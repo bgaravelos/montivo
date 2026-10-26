@@ -48,7 +48,7 @@ Evening 3 (26/10 night) done offline on run 011: `engine/captions.py` + `engine/
 callouts, overlay in the segment encode: this ffmpeg has no libass/drawtext), `engine/image.py` (Muse Image title card,
 `--no-title`), loudnorm -14 LUFS in `render_audio`; `montivo render runs/011 --out cut_v3.mp4`.
 Run 012 (`--target 45`, fresh API run) verified evening 3 on new Voice output (commit `4952e84`).
-Evening 4 (26/10 night) done, not committed yet: `engine/review.py` (blind Spark review of the cut with a burned-in clock,
+Evening 4 (26/10 night) done, commit `3bfd99b`: `engine/review.py` (blind Spark review of the cut with a burned-in clock,
 silencedetect and caption-vs-head facts, fix ops -> EDL patches, loop with guards), `montivo review runs/012`,
 `montivo run --review`; a third fact (source audio level at both edges of every cut) on Billy's go: kill test (b) 3 of 3
 in 3 of 3 (`experiments/kt_f_review_killtest.py`, `runs/012-ktb`). Next: tighten edges to speech onset/offset (late
