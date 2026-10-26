@@ -154,6 +154,20 @@ loudnorm figures and the ebur128 measurement of the finished file).
   source -28.5 LUFS; loudnorm (dynamic, one pass) at -1.0 dBTP gave -0.8 dBTP after the AAC encode, so it now aims at
   -1.5 and the file measures -14.3 LUFS integrated, -1.3 dBTP, LRA 3.9 LU with ebur128. Muse Image returned the title
   "Raw In, Reviewed Cut Out" spelled correctly in 8.9 s.
+- Run 012 (26/10, fresh API run, `--target 45`, same clip and brief): the whole path in one `montivo run`, $0.4986 and
+  242 s wall (Voice $0.006, watch $0.057, SAM head $0.125 + person $0.250, plan $0.050, Muse Image title $0.010 in
+  12.6 s, render $0 in 30 s). Voice measured 2.14 words/s; the EDL came out at 52.0 s for a 45 to 54 s range, 9 spans,
+  100% verbatim, and the hook keeps "Hi. I'm Billy. I run a small digital marketing agency in Athens" (run 011 lost it);
+  it drops "for the Meta hackathon I'm building Montivo", so the name is first heard in the payoff. The new Voice output
+  had the same three name mishearings (metal models, MuseSpark, News Voice), all caught, no "ready viewed" this time,
+  and 5 new doubles (agent, between, me, the, afterwards), all removed. "it's an agent", "the cuts lands", "the vertical
+  crops follows" and "score it against the rubric" came out identical in runs 011 and 012, so they are most likely what
+  was said and stay uncorrected. 33 caption lines, all lower third, 0 over the face (head box bottom at most y 1036 of
+  1920); 1 callout ("4 Meta Models", below the head on the person box). Caption lines ran across sentence ends at span
+  joins ("work Muse Spark", "that matters Spark", "middle of one SAM"): a line now also breaks where the span changes,
+  which gives 35 lines in `cut_v2.mp4` with every planned sentence starting its own line. Loudness -14.3 LUFS, -1.4 dBTP,
+  LRA 3.6 LU (ebur128); cut 53.5 s with the 1.5 s title. On the lean the head stays inside the crop but sits in the left
+  third for about a second at the fastest swing (pan clamp at 450 px/s).
 
 ## Plan
 

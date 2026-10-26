@@ -65,6 +65,15 @@ def test_pause_breaks_a_line_and_short_tail_borrows_a_word():
     assert lines == [["rubric", "and", "recuts"], ["it's", "a", "loop"], ["next"]]
 
 
+def test_span_boundary_starts_a_new_line():
+    # runs/012 s3 + s4 render as one segment; Voice gives no punctuation, before this the line read "work Muse Spark"
+    ws = cw([("Meta", 0, .3), ("models", .3, .6), ("do", .6, .8), ("the", .8, .9), ("work", .9, 1.2)], span="s3")
+    ws += cw([("Muse", 1.2, 1.5), ("Spark", 1.5, 1.8), ("watches", 1.8, 2.2)], span="s4")
+    lines = [[w.w for w in ln] for ln in group_lines(ws, STYLE)]
+    assert lines[-1] == ["Muse", "Spark", "watches"]
+    assert all(len({w.span for w in ln}) == 1 for ln in group_lines(ws, STYLE))  # the short-line borrow stays in its span
+
+
 @pytest.mark.skipif(not REC.is_file(), reason="recorded stream not present")
 def test_recorded_voice_stream_to_caption_lines():
     turns, words = fold_events(json.loads(REC.read_text())["events"])

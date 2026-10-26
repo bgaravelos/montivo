@@ -145,13 +145,15 @@ def apply_glossary(words: list[CWord], glossary: dict[str, str] | None = None) -
 
 def group_lines(words: list[CWord], style: CaptionStyle, max_words: int = LINE_MAX_WORDS,
                 break_gap_s: float = LINE_BREAK_GAP_S, min_tail_s: float = 0.8) -> list[list[CWord]]:
-    """1 to max_words words per line; a new line on a pause, after end punctuation or when the line would get too wide.
-    A name the glossary produced ("Muse Voice") is never split across two lines, and a short last line borrows words
-    from the line before so it does not flash by."""
+    """1 to max_words words per line; a new line on a pause, after end punctuation, at a span boundary (the planner
+    splits a long turn into spans at sentence ends, and Voice gives no punctuation inside a turn) or when the line would
+    get too wide. A name the glossary produced ("Muse Voice") is never split across two lines, and a short last line
+    borrows words from the line before so it does not flash by."""
     lines: list[list[CWord]] = []
     cur: list[CWord] = []
     for w in words:
-        hard = bool(cur) and (w.t_in - cur[-1].t_out > break_gap_s or bool(_END.search(cur[-1].w)))
+        hard = bool(cur) and (w.t_in - cur[-1].t_out > break_gap_s or bool(_END.search(cur[-1].w))
+                              or w.span != cur[-1].span)
         soft = bool(cur) and (len(cur) >= max_words or line_width([x.w for x in cur + [w]], style) > style.max_w)
         if hard or soft:
             carry: list[CWord] = []
@@ -164,13 +166,14 @@ def group_lines(words: list[CWord], style: CaptionStyle, max_words: int = LINE_M
     if cur:
         lines.append(cur)
     # a short line (1 word, or under min_tail_s) takes the last word of the line before when they are one phrase
-    # (no pause, no end punctuation) and that line keeps 2+ words
+    # (no pause, no end punctuation, same span) and that line keeps 2+ words
     for j in range(1, len(lines)):
         for _ in range(2):
             last, prev = lines[j], lines[j - 1]
             moved = prev[-1]
             short = len(last) == 1 or last[-1].t_out - last[0].t_in < min_tail_s
             if (short and len(prev) >= 3 and len(last) < max_words and last[0].t_in - moved.t_out <= break_gap_s
+                    and moved.span == last[0].span
                     and not _END.search(moved.w) and not (moved.src and moved.src == prev[-2].src)
                     and line_width([moved.w] + [x.w for x in last], style) <= style.max_w):
                 last.insert(0, prev.pop())
