@@ -118,10 +118,14 @@ also carries `reframe` (crop keyframes every 0.5 s and whenever the camera start
   On Billy's clip the same 2.5 constant made a 40 s target come out at 50.7 s (Spark's own estimate was 47.6 s): Billy
   speaks slower, 2.3 words/s measured by Voice over the spoken seconds of the turns. The plan prompt now takes the
   rate Voice measured on the clip (`VoiceResult.speech_rate`, 2.5 only when unknown) for the word range and the
-  `estimated_runtime_s` rule; the effect on the kept runtime is not measured yet (needs a run).
+  `estimated_runtime_s` rule. Run 011 on the same clip: Voice measured 2.09 words/s, the EDL came out at 47.7 s for a
+  40 to 48 s range (was 50.7 s).
 - Watch on Billy's clip (26/10) logged 2 shots for 125 s and no motion, so the planner dropped the one block where he
   moves (60.6 to 85.4 s). Watch now also returns `movement_moments` (speaker out of centre or handling a prop, with
-  seconds) and the plan prompt lists them under the shot log. Not yet measured on the API.
+  seconds) and the plan prompt lists them under the shot log. Run 011: watch returned the 82.5 to 85.6 s side-to-side
+  lean among 5 moments and the plan kept that block (the brief asked for it too). `--hflip` on the same run: the EDL
+  and the render read `source_hflip.mp4`, the head track stayed one id, the head was centred at all 9 checked points
+  of the cut including the lean. Run cost $0.49 (hflip and render are $0).
 
 ## Plan
 
