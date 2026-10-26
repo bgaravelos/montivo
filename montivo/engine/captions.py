@@ -283,6 +283,35 @@ def place_callout(w: int, h: int, person: list[float] | None, head: list[float] 
     return x, max(SAFE_TOP, cands[-1][0]), "overlap"
 
 
+# --------------------------------------------------------------------------- review patches
+
+def override_for(words: list[CWord], overrides: list[dict]) -> dict | None:
+    """The EDL `caption_overrides` entry that targets this line: same span, its source time inside the line's words.
+    An override carries `top` (a forced y, used to plant a known fault and removed by caption_fix) and/or `text`
+    (the words actually spoken, from the reviewer's caption_fix)."""
+    for ov in overrides:
+        if any(w.span == ov.get("span") for w in words) and \
+                words[0].t_in - 0.01 <= float(ov["src_t"]) <= words[-1].t_out + 0.01:
+            return ov
+    return None
+
+
+def retext(words: list[CWord], text: str) -> list[CWord]:
+    """The line's words replaced by `text`, sharing the line's time split by character count."""
+    new = text.split()
+    if not new:
+        return words
+    t0, t1 = words[0].t_in, words[-1].t_out
+    src = " ".join(w.w for w in words)
+    total = sum(len(x) for x in new) or 1
+    out, t = [], t0
+    for x in new:
+        d = (t1 - t0) * len(x) / total
+        out.append(CWord(w=x, t_in=round(t, 3), t_out=round(t + d, 3), span=words[0].span, src=src))
+        t += d
+    return out
+
+
 # --------------------------------------------------------------------------- the stage
 
 @dataclass
@@ -339,6 +368,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
         seg = segments[i]
         return round(seg_cut[i] + min(seg.duration, max(0.0, src - seg.t_in)), 3)
 
+    overrides = edl.get("caption_overrides") or []
     seg_of_span = {sid: i for i, seg in enumerate(segments) for sid in seg.span_ids}
     per_span = span_words(edl["spans"], words)
     fixes: list[dict] = []
@@ -357,6 +387,15 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
         for i, ws in sorted(seg_words.items()):
             seg = segments[i]
             lines = [Line(words=lw, segment=i) for lw in group_lines(ws, style)]
+            forced: dict[int, dict] = {}
+            for k, ln in enumerate(lines):
+                ov = override_for(ln.words, overrides)
+                if ov is None:
+                    continue
+                if ov.get("text"):
+                    ln.words = retext(ln.words, ov["text"])
+                if ov.get("top") is not None:
+                    forced[k] = ov
             for ln in lines:
                 ln.word_times = [(cut_t(i, w.t_in), cut_t(i, w.t_out)) for w in ln.words]
                 ln.t_in, ln.t_out = ln.word_times[0][0], ln.word_times[-1][1]
@@ -365,7 +404,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                     a.t_out = b.t_in
             if lines:
                 lines[-1].t_out = min(seg_cut[i] + seg.duration, lines[-1].t_out + LINE_TAIL_S)
-            for ln in lines:
+            for k, ln in enumerate(lines):
                 n_line += 1
                 la, lb = ln.t_in - seg_cut[i], ln.t_out - seg_cut[i]
                 if lb - la <= 0:
@@ -375,6 +414,8 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                 hl = [norm(w).replace("'s", "") in HIGHLIGHT for w in texts]
                 w_px, h_px = line_width(texts, style), style.height()
                 y, where = place_caption(w_px, h_px, head)
+                if k in forced:
+                    y, where = int(forced[k]["top"]), "forced"
                 x = (OUT_W - w_px) // 2
                 caption_rects[i].append((la, lb, [x, y, x + w_px, y + h_px]))
                 for k in range(len(texts)):
@@ -390,7 +431,8 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                     "words": [{"w": w.w, "t_in": a, "t_out": b, **({"voice": w.src} if w.src else {})}
                               for w, (a, b) in zip(ln.words, ln.word_times)],
                     "box": [x, y, w_px, h_px], "placement": where,
-                    "head_box": [round(v) for v in head] if head else None, "over_face": where == "over_head",
+                    "head_box": [round(v) for v in head] if head else None,
+                    "over_face": where == "over_head" or overlaps([x, y, x + w_px, y + h_px], head),
                     "corrections": [f for f in fixes if f["span"] in {w.span for w in ln.words}
                                     and ln.words[0].t_in - 0.01 <= f["src_t"] <= ln.words[-1].t_out + 0.01],
                 })
@@ -403,7 +445,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                 continue
             i = seg_of_span[s["id"]]
             seg = segments[i]
-            a = max(0.0, s["t_in"] - seg.t_in) + CALLOUT_LEAD_S
+            a = max(0.0, max(0.0, s["t_in"] - seg.t_in) + CALLOUT_LEAD_S + float(s.get("callout_shift_s") or 0.0))
             dur = min(CALLOUT_MAX_S, max(CALLOUT_MIN_S, s["duration"] - 2 * CALLOUT_LEAD_S))
             b = min(seg.duration, a + dur)
             if b - a < 0.5:

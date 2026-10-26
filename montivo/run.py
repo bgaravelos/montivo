@@ -41,6 +41,9 @@ class RunOptions:
     hflip: bool = False  # mirror the footage once in ingest (selfie / mirror-mode clips)
     title: bool = True  # Muse Image title card in front of the cut ($0.01)
     captions: bool = True
+    review: bool = False  # blind review loop after cut_v1 (engine/review.py)
+    review_passes: int = 3
+    review_budget: float = 0.30
 
 
 class RunLog:
@@ -192,12 +195,26 @@ def run(opts: RunOptions) -> dict:
             errors.append(("render", traceback.format_exc()))
             log(f"ERROR in render:\n{errors[-1][1]}")
 
+    # 6. the closed loop: Spark reviews cut_v1 blind, fix ops patch the EDL, re-render, up to review_passes reviews
+    loop = None
+    if opts.review and rendered:
+        from .engine.review import review_loop
+        try:
+            loop = review_loop(out, out / "edl_v1.json", passes=opts.review_passes, budget_usd=opts.review_budget,
+                               ledger=ledger, log=log, spark=spark,
+                               render_fn=lambda ep, name: render_run(out, edl_path=ep, out_name=name, title=opts.title,
+                                                                     captions=opts.captions, ledger=ledger, log=log))
+        except Exception:
+            errors.append(("review", traceback.format_exc()))
+            log(f"ERROR in review loop:\n{errors[-1][1]}")
+
     summary = {
         "out": str(out), "runtime_s": edl["runtime_s"], "spans": len(edl["spans"]), "verbatim_rate": edl["verbatim_rate"],
         "unplaced": len(edl["unplaced"]), "turns": len(voice.turns), "words": len(voice.words), "speakers": voice.speakers,
         "tracks": {c: len(t.objects) for c, t in tracks.items()},
         "watch_suggested_concepts": watch.parsed.get("trackable_concepts", []), "speech_rate_wps": wps,
         "cut": rendered["output"] if rendered else None,
+        "review": {k: loop[k] for k in ("stop", "reviews", "review_cost_usd", "best", "last_edl")} if loop else None,
         "cost_usd": ledger.total_cost(), "wall_s": ledger.summary()["wall_seconds"], "errors": [e[0] for e in errors],
     }
     dump_json(out / "summary.json", summary)
@@ -226,7 +243,8 @@ def title_card(run_dir: Path, edl: dict, ledger: Ledger, log=print) -> Path:
 
 
 def render_run(run_dir: Path, edl_path: Path | None = None, source: Path | None = None, out_name: str = "cut_v1.mp4",
-               title: bool = True, captions: bool = True, callouts: bool = True, loudnorm: bool = True) -> dict:
+               title: bool = True, captions: bool = True, callouts: bool = True, loudnorm: bool = True,
+               ledger: Ledger | None = None, log=None) -> dict:
     """`montivo render runs/001`: ffmpeg only, from an existing EDL and the run's voice.json and tracks; appends a
     `render` entry to the run's ledger. The only possible API call is the title card, when title/title_card.png is
     missing ($0.01, muse-image-1.0); --no-title skips it."""
@@ -237,8 +255,8 @@ def render_run(run_dir: Path, edl_path: Path | None = None, source: Path | None 
     source = source or Path(edl["source"]["path"])
     if not source.is_file():
         raise SystemExit(f"source footage {source} not found (run from the project root or pass --source)")
-    log = RunLog(run_dir / "run.log")
-    ledger = Ledger.resume(run_dir / "ledger.json")
+    log = log or RunLog(run_dir / "run.log")
+    ledger = ledger or Ledger.resume(run_dir / "ledger.json")  # the review loop passes its own, one writer per file
     log(f"montivo render: {edl_path} -> {run_dir / out_name}")
     words = None
     vpath = run_dir / "voice" / "voice.json"
@@ -246,6 +264,8 @@ def render_run(run_dir: Path, edl_path: Path | None = None, source: Path | None 
         words = json.loads(vpath.read_text())["words"]
     elif captions:
         log(f"render: {vpath} missing, no captions")
+    # the review loop can drop the opening card (swap_hook on the title): the EDL then says title_card false
+    title = title and edl.get("title_card", True)
     title_png = title_card(run_dir, edl, ledger, log) if title and edl.get("title_card_text") else None
     info = render_edl(run_dir, edl, source, ledger, out_name=out_name, log=log, edl_path=edl_path, words=words,
                       title_png=title_png, captions=captions, callouts=callouts, loudnorm=loudnorm)

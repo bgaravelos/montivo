@@ -2,6 +2,7 @@
 
     montivo run footage.mp4 --brief "..." --out runs/001
     montivo render runs/001
+    montivo review runs/001
     montivo probe footage.mp4
 """
 from __future__ import annotations
@@ -41,6 +42,10 @@ def main(argv: list[str] | None = None) -> int:
                         "writes <out>/source_hflip.mp4 (libx264 crf 18) and uses it as the source for proxy, wav, SAM and render")
     r.add_argument("--no-title", action="store_true", help="no Muse Image title card in front of the cut (saves $0.01)")
     r.add_argument("--no-captions", action="store_true", help="render without burned-in captions")
+    r.add_argument("--review", action="store_true",
+                   help="after cut_v1: blind Spark review -> fix ops -> edl_v2 -> cut_v2 ..., up to --review-passes reviews")
+    r.add_argument("--review-passes", type=int, default=3, help="max reviews in the loop (default 3)")
+    r.add_argument("--review-budget", type=float, default=0.30, help="max dollars for the loop's review calls (default 0.30)")
 
     rr = sub.add_parser("render", help="re-render a run folder's edl_v1.json with captions, callouts, title card and loudnorm (ffmpeg only; the title card is generated once if missing)")
     rr.add_argument("run_dir", type=Path)
@@ -51,6 +56,16 @@ def main(argv: list[str] | None = None) -> int:
     rr.add_argument("--no-captions", action="store_true", help="no burned-in captions")
     rr.add_argument("--no-callouts", action="store_true", help="no callouts")
     rr.add_argument("--no-loudnorm", action="store_true", help="keep the source loudness")
+
+    rv = sub.add_parser("review", help="blind review loop on a run folder: review cut_vN with Spark 1.3, patch the EDL with "
+                                       "the fix ops, render cut_vN+1, repeat (max passes, $ budget, same fix twice = stop)")
+    rv.add_argument("run_dir", type=Path)
+    rv.add_argument("--edl", type=Path, default=None, help="EDL to start from (default <run_dir>/edl_v1.json; cut_vN.mp4 is "
+                                                         "rendered first when it is missing or stale)")
+    rv.add_argument("--passes", type=int, default=3, help="max reviews (default 3; 1 = review once, propose fixes, no patch)")
+    rv.add_argument("--budget", type=float, default=0.30, help="max dollars for review calls (default 0.30)")
+    rv.add_argument("--no-clock", action="store_true", help="do not burn the cut-time clock into the copy Spark watches")
+    rv.add_argument("--no-apply", action="store_true", help="review once and write the proposed fixes, no patch, no render")
 
     p = sub.add_parser("probe", help="ffprobe summary of a file")
     p.add_argument("footage", type=Path)
@@ -66,8 +81,20 @@ def main(argv: list[str] | None = None) -> int:
         if not args.run_dir.is_dir():
             ap.error(f"{args.run_dir} is not a run folder")
         print(json.dumps(render_run(args.run_dir, edl_path=args.edl, source=args.source, out_name=args.out,
-                                    title=not args.no_title, captions=not args.no_captions,
+                                    title=not args.no_title, captions=not args.no_captions, review=args.review,
+                          review_passes=args.review_passes, review_budget=args.review_budget,
                                     callouts=not args.no_callouts, loudnorm=not args.no_loudnorm), indent=2))
+        return 0
+
+    if args.cmd == "review":
+        from .engine.review import review_loop
+        from .run import RunLog
+        if not args.run_dir.is_dir():
+            ap.error(f"{args.run_dir} is not a run folder")
+        edl = args.edl if args.edl is None or args.edl.is_absolute() or args.edl.is_file() else args.run_dir / args.edl
+        log = RunLog(args.run_dir / "run.log")
+        print(json.dumps(review_loop(args.run_dir, edl_path=edl, passes=args.passes, budget_usd=args.budget, log=log,
+                                     clock=not args.no_clock, apply=not args.no_apply), indent=2))
         return 0
 
     if args.cmd == "run":
@@ -81,7 +108,8 @@ def main(argv: list[str] | None = None) -> int:
                           reframe_fps=args.reframe_fps, language=None if args.language.lower() == "none" else args.language,
                           target_s=args.target, plan_with_video=args.plan_with_video, plan_effort=args.plan_effort,
                           skip_track=args.no_track, resume=args.resume, render=not args.no_render, hflip=args.hflip,
-                          title=not args.no_title, captions=not args.no_captions,
+                          title=not args.no_title, captions=not args.no_captions, review=args.review,
+                          review_passes=args.review_passes, review_budget=args.review_budget,
                           model=args.model or RunOptions.__dataclass_fields__["model"].default)
         summary = run(opts)
         print(json.dumps(summary, indent=2))

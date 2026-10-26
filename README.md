@@ -15,9 +15,10 @@ cut against a rubric and re-cut until it passes.
 Every runtime model is a Meta model. Every call's request and response JSON lands in the run folder next to a
 ledger of tokens, dollars and seconds per stage.
 
-## Status (evening 3 of 8)
+## Status (evening 4 of 8)
 
-Works end to end from raw footage to a finished 9:16 cut with captions, callouts, a title card and loudnorm:
+Works end to end from raw footage to a finished 9:16 cut with captions, callouts, a title card and loudnorm, then
+reviews its own cut blind and re-cuts:
 
 ```
 montivo run footage.mp4 --brief "..." --out runs/001
@@ -34,11 +35,26 @@ montivo run footage.mp4 --brief "..." --out runs/001
   render   ffmpeg from the SOURCE: 1.5 s title segment with a fade, then frame-aligned segments, sendcmd-driven crop, overlays
            burned in after the scale, 1080x1920 H.264; audio cut in one pass, 1.5 s of silence in front, one loudnorm pass
            (-14 LUFS) -> cut_v1.mp4, measured again with ebur128
+  review   (--review) Spark 1.3 watches cut_vN blind -> rubric scores + fix ops -> EDL patch -> edl_vN+1 -> render cut_vN+1, repeat
 montivo render runs/001 --out cut_v3.mp4   re-render from edl_v1.json + voice.json + tracks, ffmpeg only (the title card is
                                            generated once if missing, --no-title to skip it)
+montivo review runs/001                    the review loop on a finished run folder: review cut_v1, patch, render cut_v2, review ...
 ```
 
-Not yet: review loop, UI. See the plan at the end.
+The review loop: the reviewer gets the cut (scaled to 720x1280 with a cut-time clock burned in at the top left), the brief,
+the rubric and three measured facts, never the EDL: the silence gaps ffmpeg `silencedetect` finds in the cut, every
+caption box against the SAM head box, and the speech level of the source audio right at both edges of every cut (added
+after kill test (b): Spark never hears a clipped word). It names times in the cut, not spans; `engine/review.py` maps each time back to a
+span, a cut point, a caption line or a callout and turns blocker and major issues into EDL patches (`drop_span`,
+`extend_span`, `move_cut`, `swap_hook`, `reorder`, `caption_fix`, `retime_callout`, `reframe_bias`; a title card the
+reviewer flags is dropped with `title_card: false`). Guards: at most 3 reviews, a dollar budget checked before each review
+(`--budget`, default $0.30), at most 4 fixes per pass, the same fix proposed twice stops the loop, a pass that scores
+below the best so far stops it, the hook span is never dropped whole, and a drop over part of a span trims only the words
+in the reviewer's window at that end. Word-level edits land on a sentence end when one is a word away and then settle on
+the quietest 40 ms of the source audio within 0.3 s (Voice words abut, so only the audio shows the gap); a clipped
+word is fixed by moving its edge to that quiet point, never by removing words.
+
+Not yet: UI. See the plan at the end.
 
 ## Setup
 
@@ -64,11 +80,14 @@ with libx264 crf 18 and the audio copied, and that file is the source for the pr
 box or crop is ever flipped afterwards; recorded in `ingest.json` and in the EDL's `source`),
 `--track-fps 10` (default: 10 fps for sources over 60 s, source fps below that), `--reframe-concept head` and
 `--reframe-fps 5` (the track the crop follows; `none` falls back to the person track), `--no-track`, `--plan-with-video`,
-`--plan-effort low|medium|high`, `--resume` (reuse ingest, voice, watch and tracks already in the run folder while
+`--plan-effort low|medium|high`, `--review` (the review loop after cut_v1; `--review-passes 3`, `--review-budget 0.30`), `--resume` (reuse ingest, voice, watch and tracks already in the run folder while
 iterating on the plan), `--language none`, `--no-render` (stop at `edl_v1.json`), `--no-title` (no Muse Image title card,
 saves $0.01), `--no-captions`. `montivo render runs/001 [--edl ...] [--source ...] [--out cut_v3.mp4] [--no-title]
 [--no-captions] [--no-callouts] [--no-loudnorm]` renders an EDL again from the run folder's `voice/voice.json` and tracks;
 it calls no model, except Muse Image once when `title/title_card.png` is missing or was made for another title text.
+`montivo review runs/001 [--edl edl_v1.json] [--passes 3] [--budget 0.30] [--no-clock] [--no-apply]` runs the loop on a
+finished run folder (only Spark review calls, about $0.03 each, $0.012 when the same cut is reviewed again and the video
+tokens come from the cache); `--passes 1` or `--no-apply` reviews once and writes the proposed fixes without patching.
 Captions use the first font found of `MONTIVO_FONT`, `~/Library/Fonts/InterTight-800.ttf`, Arial Black, Arial Bold,
 DejaVu Sans Bold (recorded in the EDL's `caption_style.font_path`).
 
@@ -90,6 +109,10 @@ runs/001/
   render/ seg_00_title.mp4 seg_NN.mp4 seg_NN_crop.cmd audio.m4a concat.txt   title segment, one video segment per cut with its crop
           overlays/ cap_NNN_K.png callout_sN.png    path, the audio in one piece; one PNG per caption line and active word, per callout
   cut_v1.mp4                                        1080x1920 H.264 + AAC, the segments joined by stream copy
+  review_v1.json                                    the review of cut_v1: facts, scores, issues, the fixes planned and skipped (why)
+  review/review_v1/ cut_v1_review.mp4 clock/        the 720x1280 copy Spark watched with its clock frames; review/loop.json
+  spark/review_v1_request.json review_v1_response.json
+  edl_v2.json  cut_v2.mp4  review_v2.json ...       the patched EDL (`patches`: what changed and why), its render, its review
 ```
 
 `edl_v1.json` spans carry `t_in`/`t_out` from the Voice words, `verbatim` (the planner quoted the transcript
@@ -169,6 +192,40 @@ loudnorm figures and the ebur128 measurement of the finished file).
   LRA 3.6 LU (ebur128); cut 53.5 s with the 1.5 s title. On the lean the head stays inside the crop but sits in the left
   third for about a second at the fastest swing (pan clamp at 450 px/s).
 
+- Review loop (evening 4, 26/10 night, runs 012 and 012-ktb): Spark 1.3 at the default reasoning effort burned all 10,000
+  output tokens of a 53.5 s review on reasoning and returned nothing ($0.06); at effort low a review takes 15.5K tokens in
+  (about 280 per second of video), 2.2K to 3.9K out, 17 to 31 s and $0.025 to $0.036, $0.012 to $0.016 when the same cut is
+  reviewed again (video tokens cached). On run 012's cut_v1 the reviewer flagged the 1.5 s title card as a hook blocker in
+  3 of 3 reviews (hook 2/10, overall 67 to 68); the loop dropped the card and cut_v2 passed at 82 (one patch, two reviews,
+  $0.046). It never flagged that "Montivo" is first heard at 47 s. The first loop, before two guards existed, made the cut
+  worse: "extra backstory at 4.5 to 7.5 s" dropped the whole hook span with "Hi, I'm Billy", and a stutter the reviewer
+  imagined ("Muse Vocal gives", the caption reads "Muse Voice gives") dropped the timestamp line (68, 66, 68). Hence: a drop
+  over part of a span trims only the words in the window at that end, the hook span is never dropped whole, and a pass
+  scoring below the best stops the loop. The reviewer misreads captions at 720x1280 ("Musi Voice", "digital marketers");
+  a caption_fix whose text equals the line is skipped, and minor issues are never applied.
+- Kill test (b), reviewer (26/10 night): a bad v1 of run 012 with the first take "Okay. So, hi, I'm Billy..." as the hook
+  (about 3 s of filler), span s2 cut inside "agent" (the 40 ms before the cut at -15.5 dB) and the line "Muse Spark watches"
+  forced over the face. 3 of 3 blind reviews caught 2 of 3 with the timestamp inside the fault (hook at 0.0 s, caption at
+  15.29 s): PASS by the rule, $0.081. The mid-word cut was caught 0 of 3 times (no_cut_mid_word 9 or 10/10): Spark does not
+  hear a clipped word. The caption is caught because the deterministic caption fact names it; the hook from what Spark
+  sees and hears. A control without the clock caught the same 2. The loop on the bad v1: trim the filler, un-force the
+  caption, 58 to 84 and pass in two reviews ($0.044); the clipped "agent" stays. The audio level in the 40 ms before each
+  cut separates it cleanly (good cuts on runs 012 and 012-ktb: -34.7 to -36.1 dB; the mid-word cut -15.5 dB), so a third
+  measured fact would catch it.
+- Third fact, cut edges (26/10 night): measured on the source audio (`audio.wav`) over 40 ms centred on each edge, because
+  the render fades 20 ms at every join and a word that ends right at a tight cut is loud just before it without being
+  clipped (a first version measured the render 20 to 60 ms before the cut and flagged the end of "company.", which is a
+  clean cut into the next word). Clean edges on runs 012 and 012-ktb: -37.8 to -53.4 dB; inside "agent" -25.8 dB; 20 ms
+  into the next word -31.3 dB; threshold -34 dB. Kill test (b) again with the three facts: 3 of 3 faults caught in 3 of 3
+  runs, the mid-word cut at 12.17 s as a no_cut_mid_word blocker every time ($0.081). Run 012's clean cut gets no
+  mid-word flag. Loops with the final code: run 012 v1 68 -> drop the title, trim the hook to "Hi. I'm Billy." with the
+  edge moved into the gap (-25.1 -> -49.3 dB) -> 77 -> trim s2 to "It's a video editor where" -> 88, pass ($0.106; the
+  dangling "where" is a weak edit the reviewer did not mind). The bad v1: 56 -> trim "Okay. So,", move the "company." end
+  to the quiet point (-31.3 -> -40.6 dB), snap "agent" back onto its word, un-force the caption -> 72; the reviewer then
+  asked to move the start 1 s earlier, which put "So," back, 69, and the regression guard kept v2 ($0.099). The same
+  cut_v2 scored 83 and passed in an earlier loop: the reviewer varies by about 10 points on an identical cut. All
+  evening: 45 review calls, $1.38.
+
 ## Plan
 
 | Evening | Deliverable |
@@ -176,16 +233,17 @@ loudnorm figures and the ebur128 measurement of the finished file).
 | 27/10 | engine clients, run folder, ledger, CLI (this); then two kill tests on the render path, see below |
 | 28/10 | done early (26/10 night): reframe path, ffmpeg trim/concat, 9:16 crop following the track, `cut_v1.mp4`, `montivo render`; from here every run uses Billy's own 60 to 90 s English talking-head clip, the NASA clip is regression only |
 | 29/10 | done early (26/10 night): captions from word times, callouts on tracks, Muse Image title card, loudnorm; speaker-to-person mapping still open |
-| 30/10 | blind review pass, fix ops, loop guards (3 passes, budget, repeated fixes): v1 to v3 on three sources |
+| 30/10 | done early (26/10 night): blind review pass, fix ops, loop guards (3 passes, budget, repeated fixes, regression); kill test (b) 3 of 3 in 3 of 3 with the cut-edge fact (2 of 3 with the two original facts); v1 to v3 on three sources still open (one source so far) |
 | 31/10 | FastAPI + SSE, React shell: upload, brief, run, live log, preview, review panel |
 | 1/11 | the two human actions in the loop first: "drop this span" and "re-run with this instruction" (typed, or spoken through Voice); reorder, caption edit and reframe nudge only after those |
 | 2/11 to 4/11 | demo video, README for judges, buffer, submission |
 
 Design rules fixed on 26/10:
 
-- **Blind reviewer.** The review pass gets only the rendered mp4, the brief and the rubric, never the EDL. It also gets two
-  deterministic facts as text: the silence gaps ffmpeg `silencedetect` finds in the render, and where the caption boxes sit
-  relative to the SAM face boxes.
+- **Blind reviewer.** The review pass gets only the rendered mp4, the brief and the rubric, never the EDL. It also gets
+  deterministic facts as text: the silence gaps ffmpeg `silencedetect` finds in the render, where the caption boxes sit
+  relative to the SAM face boxes and (since 26/10 night, Billy's call after kill test (b)) the source audio level at both
+  edges of every cut.
 - **Kill test (a), render path:** Billy's clip, cuts on Voice word boundaries, 9:16 reframe from the SAM track. Pass when no cut
   lands inside a word and the pan does not jitter. If it fails: an 80 ms audio crossfade on every cut and snapping only to
   `speechEnd`/`speechStart`.

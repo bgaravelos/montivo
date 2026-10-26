@@ -40,13 +40,14 @@ class Spark:
     # ----------------------------------------------------------------- generic call
 
     def call(self, name: str, prompt: str, schema: dict, file_id: str | None = None, max_output_tokens: int = 12000,
-             reasoning_effort: str | None = None) -> SparkCall:
+             reasoning_effort: str | None = None, stage: str | None = None, schema_name: str | None = None) -> SparkCall:
+        """`name` names the request/response files; `stage` the ledger entry (default spark.<name>)."""
         content: list[dict] = [{"type": "input_text", "text": prompt}]
         if file_id:
             content.append({"type": "input_file", "file_id": file_id})
         body: dict = {"model": self.model, "max_output_tokens": max_output_tokens,
                       "input": [{"type": "message", "role": "user", "content": content}],
-                      "text": {"format": {"type": "json_schema", "name": name, "strict": True, "schema": schema}}}
+                      "text": {"format": {"type": "json_schema", "name": schema_name or name, "strict": True, "schema": schema}}}
         if reasoning_effort:
             body["reasoning"] = {"effort": reasoning_effort}
         dump_json(self.dir / f"{name}_request.json", body)
@@ -60,7 +61,7 @@ class Spark:
         text = output_text(resp)
         parsed, err = _parse_json(text)
         entry_status = status if parsed is not None else f"{status}/parse_error"
-        self.ledger.add(Entry(stage=f"spark.{name}", model=self.model, seconds=t.seconds, cost_usd=round(cost, 4),
+        self.ledger.add(Entry(stage=stage or f"spark.{name}", model=self.model, seconds=t.seconds, cost_usd=round(cost, 4),
                               tokens_in=usage.get("input_tokens") or 0, tokens_out=usage.get("output_tokens") or 0,
                               tokens_cached=(usage.get("input_tokens_details") or {}).get("cached_tokens") or 0,
                               status=entry_status, note=f"response {resp.get('id', '?')}"))
@@ -131,15 +132,61 @@ class Spark:
             f"TRANSCRIPT (authoritative):\n{transcript_text}")
         return self.call("plan", prompt, schemas.PLAN, file_id=file_id, max_output_tokens=16000, reasoning_effort=reasoning_effort)
 
-    def review(self, file_id: str, brief: str, edl_summary: str) -> SparkCall:
+    def review(self, file_id: str, brief: str, facts: str, duration_s: float, name: str = "review",
+               reasoning_effort: str | None = "low", max_output_tokens: int = 16000) -> SparkCall:
+        """Blind review: the rendered cut (with a review clock burned in), the brief, the rubric and two measured facts.
+        Never the EDL, the plan or the transcript: the reviewer judges what a viewer gets. Effort low: at the default
+        effort a 53.5 s cut burned all 10,000 output tokens on reasoning and returned nothing (26/10)."""
         prompt = (
-            "You are the reviewer of an automated video editor.\n"
-            f"Brief: {brief}\n\nThe cut you are watching was built from this edit decision list:\n{edl_summary}\n\n"
-            "Watch the rendered cut with its audio and score it on each criterion 0 to 10 (10 = perfect). Be strict and "
-            "concrete: every issue needs a timestamp, the span id it concerns when applicable, and a fix operation with "
-            "arguments the editor can apply. If there are no captions or callouts, score those criteria 0 and say so. "
-            "pass = true only if overall >= 80 and there is no blocker.")
-        return self.call("review", prompt, schemas.REVIEW, file_id=file_id, max_output_tokens=8000)
+            "You are the reviewer of an automated video editor. You get the finished vertical cut, nothing else: judge it "
+            "as a strict editor would before it goes out.\n"
+            f"Brief from the producer: {brief}\n\n"
+            f"The cut is {duration_s:.1f} s long. A small clock in the top-left corner (white on black, e.g. 12.3) shows the "
+            "time of this cut in seconds; it was added for this review only, it is not part of the edit, do not score it. "
+            "Read every t_s and t_end_s from that clock.\n\n"
+            "Rubric, each criterion 0 to 10 (10 = perfect):\n"
+            f"{RUBRIC}\n\n"
+            f"Measured facts about this cut (deterministic, trust them over your impression):\n{facts}\n\n"
+            "Listen at every cut point and watch every caption. Be strict and concrete: list every problem a viewer would "
+            "notice, each with its time, and one fix operation from this list with its params:\n"
+            f"{FIX_OP_GUIDE}\n"
+            "Unused params: edge none, seconds 0, target_t_s -1, text empty, direction none. "
+            "overall is 0 to 100. pass = true only if overall >= 80 and there is no blocker.")
+        return self.call(name, prompt, schemas.REVIEW, file_id=file_id, max_output_tokens=max_output_tokens,
+                         reasoning_effort=reasoning_effort, stage="spark.review", schema_name="review")
+
+
+RUBRIC = "\n".join(f"- {c}: {d}" for c, d in {
+    "hook_in_1_5s": "the first 1.5 s grab the viewer: the strongest line starts within 1.5 s. Silence, filler "
+                    "('okay, so', 'um') or a slow warm-up in the opening fails it.",
+    "brief_covered": "everything the brief asks for is in the cut, in an order that makes sense; nothing it forbids is in.",
+    "no_cut_mid_word": "at every cut the last word before it and the first word after it are complete: no clipped "
+                       "syllable, no word cut off, no half breath.",
+    "captions_legible": "captions are readable, on screen long enough, inside the safe area and never over the face.",
+    "captions_match_speech": "caption words are the words spoken (names spelled right), in sync with the voice.",
+    "subject_framed": "the speaker's face stays fully in the 9:16 frame with sensible headroom, also when they move.",
+    "callouts_anchored": "on-screen callouts sit next to what they name, appear while it is discussed, never cover the "
+                         "face or a caption. Score 10 when the cut needs none and has none.",
+    "pacing": "no dead air, long pauses, repeated takes or rambling; the cut keeps moving.",
+    "ending": "the cut ends on a complete, deliberate closing line, not mid-thought.",
+}.items())
+
+FIX_OP_GUIDE = "\n".join(f"- {op}: {d}" for op, d in {
+    "move_cut": "a cut at t_s is badly placed (mid-word, clipped, too early or late): edge = which side of the cut to "
+                "change (out = the end of the passage before it, in = the start of the passage after it); seconds = how "
+                "far to move it (+ later, - earlier), 0 to just snap it to the nearest word boundary.",
+    "drop_span": "remove the passage spoken at t_s (a weak line, a repeat, filler).",
+    "extend_span": "the passage at t_s is cut short: edge = which end to extend, seconds = roughly how much.",
+    "swap_hook": "the opening is weak: target_t_s = the cut time of the line that should open the video instead. "
+                 "With target_t_s -1 and t_s inside a title card or silence at the start, the opening card is dropped.",
+    "reorder": "the passage at t_s belongs elsewhere: target_t_s = the cut time of the line it should come before.",
+    "caption_fix": "the caption shown at t_s is wrong or badly placed: text = the words actually spoken when the "
+                   "words are wrong, empty when only the position is wrong (e.g. over the face).",
+    "retime_callout": "the callout at t_s appears at the wrong time or says the wrong thing: seconds = shift, text = "
+                      "new text (empty to keep it).",
+    "reframe_bias": "the speaker is badly framed around t_s: direction = which way the camera should move.",
+    "none": "no edit can fix it (a note only).",
+}.items())
 
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.S)

@@ -115,6 +115,21 @@ def load_reframe_track(run_dir: Path, edl: dict) -> tuple[str | None, dict | Non
     return None, None
 
 
+def segment_bias(spans: list[dict], span_ids: list[str]) -> int:
+    """The review's reframe_bias for a segment: the `reframe_bias_px` of its spans (source px, + moves the crop right)."""
+    vals = [int(s.get("reframe_bias_px") or 0) for s in spans if s["id"] in span_ids]
+    return int(round(sum(vals) / len(vals))) if vals else 0
+
+
+def apply_bias(path: SegmentPath, bias_px: int, source_w: int) -> None:
+    """Shift a planned crop path by bias_px (kept even and inside the frame); the keyframes follow."""
+    hi = source_w - path.crop_w
+    path.xs = [min(hi, max(0, x + bias_px // 2 * 2)) for x in path.xs]
+    for kf in path.keyframes:
+        kf["x"] = min(hi, max(0, kf["x"] + bias_px // 2 * 2))
+        kf["bias_px"] = bias_px
+
+
 def _ffmpeg(args: list[str]) -> None:
     proc = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *args], capture_output=True, text=True)
     if proc.returncode != 0:
@@ -277,6 +292,9 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
         for seg in segments:
             path = plan_segment(seg.t_in, seg.t_out, edl["source"], track, params, span_ids=seg.span_ids)
             path.xs = path.xs[:seg.frames] + [path.xs[-1]] * max(0, seg.frames - len(path.xs))
+            bias = segment_bias(edl["spans"], seg.span_ids)
+            if bias:
+                apply_bias(path, bias, int(edl["source"]["width"]))
             paths.append(path)
         title_frames = 0
         title_s = 0.0

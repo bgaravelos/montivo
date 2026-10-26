@@ -59,6 +59,11 @@ CRITERIA = ["hook_in_1_5s", "brief_covered", "no_cut_mid_word", "captions_legibl
             "subject_framed", "callouts_anchored", "pacing", "ending"]
 FIX_OPS = ["move_cut", "drop_span", "extend_span", "reframe_bias", "caption_fix", "retime_callout", "swap_hook", "reorder", "none"]
 
+# The reviewer is blind: it never sees the EDL, so an issue names a time in the cut, not a span. review.py maps
+# t_s back to the span, cut point, caption line or callout and turns fix_op + params into an EDL patch.
+EDGES = ["in", "out", "none"]
+DIRECTIONS = ["left", "right", "none"]
+
 REVIEW = {
     "type": "object", "additionalProperties": False,
     "properties": {
@@ -68,13 +73,28 @@ REVIEW = {
                    "properties": {c: {"type": "integer", "minimum": 0, "maximum": 10} for c in CRITERIA},
                    "required": CRITERIA},
         "issues": {"type": "array", "items": {"type": "object", "additionalProperties": False, "properties": {
-            "t_s": {"type": "number"}, "criterion": {"type": "string", "enum": CRITERIA},
+            "t_s": {"type": "number", "description": "cut seconds where the issue starts, read from the burned-in clock"},
+            "t_end_s": {"type": "number", "description": "cut seconds where it ends (same as t_s for a single moment)"},
+            "criterion": {"type": "string", "enum": CRITERIA},
             "severity": {"type": "string", "enum": ["blocker", "major", "minor"]},
             "what": {"type": "string"},
             "fix_op": {"type": "string", "enum": FIX_OPS},
-            "span_id": {"type": "string", "description": "the EDL span id the fix applies to, or empty"},
-            "fix_args": {"type": "string"}},
-            "required": ["t_s", "criterion", "severity", "what", "fix_op", "span_id", "fix_args"]}},
+            "params": {"type": "object", "additionalProperties": False, "properties": {
+                "edge": {"type": "string", "enum": EDGES,
+                         "description": "move_cut / extend_span: the start (in) or the end (out) of the passage at t_s"},
+                "seconds": {"type": "number",
+                            "description": "move_cut: + moves the cut later, - earlier; extend_span: seconds to add; "
+                                           "retime_callout: + later, - earlier; else 0"},
+                "target_t_s": {"type": "number",
+                               "description": "swap_hook: cut seconds of the line that should open the video; reorder: "
+                                              "cut seconds of the line the passage at t_s should come before; else -1"},
+                "text": {"type": "string", "description": "caption_fix: the words actually spoken; retime_callout: new "
+                                                         "callout text; else empty"},
+                "direction": {"type": "string", "enum": DIRECTIONS,
+                              "description": "reframe_bias: which way the camera should move; else none"}},
+                "required": ["edge", "seconds", "target_t_s", "text", "direction"]},
+            "fix_args": {"type": "string", "description": "the fix in words, one sentence"}},
+            "required": ["t_s", "t_end_s", "criterion", "severity", "what", "fix_op", "params", "fix_args"]}},
         "summary": {"type": "string"},
     },
     "required": ["pass", "overall", "scores", "issues", "summary"],

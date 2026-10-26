@@ -9,6 +9,7 @@ Standalone scripts, Python 3.12 venv in `.venv`. Set `MODEL_API_KEY` in the envi
 | `kt_b_sam_person.py` | `sam-3.1` | 30 s clip, "person"; frames, wall time, cost, mask format, track stability |
 | `kt_c_voice_diarization.py` | `muse-voice-transcribe-1.0` | DIARIZATION turns, speakers, timestamps |
 | `kt_d_image_titlecard.py` | `muse-image-1.0` | 1080x1920 title card; returned size, latency |
+| `kt_f_review_killtest.py` | `muse-spark-1.3` | product kill test (b), reviewer: plants 3 faults in a run's EDL (weak hook, cut mid-word, caption over the face), renders it to a new run folder and reviews it blind N times with `montivo.engine.review`; caught = matching criterion within 1 s of the fault |
 
 ## Results (26/10/2026, public domain NASA interview clip 1280x720 + Duck and Cover 1951)
 
@@ -23,3 +24,10 @@ Standalone scripts, Python 3.12 venv in `.venv`. Set `MODEL_API_KEY` in the envi
 Extra scripts: `kt_a_probe*.py` (what Spark receives), `kt_a_planner.py` (video + transcript → paper edit by turn id),
 `kt_b_sam_curl.sh` + `kt_b_parse_sse.py` + `kt_b_fast_boxes.py` + `kt_b_draw.py` (SAM transport, parsing, visual check),
 `kt_c_voice_stream.py` (word deltas), `kt_e_review.py` (rubric review). Logged spend: $0.76.
+
+Kill test (b), reviewer (26/10 night, `kt_f_review_killtest.py --runs 3 --no-clock 1` on run 012 -> `runs/012-ktb`):
+PASS by the rule, 2 of 3 faults caught in 3 of 3 runs (weak hook at 0.0 s, caption over the face at 15.29 s), $0.081
+for three reviews; the cut mid-word was caught 0 of 3 times. A run without the burned-in clock caught the same 2. Numbers
+and analysis in the main README ("Measured behaviour").
+With the third fact (source audio level at both edges of every cut, `--tag f3b_`): 3 of 3 caught in 3 of 3 runs, the
+mid-word cut flagged as a no_cut_mid_word blocker every time, $0.081.

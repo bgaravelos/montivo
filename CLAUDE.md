@@ -28,7 +28,7 @@ Viral; Open Weight only if the Baseten credits arrive by 31/10.
 ## Layout
 ```
 montivo/           the engine package (config, ledger, run, cli; engine/{api,ingest,voice,track,spark,schemas,edl,reframe,
-                   render,captions,graphics,image}.py)
+                   render,captions,graphics,image,review}.py)
 tests/             offline tests on recorded Voice and SAM streams (make test)
 experiments/       the 26/10 kill-test scripts (research, not product; results/ ignored)
 docs/notes/        hand-over notes copied from the Claude Code sessions (git-ignored, read them first)
@@ -47,8 +47,12 @@ Measured facts that shape the code are in README.md ("Measured behaviour") and, 
 Evening 3 (26/10 night) done offline on run 011: `engine/captions.py` + `engine/graphics.py` (Pillow PNG captions and
 callouts, overlay in the segment encode: this ffmpeg has no libass/drawtext), `engine/image.py` (Muse Image title card,
 `--no-title`), loudnorm -14 LUFS in `render_audio`; `montivo render runs/011 --out cut_v3.mp4`.
-Next: a fresh run 012 (`--target 45`) to verify on new Voice output, then the blind review loop. The evening-by-evening
-table is in README.md.
+Run 012 (`--target 45`, fresh API run) verified evening 3 on new Voice output (commit `4952e84`).
+Evening 4 (26/10 night) done, not committed yet: `engine/review.py` (blind Spark review of the cut with a burned-in clock,
+silencedetect and caption-vs-head facts, fix ops -> EDL patches, loop with guards), `montivo review runs/012`,
+`montivo run --review`; a third fact (source audio level at both edges of every cut) on Billy's go: kill test (b) 3 of 3
+in 3 of 3 (`experiments/kt_f_review_killtest.py`, `runs/012-ktb`). Next: tighten edges to speech onset/offset (late
+"hi", 2 s hold after "cut out"), the loop on more sources, then the API + UI. The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
