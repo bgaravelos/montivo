@@ -27,7 +27,8 @@ montivo run footage.mp4 --brief "..." --out runs/001
   track    SAM 3.1 "person" (10 fps) and "head" (5 fps) over httpx SSE, regex boxes -> track/<concept>/tracks.json | in parallel
   watch    Spark 1.3 + proxy + transcript -> shot log, speaker map, concept suggestions, b-roll, movement moments /
   plan     Spark 1.3 + brief + shot log + movement moments + measured speech rate + transcript -> paper edit (turn id + verbatim words)
-  edl      spans mapped to Voice word boundaries -> edl_v1.json
+  edl      spans mapped to Voice word boundaries, then every cut edge tightened to the speech in the source audio
+           (0.1 s before the onset, 0.15 s after the offset, 0.3 s at the very end) -> edl_v1.json
   reframe  per segment: the head track (person as fallback), largest and most centred id -> smoothed 9:16 crop path (dead zone, EMA, pan clamp)
   title    Muse Image 1.0: the plan's title_card_text -> title/title_card.png (generated once, $0.01)
   captions Voice words of the kept spans -> de-doubled, glossary-corrected, 1 to 4 word lines, placed clear of the SAM head box;
@@ -39,6 +40,7 @@ montivo run footage.mp4 --brief "..." --out runs/001
 montivo render runs/001 --out cut_v3.mp4   re-render from edl_v1.json + voice.json + tracks, ffmpeg only (the title card is
                                            generated once if missing, --no-title to skip it)
 montivo review runs/001                    the review loop on a finished run folder: review cut_v1, patch, render cut_v2, review ...
+montivo edges runs/001                     the edge pass on an EDL built before it existed ($0; the old EDL kept under check/)
 ```
 
 The review loop: the reviewer gets the cut (scaled to 720x1280 with a cut-time clock burned in at the top left), the brief,
@@ -51,8 +53,8 @@ reviewer flags is dropped with `title_card: false`). Guards: at most 3 reviews, 
 (`--budget`, default $0.30), at most 4 fixes per pass, the same fix proposed twice stops the loop, a pass that scores
 below the best so far stops it, the hook span is never dropped whole, and a drop over part of a span trims only the words
 in the reviewer's window at that end. Word-level edits land on a sentence end when one is a word away and then settle on
-the quietest 40 ms of the source audio within 0.3 s (Voice words abut, so only the audio shows the gap); a clipped
-word is fixed by moving its edge to that quiet point, never by removing words.
+the quietest 40 ms of the source audio within 0.3 s (Voice words abut, so only the audio shows the gap) and are then
+tightened to the speech like v1; a clipped word is fixed by moving its edge to that quiet point, never by removing words.
 
 Not yet: UI. See the plan at the end.
 
@@ -88,6 +90,9 @@ it calls no model, except Muse Image once when `title/title_card.png` is missing
 `montivo review runs/001 [--edl edl_v1.json] [--passes 3] [--budget 0.30] [--no-clock] [--no-apply]` runs the loop on a
 finished run folder (only Spark review calls, about $0.03 each, $0.012 when the same cut is reviewed again and the video
 tokens come from the cache); `--passes 1` or `--no-apply` reviews once and writes the proposed fixes without patching.
+`montivo edges runs/001 [--edl edl_v1.json] [--dry-run]` tightens an EDL that was built before the edge pass existed: it
+rewrites the EDL in place (the old one goes to `check/<name>_before_edges.json`), clears the render fields so the next
+`render` or `review` renders it again, and logs every move; a second run moves nothing.
 Captions use the first font found of `MONTIVO_FONT`, `~/Library/Fonts/InterTight-800.ttf`, Arial Black, Arial Bold,
 DejaVu Sans Bold (recorded in the EDL's `caption_style.font_path`).
 
@@ -116,7 +121,10 @@ runs/001/
 ```
 
 `edl_v1.json` spans carry `t_in`/`t_out` from the Voice words, `verbatim` (the planner quoted the transcript
-exactly), `match_ratio` otherwise, and `contiguous_with_previous` when two spans join without a cut. After a render it
+exactly), `match_ratio` otherwise, and `contiguous_with_previous` when two spans join without a cut; `edges` records
+every edge the edge pass moved (from, to, the speech onset or offset, a neighbour's fragment skipped, the level before and
+after) and `edge_tuned` the edges the review patcher must not snap back; `edge_pass` holds the noise floor, the speech
+threshold and the totals. After a render it
 also carries `reframe` (crop keyframes every 0.5 s and whenever the camera starts or stops moving), `captions` (one entry
 per line: text, cut times per word with what Voice heard where a correction applied, the box in output pixels, the head
 box it avoided, `placement` lower_third / below_head / above_head / over_head, and its `corrections`), `callouts` (text,
@@ -225,6 +233,23 @@ loudnorm figures and the ebur128 measurement of the finished file).
   asked to move the start 1 s earlier, which put "So," back, 69, and the regression guard kept v2 ($0.099). The same
   cut_v2 scored 83 and passed in an earlier loop: the reviewer varies by about 10 points on an identical cut. All
   evening: 45 review calls, $1.38.
+- Edge pass (27/10, `engine/edges.py`): Voice puts the pauses inside words, so cuts on word boundaries opened in silence
+  and every ending held 2.07 s after "cut out". Run 012's source: room tone at -51 dB (10th percentile of 10 ms frames),
+  word onsets cross -45 dB within 10 to 20 ms, so speech is anything 6 dB over the floor, with dips under 60 ms bridged.
+  Voice word edges were up to 1.6 s off at a passage start ("Hi." 25.50 to 27.18 s, heard from 27.13) and 0.4 s off
+  inside one: "this" of the second take sits at 93.98 to 94.90 s in Voice, the speaker says it at 95.28 after the end of
+  "again" and a 1.05 s pause, hence the fragment rule and the bound at the middle of the segment rather than the span.
+  Measured on the source through the render's own segments (the rendered audio cannot be used: loudnorm runs in
+  dynamic mode and lifts the room tone at the start of a cut from -48 to -20 dB): run 012 v1 9 edges moved, 52.0 -> 44.6 s;
+  first speech 3.13 -> 1.63 s (1.5 s of it the title card), end hold 2.07 -> 0.31 s, dead air at the joins 3.12 ->
+  0.98 s, the longest pause at a join 1.71 -> 0.27 s, the loudest cut edge -37.8 -> -47.9 dB (no loud edge). The bad
+  v1 (012-ktb): 8 edges, 54.2 -> 47.6 s, first speech 0.42 -> 0.12 s, the "company." end pulled out of the next word
+  (-31.3 -> -50.5 dB, fragment skipped); the deliberate cut inside "agent" is left alone (speech at the edge). Review
+  loops on the tightened v1: run 012 76 -> drop the title -> 100, pass ($0.057; before the pass the same clip went
+  68 -> 77 -> 88); the bad v1 65 -> trim "Okay. So,", snap "agent" back onto its word -> 85, pass ($0.061; before
+  56 -> 72 -> 69). A first try of that loop showed that `trim_at` re-snaps both edges of a span, so a trim at the start
+  re-opened the end the pass had tightened (the reviewer flagged it at -31.3 dB, 61 -> 78 -> 83): word-level patches now
+  tighten both edges again. Spark has not flagged the ending or a late first word since.
 
 ## Plan
 
@@ -233,7 +258,7 @@ loudnorm figures and the ebur128 measurement of the finished file).
 | 27/10 | engine clients, run folder, ledger, CLI (this); then two kill tests on the render path, see below |
 | 28/10 | done early (26/10 night): reframe path, ffmpeg trim/concat, 9:16 crop following the track, `cut_v1.mp4`, `montivo render`; from here every run uses Billy's own 60 to 90 s English talking-head clip, the NASA clip is regression only |
 | 29/10 | done early (26/10 night): captions from word times, callouts on tracks, Muse Image title card, loudnorm; speaker-to-person mapping still open |
-| 30/10 | done early (26/10 night): blind review pass, fix ops, loop guards (3 passes, budget, repeated fixes, regression); kill test (b) 3 of 3 in 3 of 3 with the cut-edge fact (2 of 3 with the two original facts); v1 to v3 on three sources still open (one source so far) |
+| 30/10 | done early (26/10 night): blind review pass, fix ops, loop guards (3 passes, budget, repeated fixes, regression); kill test (b) 3 of 3 in 3 of 3 with the cut-edge fact (2 of 3 with the two original facts); v1 to v3 on three sources still open (one source so far); 27/10: edge pass, cut edges tightened to the speech in the source audio, loops 76 -> 100 and 65 -> 85 |
 | 31/10 | FastAPI + SSE, React shell: upload, brief, run, live log, preview, review panel |
 | 1/11 | the two human actions in the loop first: "drop this span" and "re-run with this instruction" (typed, or spoken through Voice); reorder, caption edit and reframe nudge only after those |
 | 2/11 to 4/11 | demo video, README for judges, buffer, submission |

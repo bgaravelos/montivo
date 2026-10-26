@@ -29,14 +29,12 @@ not cure it), and a pass that scores below the best so far stops it (the best ve
 """
 from __future__ import annotations
 
-import array
 import copy
 import difflib
 import json
 import math
 import re
 import subprocess
-import wave
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -46,6 +44,7 @@ from ..config import PRICE, SPARK_MODEL
 from ..ledger import Entry, Ledger, Timer
 from .api import dump_json, upload_file
 from .captions import CAPTION_TOP, HEAD_MARGIN, SAFE_BOTTOM, overlaps
+from .edges import Audio, Words, level_db, tighten_edges  # noqa: F401 (level_db re-exported for callers)
 from .edl import norm, norm_tokens
 from .graphics import font
 from .render import frame_align, merge_segments
@@ -149,14 +148,6 @@ def cut_edge_levels(edl: dict, audio: "Audio") -> list[dict]:
         loud = max(end_db, start_db if start_db is not None else -120.0) > EDGE_LOUD_DB
         out.append({"t": round(t, 2), "end_db": end_db, "start_db": start_db, "end": after is None, "loud": loud})
     return out
-
-
-def level_db(pcm: array.array, rate: int, t0: float, t1: float) -> float:
-    seg = pcm[max(0, int(t0 * rate)):max(0, int(t1 * rate))]
-    if not seg:
-        return -120.0
-    rms = math.sqrt(sum(x * x for x in seg) / len(seg))
-    return round(20 * math.log10(rms / 32768 + 1e-9), 1)
 
 
 def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: float,
@@ -301,52 +292,9 @@ def cuts(cmap: list[CutSpan]) -> list[tuple[float, CutSpan | None, CutSpan | Non
 
 # --------------------------------------------------------------------------- words
 
-class Words:
-    """Voice words by turn (voice.json `words`), indexed like the EDL's word_from / word_to."""
-
-    def __init__(self, words: list[dict]):
-        self.by_turn: dict[int, list[dict]] = {}
-        for w in words:
-            self.by_turn.setdefault(int(w["turn_id"]), []).append(w)
-        for tw in self.by_turn.values():
-            tw.sort(key=lambda w: w["i"])
-
-    def turn(self, tid: int) -> list[dict]:
-        return self.by_turn.get(int(tid), [])
-
-
 def kept_elsewhere(edl: dict, span: dict) -> set[int]:
     return {i for s in edl["spans"] if s["id"] != span["id"] and s["turn_id"] == span["turn_id"]
             for i in range(s["word_from"], s["word_to"] + 1)}
-
-
-class Audio:
-    """The run's source audio (audio.wav, 24 kHz mono from ingest) for level checks in source seconds."""
-
-    def __init__(self, wav: Path):
-        with wave.open(str(wav)) as w:
-            self.rate = w.getframerate()
-            self.pcm = array.array("h", w.readframes(w.getnframes()))
-
-    @classmethod
-    def load(cls, run_dir: Path) -> "Audio | None":
-        p = run_dir / "audio.wav"
-        return cls(p) if p.is_file() else None
-
-    def level(self, t0: float, t1: float) -> float:
-        return level_db(self.pcm, self.rate, t0, t1)
-
-    def quietest(self, lo: float, hi: float, half: float = 0.02) -> tuple[float, float]:
-        """(time, dB) of the quietest 2*half window centred between lo and hi."""
-        best = (lo, 1e9)
-        k = 0
-        while lo + k * VALLEY_STEP_S <= hi + 1e-9:
-            x = round(lo + k * VALLEY_STEP_S, 3)
-            db = self.level(x - half, x + half)
-            if db < best[1]:
-                best = (x, db)
-            k += 1
-        return best
 
 
 def valley(span: dict, words: Words, edge: str, audio: Audio, blocked: set[int]) -> tuple[float, float, float]:
@@ -362,12 +310,12 @@ def valley(span: dict, words: Words, edge: str, audio: Audio, blocked: set[int])
         t = span["t_in"]
         lo = t if span["word_from"] - 1 in blocked else t - r
         hi = min(span["t_out"] - (span["t_out"] - span["t_in"]) / 2, t + r)
-    x, db = audio.quietest(lo, hi)
+    x, db = audio.quietest(lo, hi, step=VALLEY_STEP_S)
     return x, db, audio.level(t - 0.02, t + 0.02)
 
 
 def on_boundary(span: dict, words: Words, edge: str) -> bool:
-    """The edge sits on its Voice word boundary, or where a valley fix put it (edge_tuned)."""
+    """The edge sits on its Voice word boundary, or where a valley fix or the edge pass put it (edge_tuned)."""
     tuned = (span.get("edge_tuned") or {}).get(edge)
     if tuned is not None and abs(span["t_out" if edge == "out" else "t_in"] - tuned) < 0.005:
         return True
@@ -721,10 +669,12 @@ def settle(span: dict, words: Words, edge: str, audio: Audio | None, blocked: se
 
 def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None = None) -> tuple[dict, list[dict]]:
     """A new EDL (version + 1) with the fixes applied; edge fixes first, then drops and moves. Edges moved by whole
-    words settle on the quietest point nearby when the source audio is there. The render-time fields (captions,
-    callouts, reframe, render) are cleared: the next render fills them. Returns (edl, log)."""
+    words settle on the quietest point nearby and are then tightened to the speech (edges.py), when the source audio
+    is there. The render-time fields (captions, callouts, reframe, render) are cleared: the next render fills them.
+    Returns (edl, log)."""
     new = copy.deepcopy(edl)
     log: list[dict] = []
+    touched: dict[tuple[str, str], int] = {}  # (span, edge) put back on a Voice word boundary -> its log entry
     by_id = {s["id"]: s for s in new["spans"]}
     overrides = new.setdefault("caption_overrides", [])
     for f in sorted(fixes, key=lambda f: f.op in STRUCTURAL):
@@ -805,8 +755,19 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
         elif f.op == "reframe_bias":
             s["reframe_bias_px"] = int(s.get("reframe_bias_px") or 0) + (BIAS_PX if f.args["dir"] == "right" else -BIAS_PX)
             note = f"crop bias {s['reframe_bias_px']:+d} px"
+        if f.op in ("trim_span", "extend_span") or (f.op == "move_cut" and f.args["mode"] in ("snap", "words")):
+            # trim_at / shift_words / resnap put BOTH edges back on Voice boundaries (012-ktb: a trim at the start
+            # re-opened the end tightened out of the next word), so both are tightened again
+            for e in ("in", "out"):
+                touched.setdefault((f.target, e), len(log))
         log.append({**asdict(f), "fingerprint": f.fingerprint, "note": note})
     finalize(new, words)
+    if audio is not None and touched:
+        for m in tighten_edges(new, words, audio, only=set(touched))["moves"]:
+            log[touched[(m["span"], m["edge"])]]["note"] += (f"; edge tightened to the speech {m['from']:.3f} -> "
+                                                            f"{m['to']:.3f}")
+        for s in new["spans"]:
+            refresh_span(s, words)
     return new, log
 
 

@@ -67,6 +67,12 @@ def main(argv: list[str] | None = None) -> int:
     rv.add_argument("--no-clock", action="store_true", help="do not burn the cut-time clock into the copy Spark watches")
     rv.add_argument("--no-apply", action="store_true", help="review once and write the proposed fixes, no patch, no render")
 
+    ed = sub.add_parser("edges", help="tighten a run folder's EDL to the speech onset and offset in the source audio "
+                                      "($0; new runs get this in edl_v1 already); the old EDL is kept under check/")
+    ed.add_argument("run_dir", type=Path)
+    ed.add_argument("--edl", type=Path, default=None, help="EDL to tighten in place (default <run_dir>/edl_v1.json)")
+    ed.add_argument("--dry-run", action="store_true", help="print the moves, write nothing")
+
     p = sub.add_parser("probe", help="ffprobe summary of a file")
     p.add_argument("footage", type=Path)
 
@@ -81,9 +87,16 @@ def main(argv: list[str] | None = None) -> int:
         if not args.run_dir.is_dir():
             ap.error(f"{args.run_dir} is not a run folder")
         print(json.dumps(render_run(args.run_dir, edl_path=args.edl, source=args.source, out_name=args.out,
-                                    title=not args.no_title, captions=not args.no_captions, review=args.review,
-                          review_passes=args.review_passes, review_budget=args.review_budget,
+                                    title=not args.no_title, captions=not args.no_captions,
                                     callouts=not args.no_callouts, loudnorm=not args.no_loudnorm), indent=2))
+        return 0
+
+    if args.cmd == "edges":
+        from .run import edges_run
+        if not args.run_dir.is_dir():
+            ap.error(f"{args.run_dir} is not a run folder")
+        edl = args.edl if args.edl is None or args.edl.is_absolute() or args.edl.is_file() else args.run_dir / args.edl
+        print(json.dumps(edges_run(args.run_dir, edl_path=edl, dry_run=args.dry_run), indent=2))
         return 0
 
     if args.cmd == "review":

@@ -16,6 +16,7 @@ Pipeline, all offline:
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -77,7 +78,8 @@ class Line:
 # --------------------------------------------------------------------------- words
 
 def span_words(spans: list[dict], words: list[dict]) -> dict[str, list[CWord]]:
-    """Voice words of each span, keyed by span id."""
+    """Voice words of each span, keyed by span id, their times clipped to the span's edges (the edge pass moves an
+    edge into the first or last word: Voice puts the pause before a passage inside its first word)."""
     by_turn: dict[int, list[dict]] = {}
     for w in words:
         by_turn.setdefault(int(w["turn_id"]), []).append(w)
@@ -86,7 +88,9 @@ def span_words(spans: list[dict], words: list[dict]) -> dict[str, list[CWord]]:
     out: dict[str, list[CWord]] = {}
     for s in spans:
         tw = by_turn.get(int(s["turn_id"]), [])
-        out[s["id"]] = [CWord(w=w["w"], t_in=float(w["t_start"]), t_out=float(w["t_end"]), span=s["id"])
+        a, b = float(s.get("t_in", 0.0)), float(s.get("t_out", math.inf))
+        out[s["id"]] = [CWord(w=w["w"], t_in=min(b, max(a, float(w["t_start"]))),
+                              t_out=max(a, min(b, float(w["t_end"]))), span=s["id"])
                         for w in tw if s["word_from"] <= w["i"] <= s["word_to"]]
     return out
 

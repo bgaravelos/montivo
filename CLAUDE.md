@@ -51,8 +51,10 @@ Run 012 (`--target 45`, fresh API run) verified evening 3 on new Voice output (c
 Evening 4 (26/10 night) done, commit `3bfd99b`: `engine/review.py` (blind Spark review of the cut with a burned-in clock,
 silencedetect and caption-vs-head facts, fix ops -> EDL patches, loop with guards), `montivo review runs/012`,
 `montivo run --review`; a third fact (source audio level at both edges of every cut) on Billy's go: kill test (b) 3 of 3
-in 3 of 3 (`experiments/kt_f_review_killtest.py`, `runs/012-ktb`). Next: tighten edges to speech onset/offset (late
-"hi", 2 s hold after "cut out"), the loop on more sources, then the API + UI. The evening-by-evening table is in README.md.
+in 3 of 3 (`experiments/kt_f_review_killtest.py`, `runs/012-ktb`). Edge pass (27/10):
+`engine/edges.py` tightens every cut edge to the speech in `audio.wav` (in `build_edl`, after word-level review patches,
+`montivo edges RUN` for old folders); loops 76 -> 100 (run 012) and 65 -> 85 (012-ktb). Next: the loop on more sources,
+then the API + UI. The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

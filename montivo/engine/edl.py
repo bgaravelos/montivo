@@ -9,6 +9,7 @@ import difflib
 import re
 from dataclasses import asdict, dataclass
 
+from .edges import Audio, Words, tighten_edges
 from .voice import VoiceResult, Word
 
 _PUNCT = re.compile(r"[^\w'%$€]+", re.U)
@@ -64,7 +65,9 @@ def locate(span_text: str, turn_words: list[Word]) -> tuple[int, int, bool, floa
 
 
 def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: str, tracks: dict,
-              reframe_concept: str = "head") -> dict:
+              reframe_concept: str = "head", audio: "Audio | None" = None) -> dict:
+    """The EDL v1 on Voice word boundaries; with the source audio, every cut edge is then tightened to the speech
+    onset and offset (edges.py), so v1 does not open in the pause before the first word or hold after the last."""
     by_turn: dict[int, list[Word]] = {}
     for w in voice.words:
         by_turn.setdefault(w.turn_id, []).append(w)
@@ -90,7 +93,7 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
         if cur.turn_id == prev.turn_id and cur.word_from == prev.word_to + 1:
             cur.contiguous_with_previous = True
     runtime = round(sum(s.duration for s in spans), 2)
-    return {
+    edl = {
         "version": 1,
         "brief": brief,
         "source": source,
@@ -108,6 +111,9 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
         "captions": [],  # filled by the caption step (evening 3)
         "reframe": [],  # filled by the reframe step (evening 2)
     }
+    if audio is not None and edl["spans"]:
+        tighten_edges(edl, Words([asdict(w) for w in voice.words]), audio)
+    return edl
 
 
 def edl_summary(edl: dict) -> str:

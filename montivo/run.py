@@ -12,6 +12,7 @@ from pathlib import Path
 from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, TRACK_RESAMPLE_FPS, TRACK_RESAMPLE_OVER_S, sam_cost
 from .engine import track as track_mod
 from .engine.api import dump_json
+from .engine.edges import Audio, Words, tighten_edges
 from .engine.edl import build_edl
 from .engine.image import generate_title_card
 from .engine.ingest import Ingested, Probe, ingest
@@ -175,7 +176,11 @@ def run(opts: RunOptions) -> dict:
               "proxy_width": ing.proxy_probe.width, "proxy_height": ing.proxy_probe.height}
     track_summary = {c: t.summary() for c, t in tracks.items()}
     edl = build_edl(planned.parsed, voice, watch.parsed, source, opts.brief, track_summary,
-                    reframe_concept=opts.reframe_concept or "person")
+                    reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out))
+    if edl.get("edge_pass"):
+        ep = edl["edge_pass"]
+        log(f"edges: {ep['moved']} cut edges tightened to the speech, {ep['removed_s']} s of pause removed "
+            f"(floor {ep['floor_db']} dB, speech over {ep['threshold_db']} dB)")
     dump_json(out / "edl_v1.json", edl)
 
     # 5. title card (muse-image-1.0, $0.01) and render cut_v1.mp4 from the source (ffmpeg only)
@@ -272,3 +277,36 @@ def render_run(run_dir: Path, edl_path: Path | None = None, source: Path | None 
     return {"out": info["output"], "runtime_s": edl["runtime_s"], "duration_s": info["duration_s"], "segments": len(info["segments"]),
             "captions": info["captions"], "callouts": info["callouts"], "loudness": info["loudness_ebur128"],
             "seconds": info["seconds"], "cost_usd": ledger.total_cost()}
+
+
+def edges_run(run_dir: Path, edl_path: Path | None = None, dry_run: bool = False, log=None) -> dict:
+    """`montivo edges runs/001`: the edge pass (engine/edges.py) on an EDL already in a run folder (one built before
+    the pass existed, or patched by hand). The EDL is rewritten in place, the old one kept under check/, and the
+    render-time fields are cleared so the next render or review renders it again. $0, ffmpeg not needed."""
+    edl_path = edl_path or run_dir / "edl_v1.json"
+    if not edl_path.is_file():
+        raise SystemExit(f"{edl_path} not found")
+    audio = Audio.load(run_dir)
+    if audio is None:
+        raise SystemExit(f"{run_dir / 'audio.wav'} not found (ingest writes it)")
+    log = log or RunLog(run_dir / "run.log")
+    edl = json.loads(edl_path.read_text())
+    words = Words(json.loads((run_dir / "voice" / "voice.json").read_text())["words"])
+    before = edl["runtime_s"]
+    summary = tighten_edges(edl, words, audio)
+    for m in summary["moves"]:
+        log(f"edges: {m['span']} {m['edge']:3s} {m['from']:8.3f} -> {m['to']:8.3f} (speech {m['speech']:.3f}"
+            f"{', fragment skipped' if m['fragment'] else ''}; {m['db_before']:.1f} -> {m['db_after']:.1f} dB)")
+    log(f"edges: {summary['moved']} edges moved, {summary['removed_s']} s removed, runtime {before} -> {edl['runtime_s']} s"
+        + (" (dry run, nothing written)" if dry_run else f" -> {edl_path}"))
+    if not dry_run and summary["moved"]:
+        backup = run_dir / "check" / f"{edl_path.stem}_before_edges.json"
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        if not backup.is_file():
+            backup.write_text(edl_path.read_text())
+        for k in ("captions", "callouts", "reframe"):
+            edl[k] = []
+        edl.pop("render", None)
+        dump_json(edl_path, edl)
+    return {"edl": str(edl_path), "runtime_before_s": before, **{k: v for k, v in summary.items() if k != "moves"},
+            "runtime_s": edl["runtime_s"], "moves": summary["moves"]}
