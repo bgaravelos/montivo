@@ -24,8 +24,8 @@ montivo run footage.mp4 --brief "..." --out runs/001
   ingest   ffprobe, 960 px proxy at source fps, 24 kHz mono wav, one Files API upload reused by every Spark call
   voice    streaming DIARIZATION -> turns[] + words[] (lag-corrected, snapped to speechStart/speechEnd)   \
   track    SAM 3.1 "person" (10 fps) and "head" (5 fps) over httpx SSE, regex boxes -> track/<concept>/tracks.json | in parallel
-  watch    Spark 1.3 + proxy + transcript -> shot log, speaker map, trackable concepts, b-roll            /
-  plan     Spark 1.3 + brief + shot log + transcript -> paper edit (turn id + verbatim words)
+  watch    Spark 1.3 + proxy + transcript -> shot log, speaker map, concept suggestions, b-roll, movement moments /
+  plan     Spark 1.3 + brief + shot log + movement moments + measured speech rate + transcript -> paper edit (turn id + verbatim words)
   edl      spans mapped to Voice word boundaries -> edl_v1.json
   reframe  per segment: the head track (person as fallback), largest and most centred id -> smoothed 9:16 crop path (dead zone, EMA, pan clamp)
   render   ffmpeg from the SOURCE: frame-aligned segments, sendcmd-driven crop, 1080x1920 H.264; audio cut in one pass -> cut_v1.mp4
@@ -44,7 +44,18 @@ export MODEL_API_KEY=...      # from dev.meta.ai, never committed
 .venv/bin/montivo run footage.mp4 --brief "A 30 second vertical teaser: why launching from US soil again matters." --out runs/001
 ```
 
-Useful flags: `--target 40` (seconds of speech to keep), `--concept "mission patch"` (extra SAM concepts, repeatable),
+The demo brief for Billy's own clip (`footage/billy_demo.mp4`, DJI selfie mode, so `--hflip`), verbatim:
+
+```bash
+.venv/bin/montivo run footage/billy_demo.mp4 --hflip --target 40 --out runs/011 --brief "35 to 45 s vertical reel: what Montivo is and why the review loop matters. Keep the hook (Hi, I'm Billy). Keep the line about the four Meta models through 'SAM tracks me so the vertical crop follows me when I move, like right now': that is the moment I move on camera, it must stay in the cut. Drop the Greek pre-roll, the pauses, the ums and the repeated take (keep only the second 'this is the part that matters'). End on 'Raw footage in, a reviewed cut out'."
+```
+
+Useful flags: `--target 40` (seconds of speech to keep), `--concept "mission patch"` (extra SAM concepts, repeatable;
+SAM is one request per concept, so each one costs about $0.25 per 125 s at 10 fps, and the concepts `watch` suggests are
+only logged as `watch suggests: ...` with that price, never tracked on their own), `--hflip` (mirror the footage once
+before everything else: selfie / mirror-mode clips where on-screen text reads backwards; writes `<run>/source_hflip.mp4`
+with libx264 crf 18 and the audio copied, and that file is the source for the proxy, the wav, SAM and the render, so no
+box or crop is ever flipped afterwards; recorded in `ingest.json` and in the EDL's `source`),
 `--track-fps 10` (default: 10 fps for sources over 60 s, source fps below that), `--reframe-concept head` and
 `--reframe-fps 5` (the track the crop follows; `none` falls back to the person track), `--no-track`, `--plan-with-video`,
 `--plan-effort low|medium|high`, `--resume` (reuse ingest, voice, watch and tracks already in the run folder while
@@ -59,6 +70,7 @@ iterating on the plan), `--language none`, `--no-render` (stop at `edl_v1.json`)
 runs/001/
   run.json  run.log  summary.json  ledger.json      what ran, every line logged, totals per stage (render is $0)
   ingest.json  proxy.mp4  audio.wav                 probe, 960 px proxy (uploaded once), 24 kHz mono wav
+  source_hflip.mp4                                  only with --hflip: the mirrored source every later stage reads
   voice/  request.json  events.jsonl  voice.json    raw stream, turns[] and words[]
   track/  track_source_10fps.mp4                    the clip SAM saw (resampled when the source is over 60 s)
           person/ head/ request.json events.sse tracks.json masks.jsonl   (head: track_source_5fps.mp4)
@@ -103,6 +115,13 @@ also carries `reframe` (crop keyframes every 0.5 s and whenever the camera start
 - Planner fill: with "aim for 40 seconds" alone Spark kept 20 s; told the range (target to 1.2x, never below 0.8x),
   the speech rate (2.5 words per second) and that one long turn may yield several spans, it kept 34.5 s and 32.8 s on
   two runs ($0.04 per plan call). It still pads with the interviewer's question when the speaker's own lines run short.
+  On Billy's clip the same 2.5 constant made a 40 s target come out at 50.7 s (Spark's own estimate was 47.6 s): Billy
+  speaks slower, 2.3 words/s measured by Voice over the spoken seconds of the turns. The plan prompt now takes the
+  rate Voice measured on the clip (`VoiceResult.speech_rate`, 2.5 only when unknown) for the word range and the
+  `estimated_runtime_s` rule; the effect on the kept runtime is not measured yet (needs a run).
+- Watch on Billy's clip (26/10) logged 2 shots for 125 s and no motion, so the planner dropped the one block where he
+  moves (60.6 to 85.4 s). Watch now also returns `movement_moments` (speaker out of centre or handling a prop, with
+  seconds) and the plan prompt lists them under the shot log. Not yet measured on the API.
 
 ## Plan
 

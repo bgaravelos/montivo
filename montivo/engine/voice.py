@@ -67,6 +67,17 @@ class VoiceResult:
         return cls(turns=turns, words=words, audio_s=data.get("audio_s", 0.0), chunks=data.get("chunks", []),
                    speakers=data.get("speakers") or sorted({t.speaker for t in turns}))
 
+    def speech_rate(self, default: float = 2.5, lo: float = 1.2, hi: float = 4.0) -> float:
+        """Measured words per second: all words divided by the spoken seconds of the turns (turn end minus turn start,
+        so pauses inside a turn count as speaking time, gaps between turns do not). Falls back to `default` when
+        nothing was spoken or the figure is outside [lo, hi] (a broken diarization). Billy measured 2.3 on his clip,
+        the NASA interview 2.7; the 2.5 constant the planner used before made a 40 s target come out at 50.7 s."""
+        spoken_s = sum(max(0, t.endMs - t.startMs) for t in self.turns) / 1000
+        if spoken_s <= 0 or not self.words:
+            return default
+        rate = len(self.words) / spoken_s
+        return round(rate, 2) if lo <= rate <= hi else default
+
     def transcript_text(self) -> str:
         """The authoritative transcript handed to Spark: one line per turn with id, times and speaker."""
         return "\n".join(f"[turn {t.turnId} | {t.startMs / 1000:.2f}-{t.endMs / 1000:.2f}s | speaker {t.speaker}] {t.transcript}"

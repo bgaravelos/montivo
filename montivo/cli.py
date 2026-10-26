@@ -36,6 +36,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--resume", action="store_true", help="reuse ingest, voice, watch and tracks already in --out")
     r.add_argument("--model", default=None, help="Spark model id (default muse-spark-1.3)")
     r.add_argument("--no-render", action="store_true", help="stop after edl_v1.json, do not render cut_v1.mp4")
+    r.add_argument("--hflip", action="store_true",
+                   help="mirror the footage once before everything else (selfie / mirror-mode clips with reversed text); "
+                        "writes <out>/source_hflip.mp4 (libx264 crf 18) and uses it as the source for proxy, wav, SAM and render")
 
     rr = sub.add_parser("render", help="re-render cut_v1.mp4 from a run folder's edl_v1.json (ffmpeg only, no API call)")
     rr.add_argument("run_dir", type=Path)
@@ -69,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
                           reframe_concept=None if args.reframe_concept.lower() == "none" else args.reframe_concept,
                           reframe_fps=args.reframe_fps, language=None if args.language.lower() == "none" else args.language,
                           target_s=args.target, plan_with_video=args.plan_with_video, plan_effort=args.plan_effort,
-                          skip_track=args.no_track, resume=args.resume, render=not args.no_render,
+                          skip_track=args.no_track, resume=args.resume, render=not args.no_render, hflip=args.hflip,
                           model=args.model or RunOptions.__dataclass_fields__["model"].default)
         summary = run(opts)
         print(json.dumps(summary, indent=2))

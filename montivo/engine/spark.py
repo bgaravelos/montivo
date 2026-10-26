@@ -85,26 +85,37 @@ class Spark:
             "A static card or still image is ONE shot however long it stays; only a real change of picture starts a new shot.\n"
             "2) Map each transcript speaker label to who they are and whether and where they appear on camera.\n"
             "3) List the concepts worth tracking for on-screen callouts (objects, props, logos; not 'person').\n"
-            "4) List b-roll candidates: visual moments without speech that could cover a cut.\n\n"
+            "4) List b-roll candidates: visual moments without speech that could cover a cut.\n"
+            "5) List moments where the on-camera speaker moves out of centre or handles a prop, with seconds "
+            "(leans, stands up, picks up or shows an object, points at something).\n\n"
             f"TRANSCRIPT:\n{transcript_text}")
         return self.call("watch", prompt, schemas.WATCH, file_id=file_id)
 
     def plan(self, brief: str, transcript_text: str, watch: dict, target_s: float, file_id: str | None = None,
-             reasoning_effort: str | None = None) -> SparkCall:
+             reasoning_effort: str | None = None, words_per_s: float = 2.5) -> SparkCall:
+        """`words_per_s` is the speech rate measured by Voice on this clip (VoiceResult.speech_rate); 2.5 when unknown."""
+        wps = words_per_s if words_per_s and words_per_s > 0 else 2.5
         shot_log = "\n".join(
             f"- {s['start_s']:.1f}-{s['end_s']:.1f}s {s['shot_type']}: {s['visual']}"
             + (f" | text: {s['on_screen_text']}" if s.get("on_screen_text") else "")
             for s in watch.get("visual_shots", []))
+        moments = "\n".join(
+            f"- {m['start_s']:.1f}-{m['end_s']:.1f}s: {m['what']}"
+            for m in watch.get("movement_moments", []))
+        moments_block = (
+            "\nMoments where the speaker moves out of centre or handles a prop (visual beats worth keeping when the brief "
+            f"allows; the camera reframe follows them):\n{moments}\n" if moments else "")
         speakers = "\n".join(f"- speaker {m['speaker']}: {m['who']} ({'on camera, ' + m['position'] if m['on_camera'] else 'off camera'})"
                              for m in watch.get("speaker_map", []))
         prompt = (
             "You are the editor building the paper edit for a short-form vertical video.\n"
             f"Brief: {brief}\n"
             f"Target runtime: aim for {target_s:.0f} to {target_s * 1.2:.0f} seconds of kept speech, never below {target_s * 0.8:.0f}. "
-            f"Speech runs at about 2.5 words per second, so that is roughly {target_s * 2.5:.0f} to {target_s * 3:.0f} words in total: "
+            f"This speaker runs at about {wps:.1f} words per second (measured on this clip), so that is roughly "
+            f"{target_s * wps:.0f} to {target_s * 1.2 * wps:.0f} words in total: "
             "count the words you keep and add spans until you are inside the range. Several spans may come from one long turn, "
             "each quoted as its own contiguous block in the order spoken.\n\n"
-            f"Footage summary: {watch.get('summary', '')}\n\nShot log (visual, estimated times):\n{shot_log}\n\n"
+            f"Footage summary: {watch.get('summary', '')}\n\nShot log (visual, estimated times):\n{shot_log}\n{moments_block}\n"
             f"Speakers:\n{speakers}\n\n"
             "Rules for the paper edit:\n"
             "- Ordered spans to keep, strongest line first (the hook must land inside the first 1.5 seconds of speech).\n"
@@ -116,7 +127,7 @@ class Spark:
             "needs it; the speaker's own lines fill the runtime first.\n"
             "- Give a 2 to 4 word callout for a span only when a concrete on-screen object or number deserves it, else empty.\n"
             "- Propose a short title card text (max 6 words), a caption style note and a one-sentence reframe note.\n"
-            "- estimated_runtime_s = total kept words / 2.5.\n\n"
+            f"- estimated_runtime_s = total kept words / {wps:.1f}.\n\n"
             f"TRANSCRIPT (authoritative):\n{transcript_text}")
         return self.call("plan", prompt, schemas.PLAN, file_id=file_id, max_output_tokens=16000, reasoning_effort=reasoning_effort)
 

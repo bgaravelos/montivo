@@ -25,8 +25,14 @@ WATCH = {
         "b_roll_candidates": {"type": "array", "items": {"type": "object", "additionalProperties": False, "properties": {
             "start_s": {"type": "number"}, "end_s": {"type": "number"}, "why": {"type": "string"}},
             "required": ["start_s", "end_s", "why"]}},
+        "movement_moments": {"type": "array",
+                             "description": "moments where the on-camera speaker moves out of centre or handles a prop, with seconds",
+                             "items": {"type": "object", "additionalProperties": False, "properties": {
+                                 "start_s": {"type": "number"}, "end_s": {"type": "number"},
+                                 "what": {"type": "string", "description": "e.g. 'leans left and lifts the laptop'"}},
+                                 "required": ["start_s", "end_s", "what"]}},
     },
-    "required": ["summary", "visual_shots", "speaker_map", "trackable_concepts", "b_roll_candidates"],
+    "required": ["summary", "visual_shots", "speaker_map", "trackable_concepts", "b_roll_candidates", "movement_moments"],
 }
 
 PLAN = {

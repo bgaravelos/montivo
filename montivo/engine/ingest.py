@@ -96,12 +96,32 @@ def make_wav(src: Path, dst: Path, rate: int = 24000, start: float | None = None
     return dst
 
 
-def ingest(source: Path, out: Path, ledger: Ledger, log=print) -> Ingested:
+def make_hflip(src: Path, dst: Path) -> Probe:
+    """Mirror the footage once (selfie / mirror-mode clips where on-screen text reads backwards): libx264 crf 18 at the
+    source size and fps, audio copied untouched so the Voice clock is unchanged. Everything downstream (proxy, wav, SAM,
+    render) reads this file, so boxes and crops never have to be flipped."""
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?", "-vf", "hflip",
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "copy",
+                    "-movflags", "+faststart", str(dst)], check=True)
+    return ffprobe(dst)
+
+
+def ingest(source: Path, out: Path, ledger: Ledger, log=print, hflip: bool = False) -> Ingested:
     out.mkdir(parents=True, exist_ok=True)
+    original = source
     probe = ffprobe(source)
     log(f"ingest: {source.name} {probe.width}x{probe.height} {probe.fps:g} fps {probe.duration:.1f} s audio={probe.has_audio}")
     if not probe.has_audio:
         raise SystemExit("Montivo needs footage with an audio track (Voice is the clock).")
+    if hflip:
+        flipped = out / "source_hflip.mp4"
+        with Timer() as t_flip:
+            probe = make_hflip(source, flipped)
+        ledger.add(Entry(stage="ingest.hflip", model="ffmpeg", seconds=t_flip.seconds, cost_usd=0.0,
+                         note=f"mirrored {source.name} -> {flipped.name} ({flipped.stat().st_size / 1e6:.1f} MB)"))
+        log(f"ingest: mirrored (hflip) to {flipped.name} ({flipped.stat().st_size / 1e6:.1f} MB) in {t_flip.seconds}s; "
+            "it is the source from here on")
+        source = flipped
 
     proxy = out / "proxy.mp4"
     wav = out / "audio.wav"
@@ -119,5 +139,6 @@ def ingest(source: Path, out: Path, ledger: Ledger, log=print) -> Ingested:
 
     ing = Ingested(source=source, probe=probe, proxy=proxy, proxy_probe=pp, wav=wav,
                    file_id=up["id"], upload_seconds=up["upload_seconds"])
-    dump_json(out / "ingest.json", {**ing.to_json(), "upload": {k: v for k, v in up.items() if k != "upload_seconds"}})
+    dump_json(out / "ingest.json", {**ing.to_json(), "hflip": hflip, "original_source": str(original),
+                                    "upload": {k: v for k, v in up.items() if k != "upload_seconds"}})
     return ing

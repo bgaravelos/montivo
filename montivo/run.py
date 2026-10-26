@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL
+from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, TRACK_RESAMPLE_FPS, TRACK_RESAMPLE_OVER_S, sam_cost
 from .engine import track as track_mod
 from .engine.api import dump_json
 from .engine.edl import build_edl
@@ -37,6 +37,7 @@ class RunOptions:
     resume: bool = False
     model: str = SPARK_MODEL
     render: bool = True
+    hflip: bool = False  # mirror the footage once in ingest (selfie / mirror-mode clips)
 
 
 class RunLog:
@@ -58,7 +59,7 @@ def run(opts: RunOptions) -> dict:
     log = RunLog(out / "run.log")
     ledger = Ledger.resume(out / "ledger.json") if opts.resume else Ledger(out / "ledger.json")
     dump_json(out / "run.json", {"footage": str(opts.footage), "brief": opts.brief, "concepts": opts.concepts, "reframe_concept": opts.reframe_concept, "reframe_fps": opts.reframe_fps,
-                                 "target_s": opts.target_s, "model": opts.model, "started": time.strftime("%Y-%m-%dT%H:%M:%S")})
+                                 "target_s": opts.target_s, "model": opts.model, "hflip": opts.hflip, "started": time.strftime("%Y-%m-%dT%H:%M:%S")})
     log(f"montivo run: {opts.footage.name} -> {out}")
 
     def have(*parts: str) -> bool:
@@ -69,10 +70,16 @@ def run(opts: RunOptions) -> dict:
         d = json.loads((out / "ingest.json").read_text())
         ing = Ingested(source=Path(d["source"]), probe=Probe(**d["probe"]), proxy=Path(d["proxy"]), proxy_probe=Probe(**d["proxy_probe"]),
                        wav=Path(d["wav"]), file_id=d["file_id"], upload_seconds=d["upload_seconds"])
-        log(f"resume: ingest from ingest.json (file_id {ing.file_id})")
+        log(f"resume: ingest from ingest.json (file_id {ing.file_id}{', hflip' if d.get('hflip') else ''})")
     else:
-        ing = ingest(opts.footage, out, ledger, log)
+        ing = ingest(opts.footage, out, ledger, log, hflip=opts.hflip)
+    # from here on `ing.source` is the footage every stage reads: the mirrored copy when --hflip, else opts.footage
     spark = Spark(out, ledger, model=opts.model, log=log)
+
+    def concept_price() -> float:
+        """What one more SAM concept costs on this clip at the track fps (one request per concept)."""
+        fps = opts.track_fps or (TRACK_RESAMPLE_FPS if ing.proxy_probe.duration > TRACK_RESAMPLE_OVER_S else ing.proxy_probe.fps)
+        return sam_cost(int(round(ing.proxy_probe.duration * fps)))
 
     # 2. voice and track in parallel; watch starts the moment the transcript exists (it needs it, see spark.py)
     def voice_then_watch():
@@ -90,6 +97,14 @@ def run(opts: RunOptions) -> dict:
         else:
             watch = spark.watch(ing.file_id, voice.transcript_text(), opts.brief, ing.probe.duration)
             dump_json(out / "watch.json", watch.parsed)
+        # Watch's trackable concepts are suggestions only. SAM is one request per concept (about $0.25 per 125 s at
+        # 10 fps), so the only concepts ever sent to SAM are the CLI --concept list plus the reframe head track.
+        suggested = [c for c in watch.parsed.get("trackable_concepts", []) if c.lower() not in {x.lower() for x in opts.concepts}]
+        if suggested:
+            log(f"watch suggests: {', '.join(suggested)} (not tracked; add --concept \"...\" to track one, "
+                f"about ${concept_price():.2f} per concept on this clip)")
+        for m in watch.parsed.get("movement_moments", []):
+            log(f"watch: speaker moves {m['start_s']:.1f}-{m['end_s']:.1f}s: {m['what']}")
         return voice, watch
 
     def track_stage():
@@ -138,13 +153,18 @@ def run(opts: RunOptions) -> dict:
     if voice is None or watch is None:
         raise SystemExit("run aborted: voice/watch failed (see run.log)")
 
-    # 3. plan
+    # 3. plan, with the speech rate Voice measured on this clip (2.5 words/s made a 40 s target come out at 50.7 s)
+    wps = voice.speech_rate()
+    log(f"plan: speech rate {wps:.2f} words/s ({len(voice.words)} words over the spoken seconds of {len(voice.turns)} turns), "
+        f"target {opts.target_s:.0f} s = about {opts.target_s * wps:.0f} to {opts.target_s * 1.2 * wps:.0f} words")
     planned = spark.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
-                         file_id=ing.file_id if opts.plan_with_video else None, reasoning_effort=opts.plan_effort)
+                         file_id=ing.file_id if opts.plan_with_video else None, reasoning_effort=opts.plan_effort,
+                         words_per_s=wps)
     dump_json(out / "plan.json", planned.parsed)
 
-    # 4. EDL v1 on word boundaries
-    source = {"path": str(opts.footage), "proxy": str(ing.proxy), "file_id": ing.file_id, "duration_s": ing.probe.duration,
+    # 4. EDL v1 on word boundaries; the source is the file ingest produced (the mirrored copy under --hflip)
+    source = {"path": str(ing.source), "original_path": str(opts.footage), "hflip": ing.source != opts.footage,
+              "proxy": str(ing.proxy), "file_id": ing.file_id, "duration_s": ing.probe.duration,
               "width": ing.probe.width, "height": ing.probe.height, "fps": ing.probe.fps,
               "proxy_width": ing.proxy_probe.width, "proxy_height": ing.proxy_probe.height}
     track_summary = {c: t.summary() for c, t in tracks.items()}
@@ -156,7 +176,7 @@ def run(opts: RunOptions) -> dict:
     rendered = None
     if opts.render:
         try:
-            rendered = render_edl(out, edl, opts.footage, ledger, log=log, edl_path=out / "edl_v1.json")
+            rendered = render_edl(out, edl, ing.source, ledger, log=log, edl_path=out / "edl_v1.json")
         except Exception:
             errors.append(("render", traceback.format_exc()))
             log(f"ERROR in render:\n{errors[-1][1]}")
@@ -165,6 +185,7 @@ def run(opts: RunOptions) -> dict:
         "out": str(out), "runtime_s": edl["runtime_s"], "spans": len(edl["spans"]), "verbatim_rate": edl["verbatim_rate"],
         "unplaced": len(edl["unplaced"]), "turns": len(voice.turns), "words": len(voice.words), "speakers": voice.speakers,
         "tracks": {c: len(t.objects) for c, t in tracks.items()},
+        "watch_suggested_concepts": watch.parsed.get("trackable_concepts", []), "speech_rate_wps": wps,
         "cut": rendered["output"] if rendered else None,
         "cost_usd": ledger.total_cost(), "wall_s": ledger.summary()["wall_seconds"], "errors": [e[0] for e in errors],
     }
