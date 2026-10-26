@@ -89,3 +89,24 @@ def test_plan_segment_pan_inside_frame():
     assert seg.xs[0] < seg.xs[-1]  # it panned right
     per_frame = [abs(b - a) for a, b in zip(seg.xs, seg.xs[1:])]
     assert max(per_frame) <= math.ceil(P.max_pan_px_s / 30) + 2
+
+
+def test_lean_is_followed_without_lag_at_1920():
+    """Billy's clip, 26/10: the head centre swings 1048 -> 742 px in 0.6 s (5 fps head track). With the measured
+    params the crop must keep the whole head (140 px wide at 1920) inside the 608 px window on every frame."""
+    src = {"width": 1920, "height": 1080, "fps": 30.0}
+    head_cx = [1048] * 10 + [975, 866, 779, 742, 780, 897, 1035, 1167, 1265, 1343, 1317, 1191, 1061, 940, 823, 737, 701, 750, 843, 943, 1005, 1053] + [1068] * 10
+    objs = {"0": [{"f": k, "t": round(k / 5, 2), "box": [c / 2 - 35, 30, c / 2 + 35, 250]} for k, c in enumerate(head_cx)]}
+    tr = {"track_fps": 5.0, "source": {"width": 960, "height": 540}, "objects": objs}
+    seg = plan_segment(0.0, len(head_cx) / 5, src, tr)
+    assert seg.track_id == "0"
+    clipped = 0
+    for k, x in enumerate(seg.xs):
+        t = k / 30
+        i = min(len(head_cx) - 1, int(t * 5))
+        f = t * 5 - i
+        c = head_cx[i] if i + 1 >= len(head_cx) else head_cx[i] * (1 - f) + head_cx[i + 1] * f
+        if c - 70 < x or c + 70 > x + seg.crop_w:
+            clipped += 1
+    assert clipped == 0
+    assert set(seg.xs[:50]) == {seg.xs[0]}  # still for the first 1.67 s (the resample eases in one track sample early)

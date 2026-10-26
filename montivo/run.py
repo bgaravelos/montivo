@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import SPARK_MODEL
+from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL
 from .engine import track as track_mod
 from .engine.api import dump_json
 from .engine.edl import build_edl
@@ -27,6 +27,8 @@ class RunOptions:
     out: Path
     concepts: list[str] = field(default_factory=lambda: ["person"])
     track_fps: float | None = None
+    reframe_concept: str | None = REFRAME_CONCEPT  # tracked at reframe_fps for the 9:16 crop; None = person only
+    reframe_fps: float = REFRAME_TRACK_FPS
     language: str | None = "English"
     target_s: float = 40.0
     plan_with_video: bool = False
@@ -55,7 +57,7 @@ def run(opts: RunOptions) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     log = RunLog(out / "run.log")
     ledger = Ledger.resume(out / "ledger.json") if opts.resume else Ledger(out / "ledger.json")
-    dump_json(out / "run.json", {"footage": str(opts.footage), "brief": opts.brief, "concepts": opts.concepts,
+    dump_json(out / "run.json", {"footage": str(opts.footage), "brief": opts.brief, "concepts": opts.concepts, "reframe_concept": opts.reframe_concept, "reframe_fps": opts.reframe_fps,
                                  "target_s": opts.target_s, "model": opts.model, "started": time.strftime("%Y-%m-%dT%H:%M:%S")})
     log(f"montivo run: {opts.footage.name} -> {out}")
 
@@ -98,7 +100,24 @@ def run(opts: RunOptions) -> dict:
             log(f"resume: tracks from track/*/tracks.json ({', '.join(loaded)})")
             return loaded
         src = track_mod.prepare_source(ing.proxy, ing.proxy_probe, ing.file_id, out / "track", ledger, fps=opts.track_fps, log=log)
-        return track_mod.track_all(src, opts.concepts, out / "track", ledger, log)
+        concepts = list(opts.concepts)
+        reframe = opts.reframe_concept
+        if reframe and reframe not in concepts and abs(src.fps - opts.reframe_fps) < 0.01:
+            concepts.append(reframe)  # same clip, one more request in the same batch
+            reframe = None
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_main = pool.submit(track_mod.track_all, src, concepts, out / "track", ledger, log)
+            f_head = None
+            if reframe and reframe not in concepts:
+                def head_track():
+                    s5 = track_mod.prepare_source(ing.proxy, ing.proxy_probe, ing.file_id, out / "track", ledger, fps=opts.reframe_fps, log=log)
+                    return track_mod.track_concept(s5, reframe, out / "track", ledger, log)
+                f_head = pool.submit(head_track)
+            tracks = f_main.result()
+            if f_head is not None:
+                ct = f_head.result()
+                tracks[ct.concept] = ct
+        return tracks
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         f_voice = pool.submit(voice_then_watch)
@@ -129,7 +148,8 @@ def run(opts: RunOptions) -> dict:
               "width": ing.probe.width, "height": ing.probe.height, "fps": ing.probe.fps,
               "proxy_width": ing.proxy_probe.width, "proxy_height": ing.proxy_probe.height}
     track_summary = {c: t.summary() for c, t in tracks.items()}
-    edl = build_edl(planned.parsed, voice, watch.parsed, source, opts.brief, track_summary)
+    edl = build_edl(planned.parsed, voice, watch.parsed, source, opts.brief, track_summary,
+                    reframe_concept=opts.reframe_concept or "person")
     dump_json(out / "edl_v1.json", edl)
 
     # 5. render cut_v1.mp4 from the source (ffmpeg only)

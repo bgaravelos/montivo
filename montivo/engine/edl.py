@@ -63,7 +63,8 @@ def locate(span_text: str, turn_words: list[Word]) -> tuple[int, int, bool, floa
     return first, last, False, round(sm.ratio(), 3)
 
 
-def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: str, tracks: dict) -> dict:
+def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: str, tracks: dict,
+              reframe_concept: str = "head") -> dict:
     by_turn: dict[int, list[Word]] = {}
     for w in voice.words:
         by_turn.setdefault(w.turn_id, []).append(w)
@@ -103,6 +104,7 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
         "reframe_note": plan.get("reframe_note", ""),
         "speaker_map": watch.get("speaker_map", []),
         "tracks": tracks,
+        "reframe_concept": reframe_concept,  # the SAM concept the 9:16 crop follows (falls back to person)
         "captions": [],  # filled by the caption step (evening 3)
         "reframe": [],  # filled by the reframe step (evening 2)
     }

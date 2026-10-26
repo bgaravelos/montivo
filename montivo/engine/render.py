@@ -18,6 +18,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..config import REFRAME_CONCEPT
 from ..ledger import Entry, Ledger, Timer
 from .api import dump_json
 from .reframe import ReframeParams, SegmentPath, plan_segment
@@ -74,8 +75,8 @@ def frame_align(segments: list[Segment], fps: float) -> list[Segment]:
     return segments
 
 
-def load_person_track(run_dir: Path, edl: dict, concept: str = "person") -> dict | None:
-    """tracks.json for the reframe concept: the path in the EDL when it resolves, else run_dir/track/<concept>/."""
+def load_track(run_dir: Path, edl: dict, concept: str) -> dict | None:
+    """tracks.json for one concept: the path in the EDL when it resolves, else run_dir/track/<concept>/."""
     cands: list[Path] = []
     rec = (edl.get("tracks") or {}).get(concept) or {}
     if rec.get("tracks"):
@@ -85,6 +86,18 @@ def load_person_track(run_dir: Path, edl: dict, concept: str = "person") -> dict
         if p.is_file():
             return json.loads(p.read_text())
     return None
+
+
+def load_reframe_track(run_dir: Path, edl: dict) -> tuple[str | None, dict | None]:
+    """The track the crop follows: the EDL's reframe concept (default "head"), then "person", else a centre crop."""
+    order = [edl.get("reframe_concept") or REFRAME_CONCEPT]
+    if "person" not in order:
+        order.append("person")
+    for concept in order:
+        track = load_track(run_dir, edl, concept)
+        if track and track.get("objects"):
+            return concept, track
+    return None, None
 
 
 def _ffmpeg(args: list[str]) -> None:
@@ -141,10 +154,10 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     render_dir = run_dir / "render"
     render_dir.mkdir(parents=True, exist_ok=True)
     fps = float(edl["source"]["fps"])
-    track = load_person_track(run_dir, edl)
+    concept, track = load_reframe_track(run_dir, edl)
     segments = frame_align(merge_segments(edl["spans"]), fps)
     log(f"render: {len(edl['spans'])} spans -> {len(segments)} segments, source {source.name}, "
-        f"track {'person' if track else 'none (centre crop)'}")
+        f"track {concept or 'none (centre crop)'}")
 
     keyframes: list[dict] = []
     seg_info: list[dict] = []
@@ -158,7 +171,7 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
             keyframes.extend(path.keyframes)
             moving = sum(1 for a, b in zip(path.xs, path.xs[1:]) if a != b)
             seg_info.append({"index": seg.index, "t_in": seg.t_in, "t_out": seg.t_out, "duration": seg.duration, "frames": seg.frames,
-                             "spans": seg.span_ids, "track_id": path.track_id, "crop": [path.crop_w, path.crop_h],
+                             "spans": seg.span_ids, "track_concept": concept, "track_id": path.track_id, "crop": [path.crop_w, path.crop_h],
                              "x_first": path.xs[0], "x_min": min(path.xs), "x_max": max(path.xs),
                              "frames_moving": moving, "file": f.as_posix()})
             log(f"render: seg {seg.index + 1} {seg.t_in:.3f}-{seg.t_out:.3f}s ({seg.frames} frames, {'+'.join(seg.span_ids)}) "

@@ -1,10 +1,12 @@
 """Reframe: a 9:16 crop path per rendered segment from the SAM person track.
 
-The track gives one box per frame at the track fps (10 fps for sources over 60 s) in proxy pixels. For a segment
-(t_in, t_out) we pick the object whose box is largest and most centred inside that window, map its centre to source
-pixels, interpolate the gaps, then run a camera-operator smoother: dead zone of +-8 % of the crop width (the camera
-does not chase small head moves), EMA toward the target when it leaves the dead zone, pan speed clamped (about
-180 px/s on a 1280 px source), x clamped inside the frame. The crop is full height, width = even(h * 9/16).
+The track is the SAM "head" track (5 fps) when the run has one, else the "person" track: one box per frame in proxy
+pixels. A lean moves the head about three times further than the body box centre (measured on Billy's clip: head
+450 px, body box 130 px at 1920), so the person box is only a fallback. For a segment (t_in, t_out) we pick the
+object whose box is largest and most centred inside that window, map its centre to source pixels, interpolate the
+gaps, then run a camera-operator smoother: dead zone of +-8 % of the crop width (the camera does not chase small head
+moves), EMA toward the target when it leaves the dead zone (tau 0.25 s), pan speed clamped (450 px/s on a 1280 px
+source, 675 at 1920: a 340 px lean in 0.6 s is followed without lag), x clamped inside the frame. The crop is full height, width = even(h * 9/16).
 
 Output per segment: one ffmpeg sendcmd line per source frame (`<t> crop x <px>;`, times relative to the segment
 start) and a sparse list of keyframes (every 0.5 s or when a pan starts or stops) for the EDL and the UI.
@@ -18,8 +20,8 @@ from dataclasses import dataclass, field
 @dataclass
 class ReframeParams:
     dead_zone_frac: float = 0.08  # of the crop width, each side
-    ema_tau_s: float = 0.4  # time constant of the move toward the target
-    max_pan_px_s: float = 180.0  # on a 1280 px wide source, scaled with the source width
+    ema_tau_s: float = 0.25  # time constant of the move toward the target
+    max_pan_px_s: float = 450.0  # on a 1280 px wide source, scaled with the source width (675 px/s at 1920)
     keyframe_every_s: float = 0.5
     min_coverage: float = 0.2  # a track must cover this share of the window to be picked
     edge_px: int = 2  # ignore x changes smaller than this when deciding "moving"

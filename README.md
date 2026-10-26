@@ -8,7 +8,7 @@ cut against a rubric and re-cut until it passes.
 |---|---|---|
 | Eyes and judgement | **Muse Spark 1.3** | shot log and speaker map (`watch`), paper edit by turn id with verbatim words (`plan`), rubric review with fix ops (`review`) |
 | Ears and clock | **Muse Voice Transcribe 1.0** | one streaming diarization call per clip: turns, speakers and word-level timings from the delta stream |
-| Camera operator | **SAM 3.1** | tracks the person (and any callout concept) per frame over raw SSE; drives the 9:16 reframe and callout anchors |
+| Camera operator | **SAM 3.1** | tracks the speaker's head (5 fps) for the 9:16 reframe and the person plus any callout concept per frame over raw SSE |
 | Art department | **Muse Image 1.0** | title card and thumbnail |
 | Hands | ffmpeg | proxies, audio, trims, crop path, captions, loudness, H.264 |
 
@@ -23,11 +23,11 @@ Works end to end from raw footage to a playable 9:16 cut:
 montivo run footage.mp4 --brief "..." --out runs/001
   ingest   ffprobe, 960 px proxy at source fps, 24 kHz mono wav, one Files API upload reused by every Spark call
   voice    streaming DIARIZATION -> turns[] + words[] (lag-corrected, snapped to speechStart/speechEnd)   \
-  track    SAM 3.1 "person" over httpx SSE, regex boxes -> track/person/tracks.json, masks kept opaque     | in parallel
+  track    SAM 3.1 "person" (10 fps) and "head" (5 fps) over httpx SSE, regex boxes -> track/<concept>/tracks.json | in parallel
   watch    Spark 1.3 + proxy + transcript -> shot log, speaker map, trackable concepts, b-roll            /
   plan     Spark 1.3 + brief + shot log + transcript -> paper edit (turn id + verbatim words)
   edl      spans mapped to Voice word boundaries -> edl_v1.json
-  reframe  per segment: the SAM track that is largest and most centred -> smoothed 9:16 crop path (dead zone, EMA, pan clamp)
+  reframe  per segment: the head track (person as fallback), largest and most centred id -> smoothed 9:16 crop path (dead zone, EMA, pan clamp)
   render   ffmpeg from the SOURCE: frame-aligned segments, sendcmd-driven crop, 1080x1920 H.264; audio cut in one pass -> cut_v1.mp4
 montivo render runs/001                    re-render from edl_v1.json, ffmpeg only, no API call
 ```
@@ -45,7 +45,8 @@ export MODEL_API_KEY=...      # from dev.meta.ai, never committed
 ```
 
 Useful flags: `--target 40` (seconds of speech to keep), `--concept "mission patch"` (extra SAM concepts, repeatable),
-`--track-fps 10` (default: 10 fps for sources over 60 s, source fps below that), `--no-track`, `--plan-with-video`,
+`--track-fps 10` (default: 10 fps for sources over 60 s, source fps below that), `--reframe-concept head` and
+`--reframe-fps 5` (the track the crop follows; `none` falls back to the person track), `--no-track`, `--plan-with-video`,
 `--plan-effort low|medium|high`, `--resume` (reuse ingest, voice, watch and tracks already in the run folder while
 iterating on the plan), `--language none`, `--no-render` (stop at `edl_v1.json`). `montivo render runs/001 [--edl ...]
 [--source ...] [--out cut_v2.mp4]` renders an EDL again without touching the API.
@@ -60,7 +61,7 @@ runs/001/
   ingest.json  proxy.mp4  audio.wav                 probe, 960 px proxy (uploaded once), 24 kHz mono wav
   voice/  request.json  events.jsonl  voice.json    raw stream, turns[] and words[]
   track/  track_source_10fps.mp4                    the clip SAM saw (resampled when the source is over 60 s)
-          person/ request.json events.sse tracks.json masks.jsonl
+          person/ head/ request.json events.sse tracks.json masks.jsonl   (head: track_source_5fps.mp4)
   spark/  watch_request.json watch_response.json plan_request.json plan_response.json
   watch.json  plan.json  edl_v1.json                parsed outputs and the EDL on word boundaries
   render/ seg_NN.mp4 seg_NN_crop.cmd audio.m4a concat.txt   one video segment per cut with its crop path, the audio in one piece
@@ -85,8 +86,14 @@ also carries `reframe` (crop keyframes every 0.5 s and whenever the camera start
   out of the text with a regex in milliseconds; the official parser needs minutes for the masks, so masks are kept
   as opaque payloads per frame and decoded only where a head anchor is needed. Ids are stable while the object stays
   in frame and do not reset on cuts.
-- Cost of this stage on a 150 s source: Voice $0.01, SAM at 10 fps $0.30, Spark watch $0.07, Spark plan
-  (text only) $0.03, about $0.41 and 3 minutes of wall time.
+- Cost of this stage on a 150 s source: Voice $0.01, SAM person at 10 fps $0.30 plus head at 5 fps $0.15, Spark watch
+  $0.07, Spark plan (text only) $0.03, about $0.56 and 3 minutes of wall time ($0.47 on Billy's 125 s clip). SAM is
+  one request per concept, so every extra concept costs the same again.
+- Reframe on a moving subject (Billy's clip, 26/10): on a lean the head moves about 450 px at 1920 while the SAM person
+  box centre moves 130 px (the box is torso plus arms), so a crop that centres the person box clips the face. The crop
+  follows a separate "head" track at 5 fps instead, with the pan clamp at 450 px/s (1280 base) and an EMA of 0.25 s:
+  on the 25 s lean block the head stayed fully inside the crop in 745 of 745 frames with no direction reversal, and the
+  static NASA talking head still renders at one x.
 - Render path (kill test (a) on the NASA clip): spans flagged contiguous render as one segment, every segment is
   snapped to whole source frames, video segments are joined by the concat demuxer with stream copy and the audio is
   cut from the source in one pass (atrim + 20 ms fades + concat filter). Re-transcribing the cut with Voice gives the

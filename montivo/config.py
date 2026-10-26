@@ -27,6 +27,10 @@ VOICE_CHUNK_TARGET_S = 480  # when a file must be split, aim for 8 min chunks
 PROXY_MAX_DIM = 960
 TRACK_RESAMPLE_FPS = 10.0
 TRACK_RESAMPLE_OVER_S = 60.0
+# The 9:16 reframe follows the head, not the body: on a lean the head moves 3x more than the body box centre
+# (measured 26/10 on Billy's clip). 5 fps is enough for a smoothed path and costs $0.125 per 125 s.
+REFRAME_CONCEPT = "head"
+REFRAME_TRACK_FPS = 5.0
 
 
 def api_key() -> str:

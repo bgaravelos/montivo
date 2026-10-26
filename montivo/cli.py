@@ -27,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--target", type=float, default=40.0, help="target runtime of the cut in seconds (default 40)")
     r.add_argument("--concept", action="append", default=None, help="SAM concept to track (repeatable, default: person)")
     r.add_argument("--track-fps", type=float, default=None, help="resample the clip to this fps before SAM (default: 10 fps over 60 s)")
+    r.add_argument("--reframe-concept", default="head", help="SAM concept the 9:16 crop follows (default head; 'none' = person track)")
+    r.add_argument("--reframe-fps", type=float, default=5.0, help="track fps for the reframe concept (default 5)")
     r.add_argument("--language", default="English", help="Voice languageBias (default English, 'none' to disable)")
     r.add_argument("--no-track", action="store_true", help="skip SAM")
     r.add_argument("--plan-with-video", action="store_true", help="attach the proxy to the plan call too (watch already saw it)")
@@ -63,7 +65,9 @@ def main(argv: list[str] | None = None) -> int:
             ap.error(f"{args.footage} is not a file")
         out = args.out or Path("runs") / time.strftime("%Y%m%d-%H%M%S")
         opts = RunOptions(footage=args.footage, brief=args.brief, out=out, concepts=args.concept or ["person"],
-                          track_fps=args.track_fps, language=None if args.language.lower() == "none" else args.language,
+                          track_fps=args.track_fps,
+                          reframe_concept=None if args.reframe_concept.lower() == "none" else args.reframe_concept,
+                          reframe_fps=args.reframe_fps, language=None if args.language.lower() == "none" else args.language,
                           target_s=args.target, plan_with_video=args.plan_with_video, plan_effort=args.plan_effort,
                           skip_track=args.no_track, resume=args.resume, render=not args.no_render,
                           model=args.model or RunOptions.__dataclass_fields__["model"].default)

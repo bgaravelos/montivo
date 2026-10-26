@@ -27,3 +27,25 @@ def test_frame_align_snaps_to_whole_frames():
     s = segs[0]
     assert s.frames == 82 and abs(s.t_in - 112.766667) < 1e-6 and abs(s.t_out - 115.5) < 1e-6
     assert abs(s.duration - 82 / 30) < 1e-4
+
+
+def _tracks(tmp_path, concept, objects):
+    import json
+    d = tmp_path / "track" / concept
+    d.mkdir(parents=True)
+    (d / "tracks.json").write_text(json.dumps({"concept": concept, "track_fps": 5.0,
+                                               "source": {"width": 960, "height": 540}, "objects": objects}))
+
+
+def test_reframe_track_prefers_head_then_person_then_centre(tmp_path):
+    from montivo.engine.render import load_reframe_track
+    rec = [{"f": 0, "t": 0.0, "box": [400, 30, 540, 250]}]
+    assert load_reframe_track(tmp_path, {}) == (None, None)
+    _tracks(tmp_path, "person", {"0": rec})
+    assert load_reframe_track(tmp_path, {})[0] == "person"
+    _tracks(tmp_path, "head", {"0": rec})
+    assert load_reframe_track(tmp_path, {})[0] == "head"
+    assert load_reframe_track(tmp_path, {"reframe_concept": "person"})[0] == "person"
+    _tracks(tmp_path, "face", {})  # a concept with no objects is skipped
+    assert load_reframe_track(tmp_path, {"reframe_concept": "face"})[0] == "head" or \
+        load_reframe_track(tmp_path, {"reframe_concept": "face"})[0] == "person"
