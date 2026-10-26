@@ -15,9 +15,9 @@ cut against a rubric and re-cut until it passes.
 Every runtime model is a Meta model. Every call's request and response JSON lands in the run folder next to a
 ledger of tokens, dollars and seconds per stage.
 
-## Status (evening 1 of 8, 27/10/2026)
+## Status (evening 2 of 8)
 
-Works end to end up to the paper edit:
+Works end to end from raw footage to a playable 9:16 cut:
 
 ```
 montivo run footage.mp4 --brief "..." --out runs/001
@@ -27,9 +27,12 @@ montivo run footage.mp4 --brief "..." --out runs/001
   watch    Spark 1.3 + proxy + transcript -> shot log, speaker map, trackable concepts, b-roll            /
   plan     Spark 1.3 + brief + shot log + transcript -> paper edit (turn id + verbatim words)
   edl      spans mapped to Voice word boundaries -> edl_v1.json
+  reframe  per segment: the SAM track that is largest and most centred -> smoothed 9:16 crop path (dead zone, EMA, pan clamp)
+  render   ffmpeg from the SOURCE: frame-aligned segments, sendcmd-driven crop, 1080x1920 H.264; audio cut in one pass -> cut_v1.mp4
+montivo render runs/001                    re-render from edl_v1.json, ffmpeg only, no API call
 ```
 
-Not yet: render, captions, reframe path, review loop, UI. See the plan at the end.
+Not yet: captions, title card, loudnorm, review loop, UI. See the plan at the end.
 
 ## Setup
 
@@ -44,7 +47,8 @@ export MODEL_API_KEY=...      # from dev.meta.ai, never committed
 Useful flags: `--target 40` (seconds of speech to keep), `--concept "mission patch"` (extra SAM concepts, repeatable),
 `--track-fps 10` (default: 10 fps for sources over 60 s, source fps below that), `--no-track`, `--plan-with-video`,
 `--plan-effort low|medium|high`, `--resume` (reuse ingest, voice, watch and tracks already in the run folder while
-iterating on the plan), `--language none`.
+iterating on the plan), `--language none`, `--no-render` (stop at `edl_v1.json`). `montivo render runs/001 [--edl ...]
+[--source ...] [--out cut_v2.mp4]` renders an EDL again without touching the API.
 
 `make test` runs the offline tests (recorded Voice and SAM streams are parsed without network access).
 
@@ -52,17 +56,21 @@ iterating on the plan), `--language none`.
 
 ```
 runs/001/
-  run.json  run.log  summary.json  ledger.json      what ran, every line logged, totals per stage
+  run.json  run.log  summary.json  ledger.json      what ran, every line logged, totals per stage (render is $0)
   ingest.json  proxy.mp4  audio.wav                 probe, 960 px proxy (uploaded once), 24 kHz mono wav
   voice/  request.json  events.jsonl  voice.json    raw stream, turns[] and words[]
   track/  track_source_10fps.mp4                    the clip SAM saw (resampled when the source is over 60 s)
           person/ request.json events.sse tracks.json masks.jsonl
   spark/  watch_request.json watch_response.json plan_request.json plan_response.json
   watch.json  plan.json  edl_v1.json                parsed outputs and the EDL on word boundaries
+  render/ seg_NN.mp4 seg_NN_crop.cmd audio.m4a concat.txt   one video segment per cut with its crop path, the audio in one piece
+  cut_v1.mp4                                        1080x1920 H.264 + AAC, the segments joined by stream copy
 ```
 
 `edl_v1.json` spans carry `t_in`/`t_out` from the Voice words, `verbatim` (the planner quoted the transcript
-exactly), `match_ratio` otherwise, and `contiguous_with_previous` when two spans join without a cut.
+exactly), `match_ratio` otherwise, and `contiguous_with_previous` when two spans join without a cut. After a render it
+also carries `reframe` (crop keyframes every 0.5 s and whenever the camera starts or stops moving) and `render`
+(segments with their frame counts, the track followed and the crop x range).
 
 ## Measured behaviour the design rests on
 
@@ -79,13 +87,22 @@ exactly), `match_ratio` otherwise, and `contiguous_with_previous` when two spans
   in frame and do not reset on cuts.
 - Cost of this stage on a 150 s source: Voice $0.01, SAM at 10 fps $0.30, Spark watch $0.07, Spark plan
   (text only) $0.03, about $0.41 and 3 minutes of wall time.
+- Render path (kill test (a) on the NASA clip): spans flagged contiguous render as one segment, every segment is
+  snapped to whole source frames, video segments are joined by the concat demuxer with stream copy and the audio is
+  cut from the source in one pass (atrim + 20 ms fades + concat filter). Re-transcribing the cut with Voice gives the
+  span words in order with the first and last word of every segment intact. Joining per-segment AAC instead adds about
+  47 ms of audio per segment (encoder padding) and the lip sync drifts by that much at every cut, so the audio is not
+  cut per segment.
+- Planner fill: with "aim for 40 seconds" alone Spark kept 20 s; told the range (target to 1.2x, never below 0.8x),
+  the speech rate (2.5 words per second) and that one long turn may yield several spans, it kept 34.5 s and 32.8 s on
+  two runs ($0.04 per plan call). It still pads with the interviewer's question when the speaker's own lines run short.
 
 ## Plan
 
 | Evening | Deliverable |
 |---|---|
 | 27/10 | engine clients, run folder, ledger, CLI (this); then two kill tests on the render path, see below |
-| 28/10 | EDL builder with reframe path, ffmpeg trim/concat, 9:16 crop following the track: first `cut_v1.mp4`; from here every run uses Billy's own 60 to 90 s English talking-head clip, the NASA clip is regression only |
+| 28/10 | done early (26/10 night): reframe path, ffmpeg trim/concat, 9:16 crop following the track, `cut_v1.mp4`, `montivo render`; from here every run uses Billy's own 60 to 90 s English talking-head clip, the NASA clip is regression only |
 | 29/10 | captions from word times, callouts on tracks, Muse Image title card, loudnorm, speaker-to-person mapping |
 | 30/10 | blind review pass, fix ops, loop guards (3 passes, budget, repeated fixes): v1 to v3 on three sources |
 | 31/10 | FastAPI + SSE, React shell: upload, brief, run, live log, preview, review panel |

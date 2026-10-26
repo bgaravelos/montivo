@@ -1,4 +1,4 @@
-"""The run: ingest -> (voice -> watch) || track -> plan -> edl_v1.json, with a ledger and every raw call saved."""
+"""The run: ingest -> (voice -> watch) || track -> plan -> edl_v1.json -> render cut_v1.mp4, with a ledger and every raw call saved."""
 from __future__ import annotations
 
 import json
@@ -14,6 +14,7 @@ from .engine import track as track_mod
 from .engine.api import dump_json
 from .engine.edl import build_edl
 from .engine.ingest import Ingested, Probe, ingest
+from .engine.render import render as render_edl
 from .engine.spark import Spark, SparkCall
 from .engine.voice import VoiceResult, transcribe
 from .ledger import Ledger
@@ -33,6 +34,7 @@ class RunOptions:
     skip_track: bool = False
     resume: bool = False
     model: str = SPARK_MODEL
+    render: bool = True
 
 
 class RunLog:
@@ -52,12 +54,7 @@ def run(opts: RunOptions) -> dict:
     out = opts.out
     out.mkdir(parents=True, exist_ok=True)
     log = RunLog(out / "run.log")
-    ledger = Ledger(out / "ledger.json")
-    if opts.resume and (out / "ledger.json").is_file():
-        from .ledger import Entry
-        prev = json.loads((out / "ledger.json").read_text())
-        ledger.entries = [Entry(**e) for e in prev.get("entries", [])]
-        ledger.started -= prev.get("wall_seconds", 0.0)
+    ledger = Ledger.resume(out / "ledger.json") if opts.resume else Ledger(out / "ledger.json")
     dump_json(out / "run.json", {"footage": str(opts.footage), "brief": opts.brief, "concepts": opts.concepts,
                                  "target_s": opts.target_s, "model": opts.model, "started": time.strftime("%Y-%m-%dT%H:%M:%S")})
     log(f"montivo run: {opts.footage.name} -> {out}")
@@ -135,10 +132,20 @@ def run(opts: RunOptions) -> dict:
     edl = build_edl(planned.parsed, voice, watch.parsed, source, opts.brief, track_summary)
     dump_json(out / "edl_v1.json", edl)
 
+    # 5. render cut_v1.mp4 from the source (ffmpeg only)
+    rendered = None
+    if opts.render:
+        try:
+            rendered = render_edl(out, edl, opts.footage, ledger, log=log, edl_path=out / "edl_v1.json")
+        except Exception:
+            errors.append(("render", traceback.format_exc()))
+            log(f"ERROR in render:\n{errors[-1][1]}")
+
     summary = {
         "out": str(out), "runtime_s": edl["runtime_s"], "spans": len(edl["spans"]), "verbatim_rate": edl["verbatim_rate"],
         "unplaced": len(edl["unplaced"]), "turns": len(voice.turns), "words": len(voice.words), "speakers": voice.speakers,
         "tracks": {c: len(t.objects) for c, t in tracks.items()},
+        "cut": rendered["output"] if rendered else None,
         "cost_usd": ledger.total_cost(), "wall_s": ledger.summary()["wall_seconds"], "errors": [e[0] for e in errors],
     }
     dump_json(out / "summary.json", summary)
@@ -151,3 +158,19 @@ def run(opts: RunOptions) -> dict:
     log(f"done: {edl['runtime_s']} s cut from {len(edl['spans'])} spans, verbatim {edl['verbatim_rate']:.0%}, "
         f"${ledger.total_cost():.4f}, {summary['wall_s']} s wall")
     return summary
+
+
+def render_run(run_dir: Path, edl_path: Path | None = None, source: Path | None = None, out_name: str = "cut_v1.mp4") -> dict:
+    """`montivo render runs/001`: ffmpeg only, from an existing EDL; appends a `render` entry to the run's ledger."""
+    edl_path = edl_path or run_dir / "edl_v1.json"
+    if not edl_path.is_file():
+        raise SystemExit(f"{edl_path} not found: run `montivo run` first")
+    edl = json.loads(edl_path.read_text())
+    source = source or Path(edl["source"]["path"])
+    if not source.is_file():
+        raise SystemExit(f"source footage {source} not found (run from the project root or pass --source)")
+    log = RunLog(run_dir / "run.log")
+    ledger = Ledger.resume(run_dir / "ledger.json")
+    log(f"montivo render: {edl_path} -> {run_dir / out_name}")
+    info = render_edl(run_dir, edl, source, ledger, out_name=out_name, log=log, edl_path=edl_path)
+    return {"out": info["output"], "runtime_s": edl["runtime_s"], "segments": len(info["segments"]), "seconds": info["seconds"]}

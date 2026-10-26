@@ -38,9 +38,13 @@ stages of a run folder while iterating on prompts.
 
 ## State and plan
 Evening 1 (26/10 night) done: `montivo run` goes ingest -> voice + track + watch -> plan -> `edl_v1.json` with a ledger.
+Evening 2 (26/10 night, same session group) done: `engine/reframe.py` (9:16 crop path from the SAM track, sendcmd per
+frame, keyframes in the EDL) and `engine/render.py` (frame-aligned segments from the source, audio cut in one pass,
+concat by stream copy) give `cut_v1.mp4`; `montivo render runs/001` re-renders without the API; `--no-render` skips it.
+Kill test (a) passed on the NASA clip (cut re-transcribed with Voice: span words in order, segment edges intact).
 Measured facts that shape the code are in README.md ("Measured behaviour") and, in full, in `docs/notes/`.
-Next: evening 2 = EDL to ffmpeg trim/concat, 9:16 reframe from the person track, first `cut_v1.mp4`, then the two
-render-path kill tests (see README "Design rules fixed on 26/10"). The evening-by-evening table is in README.md.
+Next: evening 3 = captions from word times, callouts on tracks, Muse Image title card, loudnorm; then the blind
+review loop. The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

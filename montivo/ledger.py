@@ -30,6 +30,16 @@ class Ledger:
     started: float = field(default_factory=time.time)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
+    @classmethod
+    def resume(cls, path: Path) -> "Ledger":
+        """A ledger that continues ledger.json when it exists (entries kept, wall clock continued)."""
+        led = cls(path)
+        if path.is_file():
+            prev = json.loads(path.read_text())
+            led.entries = [Entry(**e) for e in prev.get("entries", [])]
+            led.started -= prev.get("wall_seconds", 0.0)
+        return led
+
     def add(self, entry: Entry) -> Entry:
         with self._lock:
             self.entries.append(entry)

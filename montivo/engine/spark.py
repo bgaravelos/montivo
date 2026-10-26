@@ -99,7 +99,11 @@ class Spark:
                              for m in watch.get("speaker_map", []))
         prompt = (
             "You are the editor building the paper edit for a short-form vertical video.\n"
-            f"Brief: {brief}\nTarget runtime: about {target_s:.0f} seconds of speech, never more than {target_s * 1.25:.0f}.\n\n"
+            f"Brief: {brief}\n"
+            f"Target runtime: aim for {target_s:.0f} to {target_s * 1.2:.0f} seconds of kept speech, never below {target_s * 0.8:.0f}. "
+            f"Speech runs at about 2.5 words per second, so that is roughly {target_s * 2.5:.0f} to {target_s * 3:.0f} words in total: "
+            "count the words you keep and add spans until you are inside the range. Several spans may come from one long turn, "
+            "each quoted as its own contiguous block in the order spoken.\n\n"
             f"Footage summary: {watch.get('summary', '')}\n\nShot log (visual, estimated times):\n{shot_log}\n\n"
             f"Speakers:\n{speakers}\n\n"
             "Rules for the paper edit:\n"
@@ -107,9 +111,12 @@ class Spark:
             "- Each span lies inside ONE transcript turn and quotes the exact contiguous words to keep, copied character for "
             "character from that turn's transcript, including repeated words and disfluencies. We cut on word boundaries "
             "taken from the audio, so a paraphrase or a cleaned-up quote cannot be used.\n"
-            "- Prefer spans that start and end on complete thoughts. Skip interviewer questions unless they carry the hook.\n"
+            "- Prefer spans that start and end on complete thoughts. Never keep greetings, audio checks or small talk "
+            "('can you hear me', 'how are you'). Keep an interviewer question only when it is short and the answer "
+            "needs it; the speaker's own lines fill the runtime first.\n"
             "- Give a 2 to 4 word callout for a span only when a concrete on-screen object or number deserves it, else empty.\n"
-            "- Propose a short title card text (max 6 words), a caption style note and a one-sentence reframe note.\n\n"
+            "- Propose a short title card text (max 6 words), a caption style note and a one-sentence reframe note.\n"
+            "- estimated_runtime_s = total kept words / 2.5.\n\n"
             f"TRANSCRIPT (authoritative):\n{transcript_text}")
         return self.call("plan", prompt, schemas.PLAN, file_id=file_id, max_output_tokens=16000, reasoning_effort=reasoning_effort)
 
