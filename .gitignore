@@ -25,3 +25,6 @@ research/results/
 research/.venv/
 
 .DS_Store
+
+# private session notes
+docs/notes/
