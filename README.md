@@ -10,14 +10,14 @@ cut against a rubric and re-cut until it passes.
 | Ears and clock | **Muse Voice Transcribe 1.0** | one streaming diarization call per clip: turns, speakers and word-level timings from the delta stream |
 | Camera operator | **SAM 3.1** | tracks the speaker's head (5 fps) for the 9:16 reframe and the person plus any callout concept per frame over raw SSE |
 | Art department | **Muse Image 1.0** | title card and thumbnail |
-| Hands | ffmpeg | proxies, audio, trims, crop path, captions, loudness, H.264 |
+| Hands | ffmpeg + Pillow | proxies, audio, trims, crop path, caption and callout overlays, loudness, H.264 |
 
 Every runtime model is a Meta model. Every call's request and response JSON lands in the run folder next to a
 ledger of tokens, dollars and seconds per stage.
 
-## Status (evening 2 of 8)
+## Status (evening 3 of 8)
 
-Works end to end from raw footage to a playable 9:16 cut:
+Works end to end from raw footage to a finished 9:16 cut with captions, callouts, a title card and loudnorm:
 
 ```
 montivo run footage.mp4 --brief "..." --out runs/001
@@ -28,11 +28,17 @@ montivo run footage.mp4 --brief "..." --out runs/001
   plan     Spark 1.3 + brief + shot log + movement moments + measured speech rate + transcript -> paper edit (turn id + verbatim words)
   edl      spans mapped to Voice word boundaries -> edl_v1.json
   reframe  per segment: the head track (person as fallback), largest and most centred id -> smoothed 9:16 crop path (dead zone, EMA, pan clamp)
-  render   ffmpeg from the SOURCE: frame-aligned segments, sendcmd-driven crop, 1080x1920 H.264; audio cut in one pass -> cut_v1.mp4
-montivo render runs/001                    re-render from edl_v1.json, ffmpeg only, no API call
+  title    Muse Image 1.0: the plan's title_card_text -> title/title_card.png (generated once, $0.01)
+  captions Voice words of the kept spans -> de-doubled, glossary-corrected, 1 to 4 word lines, placed clear of the SAM head box;
+           the plan's per-span callouts anchored to the SAM person box -> transparent PNGs (Pillow)
+  render   ffmpeg from the SOURCE: 1.5 s title segment with a fade, then frame-aligned segments, sendcmd-driven crop, overlays
+           burned in after the scale, 1080x1920 H.264; audio cut in one pass, 1.5 s of silence in front, one loudnorm pass
+           (-14 LUFS) -> cut_v1.mp4, measured again with ebur128
+montivo render runs/001 --out cut_v3.mp4   re-render from edl_v1.json + voice.json + tracks, ffmpeg only (the title card is
+                                           generated once if missing, --no-title to skip it)
 ```
 
-Not yet: captions, title card, loudnorm, review loop, UI. See the plan at the end.
+Not yet: review loop, UI. See the plan at the end.
 
 ## Setup
 
@@ -59,8 +65,12 @@ box or crop is ever flipped afterwards; recorded in `ingest.json` and in the EDL
 `--track-fps 10` (default: 10 fps for sources over 60 s, source fps below that), `--reframe-concept head` and
 `--reframe-fps 5` (the track the crop follows; `none` falls back to the person track), `--no-track`, `--plan-with-video`,
 `--plan-effort low|medium|high`, `--resume` (reuse ingest, voice, watch and tracks already in the run folder while
-iterating on the plan), `--language none`, `--no-render` (stop at `edl_v1.json`). `montivo render runs/001 [--edl ...]
-[--source ...] [--out cut_v2.mp4]` renders an EDL again without touching the API.
+iterating on the plan), `--language none`, `--no-render` (stop at `edl_v1.json`), `--no-title` (no Muse Image title card,
+saves $0.01), `--no-captions`. `montivo render runs/001 [--edl ...] [--source ...] [--out cut_v3.mp4] [--no-title]
+[--no-captions] [--no-callouts] [--no-loudnorm]` renders an EDL again from the run folder's `voice/voice.json` and tracks;
+it calls no model, except Muse Image once when `title/title_card.png` is missing or was made for another title text.
+Captions use the first font found of `MONTIVO_FONT`, `~/Library/Fonts/InterTight-800.ttf`, Arial Black, Arial Bold,
+DejaVu Sans Bold (recorded in the EDL's `caption_style.font_path`).
 
 `make test` runs the offline tests (recorded Voice and SAM streams are parsed without network access).
 
@@ -76,14 +86,20 @@ runs/001/
           person/ head/ request.json events.sse tracks.json masks.jsonl   (head: track_source_5fps.mp4)
   spark/  watch_request.json watch_response.json plan_request.json plan_response.json
   watch.json  plan.json  edl_v1.json                parsed outputs and the EDL on word boundaries
-  render/ seg_NN.mp4 seg_NN_crop.cmd audio.m4a concat.txt   one video segment per cut with its crop path, the audio in one piece
+  title/  request.json response.json title_card.png   Muse Image call (image stripped from the response) and the card (1152x2048)
+  render/ seg_00_title.mp4 seg_NN.mp4 seg_NN_crop.cmd audio.m4a concat.txt   title segment, one video segment per cut with its crop
+          overlays/ cap_NNN_K.png callout_sN.png    path, the audio in one piece; one PNG per caption line and active word, per callout
   cut_v1.mp4                                        1080x1920 H.264 + AAC, the segments joined by stream copy
 ```
 
 `edl_v1.json` spans carry `t_in`/`t_out` from the Voice words, `verbatim` (the planner quoted the transcript
 exactly), `match_ratio` otherwise, and `contiguous_with_previous` when two spans join without a cut. After a render it
-also carries `reframe` (crop keyframes every 0.5 s and whenever the camera starts or stops moving) and `render`
-(segments with their frame counts, the track followed and the crop x range).
+also carries `reframe` (crop keyframes every 0.5 s and whenever the camera starts or stops moving), `captions` (one entry
+per line: text, cut times per word with what Voice heard where a correction applied, the box in output pixels, the head
+box it avoided, `placement` lower_third / below_head / above_head / over_head, and its `corrections`), `callouts` (text,
+times, box, the person and head boxes, placement), `caption_corrections` (every dedupe and glossary fix) and `render`
+(segments with their frame counts, the track followed, the crop x range and overlay count; the title segment; the
+loudnorm figures and the ebur128 measurement of the finished file).
 
 ## Measured behaviour the design rests on
 
@@ -127,13 +143,25 @@ also carries `reframe` (crop keyframes every 0.5 s and whenever the camera start
   and the render read `source_hflip.mp4`, the head track stayed one id, the head was centred at all 9 checked points
   of the cut including the lean. Run cost $0.49 (hflip and render are $0).
 
+- Finishing on run 011 (26/10, `montivo render runs/011 --out cut_v3.mp4`, ffmpeg only after one $0.01 Muse Image call):
+  this ffmpeg build (Homebrew 9.0.2) has neither libass nor freetype, so `subtitles` and `drawtext` are unavailable;
+  captions and callouts are Pillow PNGs burned in with `overlay` inside the segment encode, so the video is still
+  encoded once. 29 caption lines, 96 word-state PNGs and 1 callout, render 25 s for a 49.3 s cut (the plain cut took 20 s). Voice
+  doubled 3 words in the kept spans ("its its", "that's that's", "in in", each with 0 s gap) and misheard 4 names; all 7
+  corrections are in the EDL. The SAM head box bottom stayed above y 971 of 1920 in every line, so all 29 lines kept the
+  lower-third default (top at 1300) and none is over the face; the callout could not sit on top of the person box (the
+  box starts 132 px from the frame top, inside the platform UI) and went inside the box under the head. Loudness:
+  source -28.5 LUFS; loudnorm (dynamic, one pass) at -1.0 dBTP gave -0.8 dBTP after the AAC encode, so it now aims at
+  -1.5 and the file measures -14.3 LUFS integrated, -1.3 dBTP, LRA 3.9 LU with ebur128. Muse Image returned the title
+  "Raw In, Reviewed Cut Out" spelled correctly in 8.9 s.
+
 ## Plan
 
 | Evening | Deliverable |
 |---|---|
 | 27/10 | engine clients, run folder, ledger, CLI (this); then two kill tests on the render path, see below |
 | 28/10 | done early (26/10 night): reframe path, ffmpeg trim/concat, 9:16 crop following the track, `cut_v1.mp4`, `montivo render`; from here every run uses Billy's own 60 to 90 s English talking-head clip, the NASA clip is regression only |
-| 29/10 | captions from word times, callouts on tracks, Muse Image title card, loudnorm, speaker-to-person mapping |
+| 29/10 | done early (26/10 night): captions from word times, callouts on tracks, Muse Image title card, loudnorm; speaker-to-person mapping still open |
 | 30/10 | blind review pass, fix ops, loop guards (3 passes, budget, repeated fixes): v1 to v3 on three sources |
 | 31/10 | FastAPI + SSE, React shell: upload, brief, run, live log, preview, review panel |
 | 1/11 | the two human actions in the loop first: "drop this span" and "re-run with this instruction" (typed, or spoken through Voice); reorder, caption edit and reframe nudge only after those |

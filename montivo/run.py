@@ -13,6 +13,7 @@ from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, TRACK_RESAM
 from .engine import track as track_mod
 from .engine.api import dump_json
 from .engine.edl import build_edl
+from .engine.image import generate_title_card
 from .engine.ingest import Ingested, Probe, ingest
 from .engine.render import render as render_edl
 from .engine.spark import Spark, SparkCall
@@ -38,6 +39,8 @@ class RunOptions:
     model: str = SPARK_MODEL
     render: bool = True
     hflip: bool = False  # mirror the footage once in ingest (selfie / mirror-mode clips)
+    title: bool = True  # Muse Image title card in front of the cut ($0.01)
+    captions: bool = True
 
 
 class RunLog:
@@ -172,11 +175,19 @@ def run(opts: RunOptions) -> dict:
                     reframe_concept=opts.reframe_concept or "person")
     dump_json(out / "edl_v1.json", edl)
 
-    # 5. render cut_v1.mp4 from the source (ffmpeg only)
+    # 5. title card (muse-image-1.0, $0.01) and render cut_v1.mp4 from the source (ffmpeg only)
     rendered = None
     if opts.render:
+        title_png = None
+        if opts.title and edl.get("title_card_text"):
+            try:
+                title_png = title_card(out, edl, ledger, log)
+            except Exception:
+                errors.append(("title", traceback.format_exc()))
+                log(f"ERROR in title card (rendering without it):\n{errors[-1][1]}")
         try:
-            rendered = render_edl(out, edl, ing.source, ledger, log=log, edl_path=out / "edl_v1.json")
+            rendered = render_edl(out, edl, ing.source, ledger, log=log, edl_path=out / "edl_v1.json",
+                                  words=[w.__dict__ for w in voice.words] if opts.captions else None, title_png=title_png)
         except Exception:
             errors.append(("render", traceback.format_exc()))
             log(f"ERROR in render:\n{errors[-1][1]}")
@@ -201,8 +212,24 @@ def run(opts: RunOptions) -> dict:
     return summary
 
 
-def render_run(run_dir: Path, edl_path: Path | None = None, source: Path | None = None, out_name: str = "cut_v1.mp4") -> dict:
-    """`montivo render runs/001`: ffmpeg only, from an existing EDL; appends a `render` entry to the run's ledger."""
+def title_card(run_dir: Path, edl: dict, ledger: Ledger, log=print) -> Path:
+    """run_dir/title/title_card.png for the EDL's title text: reused when it exists for the same text, else generated
+    once with muse-image-1.0 ($0.01, in the ledger)."""
+    tdir = run_dir / "title"
+    png = tdir / "title_card.png"
+    text = edl["title_card_text"]
+    req = tdir / "request.json"
+    if png.is_file() and req.is_file() and f'"{text}"' in json.loads(req.read_text()).get("prompt", ""):
+        log(f"title: reusing {png} (\"{text}\")")
+        return png
+    return generate_title_card(text, tdir, ledger, log)
+
+
+def render_run(run_dir: Path, edl_path: Path | None = None, source: Path | None = None, out_name: str = "cut_v1.mp4",
+               title: bool = True, captions: bool = True, callouts: bool = True, loudnorm: bool = True) -> dict:
+    """`montivo render runs/001`: ffmpeg only, from an existing EDL and the run's voice.json and tracks; appends a
+    `render` entry to the run's ledger. The only possible API call is the title card, when title/title_card.png is
+    missing ($0.01, muse-image-1.0); --no-title skips it."""
     edl_path = edl_path or run_dir / "edl_v1.json"
     if not edl_path.is_file():
         raise SystemExit(f"{edl_path} not found: run `montivo run` first")
@@ -213,5 +240,15 @@ def render_run(run_dir: Path, edl_path: Path | None = None, source: Path | None 
     log = RunLog(run_dir / "run.log")
     ledger = Ledger.resume(run_dir / "ledger.json")
     log(f"montivo render: {edl_path} -> {run_dir / out_name}")
-    info = render_edl(run_dir, edl, source, ledger, out_name=out_name, log=log, edl_path=edl_path)
-    return {"out": info["output"], "runtime_s": edl["runtime_s"], "segments": len(info["segments"]), "seconds": info["seconds"]}
+    words = None
+    vpath = run_dir / "voice" / "voice.json"
+    if captions and vpath.is_file():
+        words = json.loads(vpath.read_text())["words"]
+    elif captions:
+        log(f"render: {vpath} missing, no captions")
+    title_png = title_card(run_dir, edl, ledger, log) if title and edl.get("title_card_text") else None
+    info = render_edl(run_dir, edl, source, ledger, out_name=out_name, log=log, edl_path=edl_path, words=words,
+                      title_png=title_png, captions=captions, callouts=callouts, loudnorm=loudnorm)
+    return {"out": info["output"], "runtime_s": edl["runtime_s"], "duration_s": info["duration_s"], "segments": len(info["segments"]),
+            "captions": info["captions"], "callouts": info["callouts"], "loudness": info["loudness_ebur128"],
+            "seconds": info["seconds"], "cost_usd": ledger.total_cost()}

@@ -27,7 +27,8 @@ Viral; Open Weight only if the Baseten credits arrive by 31/10.
 
 ## Layout
 ```
-montivo/           the engine package (config, ledger, run, cli; engine/{api,ingest,voice,track,spark,schemas,edl}.py)
+montivo/           the engine package (config, ledger, run, cli; engine/{api,ingest,voice,track,spark,schemas,edl,reframe,
+                   render,captions,graphics,image}.py)
 tests/             offline tests on recorded Voice and SAM streams (make test)
 experiments/       the 26/10 kill-test scripts (research, not product; results/ ignored)
 docs/notes/        hand-over notes copied from the Claude Code sessions (git-ignored, read them first)
@@ -43,8 +44,11 @@ frame, keyframes in the EDL) and `engine/render.py` (frame-aligned segments from
 concat by stream copy) give `cut_v1.mp4`; `montivo render runs/001` re-renders without the API; `--no-render` skips it.
 Kill test (a) passed on the NASA clip (cut re-transcribed with Voice: span words in order, segment edges intact).
 Measured facts that shape the code are in README.md ("Measured behaviour") and, in full, in `docs/notes/`.
-Next: evening 3 = captions from word times, callouts on tracks, Muse Image title card, loudnorm; then the blind
-review loop. The evening-by-evening table is in README.md.
+Evening 3 (26/10 night) done offline on run 011: `engine/captions.py` + `engine/graphics.py` (Pillow PNG captions and
+callouts, overlay in the segment encode: this ffmpeg has no libass/drawtext), `engine/image.py` (Muse Image title card,
+`--no-title`), loudnorm -14 LUFS in `render_audio`; `montivo render runs/011 --out cut_v3.mp4`.
+Next: a fresh run 012 (`--target 45`) to verify on new Voice output, then the blind review loop. The evening-by-evening
+table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

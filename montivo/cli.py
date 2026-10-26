@@ -39,12 +39,18 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--hflip", action="store_true",
                    help="mirror the footage once before everything else (selfie / mirror-mode clips with reversed text); "
                         "writes <out>/source_hflip.mp4 (libx264 crf 18) and uses it as the source for proxy, wav, SAM and render")
+    r.add_argument("--no-title", action="store_true", help="no Muse Image title card in front of the cut (saves $0.01)")
+    r.add_argument("--no-captions", action="store_true", help="render without burned-in captions")
 
-    rr = sub.add_parser("render", help="re-render cut_v1.mp4 from a run folder's edl_v1.json (ffmpeg only, no API call)")
+    rr = sub.add_parser("render", help="re-render a run folder's edl_v1.json with captions, callouts, title card and loudnorm (ffmpeg only; the title card is generated once if missing)")
     rr.add_argument("run_dir", type=Path)
     rr.add_argument("--edl", type=Path, default=None, help="EDL to render (default <run_dir>/edl_v1.json)")
     rr.add_argument("--source", type=Path, default=None, help="source footage (default: the EDL's source path)")
     rr.add_argument("--out", default="cut_v1.mp4", help="output file name inside the run folder (default cut_v1.mp4)")
+    rr.add_argument("--no-title", action="store_true", help="no title card (otherwise title/title_card.png, generated once if missing, $0.01)")
+    rr.add_argument("--no-captions", action="store_true", help="no burned-in captions")
+    rr.add_argument("--no-callouts", action="store_true", help="no callouts")
+    rr.add_argument("--no-loudnorm", action="store_true", help="keep the source loudness")
 
     p = sub.add_parser("probe", help="ffprobe summary of a file")
     p.add_argument("footage", type=Path)
@@ -59,7 +65,9 @@ def main(argv: list[str] | None = None) -> int:
         from .run import render_run
         if not args.run_dir.is_dir():
             ap.error(f"{args.run_dir} is not a run folder")
-        print(json.dumps(render_run(args.run_dir, edl_path=args.edl, source=args.source, out_name=args.out), indent=2))
+        print(json.dumps(render_run(args.run_dir, edl_path=args.edl, source=args.source, out_name=args.out,
+                                    title=not args.no_title, captions=not args.no_captions,
+                                    callouts=not args.no_callouts, loudnorm=not args.no_loudnorm), indent=2))
         return 0
 
     if args.cmd == "run":
@@ -73,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
                           reframe_fps=args.reframe_fps, language=None if args.language.lower() == "none" else args.language,
                           target_s=args.target, plan_with_video=args.plan_with_video, plan_effort=args.plan_effort,
                           skip_track=args.no_track, resume=args.resume, render=not args.no_render, hflip=args.hflip,
+                          title=not args.no_title, captions=not args.no_captions,
                           model=args.model or RunOptions.__dataclass_fields__["model"].default)
         summary = run(opts)
         print(json.dumps(summary, indent=2))
