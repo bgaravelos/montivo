@@ -7,8 +7,12 @@ segment are exactly as long as each other and no drift builds up across cuts.
 
 Video: per segment, accurate input seek on the source, crop x driven per frame by a sendcmd file from the reframe
 path, full-height crop scaled to 1080x1920, libx264 crf 18, no audio; then the concat demuxer joins the segments
-with stream copy. Audio: one pass over the source with atrim per segment, a 20 ms fade in and out against clicks,
-the concat filter, one loudnorm pass to -14 LUFS / -1 dBTP, AAC 192k 48 kHz. The two are muxed with stream copy.
+with stream copy. Audio: atrim per segment over the source, a 20 ms fade in and out against clicks, the concat filter,
+then loudness in two passes: loudnorm measures the joined audio first, the second pass applies one fixed gain to
+-14 LUFS (loudnorm linear mode with the measured values), so room tone stays as far under speech as in the source
+(single-pass loudnorm is a dynamic AGC and lifted the room tone at cut starts by up to 28 dB). When that gain would
+push the true peak over -1.5 dBTP, a 4x oversampled lookahead limiter takes the peaks off after the gain and the
+limited audio is measured again before the linear pass. AAC 192k 48 kHz. The two are muxed with stream copy.
 
 Finishing (evening 3), still one video encode per segment: caption lines and callouts are transparent PNGs
 (captions.py / graphics.py) burned in with `overlay` after the crop and scale, each gated by its segment-local time;
@@ -40,6 +44,11 @@ TITLE_S = 1.5
 TITLE_FADE_S = 0.3
 # TP is asked for at -1.5: loudnorm holds -1.0 on the PCM, the AAC encode then measured -0.8 dBTP (run 011)
 LOUDNORM = {"I": -14.0, "TP": -1.5, "LRA": 11.0}
+LOUDNORM_LRA_MAX = 50.0  # loudnorm's own upper bound for the LRA target
+LIMIT_MARGIN_DB = 0.5  # the limiter ceiling sits this far under TP, room for inter-sample peaks and the AAC encode
+LIMIT_RATE = 192000  # the limiter runs 4x oversampled, so it catches true peaks, not only sample peaks
+LIMIT_ATTACK_MS, LIMIT_RELEASE_MS = 5.0, 50.0
+LIMIT_TRIES = 3
 X264 = ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-video_track_timescale", "90000",
         "-map_metadata", "-1", "-movflags", "+faststart"]
 
@@ -191,12 +200,67 @@ def render_title_video(png: Path, fps: float, render_dir: Path, seconds: float =
 
 
 _LOUD_JSON = re.compile(r"\{[^{}]*\"input_i\"[^{}]*\}", re.S)
+_LOUD_KEYS = ("input_i", "input_tp", "input_lra", "input_thresh", "target_offset")
+
+
+def parse_loudnorm(stderr: str) -> dict | None:
+    """The last loudnorm JSON block in an ffmpeg log (print_format=json), numbers as floats."""
+    m = _LOUD_JSON.findall(stderr)
+    if not m:
+        return None
+    return {k: (float(v) if _num(v) else v) for k, v in json.loads(m[-1]).items()}
+
+
+def loudnorm_filter(lra: float, measured: dict | None = None, targets: dict | None = None) -> str:
+    """loudnorm with the targets; with `measured` (a first pass's input_* values) the second, linear pass."""
+    tg = targets or LOUDNORM
+    f = f"loudnorm=I={tg['I']}:TP={tg['TP']}:LRA={lra:g}"
+    if measured:
+        f += (f":measured_I={measured['input_i']}:measured_LRA={measured['input_lra']}:measured_TP={measured['input_tp']}"
+              f":measured_thresh={measured['input_thresh']}:offset={measured['target_offset']}:linear=true")
+    return f + ":print_format=json"
+
+
+def target_lra(measured: dict, targets: dict | None = None) -> float:
+    """loudnorm leaves linear mode when the measured LRA is over the target: the target is raised to clear it."""
+    tg = targets or LOUDNORM
+    return float(min(LOUDNORM_LRA_MAX, max(tg["LRA"], math.ceil(measured["input_lra"]) + 1.0)))
+
+
+def linear_ok(measured: dict, targets: dict | None = None) -> bool:
+    """Whether loudnorm can stay linear on audio with these measured values: the gain to the target must not lift
+    the true peak over TP (and the LRA target is raised by target_lra)."""
+    tg = targets or LOUDNORM
+    return measured["input_tp"] + (tg["I"] - measured["input_i"]) <= tg["TP"] + 1e-6
+
+
+def limiter_chain(gain_db: float, targets: dict | None = None) -> str:
+    """Fixed gain then a lookahead limiter at TP - LIMIT_MARGIN_DB, 4x oversampled, delay compensated (no A/V shift)."""
+    tg = targets or LOUDNORM
+    ceiling = 10 ** ((tg["TP"] - LIMIT_MARGIN_DB) / 20)
+    return (f"aresample={LIMIT_RATE},volume={gain_db:.2f}dB,alimiter=limit={ceiling:.4f}:attack={LIMIT_ATTACK_MS:g}:"
+            f"release={LIMIT_RELEASE_MS:g}:level=disabled:latency=1")
+
+
+def _audio_graph(source_graph: str, chain: str) -> str:
+    return source_graph + (f",{chain}" if chain else "") + "[a]"
+
+
+def _run_audio(source: Path, graph: str, out: Path | None) -> str:
+    """One ffmpeg pass over the source with an audio graph ending in [a]; to AAC in `out`, or measure only (None)."""
+    tail = (["-c:a", "aac", "-b:a", "192k", "-ar", str(AUDIO_RATE), "-ac", "2", "-map_metadata", "-1", str(out)]
+            if out else ["-f", "null", "-"])
+    proc = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-nostats", "-loglevel", "info", "-i", str(source),
+                           "-filter_complex", graph, "-map", "[a]", *tail], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"ffmpeg audio failed ({proc.returncode})\n{proc.stderr[-2000:]}")
+    return proc.stderr
 
 
 def render_audio(source: Path, segments: list[Segment], render_dir: Path, lead_s: float = 0.0,
                  loudnorm: bool = True) -> tuple[Path, dict | None]:
-    """All segments' audio in one pass: atrim per segment, 20 ms fades, `lead_s` of silence in front (title card),
-    concat, one loudnorm pass to -14 LUFS / -1 dBTP, AAC. Returns the file and loudnorm's measured values."""
+    """All segments' audio: atrim per segment, 20 ms fades, `lead_s` of silence in front (title card), concat, then
+    two-pass loudness (see the module docstring), AAC. Returns the file and a record of the loudness passes."""
     out = render_dir / "audio.m4a"
     fmt = f"aformat=sample_fmts=fltp:sample_rates={AUDIO_RATE}:channel_layouts=stereo"
     parts = []
@@ -209,24 +273,50 @@ def render_audio(source: Path, segments: list[Segment], render_dir: Path, lead_s
         parts.append(f"[0:a]aresample={AUDIO_RATE},atrim=start={seg.t_in:.6f}:duration={d:.6f},asetpts=PTS-STARTPTS,"
                      f"afade=t=in:st=0:d={AUDIO_FADE_S},afade=t=out:st={max(0.0, d - AUDIO_FADE_S):.6f}:d={AUDIO_FADE_S},{fmt}[a{i}]")
         labels.append(f"[a{i}]")
-    post = ""
-    if loudnorm:
-        post = (f",loudnorm=I={LOUDNORM['I']}:TP={LOUDNORM['TP']}:LRA={LOUDNORM['LRA']}:print_format=json,"
-                f"aresample={AUDIO_RATE}")
-    graph = ";".join(parts) + ";" + "".join(labels) + f"concat=n={len(labels)}:v=0:a=1{post}[a]"
-    proc = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-nostats", "-loglevel", "info", "-i", str(source),
-                           "-filter_complex", graph, "-map", "[a]", "-c:a", "aac", "-b:a", "192k", "-ar", str(AUDIO_RATE),
-                           "-ac", "2", "-map_metadata", "-1", str(out)], capture_output=True, text=True)
-    if proc.returncode != 0:
-        raise RuntimeError(f"ffmpeg audio failed ({proc.returncode})\n{proc.stderr[-2000:]}")
-    measured = None
-    if loudnorm:
-        m = _LOUD_JSON.findall(proc.stderr)
-        if m:
-            raw = json.loads(m[-1])
-            measured = {"target_i": LOUDNORM["I"], "target_tp": LOUDNORM["TP"], "target_lra": LOUDNORM["LRA"],
-                        **{k: (float(v) if _num(v) else v) for k, v in raw.items()}}
-    return out, measured
+    joined = ";".join(parts) + ";" + "".join(labels) + f"concat=n={len(labels)}:v=0:a=1"
+    if not loudnorm:
+        _run_audio(source, _audio_graph(joined, ""), out)
+        return out, None
+    first = parse_loudnorm(_run_audio(source, _audio_graph(joined, loudnorm_filter(LOUDNORM["LRA"])), None))
+    if first is None:
+        raise RuntimeError("loudnorm measuring pass printed no JSON")
+    rec, chain = normalize_plan(first, lambda pre: parse_loudnorm(_run_audio(
+        source, _audio_graph(joined, ",".join(x for x in (pre, loudnorm_filter(LOUDNORM["LRA"])) if x)), None)))
+    final = parse_loudnorm(_run_audio(source, _audio_graph(joined, chain), out)) or {}
+    rec["normalization_type"] = final.get("normalization_type")
+    rec["output"] = {k: final.get(k) for k in ("output_i", "output_tp", "output_lra", "output_thresh")}
+    if rec["normalization_type"] != "linear":
+        rec["mode"] = "dynamic"
+    return out, rec
+
+
+def normalize_plan(first: dict, measure, targets: dict | None = None) -> tuple[dict, str]:
+    """The second pass from the measuring one: loudnorm linear when the gain to I keeps the true peak under TP; else
+    gain + limiter (limiter_chain), measured again by `measure(pre_chain) -> loudnorm JSON`, with the gain corrected
+    for the loudness the limiter took (up to LIMIT_TRIES times). Returns the record for the EDL and the filter chain."""
+    tg = targets or LOUDNORM
+    rec: dict = {"target_i": tg["I"], "target_tp": tg["TP"], "target_lra": tg["LRA"],
+                 "first_pass": {k: first.get(k) for k in _LOUD_KEYS}, "limiter": None}
+    m, pre, gain, tries = first, "", 0.0, 0
+    while not linear_ok(m, tg) and tries < LIMIT_TRIES:
+        gain = round(gain + tg["I"] - m["input_i"], 2)
+        pre = limiter_chain(gain, tg)
+        m = measure(pre)
+        if m is None:
+            raise RuntimeError("loudnorm measuring pass after the limiter printed no JSON")
+        tries += 1
+    lra = target_lra(m, tg)
+    if pre:
+        rec["limiter"] = {"gain_db": gain, "ceiling_dbtp": tg["TP"] - LIMIT_MARGIN_DB, "rate": LIMIT_RATE,
+                          "attack_ms": LIMIT_ATTACK_MS, "release_ms": LIMIT_RELEASE_MS, "tries": tries,
+                          "limited_pass": {k: m.get(k) for k in _LOUD_KEYS}}
+    rec["lra_used"] = lra
+    rec["lra_raised"] = lra > tg["LRA"]
+    ok = linear_ok(m, tg)
+    rec["mode"] = ("limiter+linear" if pre else "linear") if ok else "dynamic"
+    rec["passes"] = 2 + tries
+    chain = ",".join(x for x in (pre, loudnorm_filter(lra, m, tg), f"aresample={AUDIO_RATE}") if x)
+    return rec, chain
 
 
 def _num(v) -> bool:
@@ -346,6 +436,8 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     if edl_path:
         dump_json(edl_path, edl)
     loud_note = f", {measured['integrated_lufs']} LUFS / {measured['true_peak_dbtp']} dBTP" if measured else ""
+    if loud:
+        loud_note += f" ({loud['mode']}" + (f", limiter +{loud['limiter']['gain_db']} dB" if loud["limiter"] else "") + ")"
     ledger.add(Entry(stage="render", model="ffmpeg", seconds=t.seconds, cost_usd=0.0,
                      note=f"{len(segments)} segments{' + title' if title_png else ''}, {total} s, "
                           f"{len(edl.get('captions') or [])} captions, {out.name} {size_mb:.1f} MB{loud_note}"))

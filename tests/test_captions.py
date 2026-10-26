@@ -6,8 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from montivo.engine.captions import (CAPTION_TOP, CWord, apply_glossary, build_overlays, dedupe_words, group_lines,
-                                     interp_box, place_callout, place_caption, span_words)
+from montivo.engine.captions import (CAPTION_TOP, LINE_MIN_S, CWord, Line, apply_glossary, build_overlays, dedupe_words,
+                                     group_lines, hold_short_lines, interp_box, merge_short_lines, place_callout,
+                                     place_caption, span_words)
 from montivo.engine.graphics import CaptionStyle
 from montivo.engine.voice import fold_events
 
@@ -74,6 +75,43 @@ def test_span_boundary_starts_a_new_line():
     assert all(len({w.span for w in ln}) == 1 for ln in group_lines(ws, STYLE))  # the short-line borrow stays in its span
 
 
+def test_short_line_joins_its_phrase_when_it_fits():
+    # a 0.15 s first line ("Hi" with no end punctuation) and the next line of the same phrase: one line
+    lines = merge_short_lines([cw([("Hi", 27.03, 27.18)], "s1"), cw([("I'm", 27.18, 27.9), ("Billy", 27.9, 28.14)], "s1")], STYLE)
+    assert [[w.w for w in ln] for ln in lines] == [["Hi", "I'm", "Billy"]]
+    # the line before when it is the one that fits
+    lines = merge_short_lines([cw([("then", 0, .5), ("the", .5, 1.0)]), cw([("four", 1.0, 1.2)]),
+                               cw([("models", 1.2, 1.6), ("do", 1.6, 1.8), ("the", 1.8, 2.0), ("work", 2.0, 2.5)])], STYLE)
+    assert [[w.w for w in ln] for ln in lines] == [["then", "the", "four"], ["models", "do", "the", "work"]]
+
+
+def test_short_line_stays_apart_across_a_sentence_end_span_or_full_line():
+    hi = [cw([("Hi.", 27.03, 27.18)], "s1"), cw([("I'm", 27.18, 27.9), ("Billy.", 27.9, 28.14)], "s1")]
+    assert len(merge_short_lines(hi, STYLE)) == 2  # end punctuation: two sentences
+    spans = [cw([("Hi", 27.03, 27.18)], "s1"), cw([("I'm", 27.18, 27.9)], "s2")]
+    assert len(merge_short_lines(spans, STYLE)) == 2  # never across a span boundary
+    full = [cw([("then", 0, .5), ("the", .5, .8), ("four", .8, 1.0)]), cw([("Meta", 1.0, 1.1), ("models", 1.1, 1.24)]),
+            cw([("do", 1.24, 1.4), ("the", 1.4, 1.56), ("work", 1.56, 2.0)])]
+    assert len(merge_short_lines(full, STYLE)) == 3  # 5 words either way: held instead (below)
+
+
+def test_short_line_is_held_and_the_next_line_starts_later():
+    # runs/012 cut_v2 after the edge pass: "Hi." 0.03-0.18, "I'm Billy." from 0.18
+    a = Line(words=cw([("Hi.", 27.03, 27.18)]), segment=0, t_in=0.03, t_out=0.18, word_times=[(0.03, 0.18)])
+    b = Line(words=cw([("I'm", 27.18, 27.9), ("Billy.", 27.9, 28.14)]), segment=0, t_in=0.18, t_out=1.14,
+             word_times=[(0.18, 0.9), (0.9, 1.14)])
+    held = hold_short_lines([a, b], seg_end=4.767)
+    assert held == [0.25, 0.0] and (a.t_in, a.t_out) == (0.03, round(0.03 + LINE_MIN_S, 3))
+    assert b.t_in == a.t_out and b.word_times[0] == (0.43, 0.9)  # words clamped inside their line
+    # never past the segment end
+    c = Line(words=cw([("out", 0, 1)]), segment=0, t_in=5.0, t_out=5.1, word_times=[(5.0, 5.1)])
+    assert hold_short_lines([c], seg_end=5.2) == [0.1] and c.t_out == 5.2
+    # never leaves the next line under the minimum: a stays short then
+    d = Line(words=cw([("so", 0, 1)]), segment=0, t_in=0.0, t_out=0.1, word_times=[(0.0, 0.1)])
+    e = Line(words=cw([("yes", 0, 1)]), segment=0, t_in=0.1, t_out=0.45, word_times=[(0.1, 0.45)])
+    assert hold_short_lines([d, e], seg_end=9.0) == [0.0, 0.05] and e.t_in == 0.1  # e, short itself, is held
+
+
 @pytest.mark.skipif(not REC.is_file(), reason="recorded stream not present")
 def test_recorded_voice_stream_to_caption_lines():
     turns, words = fold_events(json.loads(REC.read_text())["events"])
@@ -131,6 +169,8 @@ def test_build_overlays_end_to_end(tmp_path):
     assert len(fields["callouts"]) == 1 and 2.0 <= fields["callouts"][0]["t_out"] - fields["callouts"][0]["t_in"] <= 3.0
     # one PNG per word state plus the callout, all inside the segment, files on disk
     assert len(ovs[0]) == 9 + 1 and all(0 <= o.t_in < o.t_out <= seg.duration + 1e-6 and o.png.is_file() for o in ovs[0])
+    assert all(c["t_out"] - c["t_in"] >= LINE_MIN_S - 1e-6 for c in caps)
+    assert all(c["t_in"] <= w["t_in"] <= w["t_out"] <= c["t_out"] for c in caps for w in c["words"])
 
 
 def test_overlay_graph_and_loudness_parsers():

@@ -8,7 +8,8 @@ Pipeline, all offline:
    "ready viewed" -> "reviewed", "MuseSpark"/"Newspark" -> "Muse Spark", "News Voice" -> "Muse Voice"); every
    replacement is recorded.
 4. `group_lines`: 1 to 4 words per line, never across a cut, a pause over 0.45 s or end punctuation, never wider than the
-   frame allows.
+   frame allows; a line that would be up under LINE_MIN_S joins a neighbour of the same phrase when the two fit on one
+   line, and `hold_short_lines` keeps any line still that short up LINE_MIN_S, starting the next one later.
 5. `build_overlays`: cut times for every line and word, the head boxes (SAM head track, interpolated, mapped through the
    segment's crop path into output pixels) over each line's interval, the caption pushed below or above the head when
    the lower-third default would touch it; the plan's per-span callouts anchored to the SAM person box. Returns the
@@ -34,6 +35,7 @@ LINE_MAX_WORDS = 4
 LINE_BREAK_GAP_S = 0.45
 LINE_HOLD_S = 0.5  # a line stays up until the next one when the gap is shorter than this
 LINE_TAIL_S = 0.3
+LINE_MIN_S = 0.4  # no caption line shows for less ("Hi." showed 0.15 s on run 012 after the edge pass)
 CALLOUT_LEAD_S = 0.3
 CALLOUT_MIN_S, CALLOUT_MAX_S = 2.0, 3.0
 CALLOUT_FADE_S = 0.2
@@ -151,8 +153,9 @@ def group_lines(words: list[CWord], style: CaptionStyle, max_words: int = LINE_M
                 break_gap_s: float = LINE_BREAK_GAP_S, min_tail_s: float = 0.8) -> list[list[CWord]]:
     """1 to max_words words per line; a new line on a pause, after end punctuation, at a span boundary (the planner
     splits a long turn into spans at sentence ends, and Voice gives no punctuation inside a turn) or when the line would
-    get too wide. A name the glossary produced ("Muse Voice") is never split across two lines, and a short last line
-    borrows words from the line before so it does not flash by."""
+    get too wide. A name the glossary produced ("Muse Voice") is never split across two lines, a short last line
+    borrows words from the line before so it does not flash by, and a line that would be up under min_line_s joins a
+    neighbour of the same phrase when they fit together (merge_short_lines)."""
     lines: list[list[CWord]] = []
     cur: list[CWord] = []
     for w in words:
@@ -183,7 +186,61 @@ def group_lines(words: list[CWord], style: CaptionStyle, max_words: int = LINE_M
                 last.insert(0, prev.pop())
             else:
                 break
+    return merge_short_lines(lines, style, max_words, break_gap_s)
+
+
+def shown_s(lines: list[list[CWord]], j: int) -> float:
+    """How long line j will be up, as build_overlays times it: until the next line when the gap is under LINE_HOLD_S,
+    else until its last word ends (plus LINE_TAIL_S for the last line)."""
+    ln = lines[j]
+    if j + 1 < len(lines) and lines[j + 1][0].t_in - ln[-1].t_out < LINE_HOLD_S:
+        return lines[j + 1][0].t_in - ln[0].t_in
+    return ln[-1].t_out - ln[0].t_in + (LINE_TAIL_S if j == len(lines) - 1 else 0.0)
+
+
+def merge_short_lines(lines: list[list[CWord]], style: CaptionStyle, max_words: int = LINE_MAX_WORDS,
+                      break_gap_s: float = LINE_BREAK_GAP_S, min_line_s: float = LINE_MIN_S) -> list[list[CWord]]:
+    """A line that would be up under min_line_s joins the line before, else the line after, when the two are one
+    phrase (same span, no pause over break_gap_s, no end punctuation between them) and fit (max_words, frame width)."""
+    def joinable(a: list[CWord], b: list[CWord]) -> bool:
+        return (a[-1].span == b[0].span and b[0].t_in - a[-1].t_out <= break_gap_s and not _END.search(a[-1].w)
+                and len(a) + len(b) <= max_words and line_width([x.w for x in a + b], style) <= style.max_w)
+
+    lines = [list(ln) for ln in lines]
+    j = 0
+    while j < len(lines):
+        if shown_s(lines, j) < min_line_s:
+            if j > 0 and joinable(lines[j - 1], lines[j]):
+                lines[j - 1] += lines.pop(j)
+                j -= 1
+                continue
+            if j + 1 < len(lines) and joinable(lines[j], lines[j + 1]):
+                lines[j] += lines.pop(j + 1)
+                continue
+        j += 1
     return lines
+
+
+def hold_short_lines(lines: list[Line], seg_end: float, min_s: float = LINE_MIN_S) -> list[float]:
+    """Cut-time pass after the hold and tail: a line still up under min_s stays up min_s (never past seg_end, and never
+    leaving the next line under min_s), the next line starts that much later; every word's time is then clamped inside
+    its line so the EDL entries and the word highlights agree. Returns the seconds each line was held over."""
+    held = [0.0] * len(lines)
+    for k, a in enumerate(lines):
+        if a.t_out - a.t_in >= min_s - 1e-6:
+            continue
+        b = lines[k + 1] if k + 1 < len(lines) else None
+        end = min(seg_end, a.t_in + min_s)
+        if b is not None:
+            end = min(end, max(a.t_out, b.t_out - min_s))
+            if end > b.t_in:
+                b.t_in = round(end, 3)
+        if end > a.t_out:
+            held[k] = round(end - a.t_out, 3)
+            a.t_out = round(end, 3)
+    for ln in lines:
+        ln.word_times = [(min(max(wa, ln.t_in), ln.t_out), min(max(wb, ln.t_in), ln.t_out)) for wa, wb in ln.word_times]
+    return held
 
 
 # --------------------------------------------------------------------------- boxes
@@ -408,8 +465,10 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                     a.t_out = b.t_in
             if lines:
                 lines[-1].t_out = min(seg_cut[i] + seg.duration, lines[-1].t_out + LINE_TAIL_S)
+            held = hold_short_lines(lines, round(seg_cut[i] + seg.duration, 3))
             for k, ln in enumerate(lines):
                 n_line += 1
+                hold_s = held[k]
                 la, lb = ln.t_in - seg_cut[i], ln.t_out - seg_cut[i]
                 if lb - la <= 0:
                     continue
@@ -437,6 +496,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                     "box": [x, y, w_px, h_px], "placement": where,
                     "head_box": [round(v) for v in head] if head else None,
                     "over_face": where == "over_head" or overlaps([x, y, x + w_px, y + h_px], head),
+                    **({"held_s": hold_s} if hold_s else {}),
                     "corrections": [f for f in fixes if f["span"] in {w.span for w in ln.words}
                                     and ln.words[0].t_in - 0.01 <= f["src_t"] <= ln.words[-1].t_out + 0.01],
                 })
@@ -469,5 +529,6 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
 
     fields = {"captions": cap_entries, "callouts": call_entries, "caption_corrections": fixes,
               "caption_style": {"font": style.size, "max_words": LINE_MAX_WORDS, "default_top": CAPTION_TOP,
+                                "min_line_s": LINE_MIN_S,
                                 "dedupe_gap_s": DEDUPE_GAP_S, "glossary": glossary if glossary is not None else GLOSSARY}}
     return fields, overlays
