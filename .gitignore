@@ -1,0 +1,27 @@
+# environments and secrets
+.venv/
+.env
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+.pytest_cache/
+
+# run folders and footage never go in the repo
+runs/
+footage/
+*.mp4
+*.mov
+*.mkv
+*.wav
+*.m4a
+*.png
+*.jpg
+
+# research scripts keep their own results and venv
+experiments/results/
+experiments/.venv/
+research/results/
+research/.venv/
+
+.DS_Store
