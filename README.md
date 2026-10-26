@@ -84,19 +84,32 @@ exactly), `match_ratio` otherwise, and `contiguous_with_previous` when two spans
 
 | Evening | Deliverable |
 |---|---|
-| 27/10 | engine clients, run folder, ledger, CLI (this) |
-| 28/10 | EDL builder with reframe path, ffmpeg trim/concat, 9:16 crop following the track: first `cut_v1.mp4` |
+| 27/10 | engine clients, run folder, ledger, CLI (this); then two kill tests on the render path, see below |
+| 28/10 | EDL builder with reframe path, ffmpeg trim/concat, 9:16 crop following the track: first `cut_v1.mp4`; from here every run uses Billy's own 60 to 90 s English talking-head clip, the NASA clip is regression only |
 | 29/10 | captions from word times, callouts on tracks, Muse Image title card, loudnorm, speaker-to-person mapping |
-| 30/10 | review pass, fix ops, loop guards (3 passes, budget, repeated fixes): v1 to v3 on three sources |
+| 30/10 | blind review pass, fix ops, loop guards (3 passes, budget, repeated fixes): v1 to v3 on three sources |
 | 31/10 | FastAPI + SSE, React shell: upload, brief, run, live log, preview, review panel |
-| 1/11 | timeline with human edits (lock, drop, reorder, caption, reframe bias) as EDL patches |
+| 1/11 | the two human actions in the loop first: "drop this span" and "re-run with this instruction" (typed, or spoken through Voice); reorder, caption edit and reframe nudge only after those |
 | 2/11 to 4/11 | demo video, README for judges, buffer, submission |
+
+Design rules fixed on 26/10:
+
+- **Blind reviewer.** The review pass gets only the rendered mp4, the brief and the rubric, never the EDL. It also gets two
+  deterministic facts as text: the silence gaps ffmpeg `silencedetect` finds in the render, and where the caption boxes sit
+  relative to the SAM face boxes.
+- **Kill test (a), render path:** Billy's clip, cuts on Voice word boundaries, 9:16 reframe from the SAM track. Pass when no cut
+  lands inside a word and the pan does not jitter. If it fails: an 80 ms audio crossfade on every cut and snapping only to
+  `speechEnd`/`speechStart`.
+- **Kill test (b), reviewer:** a deliberately bad v1 with three known faults (a cut mid-word, a caption over the face, a weak
+  hook). The review must catch 2 of 3 with a timestamp within 1 s, 3 runs out of 3.
+- Track: Indie. Bonus targets: Best Agentic, Best Creative, Most Viral. Open Weight (Muse Spark Open on Baseten) only if the
+  credits arrive by 31/10.
 
 ## Where it comes from
 
-The concept is Montivo, a chat-driven video editor Nocta Digital had prototyped earlier for its own agency work. This
-repository is a new implementation written from scratch for the Meta Global AI Developer Hackathon (build window
-27/10 to 4/11/2026): no code is shared with that prototype, and at run time the application calls Meta models only.
+The concept comes from Montivo, an earlier personal project of Billy Gkaravelos (a chat-driven video editor). All the
+code in this repository was written during the Meta Global AI Developer Hackathon (27/10 to 4/11/2026) from scratch:
+nothing is shared with that earlier editor, and at run time the application calls Meta models only.
 
 `experiments/` holds the kill-test scripts from 26/10 (kickoff day) that measured the API behaviour listed above; they
 are research, not part of the product, and nothing in `montivo/` imports them. Their raw results stay out of the repo.
