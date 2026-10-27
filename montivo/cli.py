@@ -3,6 +3,7 @@
     montivo run footage.mp4 --brief "..." --out runs/001
     montivo render runs/001
     montivo review runs/001
+    montivo speakers runs/001
     montivo probe footage.mp4
     montivo serve
 """
@@ -74,6 +75,10 @@ def main(argv: list[str] | None = None) -> int:
     ed.add_argument("--edl", type=Path, default=None, help="EDL to tighten in place (default <run_dir>/edl_v1.json)")
     ed.add_argument("--dry-run", action="store_true", help="print the moves, write nothing")
 
+    sp = sub.add_parser("speakers", help="map Voice speakers to SAM head ids from mouth motion ($0, ffmpeg) -> "
+                                         "speakers.json; the next render follows whoever talks")
+    sp.add_argument("run_dir", type=Path)
+
     p = sub.add_parser("probe", help="ffprobe summary of a file")
     p.add_argument("footage", type=Path)
 
@@ -99,6 +104,18 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(render_run(args.run_dir, edl_path=args.edl, source=args.source, out_name=args.out,
                                     title=not args.no_title, captions=not args.no_captions,
                                     callouts=not args.no_callouts, loudnorm=not args.no_loudnorm), indent=2))
+        return 0
+
+    if args.cmd == "speakers":
+        from .engine.speakers import speakers_run
+        from .run import RunLog
+        if not args.run_dir.is_dir():
+            ap.error(f"{args.run_dir} is not a run folder")
+        try:
+            res = speakers_run(args.run_dir, log=RunLog(args.run_dir / "run.log"))
+        except FileNotFoundError as exc:
+            ap.error(str(exc))
+        print(json.dumps(res["speakers"], indent=2))
         return 0
 
     if args.cmd == "edges":

@@ -26,10 +26,13 @@ montivo run footage.mp4 --brief "..." --out runs/001
   voice    streaming DIARIZATION -> turns[] + words[] (lag-corrected, snapped to speechStart/speechEnd)   \
   track    SAM 3.1 "person" and "head" at 5 fps (one upload) over httpx SSE, regex boxes -> track/<concept>/tracks.json | in parallel
   watch    Spark 1.3 + proxy + transcript -> shot log, speaker map, concept suggestions, b-roll, movement moments /
+  speakers (2+ voices, 2+ heads) mouth-minus-eyes motion of every SAM head vs the Voice word times of every speaker
+           -> speakers.json (head ids per speaker; watch's "left/right/centre" as the fallback), $0, ffmpeg + Pillow
   plan     Spark 1.3 + brief + shot log + movement moments + measured speech rate + transcript -> paper edit (turn id + verbatim words)
   edl      spans mapped to Voice word boundaries, then every cut edge tightened to the speech in the source audio
            (0.1 s before the onset, 0.15 s after the offset, 0.3 s at the very end) -> edl_v1.json
-  reframe  per segment: the head track (person as fallback), largest and most centred id -> smoothed 9:16 crop path (dead zone, EMA, pan clamp)
+  reframe  per segment: the head track (person as fallback), the talking speaker's head when speakers.json maps one, else the
+           largest and most centred id -> smoothed 9:16 crop path (dead zone, EMA, pan clamp)
   title    Muse Image 1.0: the plan's title_card_text -> title/title_card.png (generated once, $0.01)
   captions Voice words of the kept spans -> de-doubled, glossary-corrected, 1 to 4 word lines up at least 0.4 s each, placed
            clear of the SAM head box;
@@ -43,6 +46,7 @@ montivo render runs/001 --out cut_v3.mp4   re-render from edl_v1.json + voice.js
                                            generated once if missing, --no-title to skip it)
 montivo review runs/001                    the review loop on a finished run folder: review cut_v1, patch, render cut_v2, review ...
 montivo edges runs/001                     the edge pass on an EDL built before it existed ($0; the old EDL kept under check/)
+montivo speakers runs/001                  which SAM head is which Voice speaker ($0) -> speakers.json; the next render follows it
 ```
 
 The review loop: the reviewer gets the cut (scaled to 720x1280 with a cut-time clock burned in at the top left), the brief,
@@ -103,6 +107,15 @@ tokens come from the cache); `--passes 1` or `--no-apply` reviews once and write
 `montivo edges runs/001 [--edl edl_v1.json] [--dry-run]` tightens an EDL that was built before the edge pass existed: it
 rewrites the EDL in place (the old one goes to `check/<name>_before_edges.json`), clears the render fields so the next
 `render` or `review` renders it again, and logs every move; a second run moves nothing.
+Speaker to head mapping (`engine/speakers.py`, run step and `montivo speakers runs/001`): with two or more voices and two
+or more heads, every head box gets a mouth-minus-eyes motion series on the 5 fps grid SAM saw (mean absolute frame
+difference in the lower 40 % of the box minus the 10 to 45 % band, so a nod or a camera move cancels out), compared per
+speaker between the frames where only that speaker talks (Voice word times) and the frames where they are silent; a
+head goes to the speaker whose effect size is at least 0.4 and 0.2 over the runner-up, two heads on screen together
+never share one, and a speaker left without a head takes the one at the position watch's speaker map names. The
+render then plans each segment in pieces, one per speaker run, each following that speaker's head (`pieces` in the
+EDL's `render.segments`); captions keep clear of the head followed at that moment. Off-camera voices and single-speaker
+clips keep the plain rule. Verified offline on synthetic frames so far; the NASA crew clip is the first real check.
 Captions use `MONTIVO_FONT` when set, else the bundled `montivo/fonts/InterTight-800.ttf` (Inter Tight, SIL OFL 1.1, a
 static wght 800 instance of the Google Fonts variable font), so line breaks and pixels match on every machine; Arial
 Black, Arial Bold and DejaVu Sans Bold are fallbacks only (the path is recorded in the EDL's `caption_style.font_path`).

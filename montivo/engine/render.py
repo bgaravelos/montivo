@@ -35,6 +35,7 @@ from .api import dump_json
 from .captions import Overlay, build_overlays
 from .graphics import font_path
 from .reframe import ReframeParams, SegmentPath, plan_segment
+from .speakers import follow_ids
 
 OUT_W, OUT_H = 1080, 1920
 AUDIO_RATE = 48000
@@ -122,6 +123,35 @@ def load_reframe_track(run_dir: Path, edl: dict) -> tuple[str | None, dict | Non
         if track and track.get("objects"):
             return concept, track
     return None, None
+
+
+def load_speaker_ids(run_dir: Path, concept: str | None) -> dict[str, list[str]]:
+    """speaker -> head ids from run_dir/speakers.json (speakers.py); only meaningful when the crop follows heads."""
+    p = run_dir / "speakers.json"
+    if concept != "head" or not p.is_file():
+        return {}
+    return follow_ids(json.loads(p.read_text()))
+
+
+def follow_pieces(seg: Segment, spans: list[dict], speaker_ids: dict[str, list[str]]) -> list[dict] | None:
+    """The segment cut into runs of spans by one speaker, each with that speaker's head ids; None when no span's
+    speaker has a head (the crop keeps the plain rule)."""
+    if not speaker_ids:
+        return None
+    by_id = {s["id"]: s for s in spans}
+    ordered = [by_id[sid] for sid in seg.span_ids if sid in by_id]
+    if not ordered or not any(str(s.get("speaker")) in speaker_ids for s in ordered):
+        return None
+    pieces: list[dict] = []
+    for k, s in enumerate(ordered):
+        a = seg.t_in if k == 0 else max(seg.t_in, min(seg.t_out, float(s["t_in"])))
+        b = seg.t_out if k == len(ordered) - 1 else max(a, min(seg.t_out, float(ordered[k + 1]["t_in"])))
+        spk = str(s.get("speaker"))
+        if pieces and pieces[-1]["speaker"] == spk:
+            pieces[-1]["t_out"] = b
+        else:
+            pieces.append({"t_in": a, "t_out": b, "speaker": spk, "ids": speaker_ids.get(spk)})
+    return pieces
 
 
 def segment_bias(spans: list[dict], span_ids: list[str]) -> int:
@@ -370,9 +400,11 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     ov_dir.mkdir()
     fps = float(edl["source"]["fps"])
     concept, track = load_reframe_track(run_dir, edl)
+    speaker_ids = load_speaker_ids(run_dir, concept)
     segments = frame_align(merge_segments(edl["spans"]), fps)
     log(f"render: {len(edl['spans'])} spans -> {len(segments)} segments, source {source.name}, "
-        f"track {concept or 'none (centre crop)'}")
+        f"track {concept or 'none (centre crop)'}"
+        + (f", following speakers {', '.join(f'{k}->{'/'.join(v)}' for k, v in speaker_ids.items())}" if speaker_ids else ""))
 
     keyframes: list[dict] = []
     seg_info: list[dict] = []
@@ -380,7 +412,8 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     with Timer() as t:
         paths: list[SegmentPath] = []
         for seg in segments:
-            path = plan_segment(seg.t_in, seg.t_out, edl["source"], track, params, span_ids=seg.span_ids)
+            path = plan_segment(seg.t_in, seg.t_out, edl["source"], track, params, span_ids=seg.span_ids,
+                                follow=follow_pieces(seg, edl["spans"], speaker_ids))
             path.xs = path.xs[:seg.frames] + [path.xs[-1]] * max(0, seg.frames - len(path.xs))
             bias = segment_bias(edl["spans"], seg.span_ids)
             if bias:
@@ -419,9 +452,10 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
             seg_info.append({"index": seg.index, "t_in": seg.t_in, "t_out": seg.t_out, "duration": seg.duration, "frames": seg.frames,
                              "spans": seg.span_ids, "track_concept": concept, "track_id": path.track_id, "crop": [path.crop_w, path.crop_h],
                              "x_first": path.xs[0], "x_min": min(path.xs), "x_max": max(path.xs),
-                             "frames_moving": moving, "overlays": len(ovs), "file": f.as_posix()})
+                             "frames_moving": moving, "overlays": len(ovs), "file": f.as_posix(),
+                             **({"pieces": path.pieces} if path.pieces else {})})
             log(f"render: seg {seg.index + 1} {seg.t_in:.3f}-{seg.t_out:.3f}s ({seg.frames} frames, {'+'.join(seg.span_ids)}) "
-                f"track {path.track_id} crop {path.crop_w}x{path.crop_h} x {min(path.xs)}..{max(path.xs)}, {len(ovs)} overlays")
+                f"track {'/'.join(f'{p['speaker']}:{p['track_id']}' for p in path.pieces) if path.pieces else path.track_id} crop {path.crop_w}x{path.crop_h} x {min(path.xs)}..{max(path.xs)}, {len(ovs)} overlays")
         audio, loud = render_audio(source, segments, render_dir, lead_s=title_s, loudnorm=loudnorm)
         out = mux(files, audio, run_dir / out_name, render_dir)
     measured = measure_loudness(out)

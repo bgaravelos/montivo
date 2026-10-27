@@ -18,6 +18,7 @@ from .engine.image import generate_title_card
 from .engine.ingest import Ingested, Probe, ingest
 from .engine.render import render as render_edl
 from .engine.spark import Spark, SparkCall
+from .engine.speakers import speakers_run
 from .engine.voice import VoiceResult, transcribe
 from .ledger import Ledger
 
@@ -158,6 +159,18 @@ def run(opts: RunOptions) -> dict:
         log(f"ERROR in {stage}:\n{tb}")
     if voice is None or watch is None:
         raise SystemExit("run aborted: voice/watch failed (see run.log)")
+
+    # 2b. which head is which speaker (speakers.py, $0): only with two or more voices and two or more heads
+    head = tracks.get(opts.reframe_concept or "") if opts.reframe_concept == "head" else None
+    if head is not None and len(voice.speakers) >= 2 and len(head.objects) >= 2:
+        if have("speakers.json"):
+            log("resume: speakers from speakers.json")
+        else:
+            try:
+                speakers_run(out, log=log)
+            except Exception:
+                errors.append(("speakers", traceback.format_exc()))
+                log(f"ERROR in speaker mapping (the crop keeps the largest head):\n{errors[-1][1]}")
 
     # 3. plan, with the speech rate Voice measured on this clip (2.5 words/s made a 40 s target come out at 50.7 s)
     wps = voice.speech_rate()
