@@ -56,8 +56,45 @@ def test_plan_call_goes_to_baseten_as_chat(tmp_path, monkeypatch):
 
 def test_open_model_refuses_video(tmp_path):
     sp = spark_mod.Spark(tmp_path, Ledger(tmp_path / "ledger.json"), model=OPEN_MODEL, log=lambda m: None)
-    with pytest.raises(SystemExit, match="text only"):
+    with pytest.raises(SystemExit, match="no Files API"):
         sp.call("plan", "p", {"type": "object"}, file_id="file-1")
+    with pytest.raises(SystemExit, match="not inline"):
+        spark_mod.Spark(tmp_path, Ledger(tmp_path / "l2.json"), log=lambda m: None).call(
+            "review", "p", {"type": "object"}, video=tmp_path / "cut.mp4")
+
+
+REVIEW = {"overall": 84, "pass": True, "issues": []}
+
+
+def test_open_review_sends_the_cut_inline_and_says_it_cannot_hear(tmp_path, monkeypatch):
+    sent = {}
+
+    def fake_chat(body):
+        sent.update(body)
+        return {**CHAT, "choices": [{**CHAT["choices"][0], "message": {"role": "assistant", "content": json.dumps(REVIEW)}}]}
+
+    monkeypatch.setattr(spark_mod, "chat_create", fake_chat)
+    cut = tmp_path / "cut_review.mp4"
+    cut.write_bytes(b"\x00\x01mp4")
+    sp = spark_mod.Spark(tmp_path, Ledger(tmp_path / "ledger.json"), model=OPEN_MODEL, log=lambda m: None)
+    call = sp.review(None, "a brief", "1. facts", 40.0, name="review_v1", video=cut, hears=False)
+    assert call.parsed == REVIEW
+    text, video = sent["messages"][0]["content"]
+    assert text["type"] == "text" and "cannot hear its sound" in text["text"] and "Listen at every cut" not in text["text"]
+    assert video == {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,AAFtcDQ="}}
+    on_disk = json.loads((tmp_path / "spark" / "review_v1_request.json").read_text())
+    assert on_disk["messages"][0]["content"][1]["video_url"]["url"].startswith("<inline mp4")
+    assert sent["response_format"]["json_schema"]["name"] == "review"
+
+
+def test_review_prompt_unchanged_for_a_reviewer_that_hears(tmp_path, monkeypatch):
+    sent = {}
+    monkeypatch.setattr(spark_mod, "responses_create",
+                        lambda body: sent.update(body) or {"status": "completed", "usage": {}, "output": [
+                            {"type": "message", "content": [{"type": "output_text", "text": json.dumps(REVIEW)}]}]})
+    spark_mod.Spark(tmp_path, Ledger(tmp_path / "ledger.json"), log=lambda m: None).review("file-1", "b", "f", 30.0)
+    prompt = sent["input"][0]["content"][0]["text"]
+    assert "Listen at every cut point and watch every caption. Be strict and concrete" in prompt
 
 
 def test_missing_baseten_key_stops_before_any_call(monkeypatch):

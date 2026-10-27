@@ -4,10 +4,14 @@ Rules measured on 26/10/2026: always 1.3 (1.2 degenerates with a strict schema a
 transcript as text (1.3 fabricates quotes when asked to transcribe), one uploaded proxy reused by every call.
 Every call writes <name>_request.json and <name>_response.json and a ledger entry with tokens and dollars.
 A Muse Spark Open model id (config.OPEN_MODEL, Baseten) sends the same prompt and schema as an OpenAI-compatible chat
-completion instead (text only, no file input); the response is read back in the Responses shape.
+completion instead; the response is read back in the Responses shape. It has no Files API: a video goes inline as a
+`video_url` data URL. Measured 27/10 on Baseten: it reads sampled frames (about 1 per second, the review clock and the
+captions read right, about 185 prompt tokens a frame at 360x640) but hears nothing (input_audio and the video's
+soundtrack give 0 audio tokens and "I cannot hear audio"), so a review on it needs the heard-words fact.
 """
 from __future__ import annotations
 
+import base64
 import json
 import re
 from dataclasses import dataclass
@@ -42,22 +46,30 @@ class Spark:
     # ----------------------------------------------------------------- generic call
 
     def call(self, name: str, prompt: str, schema: dict, file_id: str | None = None, max_output_tokens: int = 12000,
-             reasoning_effort: str | None = None, stage: str | None = None, schema_name: str | None = None) -> SparkCall:
-        """`name` names the request/response files; `stage` the ledger entry (default spark.<name>)."""
+             reasoning_effort: str | None = None, stage: str | None = None, schema_name: str | None = None,
+             video: Path | None = None) -> SparkCall:
+        """`name` names the request/response files; `stage` the ledger entry (default spark.<name>). `file_id` is an
+        uploaded file (Meta Files API, Spark 1.3); `video` a local mp4 sent inline (Muse Spark Open only)."""
         open_model = is_open_model(self.model)
         if open_model:
             if file_id:
-                raise SystemExit(f"spark {name}: {self.model} is used text only here (no Files API input); "
+                raise SystemExit(f"spark {name}: {self.model} has no Files API input; "
                                  "drop --plan-with-video or plan with muse-spark-1.3")
+            content: list[dict] | str = prompt
+            if video is not None:
+                url = "data:video/mp4;base64," + base64.b64encode(video.read_bytes()).decode()
+                content = [{"type": "text", "text": prompt}, {"type": "video_url", "video_url": {"url": url}}]
             body: dict = {"model": self.model, "max_tokens": max_output_tokens,
-                          "messages": [{"role": "user", "content": prompt}],
+                          "messages": [{"role": "user", "content": content}],
                           "response_format": {"type": "json_schema", "json_schema": {
                               "name": schema_name or name, "strict": True, "schema": schema}}}
             # a reasoning model: at the default effort a 200-token probe spent every token on reasoning and returned
             # no content (27/10); effort low answered in 0.8 s
             body["reasoning_effort"] = reasoning_effort or "low"
         else:
-            content: list[dict] = [{"type": "input_text", "text": prompt}]
+            if video is not None:
+                raise SystemExit(f"spark {name}: {self.model} takes video as an uploaded file_id, not inline")
+            content = [{"type": "input_text", "text": prompt}]
             if file_id:
                 content.append({"type": "input_file", "file_id": file_id})
             body = {"model": self.model, "max_output_tokens": max_output_tokens,
@@ -65,8 +77,8 @@ class Spark:
                     "text": {"format": {"type": "json_schema", "name": schema_name or name, "strict": True, "schema": schema}}}
             if reasoning_effort:
                 body["reasoning"] = {"effort": reasoning_effort}
-        dump_json(self.dir / f"{name}_request.json", body)
-        self.log(f"spark: {name} -> {self.model}{' + video' if file_id else ''} ...")
+        dump_json(self.dir / f"{name}_request.json", _without_media(body))
+        self.log(f"spark: {name} -> {self.model}{' + video' if file_id or video else ''} ...")
         with Timer() as t:
             if open_model:
                 raw = chat_create(body)
@@ -155,11 +167,13 @@ class Spark:
             f"TRANSCRIPT (authoritative):\n{transcript_text}")
         return self.call("plan", prompt, schemas.PLAN, file_id=file_id, max_output_tokens=16000, reasoning_effort=reasoning_effort)
 
-    def review(self, file_id: str, brief: str, facts: str, duration_s: float, name: str = "review",
-               reasoning_effort: str | None = "low", max_output_tokens: int = 16000) -> SparkCall:
+    def review(self, file_id: str | None, brief: str, facts: str, duration_s: float, name: str = "review",
+               reasoning_effort: str | None = "low", max_output_tokens: int = 16000, video: Path | None = None,
+               hears: bool = True) -> SparkCall:
         """Blind review: the rendered cut (with a review clock burned in), the brief, the rubric and the measured facts.
         Never the EDL, the plan or the transcript: the reviewer judges what a viewer gets. Effort low: at the default
-        effort a 53.5 s cut burned all 10,000 output tokens on reasoning and returned nothing (26/10)."""
+        effort a 53.5 s cut burned all 10,000 output tokens on reasoning and returned nothing (26/10). `hears` False
+        (Muse Spark Open, frames only) tells the reviewer to judge the sound from the facts, the heard words above all."""
         prompt = (
             "You are the reviewer of an automated video editor. You get the finished vertical cut, nothing else: judge it "
             "as a strict editor would before it goes out.\n"
@@ -170,13 +184,17 @@ class Spark:
             "Rubric, each criterion 0 to 10 (10 = perfect):\n"
             f"{RUBRIC}\n\n"
             f"Measured facts about this cut (deterministic, trust them over your impression):\n{facts}\n\n"
-            "Listen at every cut point and watch every caption. Be strict and concrete: list every problem a viewer would "
+            + ("Listen at every cut point and watch every caption. " if hears else
+               "You see sampled frames of the cut but cannot hear its sound: judge everything audible (clipped words, "
+               "dead air, repeats, filler, whether captions match the speech) from the measured facts, above all the "
+               "words heard in the cut, and watch every caption. ")
+            + "Be strict and concrete: list every problem a viewer would "
             "notice, each with its time, and one fix operation from this list with its params:\n"
             f"{FIX_OP_GUIDE}\n"
             "Unused params: edge none, seconds 0, target_t_s -1, text empty, direction none. "
             "overall is 0 to 100. pass = true only if overall >= 80 and there is no blocker.")
         return self.call(name, prompt, schemas.REVIEW, file_id=file_id, max_output_tokens=max_output_tokens,
-                         reasoning_effort=reasoning_effort, stage="spark.review", schema_name="review")
+                         reasoning_effort=reasoning_effort, stage="spark.review", schema_name="review", video=video)
 
 
 RUBRIC = "\n".join(f"- {c}: {d}" for c, d in {
@@ -210,6 +228,19 @@ FIX_OP_GUIDE = "\n".join(f"- {op}: {d}" for op, d in {
     "reframe_bias": "the speaker is badly framed around t_s: direction = which way the camera should move.",
     "none": "no edit can fix it (a note only).",
 }.items())
+
+
+def _without_media(body: dict) -> dict:
+    """The request as written to disk: an inline video data URL replaced by its size (a 40 s review copy is 5 MB)."""
+    msgs = body.get("messages")
+    if not msgs or isinstance(msgs[0].get("content"), str):
+        return body
+    parts = []
+    for c in msgs[0]["content"]:
+        if c.get("type") == "video_url":
+            c = {"type": "video_url", "video_url": {"url": f"<inline mp4, {len(c['video_url']['url'])} chars>"}}
+        parts.append(c)
+    return {**body, "messages": [{**msgs[0], "content": parts}]}
 
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.S)

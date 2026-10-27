@@ -7,7 +7,9 @@ the source audio level right at both edges of every cut, because Spark never hea
 A fourth is the caption timeline, every line's text and cut times, because Spark sees about one frame per second: a
 0.4 s line ("Hi." opening run 012-open's cut_v3) fell between its frames and was flagged as missing. The copy Spark watches is the cut scaled
 to 720x1280 with a small clock burned in at the top left, because Spark sees about one frame per second with no
-timestamps: the clock is the only way its t_s can land within a second of the fault.
+timestamps: the clock is the only way its t_s can land within a second of the fault. A fifth, optional fact is the
+words heard in the cut's own audio (Muse Voice on the cut, `heard_words`): Muse Spark Open sees frames but hears nothing
+(27/10, Baseten), so a review on it gets the speech as text, and its copy goes inline instead of through the Files API.
 
 The reviewer names times in the cut, not spans. `cut_map` maps every span (and the title card) to cut seconds with the
 same merge and frame alignment the render uses, so `plan_fixes` can turn an issue at t_s into a concrete patch:
@@ -44,13 +46,14 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from ..config import PRICE, SPARK_MODEL
+from ..config import PRICE, SPARK_MODEL, is_open_model
 from ..ledger import Entry, Ledger, Timer
 from .api import dump_json, upload_file
-from .captions import CAPTION_TOP, HEAD_MARGIN, SAFE_BOTTOM, overlaps
+from .captions import CAPTION_TOP, DEDUPE_GAP_S, HEAD_MARGIN, SAFE_BOTTOM, overlaps
 from .edges import Audio, Words, level_db, tighten_edges  # noqa: F401 (level_db re-exported for callers)
 from .edl import norm, norm_tokens
 from .graphics import font
+from .ingest import make_wav
 from .render import frame_align, merge_segments
 
 APPLY_SEVERITY = ("blocker", "major")
@@ -169,7 +172,8 @@ def cut_edge_levels(edl: dict, audio: "Audio") -> list[dict]:
 
 
 def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: float,
-               edges: list[dict] | None = None, timeline: list[dict] | None = None) -> str:
+               edges: list[dict] | None = None, timeline: list[dict] | None = None,
+               heard: list[dict] | None = None) -> str:
     sil = ", ".join(f"{a:.2f}-{b:.2f} s ({b - a:.2f} s)" for a, b in silences) or "none"
     out = [f"1. Silence gaps in the audio (ffmpeg silencedetect, below {SILENCE_DB:.0f} dB for at least {SILENCE_MIN_S} s), "
            f"cut seconds out of {duration_s:.1f}: {sil}."]
@@ -210,7 +214,87 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
                    + "; ".join(f"{c['t_in']:.2f}-{c['t_out']:.2f} s \"{c['text']}\"" for c in timeline)
                    + ". You see about one frame per second, so a line up for less than a second can fall between "
                      "your frames: a line in this list is on screen even when you did not see it.")
+    if heard is not None:
+        phrases = heard_phrases(heard)
+        out.append(f"{len(out) + 1}. Words heard in this cut's own audio (a speech model transcribed the cut, cut seconds; "
+                   "what is said and where the speech pauses): "
+                   + ("; ".join(f"{h['t_in']:.2f}-{h['t_out']:.2f} s \"{h['text']}\"" for h in phrases) or "no speech")
+                   + ". That speech model mishears names and similar-sounding words and can add a stray word at a cut.")
+        if timeline:
+            diffs = caption_heard_diff(timeline, heard)
+            out.append(f"{len(out) + 1}. Where the caption words and the heard words differ (the two aligned word by word): "
+                       + ("; ".join(f"{d['t']:.2f} s caption \"{d['caption']}\" / heard \"{d['heard'] or '(nothing)'}\""
+                                    for d in diffs) or "nowhere")
+                       + ". The captions were checked by hand where the speech model got a name wrong, so a pair that "
+                         "sounds alike (\"Muse\" / \"news\") is the speech model's mistake, not the caption's: a caption "
+                         "is wrong only where its word sounds nothing like what was heard.")
     return "\n".join(out)
+
+
+def _tok(w: str) -> str:
+    return re.sub(r"[^a-z0-9']", "", w.lower())
+
+
+def caption_heard_diff(timeline: list[dict], heard: list[dict]) -> list[dict]:
+    """Caption words against the heard words, aligned as two word sequences (difflib), every replaced or unheard caption
+    word with its cut time. No similarity threshold: whether a pair sounds alike is left to the reviewer, which knows
+    "Muse" / "news" rhyme and "Google" / "voice" do not (character ratios rank those two pairs the other way round)."""
+    cap = [(_tok(w), c["t_in"]) for c in timeline for w in c["text"].split() if _tok(w)]
+    hw = [_tok(w["w"]) for w in sorted(heard, key=lambda w: w["t_start"]) if _tok(w["w"])]
+    sm = difflib.SequenceMatcher(None, [t for t, _ in cap], hw, autojunk=False)
+    out = []
+    for op, a1, a2, b1, b2 in sm.get_opcodes():
+        if op == "replace" and a2 - a1 == b2 - b1:  # as many words on both sides: pair them one to one
+            out += [{"t": cap[a][1], "caption": cap[a][0], "heard": hw[b]} for a, b in zip(range(a1, a2), range(b1, b2))]
+        elif op in ("replace", "delete"):
+            out.append({"t": cap[a1][1], "caption": " ".join(t for t, _ in cap[a1:a2]), "heard": " ".join(hw[b1:b2])})
+    return out
+
+
+HEARD_GAP_S = 0.3  # a pause this long starts a new phrase in the heard-words fact
+HEARD_MAX_WORDS = 8
+
+
+def heard_words(cut: Path, out_dir: Path, ledger: Ledger, log=print) -> list[dict]:
+    """What a viewer hears: Muse Voice on the cut's own audio, the words with cut times (about $0.002 for 40 s).
+    Cached in out_dir/voice.json. On run 015 it heard "news voice", "soundtracks", "Newspark" again: the same
+    mishearings the captions were corrected for by hand, hence the caution in the fact."""
+    from .voice import VoiceResult, transcribe  # voice imports nothing from review; kept local like the cost helpers
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cached = out_dir / "voice.json"
+    if cached.is_file():
+        res = VoiceResult.from_json(json.loads(cached.read_text()))
+    else:
+        wav = make_wav(cut, out_dir / "cut.wav")
+        res = transcribe(wav, out_dir, ledger, log=log)
+    return dedupe_heard([{"w": w.w, "t_start": w.t_start, "t_end": w.t_end} for w in res.words])
+
+
+def dedupe_heard(words: list[dict], max_gap_s: float = DEDUPE_GAP_S) -> list[dict]:
+    """Voice doubles words at random ("run run", "I I"), the artifact the captions drop (captions.dedupe_words): a
+    word identical to the one before it within max_gap_s goes. Without this the open reviewer read every doubled word
+    on run 015 as a repeated take (four major pacing issues on a clean cut, 27/10)."""
+    out: list[dict] = []
+    for w in sorted(words, key=lambda w: w["t_start"]):
+        if out and _tok(w["w"]) == _tok(out[-1]["w"]) and w["t_start"] - out[-1]["t_end"] < max_gap_s:
+            continue
+        out.append(w)
+    return out
+
+
+def heard_phrases(words: list[dict], gap_s: float = HEARD_GAP_S, max_words: int = HEARD_MAX_WORDS) -> list[dict]:
+    phrases: list[dict] = []
+    cur: list[dict] = []
+    for w in sorted(words, key=lambda w: w["t_start"]):
+        if cur and (w["t_start"] - cur[-1]["t_end"] >= gap_s or len(cur) >= max_words):
+            phrases.append(cur)
+            cur = []
+        cur.append(w)
+    if cur:
+        phrases.append(cur)
+    return [{"t_in": round(p[0]["t_start"], 2), "t_out": round(p[-1]["t_end"], 2), "text": " ".join(w["w"] for w in p)}
+            for p in phrases]
 
 
 # --------------------------------------------------------------------------- the copy Spark watches
@@ -818,10 +902,16 @@ def finalize(edl: dict, words: Words) -> None:
 # --------------------------------------------------------------------------- one review
 
 def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Ledger, spark, brief: str | None = None,
-                  clock: bool = True, log=print, name: str | None = None) -> dict:
-    """Review cut_vN.mp4 blind: facts, review copy, upload, Spark 1.3. Writes review_vN.json and returns it."""
+                  clock: bool = True, log=print, name: str | None = None, heard: bool | None = None,
+                  heard_dir: Path | None = None) -> dict:
+    """Review cut_vN.mp4 blind: facts, review copy, upload, Spark. Writes review_vN.json and returns it.
+    A Muse Spark Open reviewer (spark.model) gets the copy inline and, since it cannot hear, the heard-words fact;
+    `heard` True or False forces that fact either way. `heard_dir` caches the cut's Voice transcript (default
+    review/<name>/heard)."""
     name = name or f"review_v{version}"
     rdir = run_dir / "review" / name
+    open_model = is_open_model(spark.model)
+    heard = open_model if heard is None else heard
     log(f"review: {name}: facts, review copy and upload ...")  # the UI's progress: prep starts here, not at the facts
     with Timer() as t:
         duration = media_duration(cut)
@@ -830,22 +920,26 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
         audio = Audio.load(run_dir)
         edges = cut_edge_levels(edl, audio) if audio else None
         timeline = caption_timeline(edl)
-        facts = facts_text(sil, caps, duration, edges, timeline)
+        words_heard = heard_words(cut, heard_dir or rdir / "heard", ledger, log=log) if heard else None
+        facts = facts_text(sil, caps, duration, edges, timeline, words_heard)
         copy_path = review_copy(cut, rdir, clock=clock)
-        up = upload_file(copy_path, "video/mp4")
-    ledger.add(Entry(stage="review.prep", model="ffmpeg+files", seconds=t.seconds, cost_usd=0.0,
+        up = {"id": None} if open_model else upload_file(copy_path, "video/mp4")
+    ledger.add(Entry(stage="review.prep", model="ffmpeg" if open_model else "ffmpeg+files", seconds=t.seconds, cost_usd=0.0,
                      note=f"{name}: {copy_path.name} {copy_path.stat().st_size / 1e6:.1f} MB, file {up.get('id')}, "
                           f"{len(sil)} silences, {len(caps['over_face'])} captions over the face, "
                           f"{sum(e['loud'] for e in edges or [])} loud cuts"))
     log(f"review: {name} facts:\n{facts}")
-    call = spark.review(up["id"], brief or edl["brief"], facts, duration, name=name)
+    call = spark.review(up["id"], brief or edl["brief"], facts, duration, name=name,
+                        video=copy_path if open_model else None, hears=not open_model)
     rv = call.parsed
     log(f"review: {name} overall {rv['overall']} pass {rv['pass']} ({len(rv['issues'])} issues), ${call.cost_usd:.4f}")
     for i in sorted(rv["issues"], key=lambda i: i["t_s"]):
         log(f"  {i['t_s']:6.2f}s {i['severity']:7s} {i['criterion']:22s} {i['fix_op']:14s} {i['what'][:90]}")
     out = {"name": name, "version": version, "cut": cut.as_posix(), "review_copy": copy_path.as_posix(),
            "file_id": up.get("id"), "clock": clock, "duration_s": duration,
-           "facts": {"silences": sil, "captions": caps, "cut_edges": edges, "caption_timeline": timeline},
+           "reviewer": spark.model,
+           "facts": {"silences": sil, "captions": caps, "cut_edges": edges, "caption_timeline": timeline,
+                     "heard": words_heard},
            "facts_text": facts, "review": rv, "cost_usd": call.cost_usd, "seconds": call.seconds,
            "response_id": call.response_id}
     dump_json(run_dir / f"{name}.json", out)

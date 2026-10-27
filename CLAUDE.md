@@ -234,6 +234,14 @@ end, the cuts that now meet tightened, `roles_by_position` = edl.normalize_roles
 (`media.head_thumb`). UI: Text panel staged edits, drag a clip body on the video track (MoveAsk -> EditDialog "move"),
 Speakers panel (rail). Watch's "who" is shown as "watch's guess": on 014 it names the wrong astronauts. Checked keyless
 with real renders on a throwaway copy of 014 (pin A -> head 0, s8 moved before s2, callouts + title off; removed).
+Reviewer benchmark + Spark Open reviewer (27/10 night, $5.02, `docs/notes/montivo-reviewer-bench_2026-10-27.md`):
+Muse Spark Open on Baseten sees `video_url` frames (~1 fps) but hears nothing; `Spark.call(video=)` sends the cut
+inline, `review_render` gives an Open reviewer the heard-words facts (Voice on the cut, `dedupe_heard`,
+`caption_heard_diff`); Spark 1.3's prompt unchanged. `tools/reviewer_bench.py` plants 8 fault types in 012 v2, 015 v3,
+014 v1 (`runs/bench/`), 50 reviews per reviewer: Spark 1.3 82 % caught / 75 % as major, clean 88.5 pass 100 %, weak on
+mid-word (2/6) and caption text (4/6), 30 % of faulty cuts still pass; Open 82 % / 75 %, $0.018 vs $0.032, but scores
+15-20 lower and never passed a clean cut; heard facts do not help 1.3. The Open reviewer found 015 v3 opening with
+"Okay, hi" (edge pass widened s1 into "Okay"; needs Billy's ear).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

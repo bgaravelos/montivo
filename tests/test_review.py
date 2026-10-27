@@ -370,3 +370,45 @@ def test_a_trimmed_edge_settles_in_the_gap_and_a_clipped_word_is_never_fixed_by_
     mid["criterion"] = "pacing"
     fix, _ = R.resolve(mid, 0, edl, words, R.cut_map(edl), FakeAudio())
     assert fix.args["mode"] == "words"
+
+
+def test_heard_phrases_break_on_pauses_and_length():
+    from montivo.engine.review import heard_phrases
+    w = lambda x, a, b: {"w": x, "t_start": a, "t_end": b}  # noqa: E731
+    words = [w("Hi.", 0.1, 0.4), w("I'm", 0.45, 0.6), w("Billy.", 0.6, 1.0), w("Four", 1.6, 1.9), w("Meta", 1.9, 2.1)]
+    assert heard_phrases(words) == [{"t_in": 0.1, "t_out": 1.0, "text": "Hi. I'm Billy."},
+                                    {"t_in": 1.6, "t_out": 2.1, "text": "Four Meta"}]
+    assert [p["text"] for p in heard_phrases(words, max_words=2)] == ["Hi. I'm", "Billy.", "Four Meta"]
+
+
+def test_facts_text_lists_the_heard_words_last():
+    from montivo.engine.review import facts_text
+    caps = {"lines": 0, "over_face": [], "min_clearance_px": None}
+    heard = [{"w": "Hi.", "t_start": 0.1, "t_end": 0.4}, {"w": "I'm", "t_start": 0.45, "t_end": 0.6},
+             {"w": "Bill.", "t_start": 0.6, "t_end": 1.0}]
+    text = facts_text([], caps, 10.0, heard=heard)
+    assert text.splitlines()[-1].startswith("3. Words heard in this cut's own audio")
+    assert '0.10-1.00 s "Hi. I\'m Bill."' in text
+    assert "Words heard" not in facts_text([], caps, 10.0)
+    timeline = [{"t_in": 0.1, "t_out": 1.0, "text": "Hi. I'm Billy."}]
+    lines = facts_text([], caps, 10.0, timeline=timeline, heard=heard).splitlines()
+    assert lines[-1].startswith("5. Where the caption words and the heard words differ")
+    assert '0.10 s caption "billy" / heard "bill"' in lines[-1]
+
+
+def test_caption_heard_diff_aligns_words_not_times():
+    from montivo.engine.review import caption_heard_diff
+    timeline = [{"t_in": 19.6, "text": "the work Muse Google"}, {"t_in": 21.4, "text": "hears every word."},
+                {"t_in": 22.9, "text": "Four"}]
+    heard = [{"w": x, "t_start": 19.0 + k * 0.3, "t_end": 19.2 + k * 0.3}
+             for k, x in enumerate("all the work news voice hears every word".split())]
+    assert caption_heard_diff(timeline, heard) == [{"t": 19.6, "caption": "muse", "heard": "news"},
+                                                   {"t": 19.6, "caption": "google", "heard": "voice"},
+                                                   {"t": 22.9, "caption": "four", "heard": ""}]
+
+
+def test_dedupe_heard_drops_voice_doubles_only():
+    from montivo.engine.review import dedupe_heard
+    w = lambda x, a, b: {"w": x, "t_start": a, "t_end": b}  # noqa: E731
+    words = [w("I", 0.0, 0.2), w("run", 0.2, 0.5), w("run", 0.55, 0.8), w("a", 0.8, 0.9), w("a", 1.5, 1.6)]
+    assert [x["w"] for x in dedupe_heard(words)] == ["I", "run", "a", "a"]  # a real repeat after a pause stays
