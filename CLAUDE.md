@@ -254,6 +254,19 @@ inline, `review_render` gives an Open reviewer the heard-words facts (Voice on t
 mid-word (2/6) and caption text (4/6), 30 % of faulty cuts still pass; Open 82 % / 75 %, $0.018 vs $0.032, but scores
 15-20 lower and never passed a clean cut; heard facts do not help 1.3. The Open reviewer found 015 v3 opening with
 "Okay, hi" (edge pass widened s1 into "Okay"; needs Billy's ear).
+Deterministic checks + pass gate (27/10 night, $0.82, commit `b23604d`, `docs/notes/montivo-reviewer-bench_2026-10-27.md`
+"Round 3"): `review.py` gives every reviewer two measured facts from Voice on the cut (now run for every review, $0.002
+per 40 s): kept edge words not heard (`edge_words_unheard`: only the words nearest the cut, a mishearing that keeps the
+word is not a miss, and only where the source audio at the edge is over the clip's speech threshold) and the head out
+of the 9:16 crop (`head_frame_facts`, the crop re-planned as the render does, over 40 % outside); Spark 1.3 also gets
+the caption-vs-heard diff, not the heard phrases. `gate_check` blocks the pass on a loud edge, an unheard edge word, a
+caption forced over the head or the head out of frame for 0.5 s: `review.pass` is gated (`review.reviewer_pass` the
+reviewer's own, `pass_gate` the reasons), each fault becomes a major fix `plan_fixes` applies, the loop ranks (gate
+clear, overall); reframe_bias now moves every span of the segment. Re-review of 28 bench cuts (spark13): faults caught
+as major 59 -> 82 % (mid_word 2 -> 4/6, the 2 misses are 012's inaudible plant; framing 4 -> 6/6; caption_text 4 -> 5/6;
+weak_hook 4/4), clean 012/015 gate false alarms 0, one clean review failed on the brief's missing line + "we edit" / "we
+did"; faulty cuts still passed 41 -> 36 %: the rest are majors the reviewer passes at >= 80 (its rule only stops on a
+blocker). The UI reads `review.pass`, so a gated cut now shows no pass without the reason (UI follow-up).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
