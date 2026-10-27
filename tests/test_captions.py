@@ -70,9 +70,10 @@ def test_span_boundary_starts_a_new_line():
     # runs/012 s3 + s4 render as one segment; Voice gives no punctuation, before this the line read "work Muse Spark"
     ws = cw([("Meta", 0, .3), ("models", .3, .6), ("do", .6, .8), ("the", .8, .9), ("work", .9, 1.2)], span="s3")
     ws += cw([("Muse", 1.2, 1.5), ("Spark", 1.5, 1.8), ("watches", 1.8, 2.2)], span="s4")
-    lines = [[w.w for w in ln] for ln in group_lines(ws, STYLE)]
+    wide = CaptionStyle(max_w=4000)  # only the span rule may break here, whatever font the machine falls back to
+    lines = [[w.w for w in ln] for ln in group_lines(ws, wide)]
     assert lines[-1] == ["Muse", "Spark", "watches"]
-    assert all(len({w.span for w in ln}) == 1 for ln in group_lines(ws, STYLE))  # the short-line borrow stays in its span
+    assert all(len({w.span for w in ln}) == 1 for ln in group_lines(ws, wide))  # the short-line borrow stays in its span
 
 
 def test_short_line_joins_its_phrase_when_it_fits():

@@ -31,3 +31,4 @@ include = ["montivo*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]  # test_ui imports tests.test_review
