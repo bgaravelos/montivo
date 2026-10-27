@@ -21,9 +21,10 @@ AI editors stop at the first cut. Montivo watches its own render the way a viewe
 edit and renders again:
 
 - **A blind reviewer.** Spark 1.3 gets the rendered vertical cut (with a clock burned in, because it sees about one
-  frame per second and no timestamps), the brief, a rubric and three measured facts: the silences in the cut, where
-  every caption sits against the speaker's head box, and the source audio level at both edges of every cut (a model
-  does not hear a clipped syllable; the waveform does). It never sees the plan or the edit list.
+  frame per second and no timestamps), the brief, a rubric and four measured facts: the silences in the cut, where
+  every caption sits against the speaker's head box, the source audio level at both edges of every cut (a model
+  does not hear a clipped syllable; the waveform does) and the caption timeline (a line up under a second can fall
+  between the frames it sees). It never sees the plan or the edit list.
 - **Fix operations, not prose.** Every issue comes back with a time in the cut and one of nine fix ops (`move_cut`,
   `drop_span`, `extend_span`, `swap_hook`, `reorder`, `caption_fix`, `retime_callout`, `reframe_bias`, `none`). The
   patcher maps the time to a span, a cut, a caption line or a callout and writes the next `edl_vN.json` with a
@@ -97,7 +98,7 @@ make ui
 starts a new run (upload, brief, target length, review loop). The editor has a 9:16 viewer; a multi-track timeline
 (the title card, captions, video with a filmstrip, audio with a waveform) with the reviewer's issues as markers on the
 ruler, zoom and a transcript view of the paper edit; an inspector for the selected clip, the title card or the review
-of the whole cut (score, the three facts, the rubric, and each issue as saw, op, patch, result with the frame the
+of the whole cut (score, the facts, the rubric, and each issue as saw, op, patch, result with the frame the
 reviewer saw); the Assistant with the agent's stages live from `run.log` and a chat that re-plans from an instruction;
 the versions with Compare (two versions side by side on one transport); the ledger; Export; and a replay mode (1x or
 4x) that plays a finished run back with the dollars counting up, for recording. Punch-ins have a switch in the
@@ -159,9 +160,11 @@ montivo hook runs/001 [--edl edl_v2.json]  hook A/B: the next version opens on a
 ```
 
 The review loop: the reviewer gets the cut (scaled to 720x1280 with a cut-time clock burned in at the top left), the brief,
-the rubric and three measured facts, never the EDL: the silence gaps ffmpeg `silencedetect` finds in the cut, every
-caption box against the SAM head box, and the speech level of the source audio right at both edges of every cut (added
-after kill test (b): Spark never hears a clipped word). It names times in the cut, not spans; `engine/review.py` maps each time back to a
+the rubric and four measured facts, never the EDL: the silence gaps ffmpeg `silencedetect` finds in the cut, every
+caption box against the SAM head box, the speech level of the source audio right at both edges of every cut (added
+after kill test (b): Spark never hears a clipped word) and every caption line's text and cut times (added 27/10: the
+0.4 s "Hi." opening run 012-open's cut_v3 fell between Spark's frames and was flagged missing; with the timeline the
+same cut drew no such issue). It names times in the cut, not spans; `engine/review.py` maps each time back to a
 span, a cut point, a caption line or a callout and turns blocker and major issues into EDL patches (`drop_span`,
 `extend_span`, `move_cut`, `swap_hook`, `reorder`, `caption_fix`, `retime_callout`, `reframe_bias`; a title card the
 reviewer flags is dropped with `title_card: false`). Guards: at most 3 reviews, a dollar budget checked before each review
@@ -494,8 +497,8 @@ Design rules fixed on 26/10:
 
 - **Blind reviewer.** The review pass gets only the rendered mp4, the brief and the rubric, never the EDL. It also gets
   deterministic facts as text: the silence gaps ffmpeg `silencedetect` finds in the render, where the caption boxes sit
-  relative to the SAM face boxes and (since 26/10 night, Billy's call after kill test (b)) the source audio level at both
-  edges of every cut.
+  relative to the SAM face boxes, (since 26/10 night, Billy's call after kill test (b)) the source audio level at both
+  edges of every cut and (since 27/10) the caption timeline.
 - **Kill test (a), render path:** Billy's clip, cuts on Voice word boundaries, 9:16 reframe from the SAM track. Pass when no cut
   lands inside a word and the pan does not jitter. If it fails: an 80 ms audio crossfade on every cut and snapping only to
   `speechEnd`/`speechStart`.

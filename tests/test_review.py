@@ -187,6 +187,19 @@ def test_parse_silences_and_caption_facts():
     assert "0.00-1.52 s" in text and "1 overlap the head box" in text and '"b"' in text
 
 
+def test_caption_timeline_fact():
+    # runs/012-open cut_v3: "Hi." up 0.03-0.43 s fell between the reviewer's one-per-second frames
+    edl = {"captions": [caption(0.03, 0.43, ["s1"], [("Hi.", 0.03, 0.18)], [470, 1300, 140, 100], None),
+                        caption(0.43, 1.14, ["s1"], [("I'm", 0.43, 0.9), ("Billy.", 0.9, 1.14)], [400, 1300, 280, 100], None)]}
+    tl = R.caption_timeline(edl)
+    assert tl == [{"t_in": 0.03, "t_out": 0.43, "text": "Hi."}, {"t_in": 0.43, "t_out": 1.14, "text": "I'm Billy."}]
+    text = R.facts_text([], R.caption_face_facts(edl), 45.4, [], tl)
+    assert '4. Caption lines exactly as they are on screen, cut seconds: 0.03-0.43 s "Hi."; 0.43-1.14 s "I\'m Billy."' in text
+    assert "fall between your frames" in text
+    assert "4. Caption" not in R.facts_text([], {"lines": 0}, 3.0, [])  # no captions: no timeline line
+    assert "3. Caption lines" in R.facts_text([], R.caption_face_facts(edl), 45.4, None, tl)  # numbered in order
+
+
 def test_caption_override_and_retext():
     ws = [CWord("its", 30.0, 30.3, "s3"), CWord("a", 30.3, 30.4, "s3"), CWord("lop", 30.4, 30.8, "s3")]
     assert override_for(ws, [{"span": "s3", "src_t": 30.31, "top": 500}])["top"] == 500

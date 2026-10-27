@@ -3,7 +3,9 @@
 The reviewer gets the rendered cut, the brief and the rubric, never the EDL (design rule of 26/10). Two deterministic
 facts go with it as text: the silence gaps ffmpeg `silencedetect` finds in the cut, and where every caption box sits
 against the SAM head box (from the EDL `captions` entries the render wrote). A third fact was added after kill test (b):
-the source audio level right at both edges of every cut, because Spark never heard a word clipped by a cut (0 of 3 runs). The copy Spark watches is the cut scaled
+the source audio level right at both edges of every cut, because Spark never heard a word clipped by a cut (0 of 3 runs).
+A fourth is the caption timeline, every line's text and cut times, because Spark sees about one frame per second: a
+0.4 s line ("Hi." opening run 012-open's cut_v3) fell between its frames and was flagged as missing. The copy Spark watches is the cut scaled
 to 720x1280 with a small clock burned in at the top left, because Spark sees about one frame per second with no
 timestamps: the clock is the only way its t_s can land within a second of the fault.
 
@@ -134,6 +136,11 @@ def edge_loud_db(audio: "Audio") -> float:
     return max(EDGE_LOUD_DB, min(audio.threshold_db(), EDGE_LOUD_DB + 4.0))
 
 
+def caption_timeline(edl: dict) -> list[dict]:
+    """Every caption line as it is on screen: text and cut seconds (from the EDL `captions` entries the render wrote)."""
+    return [{"t_in": c["t_in"], "t_out": c["t_out"], "text": c["text"]} for c in edl.get("captions") or []]
+
+
 def cut_edge_levels(edl: dict, audio: "Audio") -> list[dict]:
     """Speech level of the SOURCE audio centred on both edges of every cut (where a kept passage ends, where the next
     begins, and the very end), reported at the cut's time. Between two words the level drops (clean edges on runs 012
@@ -160,7 +167,7 @@ def cut_edge_levels(edl: dict, audio: "Audio") -> list[dict]:
 
 
 def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: float,
-               edges: list[dict] | None = None) -> str:
+               edges: list[dict] | None = None, timeline: list[dict] | None = None) -> str:
     sil = ", ".join(f"{a:.2f}-{b:.2f} s ({b - a:.2f} s)" for a, b in silences) or "none"
     out = [f"1. Silence gaps in the audio (ffmpeg silencedetect, below {SILENCE_DB:.0f} dB for at least {SILENCE_MIN_S} s), "
            f"cut seconds out of {duration_s:.1f}: {sil}."]
@@ -196,6 +203,11 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
             else:
                 line += "every cut here is below it."
             out.append(line)
+    if timeline:
+        out.append(f"{len(out) + 1}. Caption lines exactly as they are on screen, cut seconds: "
+                   + "; ".join(f"{c['t_in']:.2f}-{c['t_out']:.2f} s \"{c['text']}\"" for c in timeline)
+                   + ". You see about one frame per second, so a line up for less than a second can fall between "
+                     "your frames: a line in this list is on screen even when you did not see it.")
     return "\n".join(out)
 
 
@@ -813,7 +825,8 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
         caps = caption_face_facts(edl)
         audio = Audio.load(run_dir)
         edges = cut_edge_levels(edl, audio) if audio else None
-        facts = facts_text(sil, caps, duration, edges)
+        timeline = caption_timeline(edl)
+        facts = facts_text(sil, caps, duration, edges, timeline)
         copy_path = review_copy(cut, rdir, clock=clock)
         up = upload_file(copy_path, "video/mp4")
     ledger.add(Entry(stage="review.prep", model="ffmpeg+files", seconds=t.seconds, cost_usd=0.0,
@@ -827,7 +840,8 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
     for i in sorted(rv["issues"], key=lambda i: i["t_s"]):
         log(f"  {i['t_s']:6.2f}s {i['severity']:7s} {i['criterion']:22s} {i['fix_op']:14s} {i['what'][:90]}")
     out = {"name": name, "version": version, "cut": cut.as_posix(), "review_copy": copy_path.as_posix(),
-           "file_id": up.get("id"), "clock": clock, "duration_s": duration, "facts": {"silences": sil, "captions": caps, "cut_edges": edges},
+           "file_id": up.get("id"), "clock": clock, "duration_s": duration,
+           "facts": {"silences": sil, "captions": caps, "cut_edges": edges, "caption_timeline": timeline},
            "facts_text": facts, "review": rv, "cost_usd": call.cost_usd, "seconds": call.seconds,
            "response_id": call.response_id}
     dump_json(run_dir / f"{name}.json", out)

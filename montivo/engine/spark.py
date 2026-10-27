@@ -153,7 +153,7 @@ class Spark:
 
     def review(self, file_id: str, brief: str, facts: str, duration_s: float, name: str = "review",
                reasoning_effort: str | None = "low", max_output_tokens: int = 16000) -> SparkCall:
-        """Blind review: the rendered cut (with a review clock burned in), the brief, the rubric and two measured facts.
+        """Blind review: the rendered cut (with a review clock burned in), the brief, the rubric and the measured facts.
         Never the EDL, the plan or the transcript: the reviewer judges what a viewer gets. Effort low: at the default
         effort a 53.5 s cut burned all 10,000 output tokens on reasoning and returned nothing (26/10)."""
         prompt = (
