@@ -41,6 +41,26 @@ class Span:
     callout: str
     why: str
     contiguous_with_previous: bool = False  # same turn, no gap: render as one continuous cut, no boundary here
+    planner_role: str = ""  # the planner's own label when normalize_roles changed it
+
+
+def normalize_roles(spans: list[Span]) -> list[str]:
+    """Roles by position, whatever the planner wrote: the first span is the one `hook`, the last span before any
+    trailing `cta` run is the `payoff` (the ending), a `cta` stays only in that trailing run, every other span is
+    `body`. Muse Spark Open labelled every body span `payoff` on run 012-open, which made the hook A/B take a middle
+    line as the punchline. A changed label keeps the planner's in `planner_role`; returns one note per change."""
+    if not spans:
+        return []
+    end = len(spans)
+    while end > 1 and spans[end - 1].role == "cta":
+        end -= 1
+    notes = []
+    for i, s in enumerate(spans):
+        want = "hook" if i == 0 else "payoff" if i == end - 1 else "cta" if i >= end else "body"
+        if s.role != want:
+            notes.append(f"{s.id} {s.role} -> {want}")
+            s.planner_role, s.role = s.role, want
+    return notes
 
 
 def locate(span_text: str, turn_words: list[Word]) -> tuple[int, int, bool, float] | None:
@@ -89,6 +109,7 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
                           duration=round(t_out - t_in, 3), verbatim=exact, match_ratio=ratio, word_from=a, word_to=b,
                           callout=item.get("callout", ""), why=item.get("why", "")))
 
+    role_fixes = normalize_roles(spans)
     for prev, cur in zip(spans, spans[1:]):
         if cur.turn_id == prev.turn_id and cur.word_from == prev.word_to + 1:
             cur.contiguous_with_previous = True
@@ -101,6 +122,7 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
         "runtime_s": runtime,
         "spans": [asdict(s) for s in spans],
         "unplaced": missing,
+        "role_fixes": role_fixes,
         "verbatim_rate": round(sum(s.verbatim for s in spans) / len(spans), 3) if spans else 0.0,
         "title_card_text": plan.get("title_card_text", ""),
         "caption_style_note": plan.get("caption_style_note", ""),

@@ -203,8 +203,9 @@ with libx264 crf 18 and the audio copied, and that file is the source for the pr
 box or crop is ever flipped afterwards; recorded in `ingest.json` and in the EDL's `source`),
 `--track-fps 10` (default 5 fps for every concept, the head track's rate, so person and head share one upload), `--reframe-concept head` and
 `--reframe-fps 5` (the track the crop follows; `none` falls back to the person track), `--no-track`, `--plan-with-video`,
-`--plan-effort low|medium|high`, `--punch` (punch-in zooms, see below), `--review` (the review loop after cut_v1; `--review-passes 3`, `--review-budget 0.30`), `--resume` (reuse ingest, voice, watch and tracks already in the run folder while
-iterating on the plan), `--language none`, `--no-render` (stop at `edl_v1.json`), `--no-title` (no Muse Image title card,
+`--plan-effort low|medium|high`, `--punch` (punch-in zooms, see below), `--review` (the review loop after cut_v1; `--review-passes 3`, `--review-budget 0.30`), `--resume` (reuse ingest, voice, watch and tracks already in the run folder, and `plan.json` + `edl_v1.json` while
+the brief, target and planner are the ones the plan was made with; `--replan` forces a new plan, and a new plan first
+keeps the old `plan.json` and `edl_v1.json` in `superseded/` and names any later `edl_vN` built on it in a warning), `--language none`, `--no-render` (stop at `edl_v1.json`), `--no-title` (no Muse Image title card,
 saves $0.01), `--no-captions`. `montivo render runs/001 [--edl ...] [--source ...] [--out cut_v3.mp4] [--no-title]
 [--no-captions] [--no-callouts] [--no-loudnorm] [--punch | --no-punch]` renders an EDL again from the run folder's `voice/voice.json` and tracks;
 it calls no model, except Muse Image once when `title/title_card.png` is missing or was made for another title text.
@@ -228,14 +229,17 @@ run log and the command's output. Measured on a copy of run 012 (27/10): Muse Sp
 one verbatim, nothing unplaced, the same hook and ending as Spark 1.3 and 8 of its 9 passages (it opened the body on
 "for the Meta Hackathon we are building Montivo" instead of the stumbling "the editor it's an agent agent"), for $0.012
 in 6.8 s against Spark 1.3's $0.050 in 35 s; the blind reviewer gave that first cut 92 and a pass (Spark 1.3's v1 had
-76 before the loop, its reviewed v2 100). It marks every body span `payoff`, which the hook A/B reads as a cold open.
+76 before the loop, its reviewed v2 100). It marked every body span `payoff` (the prompt gave only the label names),
+so the hook A/B took a middle line as the punchline; the plan prompt now defines each role and `build_edl` sets them by
+position for any planner (one `hook` first, the `payoff` last, `cta` only after it, `body` between; a changed label
+keeps the planner's in `planner_role` and `role_fixes`).
 
 Hook A/B (`engine/hook.py`, `montivo hook runs/001 [--edl edl_vN.json] [--budget 0.10]`, or `montivo review runs/001
 --hook-ab [--hook-budget 0.10]` after the loop): version A is the EDL as it is, version B the next free version with one
 `swap_hook` patch through the reviewer's own patch path (the challenger moved to the front, every other span in A's order,
 the old opener kept as a body span), rendered and reviewed blind; the higher (pass, overall) is kept and a tie keeps A.
 The challenger is chosen deterministically: the line the reviewer asked to open with (a `swap_hook` target in this run's
-reviews, newest first), else another span the planner marked `hook`, else the planner's first `payoff` (a cold open),
+reviews, newest first), else another span the planner marked `hook`, else the planner's `payoff`, the ending (a cold open),
 else the first span after the opener that starts a new passage. A's review is reused when `cut_vA` was already
 reviewed (then the A/B is one review, about $0.03; two reviews about $0.06 on a 45 s cut), the budget is checked for
 every review still needed before the first one, a challenger already compared against the same A is not tried again,

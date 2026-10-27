@@ -14,7 +14,8 @@ The challenger is picked deterministically, first match wins:
 1. the line the reviewer itself asked to open with: the target_t_s of a swap_hook issue in this run's reviews, newest
    review first, mapped through the cut map of the version that review saw (the reviewer named it, blind to the plan);
 2. another span the planner marked `hook` (it saw two openers and placed one);
-3. the planner's first `payoff` span (the punchline as a cold open, a common short-form opening);
+3. the planner's `payoff` span, the last one if an old EDL has several (the punchline as a cold open, a common
+   short-form opening);
 4. the first span after the opener that starts a new passage (not contiguous with the span before it: a cut that
    opens mid-sentence is no hook) and is not a call to action.
 
@@ -72,8 +73,10 @@ def challengers(edl: dict, run_dir: Path) -> list[tuple[str, str]]:
         return []
     ids = {s["id"] for s in spans[1:]}
     cands = [c for c in reviewer_targets(run_dir) if c[0] in ids]
-    cands += [(s["id"], "the planner marked it a hook too") for s in spans[1:] if s["role"] == "hook"]
-    cands += [(s["id"], "the planner's payoff, as a cold open") for s in spans[1:] if s["role"] == "payoff"][:1]
+    cands += [(s["id"], "the planner marked it a hook too") for s in spans[1:]
+              if "hook" in (s["role"], s.get("planner_role"))]
+    # the last payoff: an EDL built before normalize_roles may carry several (012-open v3 marked every body span)
+    cands += [(s["id"], "the planner's payoff, as a cold open") for s in spans[1:] if s["role"] == "payoff"][-1:]
     cands += [(s["id"], "the first new passage after the opener") for s in spans[1:]
               if not s.get("contiguous_with_previous") and s["role"] != "cta"][:1]
     seen: set[str] = set()

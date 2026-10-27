@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import sys
 import time
 import traceback
@@ -38,6 +40,7 @@ class RunOptions:
     plan_effort: str | None = None
     skip_track: bool = False
     resume: bool = False
+    replan: bool = False  # with resume: a new plan even when plan.json was made with the same brief, target and planner
     model: str = SPARK_MODEL
     planner_model: str | None = None  # None = model; config.OPEN_MODEL plans on Muse Spark Open (Baseten, text only)
     render: bool = True
@@ -63,6 +66,61 @@ class RunLog:
         self.fh.flush()
 
 
+def plan_inputs(opts: RunOptions) -> dict:
+    """What a plan depends on besides the transcript and watch; run.json keeps it as `plan_inputs`."""
+    return {"brief": opts.brief, "target_s": opts.target_s, "planner_model": opts.planner_model or opts.model,
+            "plan_with_video": opts.plan_with_video, "plan_effort": opts.plan_effort}
+
+
+def plan_made_with(prev_run: dict) -> dict:
+    """The inputs of the plan.json in a run folder; a run.json from before `plan_inputs` gives brief, target and
+    planner (the run that wrote it planned with them)."""
+    if prev_run.get("plan_inputs"):
+        return prev_run["plan_inputs"]
+    if not prev_run:
+        return {}
+    return {"brief": prev_run.get("brief"), "target_s": prev_run.get("target_s"),
+            "planner_model": prev_run.get("planner_model") or prev_run.get("model")}
+
+
+def plan_reuse(opts: RunOptions, made: dict, have_plan: bool, inputs_resumed: bool) -> tuple[bool, str]:
+    """Whether a resumed run reuses plan.json, and why (logged). Reused only when nothing the plan read has changed:
+    the transcript and watch came from disk and every recorded input equals this run's."""
+    if not opts.resume:
+        return False, "a new plan"
+    if not have_plan:
+        return False, "no plan.json yet: a new plan"
+    if opts.replan:
+        return False, "--replan: a new plan"
+    if not inputs_resumed:
+        return False, "voice or watch is new: a new plan"
+    now = plan_inputs(opts)
+    changed = [k for k in made if made[k] != now.get(k)] if made else ["(not recorded)"]
+    if changed:
+        return False, f"{', '.join(changed)} changed since plan.json: a new plan"
+    return True, "same brief, target and planner as plan.json: plan reused (--replan makes a new one)"
+
+
+def supersede_v1(out: Path, log=print) -> Path | None:
+    """Before a new plan replaces edl_v1.json: plan.json and edl_v1.json are copied to superseded/<time>/ (cut_v1.mp4
+    can be rendered again from that EDL, $0), and later versions, built on the old plan, are named in a warning.
+    They are never touched; `montivo plan RUN` is the way to a new plan as the next version."""
+    if not (out / "edl_v1.json").is_file():
+        return None
+    dest = out / "superseded" / time.strftime("%Y%m%d-%H%M%S")
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in ("plan.json", "edl_v1.json"):
+        if (out / name).is_file():
+            shutil.copy2(out / name, dest / name)
+    later = sorted((p for p in out.glob("edl_v*.json") if re.fullmatch(r"edl_v\d+\.json", p.name) and p.name != "edl_v1.json"),
+                   key=lambda p: int(p.stem[5:]))
+    log(f"plan: the previous plan.json and edl_v1.json are kept in {dest.relative_to(out)}/")
+    if later:
+        log(f"WARNING: {', '.join(p.stem for p in later)} were built on the previous plan and stay as they are; the new "
+            f"edl_v1 does not lead to them (`montivo plan {out}` makes a new plan as the next version instead)")
+    return dest
+
+
 def run(opts: RunOptions) -> dict:
     out = opts.out
     if opts.planner_model:
@@ -70,8 +128,13 @@ def run(opts: RunOptions) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     log = RunLog(out / "run.log")
     ledger = Ledger.resume(out / "ledger.json") if opts.resume else Ledger(out / "ledger.json")
-    dump_json(out / "run.json", {"footage": str(opts.footage), "brief": opts.brief, "concepts": opts.concepts, "reframe_concept": opts.reframe_concept, "reframe_fps": opts.reframe_fps,
-                                 "target_s": opts.target_s, "model": opts.model, "planner_model": opts.planner_model or opts.model, "hflip": opts.hflip, "started": time.strftime("%Y-%m-%dT%H:%M:%S")})
+    prev_run = json.loads((out / "run.json").read_text()) if opts.resume and (out / "run.json").is_file() else {}
+    run_json = {"footage": str(opts.footage), "brief": opts.brief, "concepts": opts.concepts, "reframe_concept": opts.reframe_concept, "reframe_fps": opts.reframe_fps,
+                "target_s": opts.target_s, "model": opts.model, "planner_model": opts.planner_model or opts.model, "hflip": opts.hflip, "started": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    made = plan_made_with(prev_run) if (out / "plan.json").is_file() else {}
+    if made:
+        run_json["plan_inputs"] = made  # what plan.json was made with, until a new plan replaces it
+    dump_json(out / "run.json", run_json)
     log(f"montivo run: {opts.footage.name} -> {out}")
 
     def have(*parts: str) -> bool:
@@ -93,12 +156,15 @@ def run(opts: RunOptions) -> dict:
         return sam_cost(int(round(ing.proxy_probe.duration * track_mod.track_fps(ing.proxy_probe.fps, opts.track_fps))))
 
     # 2. voice and track in parallel; watch starts the moment the transcript exists (it needs it, see spark.py)
+    fresh: set[str] = set()  # voice / watch made in this run, not read from disk: the plan read them
+
     def voice_then_watch():
         if have("voice", "voice.json"):
             voice = VoiceResult.from_json(json.loads((out / "voice" / "voice.json").read_text()))
             log(f"resume: voice from voice/voice.json ({len(voice.turns)} turns, {len(voice.words)} words)")
         else:
             voice = transcribe(ing.wav, out / "voice", ledger, language=opts.language, log=log)
+            fresh.add("voice")
         if not voice.turns:
             raise RuntimeError("voice: no speech found in the footage")
         if have("watch.json"):
@@ -108,6 +174,7 @@ def run(opts: RunOptions) -> dict:
         else:
             watch = spark.watch(ing.file_id, voice.transcript_text(), opts.brief, ing.probe.duration)
             dump_json(out / "watch.json", watch.parsed)
+            fresh.add("watch")
         # Watch's trackable concepts are suggestions only. SAM is one request per concept (about $0.125 per 125 s at
         # 5 fps), so the only concepts ever sent to SAM are the CLI --concept list plus the reframe head track.
         suggested = [c for c in watch.parsed.get("trackable_concepts", []) if c.lower() not in {x.lower() for x in opts.concepts}
@@ -189,14 +256,25 @@ def run(opts: RunOptions) -> dict:
                 log(f"ERROR in speaker mapping (the crop keeps the largest head):\n{errors[-1][1]}")
 
     # 3. plan, with the speech rate Voice measured on this clip (2.5 words/s made a 40 s target come out at 50.7 s)
+    # On --resume plan.json is reused when nothing it read has changed; a new plan never replaces edl_v1 silently
     wps = voice.speech_rate()
-    log(f"plan: speech rate {wps:.2f} words/s ({len(voice.words)} words over the spoken seconds of {len(voice.turns)} turns), "
-        f"target {opts.target_s:.0f} s = about {opts.target_s * wps:.0f} to {opts.target_s * 1.2 * wps:.0f} words")
-    planner = Spark(out, ledger, model=opts.planner_model, log=log) if opts.planner_model else spark
-    planned = planner.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
-                         file_id=ing.file_id if opts.plan_with_video else None, reasoning_effort=opts.plan_effort,
-                         words_per_s=wps)
-    dump_json(out / "plan.json", planned.parsed)
+    reuse, why = plan_reuse(opts, made, (out / "plan.json").is_file(), not fresh)
+    if reuse:
+        planned = SparkCall(name="plan", parsed=json.loads((out / "plan.json").read_text()), status="resumed", usage={},
+                            cost_usd=0.0, seconds=0.0, response_id="")
+        log(f"resume: {why}")
+    else:
+        if opts.resume:
+            log(f"plan: {why}")
+        supersede_v1(out, log)
+        log(f"plan: speech rate {wps:.2f} words/s ({len(voice.words)} words over the spoken seconds of {len(voice.turns)} turns), "
+            f"target {opts.target_s:.0f} s = about {opts.target_s * wps:.0f} to {opts.target_s * 1.2 * wps:.0f} words")
+        planner = Spark(out, ledger, model=opts.planner_model, log=log) if opts.planner_model else spark
+        planned = planner.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
+                             file_id=ing.file_id if opts.plan_with_video else None, reasoning_effort=opts.plan_effort,
+                             words_per_s=wps)
+        dump_json(out / "plan.json", planned.parsed)
+        dump_json(out / "run.json", {**run_json, "plan_inputs": plan_inputs(opts)})
 
     # 4. EDL v1 on word boundaries; the source is the file ingest produced (the mirrored copy under --hflip)
     source = {"path": str(ing.source), "original_path": str(opts.footage), "hflip": ing.source != opts.footage,
@@ -204,12 +282,19 @@ def run(opts: RunOptions) -> dict:
               "width": ing.probe.width, "height": ing.probe.height, "fps": ing.probe.fps,
               "proxy_width": ing.proxy_probe.width, "proxy_height": ing.proxy_probe.height}
     track_summary = {c: t.summary() for c, t in tracks.items()}
-    edl = build_edl(planned.parsed, voice, watch.parsed, source, opts.brief, track_summary,
-                    reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out))
-    if edl.get("edge_pass"):
-        ep = edl["edge_pass"]
-        log(f"edges: {ep['moved']} cut edges tightened to the speech, {ep['removed_s']} s of pause removed "
-            f"(floor {ep['floor_db']} dB, speech over {ep['threshold_db']} dB)")
+    if reuse and (out / "edl_v1.json").is_file():
+        # the same plan builds the same v1, and later versions were patched from this file: keep it as it is
+        edl = json.loads((out / "edl_v1.json").read_text())
+        log("resume: edl_v1 from edl_v1.json")
+    else:
+        edl = build_edl(planned.parsed, voice, watch.parsed, source, opts.brief, track_summary,
+                        reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out))
+        if edl["role_fixes"]:
+            log(f"roles set by position (one hook first, the payoff last): {', '.join(edl['role_fixes'])}")
+        if edl.get("edge_pass"):
+            ep = edl["edge_pass"]
+            log(f"edges: {ep['moved']} cut edges tightened to the speech, {ep['removed_s']} s of pause removed "
+                f"(floor {ep['floor_db']} dB, speech over {ep['threshold_db']} dB)")
     if opts.punch:
         edl["punch"] = True
     dump_json(out / "edl_v1.json", edl)

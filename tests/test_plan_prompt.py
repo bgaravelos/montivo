@@ -44,3 +44,13 @@ def test_watch_prompt_and_schema_ask_for_movement_moments(tmp_path):
     assert "5) List moments where the on-camera speaker moves out of centre or handles a prop, with seconds" in prompt
     assert "movement_moments" in schema["properties"] and "movement_moments" in schema["required"]
     assert schemas.WATCH["properties"]["movement_moments"]["items"]["required"] == ["start_s", "end_s", "what"]
+
+
+def test_plan_prompt_and_schema_define_the_roles(tmp_path):
+    # Muse Spark Open, given only the enum, labelled every body span payoff on run 012-open
+    sp = _spark(tmp_path)
+    sp.plan("brief", "[turn 0] hi", {"summary": "s", "visual_shots": [], "speaker_map": []}, 40.0)
+    _, prompt, _ = sp.captured
+    assert "'hook' for the first span only" in prompt and "'payoff' for the last span only" in prompt
+    role = schemas.PLAN["properties"]["paper_edit"]["items"]["properties"]["role"]
+    assert "first span only" in role["description"] and role["enum"] == ["hook", "body", "payoff", "cta"]

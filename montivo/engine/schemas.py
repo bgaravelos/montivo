@@ -43,7 +43,8 @@ PLAN = {
                        "items": {"type": "object", "additionalProperties": False, "properties": {
                            "turn_id": {"type": "integer"},
                            "words": {"type": "string", "description": "verbatim contiguous words copied from that turn's transcript, including disfluencies"},
-                           "role": {"type": "string", "enum": ["hook", "body", "payoff", "cta"]},
+                           "role": {"type": "string", "enum": ["hook", "body", "payoff", "cta"],
+                                    "description": "hook = first span only, payoff = last span only (the ending), cta = a closing call to action after it, body = every other span"},
                            "why": {"type": "string"},
                            "callout": {"type": "string", "description": "optional 2 to 4 word on-screen callout for this span, empty if none"}},
                            "required": ["turn_id", "words", "role", "why", "callout"]}},

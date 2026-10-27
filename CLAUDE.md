@@ -140,6 +140,17 @@ hand stay removed"), no console errors. Found: the editor opens on `review/loop.
 human edits and the hook A/B's kept version that came after the loop. Fixed (`web/src/Editor.tsx` `kept`/`opening`): the
 editor opens on the newest version a human edit made or the hook A/B kept, else the loop's best, else the newest;
 checked in the browser on 012 (v2), 012-open (v7), a copy without v6/v7 (v4, was v3), 013 (v3), 014 (v1).
+Three engine fixes (27/10, $0): roles by position for any planner (`edl.normalize_roles` in `build_edl`: one `hook`
+first, the `payoff` last, `cta` only after it, `body` between; the planner's label kept in `planner_role`, changes in
+`role_fixes`; the plan prompt now defines each role; the hook A/B takes the last payoff of an old EDL); `run --resume`
+reuses `plan.json` and `edl_v1.json` when brief, target and planner match `run.json` `plan_inputs` (old run.json: its
+brief/target/planner) and voice and watch came from disk, `--replan` forces a plan, a new plan first copies plan.json and
+edl_v1.json to `superseded/<time>/` and warns about later edl_vN; a one-word caption line under `LINE_MIN_S` joins the
+next line of its span across end punctuation ("Hi. I'm Billy.", `runs/012-open/cut_v4_caps.mp4` from a copy
+`edl_v4_caps.json`). Checks: a clean clone of the public repo passes `make dev` / `make test` and serves keyless, but
+README "Try it" needs the `sample-012` release (not created); with a locally packed zip, 012 opens on v2 and a keyless
+drop renders. `runs/012-demo` exists for live edits; replay 4x of 012: plan 20 s, cut_v1 32 s, review 76 at 41 s,
+review 100 at 51.9 s (end).
 Next: Billy's own clip when it lands in `~/Downloads` (a fresh run: worth its own session). The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.

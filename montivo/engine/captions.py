@@ -9,7 +9,8 @@ Pipeline, all offline:
    replacement is recorded.
 4. `group_lines`: 1 to 4 words per line, never across a cut, a pause over 0.45 s or end punctuation, never wider than the
    frame allows; a line that would be up under LINE_MIN_S joins a neighbour of the same phrase when the two fit on one
-   line, and `hold_short_lines` keeps any line still that short up LINE_MIN_S, starting the next one later.
+   line (a one-word line joins the next across end punctuation: "Hi. I'm Billy."), and `hold_short_lines` keeps any
+   line still that short up LINE_MIN_S, starting the next one later.
 5. `build_overlays`: cut times for every line and word, the head boxes (SAM head track, interpolated, mapped through the
    segment's crop path into output pixels) over each line's interval, the caption pushed below or above the head when
    the lower-third default would touch it; the plan's per-span callouts anchored to the SAM person box. Returns the
@@ -202,9 +203,12 @@ def shown_s(lines: list[list[CWord]], j: int) -> float:
 def merge_short_lines(lines: list[list[CWord]], style: CaptionStyle, max_words: int = LINE_MAX_WORDS,
                       break_gap_s: float = LINE_BREAK_GAP_S, min_line_s: float = LINE_MIN_S) -> list[list[CWord]]:
     """A line that would be up under min_line_s joins the line before, else the line after, when the two are one
-    phrase (same span, no pause over break_gap_s, no end punctuation between them) and fit (max_words, frame width)."""
-    def joinable(a: list[CWord], b: list[CWord]) -> bool:
-        return (a[-1].span == b[0].span and b[0].t_in - a[-1].t_out <= break_gap_s and not _END.search(a[-1].w)
+    phrase (same span, no pause over break_gap_s, no end punctuation between them) and fit (max_words, frame width).
+    A one-word line joins the line after across end punctuation too: "Hi." held 0.4 s alone was too short to read
+    (the reviewer on run 012-open), "Hi. I'm Billy." reads as one line."""
+    def joinable(a: list[CWord], b: list[CWord], across_end: bool = False) -> bool:
+        return (a[-1].span == b[0].span and b[0].t_in - a[-1].t_out <= break_gap_s
+                and (across_end or not _END.search(a[-1].w))
                 and len(a) + len(b) <= max_words and line_width([x.w for x in a + b], style) <= style.max_w)
 
     lines = [list(ln) for ln in lines]
@@ -215,7 +219,7 @@ def merge_short_lines(lines: list[list[CWord]], style: CaptionStyle, max_words: 
                 lines[j - 1] += lines.pop(j)
                 j -= 1
                 continue
-            if j + 1 < len(lines) and joinable(lines[j], lines[j + 1]):
+            if j + 1 < len(lines) and joinable(lines[j], lines[j + 1], across_end=len(lines[j]) == 1):
                 lines[j] += lines.pop(j + 1)
                 continue
         j += 1

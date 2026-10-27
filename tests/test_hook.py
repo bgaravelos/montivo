@@ -129,3 +129,13 @@ def test_cli_hook_and_review_hook_ab(tmp_path, monkeypatch):
     assert cli.main(["hook", str(tmp_path), "--budget", "0.07"]) == 0
     assert cli.main(["review", str(tmp_path), "--hook-ab"]) == 0
     assert got == [(None, 0.07), (tmp_path / "edl_v2.json", 0.10)]
+
+
+def test_old_edl_with_many_payoffs_offers_the_last_one(tmp_path):
+    # edl_v3 of run 012-open was built before normalize_roles: every body span a payoff. The ending is the cold open
+    # to try, not the first middle line; a hook the guard turned into body is still offered
+    edl = folder(tmp_path, roles=["hook", "payoff", "payoff"])
+    edl["spans"][1]["contiguous_with_previous"] = True
+    assert [c[0] for c in H.challengers(edl, tmp_path)] == ["s3"]
+    edl["spans"][1].update(role="body", planner_role="hook")
+    assert H.challengers(edl, tmp_path)[0] == ("s2", "the planner marked it a hook too")

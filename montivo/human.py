@@ -245,6 +245,8 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
                     reframe_concept=prev.get("reframe_concept") or "person", audio=Audio.load(run_dir))
     if not new["spans"]:
         raise SystemExit("the new plan placed no span on the transcript")
+    if new["role_fixes"]:
+        log(f"roles set by position (one hook first, the payoff last): {', '.join(new['role_fixes'])}")
     new["version"] = n
     # the title card stays as it was: same text (no new Muse Image call), and off when the reviewer dropped it
     new["title_card_text"] = prev.get("title_card_text") or new["title_card_text"]

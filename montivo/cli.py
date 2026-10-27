@@ -37,7 +37,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--no-track", action="store_true", help="skip SAM")
     r.add_argument("--plan-with-video", action="store_true", help="attach the proxy to the plan call too (watch already saw it)")
     r.add_argument("--plan-effort", default=None, choices=["low", "medium", "high"], help="reasoning effort for the plan call")
-    r.add_argument("--resume", action="store_true", help="reuse ingest, voice, watch and tracks already in --out")
+    r.add_argument("--resume", action="store_true",
+                   help="reuse ingest, voice, watch and tracks already in --out, and plan.json + edl_v1.json when the "
+                        "brief, target and planner are the ones it was made with")
+    r.add_argument("--replan", action="store_true", help="with --resume: make a new plan even when nothing changed "
+                                                         "(the old plan.json and edl_v1.json go to superseded/)")
     r.add_argument("--model", default=None, help="Spark model id (default muse-spark-1.3)")
     r.add_argument("--planner", choices=("spark", "open"), default="spark",
                    help="who writes the paper edit: spark = the --model above, open = Muse Spark Open on Baseten "
@@ -198,6 +202,8 @@ def main(argv: list[str] | None = None) -> int:
         from .run import RunOptions, run
         if not args.footage.is_file():
             ap.error(f"{args.footage} is not a file")
+        if args.replan and not args.resume:
+            ap.error("--replan goes with --resume (a run without --resume always plans)")
         if args.planner == "open" and args.plan_with_video:
             ap.error("--planner open plans from text only; drop --plan-with-video")
         out = args.out or Path("runs") / time.strftime("%Y%m%d-%H%M%S")
@@ -206,7 +212,7 @@ def main(argv: list[str] | None = None) -> int:
                           reframe_concept=None if args.reframe_concept.lower() == "none" else args.reframe_concept,
                           reframe_fps=args.reframe_fps, language=None if args.language.lower() == "none" else args.language,
                           target_s=args.target, plan_with_video=args.plan_with_video, plan_effort=args.plan_effort,
-                          skip_track=args.no_track, resume=args.resume, render=not args.no_render, hflip=args.hflip,
+                          skip_track=args.no_track, resume=args.resume, replan=args.replan, render=not args.no_render, hflip=args.hflip,
                           title=not args.no_title, captions=not args.no_captions, review=args.review,
                           review_passes=args.review_passes, review_budget=args.review_budget, punch=args.punch,
                           model=args.model or RunOptions.__dataclass_fields__["model"].default,

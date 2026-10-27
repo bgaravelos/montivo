@@ -86,9 +86,25 @@ def test_short_line_joins_its_phrase_when_it_fits():
     assert [[w.w for w in ln] for ln in lines] == [["then", "the", "four"], ["models", "do", "the", "work"]]
 
 
-def test_short_line_stays_apart_across_a_sentence_end_span_or_full_line():
+def test_one_word_line_joins_the_next_across_a_sentence_end():
+    # runs/012-open: "Hi." held to 0.4 s alone was too short to read (the reviewer, with the caption timeline)
     hi = [cw([("Hi.", 27.03, 27.18)], "s1"), cw([("I'm", 27.18, 27.9), ("Billy.", 27.9, 28.14)], "s1")]
-    assert len(merge_short_lines(hi, STYLE)) == 2  # end punctuation: two sentences
+    assert [[w.w for w in ln] for ln in merge_short_lines(hi, STYLE)] == [["Hi.", "I'm", "Billy."]]
+    # only forwards, only a one-word line, only when it fits and there is no pause
+    two = [cw([("Hi", 27.0, 27.05), ("there.", 27.05, 27.18)], "s1"), cw([("I'm", 27.18, 27.9)], "s1")]
+    assert len(merge_short_lines(two, STYLE)) == 2
+    long = [cw([("Hi.", 27.03, 27.18)], "s1"), cw([("I", 27.18, 27.3), ("am", 27.3, 27.5), ("Billy", 27.5, 27.7),
+                                                  ("Garavelos.", 27.7, 28.2)], "s1")]
+    assert len(merge_short_lines(long, STYLE)) == 2
+    paused = [cw([("Hi.", 27.03, 27.18)], "s1"), cw([("I'm", 27.9, 28.3), ("Billy.", 28.3, 28.6)], "s1")]
+    assert len(merge_short_lines(paused, STYLE)) == 2
+
+
+def test_short_line_stays_apart_across_a_sentence_end_span_or_full_line():
+    # a two-word sentence under the minimum does not join the one before across its end punctuation
+    end = [cw([("I'm", 26.0, 26.5), ("Billy.", 26.5, 27.0)], "s1"), cw([("Hi", 27.03, 27.1), ("all", 27.1, 27.18)], "s1"),
+           cw([("folks", 27.9, 29.0)], "s1")]
+    assert [len(ln) for ln in merge_short_lines(end, STYLE)] == [2, 2, 1]
     spans = [cw([("Hi", 27.03, 27.18)], "s1"), cw([("I'm", 27.18, 27.9)], "s2")]
     assert len(merge_short_lines(spans, STYLE)) == 2  # never across a span boundary
     full = [cw([("then", 0, .5), ("the", .5, .8), ("four", .8, 1.0)]), cw([("Meta", 1.0, 1.1), ("models", 1.1, 1.24)]),
