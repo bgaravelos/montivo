@@ -18,7 +18,7 @@ from .engine.image import generate_title_card
 from .engine.ingest import Ingested, Probe, ingest
 from .engine.render import render as render_edl
 from .engine.spark import Spark, SparkCall
-from .engine.speakers import speakers_run
+from .engine.speakers import is_mic, speakers_run
 from .engine.voice import VoiceResult, transcribe
 from .ledger import Ledger
 
@@ -110,7 +110,8 @@ def run(opts: RunOptions) -> dict:
             dump_json(out / "watch.json", watch.parsed)
         # Watch's trackable concepts are suggestions only. SAM is one request per concept (about $0.125 per 125 s at
         # 5 fps), so the only concepts ever sent to SAM are the CLI --concept list plus the reframe head track.
-        suggested = [c for c in watch.parsed.get("trackable_concepts", []) if c.lower() not in {x.lower() for x in opts.concepts}]
+        suggested = [c for c in watch.parsed.get("trackable_concepts", []) if c.lower() not in {x.lower() for x in opts.concepts}
+                     and not is_mic(c)]  # a microphone is tracked for the speaker map (2b)
         if suggested:
             log(f"watch suggests: {', '.join(suggested)} (not tracked; add --concept \"...\" to track one, "
                 f"about ${concept_price():.2f} per concept on this clip)")
@@ -164,10 +165,21 @@ def run(opts: RunOptions) -> dict:
     if voice is None or watch is None:
         raise SystemExit("run aborted: voice/watch failed (see run.log)")
 
-    # 2b. which head is which speaker (speakers.py, $0): only with two or more voices and two or more heads
+    # 2b. which head is which speaker (speakers.py): only with two or more voices and two or more heads. A microphone
+    # watch saw is tracked first on the head track's frames (one SAM request), the strongest signal of who talks
     head = tracks.get(opts.reframe_concept or "") if opts.reframe_concept == "head" else None
     if head is not None and len(voice.speakers) >= 2 and len(head.objects) >= 2:
-        if have("speakers.json"):
+        mic = next((c for c in watch.parsed.get("trackable_concepts", []) if is_mic(c)), None)
+        new_mic = False
+        if mic and not any(is_mic(c) for c in tracks):
+            try:
+                log(f"track: {mic} for the speaker map (watch saw one), about ${concept_price():.2f}")
+                tracks[mic] = track_mod.track_concept(track_mod.reuse_source(head, ing.proxy), mic, out / "track", ledger, log)
+                new_mic = True
+            except Exception:
+                errors.append(("track mic", traceback.format_exc()))
+                log(f"ERROR tracking {mic} (the speaker map goes on without it):\n{errors[-1][1]}")
+        if have("speakers.json") and not new_mic:
             log("resume: speakers from speakers.json")
         else:
             try:

@@ -113,8 +113,22 @@ stays in frame, captions and callouts do not zoom; review v4 88, pass, same as v
 (A = v4): challenger s2 "for the Meta Hackathon we are building Montivo" as the planner's payoff cold open -> v5 81
 (hook 3, major swap_hook back to "Hi") vs v4 88 (hook 10): v4 kept, margin 7, not decisive. With the timeline fact the
 reviewer now calls the 0.4 s "Hi." and "Meta models" lines too short to read (minor) instead of missing.
-Next: the NASA clip (first real check of the speaker mapping); the punch-in switch and Remove in `make ui` on
-`runs/012-open`. The evening-by-evening table is in README.md.
+NASA clip, run 014 (27/10, `footage/nasa_exp72_thanksgiving.mp4`, 120 s, 4 astronauts in one shot, one handheld mic,
+$0.36): Voice 4 speakers / 9 turns, 6 spans, 46 s cut. Speaker mapping wrong on all four: watch's speaker_map misnamed
+A, B, C (true: A = woman floating middle = head 3, B = blue shirt lower right = head 0, C = orange shirt lower left =
+head 1, D = upside-down on the ceiling = head 2, checked by who holds the mic per Voice turn and A's lips); mouth motion
+too weak (heads 54-122 px at 5 fps, the mic over the mouth, upside-down mouth in the eyes band: D scored -0.36 on his
+own head), only head 2 cleared 0.4, for C. edl_v2 = v1 + the pin {"A": "3", "B": "0", "C": "1", "D": "2"} -> cut_v2
+follows the talking astronaut in every segment (first real use of the pin, $0).
+Mic first (27/10, Billy's choice): when watch suggests a microphone, run.py tracks it on the head track's frames
+(`track.reuse_source`, no new upload, $0.12) and `speakers.mic_votes` gives each speaker the head nearest the mic (box
+gap / head height <= 1.5) on >= 60 % of their solo frames; still mic objects dropped (`held_mic`); then mouth motion with
+upside-down heads flipped (`inverted_heads` from the person track), then position. `montivo run --resume` on 014 tracked
+the mic in the run; centre distances still got A and D wrong (mic held low; a fixed fitting SAM called a mic), gaps +
+the stillness rule got all four right (shares 86/100/80/99.5 %), `montivo speakers` + render -> cut_v1 follows the right
+astronaut everywhere. The resume re-planned (9 spans, 48.8 s); the earlier state is in `runs/014/check/before_mic/`.
+Run 014 total $0.52.
+Next: the punch-in switch and Remove in `make ui` on `runs/012-open`. The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

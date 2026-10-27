@@ -70,6 +70,16 @@ def load_all(out_dir: Path) -> dict[str, ConceptTrack]:
     return {ct.concept: ct for ct in (load_concept(p) for p in sorted(out_dir.glob("*/tracks.json")))}
 
 
+def reuse_source(ct: ConceptTrack, proxy: Path) -> TrackSource:
+    """The clip and upload a finished track ran on (tracks.json keeps the file id), so one more concept lands on the
+    same frames without a second resample or upload."""
+    data = json.loads(ct.tracks_path.read_text())
+    fps, resampled = float(data["track_fps"]), bool((data.get("source") or {}).get("resampled"))
+    path = ct.tracks_path.parent.parent / f"track_source_{fps:g}fps.mp4" if resampled else proxy
+    return TrackSource(path=path, probe=ffprobe(path), file_id=data["file_id"], fps=fps, resampled=resampled,
+                       upload_seconds=0.0)
+
+
 def track_fps(source_fps: float, asked: float | None = None) -> float:
     """The rate SAM sees: --track-fps when given, else TRACK_RESAMPLE_FPS, never above the source's own rate."""
     return min(source_fps, asked or TRACK_RESAMPLE_FPS)

@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 
 from montivo.engine.reframe import id_at, plan_segment
 from montivo.engine.render import Segment, follow_pieces, load_speaker_ids
-from montivo.engine.speakers import assign, follow_ids, map_speakers
+from montivo.engine.speakers import assign, follow_ids, inverted_heads, is_mic, map_speakers, mic_votes
 
 FPS, W, H, N = 5.0, 320, 180, 60  # 12 s of track frames
 LEFT, RIGHT = [40, 30, 100, 110], [190, 20, 270, 120]  # the right head is larger: the plain rule follows it
@@ -39,7 +39,18 @@ def head_track(objects=None) -> dict:
                         for oid, box in objs.items()}}
 
 
-def frames(talking: bool = True, seed: int = 7) -> list[Image.Image]:
+def mic_track(holder=lambda spk: {"A": LEFT, "B": RIGHT}.get(spk)) -> dict:
+    """A handheld mic just under the mouth of whoever talks (none in the gaps), moving a little in the hand."""
+    objs = []
+    for f in range(N):
+        box = holder(who_talks(f / FPS))
+        if box:
+            cx, y2, j = (box[0] + box[2]) / 2, box[3], (f % 5) * 3
+            objs.append({"f": f, "t": round(f / FPS, 3), "box": [cx - 6 + j, y2 + 4 + j, cx + 6 + j, y2 + 24 + j]})
+    return {"concept": "microphone", "track_fps": FPS, "objects": {"0": objs}}
+
+
+def frames(talking: bool = True, seed: int = 7, inverted: tuple[str, ...] = ()) -> list[Image.Image]:
     """Grey frames with a global flicker (a camera's auto exposure) on both heads; the mouth of whoever talks is
     redrawn with noise every frame, the other mouth stays still."""
     rnd = random.Random(seed)
@@ -54,6 +65,8 @@ def frames(talking: bool = True, seed: int = 7) -> list[Image.Image]:
             x1, y1, x2, y2 = box
             bw, bh = x2 - x1, y2 - y1
             mouth = (int(x1 + 0.3 * bw), int(y1 + 0.7 * bh), int(x1 + 0.7 * bw), int(y1 + 0.9 * bh))
+            if me in inverted:  # upside down: the mouth at the top of the box
+                mouth = (mouth[0], int(y1 + 0.1 * bh), mouth[2], int(y1 + 0.3 * bh))
             if talking and spk == me:
                 for x in range(mouth[0], mouth[2]):
                     for y in range(mouth[1], mouth[3]):
@@ -154,3 +167,52 @@ def test_decode_path_end_to_end(tmp_path):
     res = map_speakers(words(), head_track(), video=clip)
     assert follow_ids(res) == {"A": ["1"], "B": ["2"]}
     assert res["frames_scored"]["1"] == N - 1
+
+
+def test_the_mic_holder_wins_over_mouths_and_watch():
+    # no mouth moves and watch has the sides the wrong way round (run 014): the mic decides
+    smap = [{"speaker": "A", "on_camera": True, "position": "right"}, {"speaker": "B", "on_camera": True, "position": "left"}]
+    res = map_speakers(words(), head_track(), video=None, speaker_map=smap, frames=frames(talking=False),
+                       mic_track=mic_track())
+    assert follow_ids(res) == {"A": ["1"], "B": ["2"]}
+    assert res["speakers"]["A"]["method"] == "microphone" and res["speakers"]["A"]["mic_share"] == 1.0
+    assert res["method"].startswith("microphone+") and res["mic_concept"] == "microphone"
+    without = map_speakers(words(), head_track(), video=None, speaker_map=smap, frames=frames(talking=False))
+    assert follow_ids(without) == {"A": ["2"], "B": ["1"]}  # the old path follows watch's wrong sides
+
+
+def test_mic_votes_need_a_majority_and_one_head_each():
+    objects = head_track()["objects"]
+    speaking = {"A": set(range(0, 20)) | set(range(40, 50)), "B": set(range(20, 40)) | set(range(50, 60))}
+    # the mic never leaves head 1: both voices claim it, one head per speaker, so only one keeps it
+    always_left = mic_track(holder=lambda spk: LEFT)
+    assert mic_votes(objects, always_left["objects"], speaking) == {"A": {"ids": ["1"], "share": 1.0, "frames": 30}}
+    # held by A's head on half of A's frames and by B's on the other half: no majority, no vote
+    split = {"0": [{"f": f, "box": [64, 115, 76, 135] if f % 2 else [224, 125, 236, 145]} for f in range(N)]}
+    assert mic_votes(objects, split, speaking) == {}
+    # a fixed object SAM also calls a microphone, right under B's head the whole clip: dropped, the held mic decides
+    fixed = {"9": [{"f": f, "box": [224, 124, 236, 144]} for f in range(N)]}
+    assert mic_votes(objects, {**mic_track()["objects"], **fixed}, speaking)["A"]["ids"] == ["1"]
+    assert mic_votes(objects, fixed, speaking) == {}
+    assert is_mic("microphone") and is_mic("handheld mic") and not is_mic("mission patch")
+
+
+def test_the_mic_leaves_the_rest_to_mouth_motion():
+    # only A's turns show the mic; B is mapped by mouth motion among the heads the mic left
+    res = map_speakers(words(), head_track(), video=None, frames=frames(),
+                       mic_track=mic_track(holder=lambda spk: LEFT if spk == "A" else None))
+    assert res["speakers"]["A"]["method"] == "microphone" and res["speakers"]["B"] == {"ids": ["2"], "method": "mouth_motion"}
+
+
+def test_upside_down_head_gets_flipped_bands():
+    # B floats upside down: his mouth is at the top of the box, the person box runs up from his head
+    persons = {"p1": [{"f": f, "box": [30, 20, 110, 175]} for f in range(N)],  # A upright: head at the top of the body
+               "p2": [{"f": f, "box": [180, 0, 280, 125]} for f in range(N)]}  # B: head at the bottom of the body
+    assert inverted_heads(head_track()["objects"], persons) == {"2"}
+    assert inverted_heads(head_track()["objects"], None) == set()
+    upside = frames(inverted=("B",))
+    blind = map_speakers(words(), head_track(), video=None, frames=upside)
+    assert blind["speakers"]["B"]["ids"] == [] and blind["heads"]["2"]["scores"]["B"] < 0  # backwards, as on run 014
+    res = map_speakers(words(), head_track(), video=None, frames=upside,
+                       person_track={"track_fps": FPS, "objects": persons})
+    assert res["inverted_heads"] == ["2"] and follow_ids(res) == {"A": ["1"], "B": ["2"]}

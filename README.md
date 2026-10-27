@@ -37,7 +37,8 @@ edit and renders again:
   dropped whole, and a clipped word is fixed by moving its edge to the quiet point, never by deleting the word.
 - **Time comes from Voice, never from Spark.** Every cut lands on a word boundary from Muse Voice's word timings and
   is then tightened to the actual speech onset and offset in the source audio. SAM 3.1 runs the camera: the 9:16 crop
-  follows the speaker's head with a smoothed path, and with two or more people on screen it follows whoever is talking.
+  follows the speaker's head with a smoothed path, and with two or more people on screen it follows whoever is talking
+  (who holds the microphone, then whose mouth moves, then where watch places them; four of four astronauts on run 014).
 - **A human stays in the loop.** In the editor you trim a clip by dragging its edge (it snaps to words), delete a clip,
   or type an instruction to re-plan. Each edit is the next version through the same patch path as the reviewer, so undo
   and redo walk the versions and nothing is overwritten.
@@ -243,7 +244,11 @@ editor labels B "hook A/B" and the Assistant says which version was kept. Offlin
 the tests, the render real on a synthetic run); the first real A/B is `montivo hook runs/012`.
 
 Speaker to head mapping (`engine/speakers.py`, run step and `montivo speakers runs/001`): with two or more voices and two
-or more heads, every head box gets a mouth-minus-eyes motion series on the 5 fps grid SAM saw (mean absolute frame
+or more heads, the microphone comes first. When watch saw one, the run tracks it with SAM on the head track's frames
+(one request, about $0.12 per 120 s); per frame the head whose box is nearest the mic's box (the gap over the head's
+height, within 1.5) holds it, and a speaker gets the head that holds it on at least 60 % of the frames where only that
+speaker talks; a mic object that never moves is dropped (SAM also called a fixed fitting a microphone). For the
+speakers and heads the mic leaves, every head box gets a mouth-minus-eyes motion series on the 5 fps grid SAM saw (mean absolute frame
 difference in the lower 40 % of the box minus the 10 to 45 % band, so a nod or a camera move cancels out), compared per
 speaker between the frames where only that speaker talks (Voice word times) and the frames where they are silent; a
 head goes to the speaker whose effect size is at least 0.4 and 0.2 over the runner-up, two heads on screen together
@@ -252,7 +257,16 @@ render then plans each segment in pieces, one per speaker run, each following th
 EDL's `render.segments`); captions keep clear of the head followed at that moment. Off-camera voices and single-speaker
 clips keep the plain rule. A human pin in the EDL, `reframe_speaker_ids` {"A": "3"} (Voice label -> head id), replaces
 the mapped heads of that speaker while the pinned id is in frame, with or without speakers.json, and survives a re-plan.
-Verified offline on synthetic frames so far; the NASA crew clip is the first real check.
+A head upside down (an
+astronaut on the ceiling) is found from the person track (the head sits at the bottom edge of its body's box) and its
+mouth and eyes bands are flipped. First real check, the NASA Expedition 72 Thanksgiving message (run 014, 120 s, four
+astronauts in one shot, one handheld microphone passed around): without the mic all four voices went to the wrong head.
+Watch's speaker map named the wrong person for three voices, and mouth motion carried too little (heads 54 to 122 px
+wide at 5 fps, the mic over the mouth, the upside-down astronaut's own voice at -0.36 before the flip, +0.36 after).
+With the mic ($0.12 more) all four map right, checked against who holds it in every Voice turn: shares 86, 100, 80 and
+99.5 %. Distances between box centres had given the first voice to the wrong astronaut (the mic was held low, nearer the
+next head down), and the fixed fitting the second; gaps and the stillness rule fixed both. A human pin,
+`reframe_speaker_ids`, still wins over all of it.
 Punch-ins (`engine/punch.py`, `--punch` on `run` and `render`, opt-in for now): a 1.12x zoom on the words the speaker
 leans on (a word's level in the source audio at least 3 dB over the median of the kept words, 0.2 s or longer, four
 letters or more, not a stop word; a caption highlight word such as Montivo at any level), at most one per 6 s of cut and
