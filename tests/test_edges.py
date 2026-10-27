@@ -21,12 +21,13 @@ def at(x):
 class SynthAudio(E.Audio):
     """40 s of room tone at about -60 dB with loud "speech" (a -17 dB tone) over the given source intervals."""
 
-    def __init__(self, speech):
+    def __init__(self, speech, faint=()):
         self.rate = RATE
         self.pcm = array.array("h", [int(40 * math.sin(k * 1.7)) for k in range(40 * RATE)])
-        for a, b in speech:
-            for k in range(int(a * RATE), int(b * RATE)):
-                self.pcm[k] = int(6000 * math.sin(k / 3))
+        for amp, spans in ((6000, speech), (100, faint)):  # faint: a breath, about 2 dB over the speech threshold
+            for a, b in spans:
+                for k in range(int(a * RATE), int(b * RATE)):
+                    self.pcm[k] = int(amp * math.sin(k / 3))
 
 
 def voice_words():
@@ -101,6 +102,29 @@ def test_a_fragment_of_the_neighbour_goes_with_the_pause():
     edl = edl_of(span("s1", 0, 0, 3))
     E.tighten_edges(edl, WORDS, audio)
     assert edl["spans"][0]["t_in"] == 10.0
+
+
+def test_a_dropped_word_at_the_edge_goes_with_the_pause():
+    # run 015: Voice placed the dropped "Okay." 0.8 s early, so the cut's first word window opened on it; here word 1
+    # is dropped and its sound runs 0.38 s into s1 (longer than a fragment), a breath, then s1's own speech at 11.85
+    audio = SynthAudio([(10.98, 11.38), (11.85, 12.8)], faint=[(11.5, 11.6)])
+    assert E.Audio.level(audio, 11.5, 11.6) > audio.threshold_db()  # the breath is a run of its own
+    edl = edl_of(span("s1", 0, 2, 5))
+    E.tighten_edges(edl, WORDS, audio)
+    s = edl["spans"][0]
+    assert s["t_in"] == at(11.75) and s["edges"]["in"]["fragment"] is True
+    # the same sound when another clip keeps word 1: it may be speech that clip needs, the edge stays
+    audio = SynthAudio([(10.98, 11.38), (11.85, 12.8)], faint=[(11.5, 11.6)])
+    s0, s1 = span("s0", 0, 0, 1), span("s1", 0, 2, 5)
+    edl = edl_of(s1, s0)  # reordered, so the two are not joined
+    E.tighten_edges(edl, WORDS, audio)
+    assert s1["t_in"] == 11.0
+    # a sound longer than a short word is the span's own speech, dropped neighbour or not: the clipped edge widens
+    audio = SynthAudio([(10.98, 11.7), (12.1, 12.8)])
+    edl = edl_of(span("s1", 0, 2, 5))
+    E.tighten_edges(edl, WORDS, audio)
+    s = edl["spans"][0]
+    assert s["t_in"] < 10.98 and s["edges"]["in"]["widened"] is True
 
 
 def test_joined_spans_are_not_split():
@@ -208,3 +232,19 @@ def test_a_clipped_edge_never_widens_into_a_word_another_span_keeps():
     edl = edl_of(span("s1", 0, 0, 3), span("s2", 1, 2, 5))
     E.tighten_edges(edl, WORDS, audio)
     assert edl["spans"][0]["t_out"] == 12.0
+
+
+def test_reset_edges_lets_today_s_rules_redo_an_old_pass():
+    # an older pass widened s1's start to 10.6 (in front of the dropped word's sound); reset puts it back on the Voice
+    # boundary and the pass again skips the dropped word
+    audio = SynthAudio([(10.98, 11.38), (11.85, 12.8)], faint=[(11.5, 11.6)])
+    s1 = span("s1", 0, 2, 5)
+    s1.update(t_in=10.6, edges={"in": {"from": 11.0, "to": 10.6, "widened": True}}, edge_tuned={"in": 10.6})
+    edl = edl_of(s1)
+    assert E.reset_edges(edl, WORDS) == {("s1", "in")} and s1["t_in"] == 11.0
+    E.tighten_edges(edl, WORDS, audio, only={("s1", "in")})
+    assert s1["t_in"] == at(11.75)
+    # an edge something moved after the pass (a trim, a review patch) is left alone
+    s1 = span("s1", 0, 2, 5)
+    s1.update(t_in=10.7, edges={"in": {"from": 11.0, "to": 10.6, "widened": True}})
+    assert E.reset_edges(edl_of(s1), WORDS) == set() and s1["t_in"] == 10.7

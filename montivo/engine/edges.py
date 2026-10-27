@@ -16,7 +16,11 @@ stretch within WIDEN_S, never into a word another span keeps.
 
 One case moves an edge past sound: a short fragment of the neighbouring word that is still going at the edge and is
 followed (in edge) or preceded (out edge) by a real pause. Run 012's second take opened on the end of "again" (93.98 to
-94.25 s), then 1.05 s of silence before "this is the part that matters"; the fragment goes with the pause.
+94.25 s), then 1.05 s of silence before "this is the part that matters"; the fragment goes with the pause. When the
+word on the other side of the edge is one the cut drops, the sound may be that whole word (Voice can place a short word
+0.8 s early: run 015 put "Okay." at 18.54 to 18.78 s and "Hi." from 18.78 s, the audio says "Okay" 18.76 to 19.14 and
+"Hi" from 19.58; the clipped edge widened to 18.71 and the cut opened "Okay, hi."): up to DROPPED_WORD_MAX_S long, and
+runs too faint to be words (a breath, FAINT_DB over the threshold or less) do not break the pause after it.
 
 Moved edges are recorded per span (`edges`) and in `edge_tuned`, so the review patcher treats them as on a boundary.
 """
@@ -38,6 +42,8 @@ END_TAIL_S = 0.30  # the last word of the cut gets a beat before the player loop
 SLOP_S = 0.6  # Voice word edges were measured up to 0.4 s off on run 012 ("this" heard 0.4 s after its Voice end)
 FRAGMENT_MAX_S = 0.35  # a neighbour's sound still going at the edge, at most this long inside the span ...
 FRAGMENT_GAP_S = 0.30  # ... and separated from the span's own speech by a pause at least this long
+DROPPED_WORD_MAX_S = 0.6  # the fragment may be this long when the word past the edge is not in the cut (a short word)
+FAINT_DB = 3.0  # with a dropped neighbour, runs this close to the threshold (breaths) do not count as speech
 MIN_MOVE_S = 0.03  # smaller moves are left alone (a frame at 30 fps)
 WIDEN_S = 0.4  # a clipped edge looks this far outward for the gap after (before) the word it cuts
 JOIN_GAP_S = 0.05  # render.CONTIGUOUS_GAP_S: spans of one turn closer than this render as one segment
@@ -139,37 +145,47 @@ def joins(prev: dict, cur: dict) -> bool:
         bool(cur.get("contiguous_with_previous")) or cur.get("turn_id") == prev.get("turn_id"))
 
 
-def onset(span: dict, words: Words, audio: Audio, bound: float | None = None) -> tuple[float | None, bool]:
+def loud(audio: Audio, runs: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """The runs louder than a breath: over the speech threshold by more than FAINT_DB."""
+    thr = audio.threshold_db() + FAINT_DB
+    return [r for r in runs if audio.level(*r) > thr]
+
+
+def onset(span: dict, words: Words, audio: Audio, bound: float | None = None,
+          dropped: bool = False) -> tuple[float | None, bool]:
     """Where the span's own speech starts, searched up to `bound` (default the middle of the span): (time or None,
-    a neighbour's fragment skipped)."""
+    a neighbour's fragment skipped). `dropped`: the word before the edge is not in the cut."""
     tw = words.turn(span["turn_id"])
     t = span["t_in"]
     hi = min(tw[span["word_from"]]["t_end"] + SLOP_S, bound if bound is not None else (t + span["t_out"]) / 2)
     runs = [r for r in audio.speech_runs(t - 0.1, hi) if r[1] > t]
     skipped = False
     if runs and runs[0][0] <= t + FRAME_S:  # sound already going at the edge
-        nxt = runs[1][0] if len(runs) > 1 else hi
-        if runs[0][1] - t > FRAGMENT_MAX_S or nxt - runs[0][1] < FRAGMENT_GAP_S:
+        rest, longest = (loud(audio, runs[1:]), DROPPED_WORD_MAX_S) if dropped else (runs[1:], FRAGMENT_MAX_S)
+        nxt = rest[0][0] if rest else hi
+        if runs[0][1] - t > longest or nxt - runs[0][1] < FRAGMENT_GAP_S:
             return None, False  # speech at the edge
-        runs, skipped = runs[1:], True
+        runs, skipped = rest, True
     if not runs:
         return None, skipped
     return runs[0][0], skipped
 
 
-def offset(span: dict, words: Words, audio: Audio, bound: float | None = None) -> tuple[float | None, bool]:
+def offset(span: dict, words: Words, audio: Audio, bound: float | None = None,
+           dropped: bool = False) -> tuple[float | None, bool]:
     """Where the span's own speech ends, searched back to `bound` (default the middle of the span): (time or None,
-    a neighbour's fragment skipped)."""
+    a neighbour's fragment skipped). `dropped`: the word after the edge is not in the cut."""
     tw = words.turn(span["turn_id"])
     t = span["t_out"]
     lo = max(tw[span["word_to"]]["t_start"] - SLOP_S, bound if bound is not None else (span["t_in"] + t) / 2)
     runs = [r for r in audio.speech_runs(lo, t + 0.1) if r[0] < t]
     skipped = False
     if runs and runs[-1][1] >= t - FRAME_S:
-        prv = runs[-2][1] if len(runs) > 1 else lo
-        if t - runs[-1][0] > FRAGMENT_MAX_S or runs[-1][0] - prv < FRAGMENT_GAP_S:
+        rest, longest = (loud(audio, runs[:-1]), DROPPED_WORD_MAX_S) if dropped else (runs[:-1], FRAGMENT_MAX_S)
+        prv = rest[-1][1] if rest else lo
+        if t - runs[-1][0] > longest or runs[-1][0] - prv < FRAGMENT_GAP_S:
             return None, False  # speech at the edge
-        runs, skipped = runs[:-1], True
+        runs, skipped = rest, True
     if not runs:
         return None, skipped
     return runs[-1][1], skipped
@@ -205,19 +221,24 @@ def widen(span: dict, words: Words, edge: str, audio: Audio, blocked: set[int]) 
 
 
 def tighten_edge(span: dict, words: Words, edge: str, audio: Audio, tail: float = TAIL_S,
-                 bound: float | None = None, blocked: set[int] | None = None) -> dict | None:
+                 bound: float | None = None, blocked: set[int] | None = None,
+                 kept: set[int] | None = None) -> dict | None:
     """Move one edge of the span to the speech onset - LEAD_S (in) or the speech offset + tail (out), inward and never
     past `bound` (the middle of the segment the span opens or closes); a clipped edge instead moves outward to the
-    first quiet stretch (widen). Returns the record, None when the edge stays."""
+    first quiet stretch (widen). `kept`: the turn's words other spans keep (default `blocked`); a neighbour word
+    outside it is dropped from the cut. Returns the record, None when the edge stays."""
     key = "t_in" if edge == "in" else "t_out"
     before = span[key]
     widened = False
+    kept = (blocked or set()) if kept is None else kept
+    nb = span["word_from"] - 1 if edge == "in" else span["word_to"] + 1
+    dropped = 0 <= nb < len(words.turn(span["turn_id"])) and nb not in kept
     if edge == "in":
-        at, frag = onset(span, words, audio, bound)
+        at, frag = onset(span, words, audio, bound, dropped)
         new = None if at is None else round(max(before, at - LEAD_S), 3)
         moved = new is not None and new - before >= MIN_MOVE_S
     else:
-        at, frag = offset(span, words, audio, bound)
+        at, frag = offset(span, words, audio, bound, dropped)
         new = None if at is None else round(min(before, at + tail), 3)
         moved = new is not None and before - new >= MIN_MOVE_S
     if not moved and at is None and not frag:
@@ -251,6 +272,25 @@ def cut_edges(spans: list[dict]) -> list[tuple[int, str, float]]:
     return out
 
 
+def reset_edges(edl: dict, words: Words) -> set[tuple[str, str]]:
+    """Every edge the pass moved back where it was (its record's `from`) when that was the Voice word boundary and
+    nothing moved the edge since; returns the (span id, edge) pairs reset, for tighten_edges(only=) with today's rules."""
+    out: set[tuple[str, str]] = set()
+    for s in edl["spans"]:
+        tw = words.turn(s["turn_id"])
+        for edge, rec in list((s.get("edges") or {}).items()):
+            key = "t_in" if edge == "in" else "t_out"
+            line = tw[s["word_from"]]["t_start"] if edge == "in" else tw[s["word_to"]]["t_end"]
+            if abs(rec["from"] - line) > 0.005 or abs(s[key] - rec["to"]) > 0.005:
+                continue
+            s[key] = rec["from"]
+            s["duration"] = round(s["t_out"] - s["t_in"], 3)
+            for d in ("edges", "edge_tuned"):
+                (s.get(d) or {}).pop(edge, None)
+            out.add((s["id"], edge))
+    return out
+
+
 def tighten_edges(edl: dict, words: Words, audio: Audio, only: set[tuple[str, str]] | None = None,
                   keep_out: dict[int, set[int]] | None = None) -> dict:
     """Tighten every cut edge of the EDL in place (or only the (span id, edge) pairs in `only`), widen the clipped
@@ -263,9 +303,10 @@ def tighten_edges(edl: dict, words: Words, audio: Audio, only: set[tuple[str, st
         if only is not None and (s["id"], edge) not in only:
             continue
         tail = END_TAIL_S if edge == "out" and k == len(spans) - 1 else TAIL_S
-        blocked = {i for o in spans if o is not s and o["turn_id"] == s["turn_id"]
-                   for i in range(o["word_from"], o["word_to"] + 1)} | (keep_out or {}).get(s["turn_id"], set())
-        rec = tighten_edge(s, words, edge, audio, tail=tail, bound=bound, blocked=blocked)
+        kept = {i for o in spans if o is not s and o["turn_id"] == s["turn_id"]
+                for i in range(o["word_from"], o["word_to"] + 1)}
+        blocked = kept | (keep_out or {}).get(s["turn_id"], set())
+        rec = tighten_edge(s, words, edge, audio, tail=tail, bound=bound, blocked=blocked, kept=kept)
         if rec:
             moves.append({"span": s["id"], "edge": edge, **rec})
     edl["runtime_s"] = round(sum(s["t_out"] - s["t_in"] for s in spans), 2)

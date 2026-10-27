@@ -10,6 +10,7 @@
     python -m montivo.human reorder runs/015 --span s4 (--before s2 | --end)
     python -m montivo.human cut runs/015 --words s2:16-16 [--words s3:0-2 ...]
     python -m montivo.human pin runs/014 --speaker A --head 3 (or --head none to drop the pin)
+    python -m montivo.human edges runs/015
 
 Each writes the next edl_vN.json (N = one past the highest version in the run folder, so no version is ever
 overwritten) with a `patches` entry marked `source: "human"`, renders cut_vN.mp4 and, with --review, runs the blind
@@ -22,7 +23,8 @@ words (one Muse Image call, $0.01: the words are part of the generated image). `
 reorder patch) and tightens the cuts that now meet; `pin` makes the crop follow one head for a speaker (EDL
 `reframe_speaker_ids`, for clips where the speaker map got it wrong, like run 014). Both $0. `cut` deletes the words
 of a transcript selection (turn word indices per span) in one version: whole clips are dropped, words at a clip's edge
-trimmed like a timeline drag, words inside a clip split it in two; $0.
+trimmed like a timeline drag, words inside a clip split it in two; $0. `edges` runs the edge pass again from the
+Voice word boundaries with today's rules, for a version made before a rule changed; $0.
 """
 from __future__ import annotations
 
@@ -37,7 +39,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from .engine.api import dump_json
-from .engine.edges import Audio, Words, tighten_edges
+from .engine.edges import Audio, Words, reset_edges, tighten_edges
 from .engine.edl import build_edl, edl_summary, normalize_roles
 from .engine.punch import parse_key
 from .engine.review import (REACH_S, Fix, _caption_at, _src_time, apply_fixes, cut_map, finalize, kept_elsewhere,
@@ -638,6 +640,35 @@ def pin(run_dir: Path, speaker: str, head: str | None, from_v: int | None = None
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
 
 
+def edges(run_dir: Path, from_v: int | None = None, passes: int = 0, budget: float = 0.15) -> dict:
+    """The edge pass (engine/edges.py) again with today's rules on every edge it moved before and nothing moved since
+    (edges.reset_edges): run 015's v1-v4 open "Okay, hi." from before the dropped-word rule. -> edl_vN, rendered, $0."""
+    log = RunLog(run_dir / "run.log")
+    from_v, edl, n = _new_version(run_dir, from_v)
+    words, audio = _words(run_dir), Audio.load(run_dir)
+    if audio is None:
+        raise SystemExit(f"{run_dir / 'audio.wav'} not found (ingest writes it)")
+    new, _ = apply_fixes(edl, [], words)
+    was = {s["id"]: (s["t_in"], s["t_out"]) for s in new["spans"]}
+    tighten_edges(new, words, audio, only=reset_edges(new, words))
+    fixes = []
+    for s in new["spans"]:
+        for edge, k in (("in", 0), ("out", 1)):
+            a, b = was[s["id"]][k], (s["t_in"], s["t_out"])[k]
+            if abs(a - b) >= 0.005:
+                rec = (s.get("edges") or {}).get(edge) or {}
+                why = ", a dropped word's sound skipped" if rec.get("fragment") else ""
+                fixes.append({"op": "edge_pass", "target": s["id"], "issue": -1, "severity": "human",
+                              "args": {"edge": edge, "from": a, "to": b},
+                              "note": f"{edge} edge {a:.3f} -> {b:.3f} s (the edge pass again{why})"})
+        refresh_span(s, words)
+    if not fixes:
+        raise SystemExit(f"the edge pass moves nothing in edl_v{from_v} with today's rules")
+    log(f"montivo edges: the edge pass again on edl_v{from_v} -> edl_v{n}")
+    edl_path = _save(run_dir, new, n, from_v, "edges", fixes, log)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
 def target_from(instruction: str) -> float | None:
     """'make it 30 seconds' -> 30.0: a runtime named in the instruction replaces the run's target."""
     m = re.search(r"(\d{2,3})\s*(?:s\b|sec|second)", instruction, re.I)
@@ -794,7 +825,9 @@ def main(argv: list[str] | None = None) -> int:
     cu.add_argument("run_dir", type=Path)
     cu.add_argument("--words", action="append", required=True, metavar="SPAN:FROM-TO",
                     help="turn word indices to delete from a span, inclusive (repeat for more ranges)")
-    for p in (d, t, r, pu, c, tx, ro, pn, cu):
+    ed = sub.add_parser("edges", help="the edge pass again with today's rules -> edl_vN -> cut_vN ($0 without --review)")
+    ed.add_argument("run_dir", type=Path)
+    for p in (d, t, r, pu, c, tx, ro, pn, cu, ed):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
         p.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
@@ -826,6 +859,8 @@ def main(argv: list[str] | None = None) -> int:
                 ap.error("--words SPAN:FROM-TO, like s2:16-18")
             ranges.append((m.group(1), int(m.group(2)), int(m.group(3))))
         out = cut(a.run_dir, ranges, a.from_v, a.review, a.budget)
+    elif a.cmd == "edges":
+        out = edges(a.run_dir, a.from_v, a.review, a.budget)
     elif a.cmd == "pin":
         out = pin(a.run_dir, a.speaker, None if a.head.lower() == "none" else a.head, a.from_v, a.review, a.budget)
     else:
