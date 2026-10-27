@@ -297,8 +297,8 @@ Design rules fixed on 26/10:
   `speechEnd`/`speechStart`.
 - **Kill test (b), reviewer:** a deliberately bad v1 with three known faults (a cut mid-word, a caption over the face, a weak
   hook). The review must catch 2 of 3 with a timestamp within 1 s, 3 runs out of 3.
-- Track: Indie. Bonus targets: Best Agentic, Best Creative, Most Viral. Open Weight (Muse Spark Open on Baseten) only if the
-  credits arrive by 31/10.
+- Track: Indie. Bonus targets: Best Agentic, Best Creative, Most Viral. Open Weight (Muse Spark Open on Baseten): the
+  credits ($100, 2M TPM, `meta-models/muse-spark-open-1026`) arrived on 26/10.
 
 ## Where it comes from
 

@@ -9,7 +9,7 @@ submission on cerebralvalley.ai by Wed 4/11 evening, deadline Thu 5/11 04:00 Ath
 Muse Spark 1.3 watches the footage and plans a paper edit, Muse Voice gives turns and word timings, SAM 3.1 tracks
 the speaker for the 9:16 reframe and callouts, ffmpeg renders, then Spark reviews its own render against a rubric and
 re-cuts (closed loop), with a chat-driven UI on top. Track: Indie. Bonus targets: Best Agentic, Best Creative, Most
-Viral; Open Weight only if the Baseten credits arrive by 31/10.
+Viral; Open Weight too: the Baseten and Meta credits arrived 26-27/10.
 
 ## Hard rules
 - At run time the application calls Meta models only (`muse-spark-1.3`, `muse-voice-transcribe-1.0`, `sam-3.1`,
