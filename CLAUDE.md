@@ -83,8 +83,19 @@ of the Montivo page, waiting for Billy's yes); punch-ins (`engine/punch.py`, `--
 as EDL `punch` so the loop and edits keep it, `punch_ins` records them): 1.12x on words 3 dB over the cut's median level
 or highlight words, 1.06x alternating on jump cuts, zoompan after the scale (crop cannot resize per frame, the graph
 stalls), skipped when the head would leave the top or touch a caption; synthetic tests and a smoke render only.
+Third cloud round (27/10, same branch, $0): demo video script and storyboard in Notion (subpage of the Montivo page,
+waiting for Billy's yes; shots 7a/7b only if punch-ins / speaker mapping look good on the Mac). Punch-ins in the editor
+(commit `36e137e`): every `punch_ins` entry has a `key` (`emphasis:<word>@<onset>`, `jump_cut:<span>`), the EDL's
+`punch_skip` removes one while it keeps its place (budget, spacing, alternation), `python -m montivo.human punch RUN
+--on|--off|--skip KEY` -> next edl_vN, POST `/api/runs/{id}/punch`, a switch in the cut inspector, pink markers on the
+video track, a punch-in inspector with Remove; checked in Chromium on a synthetic run folder. Hook A/B (commit `eed0ef2`):
+`engine/hook.py`, `montivo hook RUN [--edl] [--budget 0.10]` and `montivo review RUN --hook-ab`: B = A + one swap_hook
+patch (challenger: the reviewer's swap_hook target, else a planner hook, else the first payoff, else the first new
+passage), both reviewed blind, higher (pass, overall) kept, tie keeps A, record in `review/hook_ab_vA_vB.json` and B's
+patch `result`; offline tests only, the review call never made for real.
 Next: the NASA clip (first real check of the speaker mapping), `montivo plan runs/012 --planner open` (the A/B),
-`montivo render runs/012 --punch --out cut_v2_punch.mp4` (first look at the punch-ins). The evening-by-evening table is in README.md.
+`montivo render runs/012 --punch --out cut_v2_punch.mp4` (first look at the punch-ins, then the switch and Remove in
+`make ui` on a copy of 012), `montivo hook runs/012` (the first real hook A/B, about $0.03 with v2's review reused). The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
