@@ -116,6 +116,9 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
         : o.action === "trim" ? `Trim the ${(f?.args as { edge?: string } | null)?.edge === "in" ? "start" : "end"} of clip ${f?.target ?? ""}.`
         : o.action === "punch" ? (f?.op === "punch_skip" ? "Remove one punch-in." : `Turn the punch-ins ${f?.op === "punch_off" ? "off" : "on"}.`)
         : o.action === "caption" ? `Fix ${o.fixes?.length === 1 ? "a caption line" : `${o.fixes?.length} caption lines`}.`
+        : o.action === "text" ? "Edit the title card and callouts."
+        : o.action === "reorder" ? `Move clip ${f?.target ?? ""}${(f?.args as { before?: string | null } | null)?.before ? ` before ${(f!.args as { before: string }).before}` : " to the end"}.`
+        : o.action === "pin" ? `Follow ${(f?.args as { head?: string | null } | null)?.head != null ? `head ${(f!.args as { head: string }).head}` : "the speaker map"} when speaker ${f?.target ?? ""} talks.`
         : (o.instruction ?? "Ask Montivo.");
       out.push({ who: "you", text: what, chips: [`v${o.from}`], v: v.n });
       if (fixes) out.push({ who: "tool", text: fixes, v: v.n });

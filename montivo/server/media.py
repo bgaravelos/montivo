@@ -42,6 +42,23 @@ def filmstrip(src: Path, out: Path) -> Path:
         return out
 
 
+def head_thumb(src: Path, t: float, box: list[float], out: Path, size: int = 120) -> Path:
+    """A square crop around a head box (x0, y0, x1, y1 on the tracked video), with room around it, at time t."""
+    with _lock(out):
+        if fresh(out, src):
+            return out
+        x0, y0, x1, y1 = box
+        side = max(x1 - x0, y1 - y0) * 1.6
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        out.parent.mkdir(parents=True, exist_ok=True)
+        crop = (f"crop='min({side:.0f},iw)':'min({side:.0f},ih)':'max(0,min(iw-ow,{cx - side / 2:.0f}))'"
+                f":'max(0,min(ih-oh,{cy - side / 2:.0f}))',scale={size}:{size}:force_original_aspect_ratio=increase,"
+                f"crop={size}:{size}")
+        subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{max(t, 0):.2f}", "-i", str(src),
+                        "-frames:v", "1", "-vf", crop, "-q:v", "4", str(out)], capture_output=True, check=True)
+        return out
+
+
 def small_copy(src: Path, out: Path) -> Path:
     """A 720x1280 copy of a cut (H.264 CRF 26, AAC 128k, faststart), redone only when the cut is newer."""
     with _lock(out):

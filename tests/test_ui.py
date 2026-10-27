@@ -364,3 +364,125 @@ def test_run_hook_ab_needs_review(tmp_path, capsys):
     with pytest.raises(SystemExit):
         main(["run", str(clip), "--brief", "b", "--hook-ab"])
     assert "--hook-ab compares two reviewed cuts" in capsys.readouterr().err
+
+
+# ------------------------------------------------------------------- batch B: text, reorder, pin (montivo.human)
+
+def _human_run(tmp_path, monkeypatch):
+    """A run folder with make_edl's v1, its Voice words, two speakers and a head track; renders are stubbed."""
+    import json
+
+    import montivo.human as H
+    from tests.test_review import make_edl, voice_words
+    d = tmp_path / "runs" / "h1"
+    (d / "voice").mkdir(parents=True)
+    (d / "track" / "head").mkdir(parents=True)
+    edl, _ = make_edl()
+    edl.update(title_card_text="Raw In", reframe_concept="head")
+    edl["spans"][1]["callout"] = "Four Meta models"
+    (d / "edl_v1.json").write_text(json.dumps(edl))
+    (d / "voice" / "voice.json").write_text(json.dumps({"words": voice_words(), "speakers": ["A", "B"]}))
+    (d / "track" / "head" / "tracks.json").write_text(json.dumps({"objects": {"0": [], "3": []}}))
+    monkeypatch.setattr(H, "_finish", lambda run_dir, edl_path, n, *a: {"version": n, "edl": edl_path.name})
+    return d
+
+
+def test_human_text_edits_callouts_and_title(tmp_path, monkeypatch):
+    import json
+
+    import montivo.human as H
+    d = _human_run(tmp_path, monkeypatch)
+    out = H.text(d, {"s2": "", "s3": "Raw in, reviewed out"}, title_card=False)
+    v2 = json.loads((d / "edl_v2.json").read_text())
+    assert out["version"] == 2 and v2["version"] == 2 and v2["title_card"] is False
+    assert [s.get("callout") or "" for s in v2["spans"]] == ["", "", "Raw in, reviewed out"]
+    ops = [f["op"] for f in v2["patches"][-1]["fixes"]]
+    assert ops == ["callout_text", "callout_text", "title_off"] and v2["patches"][-1]["action"] == "text"
+    H.text(d, title="Raw In, Reviewed Out", from_v=2)
+    v3 = json.loads((d / "edl_v3.json").read_text())
+    assert v3["title_card_text"] == "Raw In, Reviewed Out" and v3["title_card"] is True  # new words turn it back on
+    with pytest.raises(SystemExit):
+        H.text(d, {"s3": "Raw in, reviewed out"}, from_v=2)  # no change
+    with pytest.raises(SystemExit):
+        H.text(d, {"s9": "x"})
+
+
+def test_human_reorder_moves_a_clip_and_keeps_roles_by_position(tmp_path, monkeypatch):
+    import json
+
+    import montivo.human as H
+    d = _human_run(tmp_path, monkeypatch)
+    H.reorder(d, "s1", None)  # the hook to the end
+    v2 = json.loads((d / "edl_v2.json").read_text())
+    assert [s["id"] for s in v2["spans"]] == ["s2", "s3", "s1"]
+    assert [s["role"] for s in v2["spans"]] == ["hook", "body", "payoff"] and v2["spans"][2]["planner_role"] == "hook"
+    assert [s["order"] for s in v2["spans"]] == [0, 1, 2] and "moved to the end" in v2["patches"][-1]["fixes"][0]["note"]
+    H.reorder(d, "s1", "s2", from_v=2)
+    assert [s["id"] for s in json.loads((d / "edl_v3.json").read_text())["spans"]] == ["s1", "s2", "s3"]
+    with pytest.raises(SystemExit):
+        H.reorder(d, "s1", "s2", from_v=3)  # already there
+
+
+def test_human_pin_sets_and_drops_a_speaker_head(tmp_path, monkeypatch):
+    import json
+
+    import montivo.human as H
+    d = _human_run(tmp_path, monkeypatch)
+    H.pin(d, "A", "3")
+    v2 = json.loads((d / "edl_v2.json").read_text())
+    assert v2["reframe_speaker_ids"] == {"A": "3"} and v2["patches"][-1]["fixes"][0]["op"] == "pin_speaker"
+    H.pin(d, "A", None, from_v=2)
+    assert "reframe_speaker_ids" not in json.loads((d / "edl_v3.json").read_text())
+    for spk, head in (("C", "3"), ("A", "7")):
+        with pytest.raises(SystemExit):
+            H.pin(d, spk, head)
+
+
+def test_text_reorder_pin_endpoints_build_their_commands(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import montivo.server.app as A
+    _run_folder(tmp_path)
+    seen = []
+    monkeypatch.setattr(A, "start_job", lambda st, rid, kind, label, args, chat=None: seen.append((kind, label, args)) or
+                        A.Job(id="j", run=rid, kind=kind, label=label, cmd=args))
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    c = TestClient(A.create_app(tmp_path))
+    assert c.post("/api/runs/r1/text", json={"callouts": {"s2": "", "s3": "Raw in"}, "title_card": False}).status_code == 200
+    kind, label, args = seen[-1]
+    assert kind == "text" and "--callout=s2=" in args and "--callout=s3=Raw in" in args and "--title-off" in args
+    r = c.post("/api/runs/r1/text", json={"title": "New words"})
+    assert r.status_code == 409 and "Muse Image" in r.json()["error"]  # new title words call Muse Image
+    assert c.post("/api/runs/r1/text", json={}).status_code == 400
+    assert c.post("/api/runs/r1/text", json={"callouts": {"x; rm": "a"}}).status_code == 400
+    assert c.post("/api/runs/r1/reorder", json={"span": "s3", "before": None}).status_code == 200
+    assert "--end" in seen[-1][2] and "--before" not in seen[-1][2]
+    assert c.post("/api/runs/r1/reorder", json={"span": "s3", "before": "s1"}).status_code == 200 and "--before" in seen[-1][2]
+    assert c.post("/api/runs/r1/pin", json={"speaker": "A", "head": "3"}).status_code == 200
+    assert seen[-1][2][4:8] == ["--speaker", "A", "--head", "3"]
+    assert c.post("/api/runs/r1/pin", json={"speaker": "A", "head": None}).status_code == 200 and "none" in seen[-1][2]
+    assert c.post("/api/runs/r1/pin", json={"speaker": "A; x", "head": "3"}).status_code == 400
+
+
+def test_heads_lists_speakers_and_thumbnails_a_head(tmp_path):
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from montivo.server.app import create_app
+    d = _run_folder(tmp_path)
+    (d / "voice").mkdir()
+    (d / "voice" / "voice.json").write_text(json.dumps({"speakers": ["A", "B"], "words": [{"speaker": "A"}, {"speaker": "B"}, {"speaker": "B"}]}))
+    (d / "speakers.json").write_text(json.dumps({"speakers": {"A": {"ids": ["1"], "method": "microphone", "who": "left"}},
+                                                 "heads": {"1": {"speaker": "A"}}}))
+    (d / "track" / "head").mkdir(parents=True)
+    (d / "track" / "head" / "tracks.json").write_text(json.dumps({"source": {"width": 320, "height": 240}, "objects": {
+        "1": [{"f": 0, "t": 0.2, "box": [10, 10, 40, 50]}, {"f": 1, "t": 0.4, "box": [10, 10, 80, 100]}], "2": []}}))
+    _clip(d / "track" / "track_source_5fps.mp4", size="320x240", seconds=1.0)
+    c = TestClient(create_app(tmp_path))
+    h = c.get("/api/runs/r1/heads").json()
+    assert [(s["id"], s["ids"], s["words"]) for s in h["speakers"]] == [("A", ["1"], 1), ("B", [], 2)]
+    assert [(x["id"], x["t"], x["speaker"]) for x in h["heads"]] == [("1", 0.4, "A")]  # 2 has no box: not offered
+    r = c.get("/api/runs/r1/head/1.jpg")
+    assert r.status_code == 200 and r.content[:2] == b"\xff\xd8"
+    assert c.get("/api/runs/r1/head/2.jpg").status_code == 404

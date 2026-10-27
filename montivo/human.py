@@ -6,6 +6,9 @@
     python -m montivo.human punch runs/012 --on|--off [--from 2] [--review 2]
     python -m montivo.human punch runs/012 --skip "emphasis:Montivo@47.120" [--from 2] [--review 2]
     python -m montivo.human caption runs/015 --at 18.5 --text "Four Meta models do all" [--at ... --text ...]
+    python -m montivo.human text runs/015 [--callout s5="Four Meta models"] [--callout s6=] [--title "..."] [--title-off]
+    python -m montivo.human reorder runs/015 --span s4 (--before s2 | --end)
+    python -m montivo.human pin runs/014 --speaker A --head 3 (or --head none to drop the pin)
 
 Each writes the next edl_vN.json (N = one past the highest version in the run folder, so no version is ever
 overwritten) with a `patches` entry marked `source: "human"`, renders cut_vN.mp4 and, with --review, runs the blind
@@ -13,7 +16,10 @@ review loop from it. `drop` and `trim` go through the reviewer's own patch path 
 unless --review is given; `replan` is one Spark plan call (about $0.05) with the instruction added to the brief.
 `punch` turns the punch-in zooms (engine/punch.py) on or off, or removes one of them by its key; $0, ffmpeg only.
 `caption` gives the caption line on screen at a cut second the words actually spoken (the reviewer's caption_text
-patch); $0, ffmpeg only.
+patch); $0, ffmpeg only. `text` rewrites or removes callouts and turns the title card off or on ($0) or gives it new
+words (one Muse Image call, $0.01: the words are part of the generated image). `reorder` moves a clip (the reviewer's
+reorder patch) and tightens the cuts that now meet; `pin` makes the crop follow one head for a speaker (EDL
+`reframe_speaker_ids`, for clips where the speaker map got it wrong, like run 014). Both $0.
 """
 from __future__ import annotations
 
@@ -25,10 +31,11 @@ import shutil
 import signal
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, tighten_edges
-from .engine.edl import build_edl, edl_summary
+from .engine.edl import build_edl, edl_summary, normalize_roles
 from .engine.punch import parse_key
 from .engine.review import (REACH_S, Fix, _caption_at, _src_time, apply_fixes, cut_map, kept_elsewhere, refresh_span,
                             review_loop)
@@ -258,6 +265,162 @@ def punch(run_dir: Path, on: bool | None = None, skip: str | None = None, from_v
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
 
 
+def _new_version(run_dir: Path, from_v: int | None) -> tuple[int, dict, int]:
+    from_v = from_v or latest_edl(run_dir)
+    return from_v, json.loads((run_dir / f"edl_v{from_v}.json").read_text()), next_version(run_dir)
+
+
+def _save(run_dir: Path, new: dict, n: int, from_v: int, action: str, fixes: list[dict], log) -> Path:
+    new["version"] = n
+    new.setdefault("patches", []).append({"from": from_v, "review": None, "source": "human", "action": action,
+                                          "fixes": fixes})
+    for f in fixes:
+        log(f"patch v{from_v} -> v{n}: {f['op']} {f['target']}: {f['note']} (human)")
+    edl_path = run_dir / f"edl_v{n}.json"
+    dump_json(edl_path, new)
+    return edl_path
+
+
+def text_fixes(edl: dict, callouts: dict[str, str], title: str | None, title_card: bool | None) -> list[dict]:
+    """The patch entries of a text edit: callout_text per span ("" removes it), title_text, title_off / title_on.
+    Raises SystemExit for a span that is not in the EDL or an edit that changes nothing."""
+    by_id = {s["id"]: s for s in edl["spans"]}
+    out = []
+    for sid, text in callouts.items():
+        if sid not in by_id:
+            raise SystemExit(f"{sid} is not a span of this EDL ({', '.join(by_id)})")
+        text = " ".join(text.split())
+        was = (by_id[sid].get("callout") or "").strip()
+        if text == was:
+            continue
+        out.append({"op": "callout_text", "target": sid, "issue": -1, "severity": "human", "args": {"text": text, "was": was},
+                    "note": f"callout {was!r} -> {text!r}" if text and was else f"callout {text!r} added" if text
+                    else f"callout {was!r} removed"})
+    if title is not None:
+        title = " ".join(title.split())
+        if not title:
+            raise SystemExit("the title is empty: use --title-off to drop the card")
+        if title != (edl.get("title_card_text") or ""):
+            out.append({"op": "title_text", "target": "title", "issue": -1, "severity": "human",
+                        "args": {"text": title, "was": edl.get("title_card_text")},
+                        "note": f"title card {edl.get('title_card_text')!r} -> {title!r} (new Muse Image card, $0.01)"})
+    if title_card is not None and title_card != (edl.get("title_card", True) is not False):
+        out.append({"op": "title_on" if title_card else "title_off", "target": "title", "issue": -1, "severity": "human",
+                    "note": "title card back on" if title_card else "title card off"})
+    if not out:
+        raise SystemExit("nothing to change: the texts are already these")
+    return out
+
+
+def text(run_dir: Path, callouts: dict[str, str] | None = None, title: str | None = None, title_card: bool | None = None,
+         from_v: int | None = None, passes: int = 0, budget: float = 0.15) -> dict:
+    """Callout and title card text of edl_v{from} -> edl_vN, rendered."""
+    log = RunLog(run_dir / "run.log")
+    from_v, edl, n = _new_version(run_dir, from_v)
+    fixes = text_fixes(edl, callouts or {}, title, title_card)
+    log(f"montivo text: {len(fixes)} change(s) in edl_v{from_v} -> edl_v{n}")
+    new, _ = apply_fixes(edl, [], _words(run_dir))  # a clean copy: render fields cleared, order and runtime as they were
+    by_id = {s["id"]: s for s in new["spans"]}
+    for f in fixes:
+        if f["op"] == "callout_text":
+            by_id[f["target"]]["callout"] = f["args"]["text"]
+        elif f["op"] == "title_text":
+            new["title_card_text"] = f["args"]["text"]
+            new["title_card"] = True
+        else:
+            new["title_card"] = f["op"] == "title_on"
+    edl_path = _save(run_dir, new, n, from_v, "text", fixes, log)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
+def roles_by_position(spans: list[dict]) -> list[str]:
+    """edl.normalize_roles on EDL span dicts: after a move, the first clip is the hook and the last the payoff."""
+    ns = [SimpleNamespace(id=s["id"], role=s["role"], planner_role=s.get("planner_role")) for s in spans]
+    notes = normalize_roles(ns)
+    for s, x in zip(spans, ns):
+        s["role"] = x.role
+        if x.planner_role:
+            s["planner_role"] = x.planner_role
+    return notes
+
+
+def reorder(run_dir: Path, span_id: str, before: str | None, from_v: int | None = None, passes: int = 0,
+            budget: float = 0.15) -> dict:
+    """Move one clip of edl_v{from} before another (or to the end, before=None) -> edl_vN: the reviewer's reorder
+    patch; the cuts that now meet (around the gap it left and around its new place) are tightened to the speech."""
+    log = RunLog(run_dir / "run.log")
+    from_v, edl, n = _new_version(run_dir, from_v)
+    ids = [s["id"] for s in edl["spans"]]
+    if span_id not in ids or (before is not None and before not in ids):
+        raise SystemExit(f"{span_id if span_id not in ids else before} is not a span of edl_v{from_v} ({', '.join(ids)})")
+    k = ids.index(span_id)
+    rest = [i for i in ids if i != span_id]
+    at = rest.index(before) if before else len(rest)
+    order = rest[:at] + [span_id] + rest[at:]
+    if order == ids:
+        raise SystemExit(f"{span_id} is already there")
+    log(f"montivo reorder: {span_id} {'before ' + before if before else 'to the end'} in edl_v{from_v} -> edl_v{n}")
+    words, audio = _words(run_dir), Audio.load(run_dir)
+    fix = Fix(op="reorder", target=span_id, issue=-1, severity="human", t_s=0.0, args={"before": before})
+    new, plog = apply_fixes(edl, [fix], words, audio)
+    moved = order.index(span_id)
+    meet = {(span_id, "in"), (span_id, "out")}
+    for i, e in ((k - 1, "out"), (k + 1, "in")):  # the old neighbours now meet each other
+        if 0 <= i < len(ids):
+            meet.add((ids[i], e))
+    for i, e in ((moved - 1, "out"), (moved + 1, "in")):  # the new neighbours
+        if 0 <= i < len(order):
+            meet.add((order[i], e))
+    if audio is not None:
+        for m in tighten_edges(new, words, audio, only=meet)["moves"]:
+            plog[0]["note"] += f"; {m['span']} {m['edge']} edge tightened to the speech {m['from']:.3f} -> {m['to']:.3f}"
+        for s in new["spans"]:
+            refresh_span(s, words)
+    roles = roles_by_position(new["spans"])
+    if roles:
+        plog[0]["note"] += f"; roles by position: {', '.join(roles)}"
+    edl_path = _save(run_dir, new, n, from_v, "reorder", plog, log)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
+def head_ids(run_dir: Path) -> list[str]:
+    p = run_dir / "track" / "head" / "tracks.json"
+    return sorted((json.loads(p.read_text()).get("objects") or {}) if p.is_file() else {}, key=lambda x: int(x) if x.isdigit() else 0)
+
+
+def pin(run_dir: Path, speaker: str, head: str | None, from_v: int | None = None, passes: int = 0,
+        budget: float = 0.15) -> dict:
+    """The crop follows head `head` whenever `speaker` talks (EDL `reframe_speaker_ids`, render.load_speaker_ids);
+    head None drops that speaker's pin, back to the speaker map. -> edl_vN, rendered, $0."""
+    log = RunLog(run_dir / "run.log")
+    from_v, edl, n = _new_version(run_dir, from_v)
+    voice = json.loads((run_dir / "voice" / "voice.json").read_text())
+    speakers = [str(x) for x in voice.get("speakers") or []]
+    if speaker not in speakers:
+        raise SystemExit(f"{speaker} is not a Voice speaker of this run ({', '.join(speakers) or 'none'})")
+    if (edl.get("reframe_concept") or "head") != "head":
+        raise SystemExit("this cut's crop follows the person track, not heads: a pin has nothing to follow")
+    heads = head_ids(run_dir)
+    if head is not None and head not in heads:
+        raise SystemExit(f"head {head} is not in track/head/tracks.json ({', '.join(heads) or 'no head track'})")
+    pins = dict(edl.get("reframe_speaker_ids") or {})
+    if pins.get(speaker) == head or (head is None and speaker not in pins):
+        raise SystemExit(f"speaker {speaker} is already {'on head ' + head if head else 'unpinned'}")
+    log(f"montivo pin: speaker {speaker} -> {'head ' + head if head else 'the speaker map'} in edl_v{from_v} -> edl_v{n}")
+    new, _ = apply_fixes(edl, [], _words(run_dir))
+    if head is None:
+        pins.pop(speaker, None)
+    else:
+        pins[speaker] = head
+    new["reframe_speaker_ids"] = pins
+    if not pins:
+        new.pop("reframe_speaker_ids")
+    fix = {"op": "pin_speaker", "target": speaker, "issue": -1, "severity": "human", "args": {"head": head},
+           "note": f"the crop follows head {head} when {speaker} talks" if head else f"{speaker} follows the speaker map again"}
+    edl_path = _save(run_dir, new, n, from_v, "pin", [fix], log)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
 def target_from(instruction: str) -> float | None:
     """'make it 30 seconds' -> 30.0: a runtime named in the instruction replaces the run's target."""
     m = re.search(r"(\d{2,3})\s*(?:s\b|sec|second)", instruction, re.I)
@@ -393,7 +556,24 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--at", type=float, action="append", required=True,
                    help="a cut second inside the line to retext (repeat with --text for more lines)")
     c.add_argument("--text", action="append", required=True, help="the words actually spoken on that line")
-    for p in (d, t, r, pu, c):
+    tx = sub.add_parser("text", help="callout and title card text -> edl_vN -> cut_vN ($0, $0.01 for new title words)")
+    tx.add_argument("run_dir", type=Path)
+    tx.add_argument("--callout", action="append", default=[], metavar="SPAN=TEXT", help="a span's callout (empty removes it)")
+    tx.add_argument("--title", default=None, help="new title card words (one Muse Image call)")
+    tg = tx.add_mutually_exclusive_group()
+    tg.add_argument("--title-off", dest="title_card", action="store_const", const=False, default=None)
+    tg.add_argument("--title-on", dest="title_card", action="store_const", const=True)
+    ro = sub.add_parser("reorder", help="move one clip -> edl_vN -> cut_vN ($0 without --review)")
+    ro.add_argument("run_dir", type=Path)
+    ro.add_argument("--span", required=True)
+    rg = ro.add_mutually_exclusive_group(required=True)
+    rg.add_argument("--before", default=None, help="the span it goes in front of")
+    rg.add_argument("--end", action="store_true", help="to the end of the cut")
+    pn = sub.add_parser("pin", help="the crop follows one head for a speaker -> edl_vN -> cut_vN ($0)")
+    pn.add_argument("run_dir", type=Path)
+    pn.add_argument("--speaker", required=True, help="a Voice speaker label (A, B, ...)")
+    pn.add_argument("--head", required=True, help="a head id of track/head/tracks.json, or none to drop the pin")
+    for p in (d, t, r, pu, c, tx, ro, pn):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
         p.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
@@ -410,6 +590,15 @@ def main(argv: list[str] | None = None) -> int:
         if len(a.at) != len(a.text):
             ap.error("give one --text for every --at")
         out = caption(a.run_dir, list(zip(a.at, a.text)), a.from_v, a.review, a.budget)
+    elif a.cmd == "text":
+        pairs = [x.split("=", 1) for x in a.callout]
+        if any(len(x) != 2 for x in pairs):
+            ap.error("--callout SPAN=TEXT")
+        out = text(a.run_dir, dict(pairs), a.title, a.title_card, a.from_v, a.review, a.budget)
+    elif a.cmd == "reorder":
+        out = reorder(a.run_dir, a.span, None if a.end else a.before, a.from_v, a.review, a.budget)
+    elif a.cmd == "pin":
+        out = pin(a.run_dir, a.speaker, None if a.head.lower() == "none" else a.head, a.from_v, a.review, a.budget)
     else:
         out = replan(a.run_dir, a.instruction, a.from_v, a.target, a.review, a.budget, model=a.model)
     print(json.dumps(out, indent=2))

@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { fileUrl, tc, usd } from "./api";
+import { api, fileUrl, tc, usd } from "./api";
 import { originKind, originLabel, parentOf } from "./edit";
 import { Icon } from "./icons";
-import type { Costs, Planner, RunState, Version } from "./types";
+import type { Costs, HeadsInfo, Planner, RunState, Version } from "./types";
 
 const mb = (b: number | null | undefined) => (b == null ? "–" : b > 1e9 ? `${(b / 1e9).toFixed(2)} GB` : `${(b / 1e6).toFixed(1)} MB`);
 
@@ -157,32 +157,110 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply }: {
   );
 }
 
-export function TextPanel({ state, v, t, onSeek }: { state: RunState; v: Version | null; t: number; onSeek: (a: number) => void }) {
+/** A text edit for montivo.human text: callouts by span ("" removes one), new title words, the card on or off. */
+export type TextEdit = { callouts?: Record<string, string>; title?: string; title_card?: boolean };
+
+export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply }: {
+  state: RunState; v: Version | null; t: number; next: number; canEdit: string | null; onSeek: (a: number) => void;
+  onApply: (e: TextEdit) => void;
+}) {
   const calls = v?.callouts ?? [];
+  const [staged, setStaged] = useState<Record<string, string>>({}); // span id -> callout text ("" = removed)
+  const [title, setTitle] = useState<string | null>(null);
+  const [card, setCard] = useState<boolean | null>(null);
+  const [editing, setEditing] = useState<string | null>(null); // a span id or "title"
+  const [draft, setDraft] = useState("");
+  useEffect(() => { setStaged({}); setTitle(null); setCard(null); setEditing(null); }, [v?.n]);
+  if (!v) return <section className="side-panel"><div className="panel-head"><span className="ph-title">Text</span></div></section>;
+  const cardOn = v.title_card !== false;
+  const callout = (sid: string) => (staged[sid] ?? v.spans.find((x) => x.id === sid)?.callout ?? "").trim();
+  const open = (key: string, text: string) => { if (canEdit) return; setEditing(key); setDraft(text); };
+  const clean = (x: string) => x.split(/\s+/).filter(Boolean).join(" ");
+  const commit = () => {
+    if (editing === "title") {
+      const x = clean(draft);
+      setTitle(x && x !== v.title_card_text ? x : null);
+    } else if (editing) {
+      const x = clean(draft), was = (v.spans.find((s) => s.id === editing)?.callout ?? "").trim();
+      setStaged((s) => { const { [editing]: _, ...rest } = s; return x !== was ? { ...rest, [editing]: x } : rest; });
+    }
+    setEditing(null);
+  };
+  const n = Object.keys(staged).length + (title != null ? 1 : 0) + (card != null ? 1 : 0);
+  const needsKey = title != null && !state.has_key;
+  const apply = () => onApply({ ...(Object.keys(staged).length ? { callouts: staged } : {}), ...(title != null ? { title } : {}), ...(card != null ? { title_card: card } : {}) });
+  const editor = (label: string) => (
+    <input autoFocus value={draft} maxLength={80} aria-label={label} onFocus={(e) => e.currentTarget.select()}
+      onChange={(e) => setDraft(e.target.value)} onBlur={commit}
+      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setEditing(null); } }} />
+  );
   return (
     <section className="side-panel">
       <div className="panel-head"><span className="ph-title">Text</span><span className="ph-sub">title and callouts</span></div>
       <div className="panel-body">
         <div className="pn-k">Title card</div>
-        {v?.title_card_text ? (
-          <button className={`title-card ${v.title_s > 0 ? "" : "off"}`} onClick={() => v.title_s > 0 && onSeek(0)}>
-            {state.media.title_png && <img src={fileUrl(state.id, state.media.title_png)} alt="" />}
-            <span className="tc-text">{v.title_card_text}</span>
-            <span className="tc-meta">{v.title_s > 0 ? `0:00 – ${tc(v.title_s)} · Muse Image background` : "off in this version (the reviewer dropped it)"}</span>
-          </button>
+        {v.title_card_text ? (
+          <div className={`title-card ${(card ?? cardOn) ? "" : "off"} ${title != null || card != null ? "staged" : ""}`}>
+            <button className="tc-thumb" onClick={() => v.title_s > 0 && onSeek(0)} title="Play the title card">
+              {state.media.title_png && <img src={fileUrl(state.id, state.media.title_png)} alt="" />}
+            </button>
+            {editing === "title" ? editor("Title card words") : (
+              <span className="tc-text" onDoubleClick={() => open("title", title ?? v.title_card_text ?? "")}>{title ?? v.title_card_text}</span>
+            )}
+            {title != null && <span className="lr-was">was: {v.title_card_text} · new words make a new Muse Image card ($0.01)</span>}
+            <span className="tc-meta">{v.title_s > 0 ? `0:00 – ${tc(v.title_s)} · Muse Image background` : cardOn ? "on" : "off in this version"}</span>
+            <span className="tc-actions">
+              <button className="btn quiet small" disabled={!!canEdit} title={canEdit ?? "New words for the card (Muse Image draws them, $0.01)"}
+                onClick={() => open("title", title ?? v.title_card_text ?? "")}><Icon name="pencil" size={12} /> Words</button>
+              <button className="btn quiet small" disabled={!!canEdit} title={canEdit ?? "The card in front of the cut, on or off ($0)"}
+                onClick={() => setCard((c) => { const want = !(c ?? cardOn); return want === cardOn ? null : want; })}>
+                {(card ?? cardOn) ? "Turn off" : "Turn on"}</button>
+            </span>
+          </div>
         ) : <p className="mute small">No title card.</p>}
         <div className="pn-k">Callouts</div>
+        <p className="mute small">One callout per clip at most, anchored to the speaker. Double-click to rewrite; empty removes it.</p>
         <div className="list">
-          {calls.map((c, k) => (
-            <button key={k} className={`list-row ${t >= c.t_in && t < c.t_out ? "on" : ""}`} onClick={() => onSeek(c.t_in)}>
-              <span className="lr-t mono">{tc(c.t_in)}</span>
-              <span className="lr-txt"><b>{c.text}</b></span>
-              <span className="lr-flag">clip {c.span}</span>
-            </button>
-          ))}
-          {!calls.length && <p className="mute small">No callouts in this version.</p>}
+          {v.spans.map((sp) => {
+            const c = calls.find((x) => x.span === sp.id);
+            const text = callout(sp.id);
+            const was = (sp.callout ?? "").trim();
+            if (!text && !was && !(sp.id in staged) && editing !== sp.id) return null;
+            return editing === sp.id ? (
+              <div key={sp.id} className="list-row cap-edit"><span className="lr-t mono">{sp.id}</span>{editor(`Callout of ${sp.id}`)}</div>
+            ) : (
+              <div key={sp.id} role="button" tabIndex={0} className={`list-row cap-row ${c && t >= c.t_in && t < c.t_out ? "on" : ""} ${sp.id in staged ? "staged" : ""}`}
+                onClick={() => c && onSeek(c.t_in)} onDoubleClick={() => open(sp.id, text)} onKeyDown={(e) => { if (e.key === "Enter") open(sp.id, text); }}>
+                <span className="lr-t mono">{c ? tc(c.t_in) : sp.id}</span>
+                <span className="lr-txt">{text ? <b>{text}</b> : <i className="mute">removed</i>}
+                  {sp.id in staged && <span className="lr-was">was: {was || "no callout"}</span>}</span>
+                <span className="lr-end">
+                  <span className="lr-flag">clip {sp.id}</span>
+                  <button className="icon-btn lr-edit" disabled={!!canEdit} title={canEdit ?? "Rewrite this callout"}
+                    onClick={(e) => { e.stopPropagation(); open(sp.id, text); }}><Icon name="pencil" size={13} /></button>
+                </span>
+              </div>
+            );
+          })}
+          {!v.spans.some((sp) => (sp.callout ?? "").trim() || sp.id in staged) && <p className="mute small pad">No callouts in this version.</p>}
         </div>
+        <label className="field add-callout">Add a callout to
+          <select value="" disabled={!!canEdit} onChange={(e) => { const sid = e.target.value; if (sid) open(sid, ""); }}>
+            <option value="">a clip…</option>
+            {v.spans.filter((sp) => !callout(sp.id)).map((sp) => <option key={sp.id} value={sp.id}>{sp.id} · {sp.words.slice(0, 40)}</option>)}
+          </select>
+        </label>
       </div>
+      {n > 0 && (
+        <div className="cap-apply">
+          <span>{n} change{n > 1 ? "s" : ""}</span>
+          <span className="grow" />
+          <button className="btn quiet" onClick={() => { setStaged({}); setTitle(null); setCard(null); }}>Discard</button>
+          <button className="btn" disabled={!!canEdit || needsKey}
+            title={canEdit ?? (needsKey ? "New title words call Muse Image: set MODEL_API_KEY" : `Makes Version ${next} (${title != null ? "$0.01 for the new card" : "$0"}, a re-render)`)}
+            onClick={apply}>Make Version {next}</button>
+        </div>
+      )}
     </section>
   );
 }
@@ -232,6 +310,76 @@ export function VersionsPanel({ id, state, versions, sel, onPick, go, replay, op
           </button>
         )}
       </div>
+    </section>
+  );
+}
+
+/** Who the crop follows: every Voice speaker with the head the speaker map gave it (or a human pin), and every SAM
+ *  head to pin instead. One pin makes the next version (montivo.human pin), $0. */
+export function SpeakersPanel({ id, v, next, canEdit, onApply }: {
+  id: string; v: Version | null; next: number; canEdit: string | null; onApply: (speaker: string, head: string | null) => void;
+}) {
+  const [info, setInfo] = useState<HeadsInfo | null>(null);
+  const [staged, setStaged] = useState<{ speaker: string; head: string | null } | null>(null);
+  useEffect(() => { api<HeadsInfo>(`/api/runs/${id}/heads`).then(setInfo).catch(() => setInfo({ speakers: [], heads: [], video: null })); }, [id]);
+  useEffect(() => { setStaged(null); }, [v?.n]);
+  const pins = v?.speaker_pins ?? {};
+  const thumb = (h: string) => `/api/runs/${id}/head/${h}.jpg`;
+  const follows = (spk: string) => (pins[spk] ? [pins[spk]] : info?.speakers.find((s) => s.id === spk)?.ids ?? []);
+  return (
+    <section className="side-panel">
+      <div className="panel-head"><span className="ph-title">Speakers</span><span className="ph-sub">{info ? `${info.speakers.length} voices · ${info.heads.length} heads` : ""}</span></div>
+      <div className="panel-body">
+        {!info && <p className="mute small">Loading…</p>}
+        {info && (info.speakers.length < 2 || !info.heads.length) && (
+          <p className="mute small">{!info.heads.length ? "No head track in this run: the crop follows the person." : "One voice: the crop follows the head SAM tracked, nothing to pin."}</p>
+        )}
+        {info && info.speakers.length >= 2 && info.heads.length > 0 && <>
+          <p className="mute small">When a speaker talks, the 9:16 crop follows their head. The speaker map picked one per voice; pin another head where it got it wrong.</p>
+          {info.speakers.map((s) => {
+            const cur = follows(s.id);
+            const st = staged?.speaker === s.id ? staged : null;
+            return (
+              <div key={s.id} className={`spk-card ${st ? "staged" : ""}`}>
+                <div className="spk-top">
+                  <span className="spk-id">{s.id}</span>
+                  <span className="spk-who" title="Watch's description of who speaks; it can name the wrong person (run 014): trust the faces">
+                    {s.who ? <>watch's guess: {s.who}</> : "unnamed"}</span>
+                  <span className="mute small">{s.words} words</span>
+                </div>
+                <div className="spk-now mute small">
+                  {pins[s.id] ? <>pinned to head {pins[s.id]} by you</> : cur.length ? <>speaker map: head {cur.join(", ")} ({s.method ?? "map"})</> : "no head mapped"}
+                </div>
+                <div className="spk-heads">
+                  {info.heads.map((h) => {
+                    const on = st ? st.head === h.id : cur.includes(h.id);
+                    return (
+                      <button key={h.id} className={`head ${on ? "on" : ""}`} disabled={!!canEdit}
+                        title={canEdit ?? `Head ${h.id}${h.speaker ? ` (mapped to ${h.speaker})` : ""}: follow it when ${s.id} talks`}
+                        onClick={() => setStaged(cur.includes(h.id) && !pins[s.id] ? null : pins[s.id] === h.id ? null : { speaker: s.id, head: h.id })}>
+                        <img src={thumb(h.id)} alt="" loading="lazy" />
+                        <span>{h.id}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {pins[s.id] && !st && (
+                  <button className="link small" disabled={!!canEdit} onClick={() => setStaged({ speaker: s.id, head: null })}>Back to the speaker map</button>
+                )}
+              </div>
+            );
+          })}
+        </>}
+      </div>
+      {staged && (
+        <div className="cap-apply">
+          <span>{staged.head ? `${staged.speaker} → head ${staged.head}` : `${staged.speaker} → speaker map`}</span>
+          <span className="grow" />
+          <button className="btn quiet" onClick={() => setStaged(null)}>Discard</button>
+          <button className="btn" disabled={!!canEdit} title={canEdit ?? `Makes Version ${next} with the crop on that head ($0, a re-render)`}
+            onClick={() => onApply(staged.speaker, staged.head)}>Make Version {next}</button>
+        </div>
+      )}
     </section>
   );
 }

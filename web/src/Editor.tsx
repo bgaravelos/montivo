@@ -7,20 +7,21 @@ import { Icon } from "./icons";
 import { Inspector, type PunchAsk } from "./Inspector";
 import { ProgressInline } from "./Progress";
 import { GUIDE_NAME, GUIDES, SafeArea, type Guide } from "./SafeArea";
-import { CaptionsPanel, MediaPanel, TextPanel, VersionsPanel } from "./Panels";
+import { CaptionsPanel, MediaPanel, SpeakersPanel, TextPanel, VersionsPanel } from "./Panels";
 import { FPS, Player, type PlayerHandle } from "./Player";
-import { Timeline, ZOOM_MAX, ZOOM_MIN, type ClipMenu, type TrimAsk } from "./Timeline";
+import { Timeline, ZOOM_MAX, ZOOM_MIN, type ClipMenu, type MoveAsk, type TrimAsk } from "./Timeline";
 import type { LogLine, RunState } from "./types";
 
 type Props = { id: string; replay: number; go: (hash: string) => void };
-type PanelId = "assistant" | "media" | "captions" | "text" | "versions";
-type Dialog = { kind: "delete"; span: string } | { kind: "trim"; ask: TrimAsk } | { kind: "export" } | { kind: "ledger" } | { kind: "keys" };
+type PanelId = "assistant" | "media" | "captions" | "text" | "speakers" | "versions";
+type Dialog = { kind: "delete"; span: string } | { kind: "trim"; ask: TrimAsk } | { kind: "move"; ask: MoveAsk } | { kind: "export" } | { kind: "ledger" } | { kind: "keys" };
 
 const PANELS: { id: PanelId; label: string; icon: string }[] = [
   { id: "assistant", label: "Assistant", icon: "assistant" },
   { id: "media", label: "Media", icon: "media" },
   { id: "captions", label: "Captions", icon: "captions" },
   { id: "text", label: "Text", icon: "text" },
+  { id: "speakers", label: "Speakers", icon: "speakers" },
   { id: "versions", label: "Versions", icon: "versions" },
 ];
 
@@ -113,6 +114,7 @@ export function Editor({ id, replay, go }: Props) {
   const ask = useCallback((span: string) => { setSelKey(span); setPanel("assistant"); setAskNonce((n) => n + 1); setCtx(null); }, []);
   const askDelete = useCallback((span: string) => { setCtx(null); setDialog({ kind: "delete", span }); }, []);
   const askTrim = useCallback((a: TrimAsk) => setDialog({ kind: "trim", ask: a }), []);
+  const askMove = useCallback((a: MoveAsk) => setDialog({ kind: "move", ask: a }), []);
   const pick = useCallback((n: number) => setSel(n), []);
   const onPunch = (a: PunchAsk) => { setSelKey(null); setPanel("assistant"); act("punch", { ...a, from: v?.n }); };
   const step = (dir: -1 | 1) => {
@@ -260,7 +262,14 @@ export function Editor({ id, replay, go }: Props) {
           <CaptionsPanel v={v} t={t} next={next} canEdit={canEdit} onSeek={seek}
             onApply={(edits) => { setPanel("assistant"); act("caption", { edits, from: v?.n }); }} />
         )}
-        {panel === "text" && <TextPanel state={state} v={v} t={t} onSeek={seek} />}
+        {panel === "text" && (
+          <TextPanel state={state} v={v} t={t} next={next} canEdit={canEdit} onSeek={seek}
+            onApply={(edit) => { setPanel("assistant"); act("text", { ...edit, from: v?.n }); }} />
+        )}
+        {panel === "speakers" && (
+          <SpeakersPanel id={id} v={v} next={next} canEdit={canEdit}
+            onApply={(speaker, head) => { setPanel("assistant"); act("pin", { speaker, head, from: v?.n }); }} />
+        )}
         {panel === "versions" && <VersionsPanel id={id} state={state} versions={visible} sel={sel} onPick={pick} go={go} replay={replay} opening={opening} />}
       </aside>
 
@@ -290,7 +299,7 @@ export function Editor({ id, replay, go }: Props) {
       <footer className="tl-wrap">
         <Timeline id={id} v={v} blocks={blocks} words={state.words} t={t} playing={playing} selected={selKey}
           zoom={zoom} setZoom={setZoom} mode={tlMode} setMode={setTlMode} canTrim={!canEdit}
-          onSelect={select} onSeek={seek} onScrub={scrub} onMenu={setCtx} onTrim={askTrim} />
+          onSelect={select} onSeek={seek} onScrub={scrub} onMenu={setCtx} onTrim={askTrim} onMove={askMove} />
       </footer>
 
       {ctx && (
@@ -309,6 +318,10 @@ export function Editor({ id, replay, go }: Props) {
       {dialog?.kind === "trim" && v && (
         <EditDialog kind="trim" state={state} v={v} span={dialog.ask.span} trim={dialog.ask} next={next} onCancel={() => setDialog(null)}
           onConfirm={(review) => { setDialog(null); setPanel("assistant"); act("trim", { span: dialog.ask.span, edge: dialog.ask.edge, word: dialog.ask.word, from: v.n, review: review ? 1 : 0 }); }} />
+      )}
+      {dialog?.kind === "move" && v && (
+        <EditDialog kind="move" state={state} v={v} span={dialog.ask.span} move={dialog.ask} next={next} onCancel={() => setDialog(null)}
+          onConfirm={(review) => { setDialog(null); setPanel("assistant"); act("reorder", { span: dialog.ask.span, before: dialog.ask.before, from: v.n, review: review ? 1 : 0 }); }} />
       )}
       {dialog?.kind === "export" && <ExportDialog id={id} versions={visible} initial={sel} onClose={() => setDialog(null)} />}
       {dialog?.kind === "ledger" && <LedgerDialog state={state} onClose={() => setDialog(null)} />}

@@ -31,6 +31,7 @@ const P: Record<string, string> = {
   dot: "M12 9a3 3 0 110 6 3 3 0 010-6z",
   loop: "M4.5 12a7.5 7.5 0 0113-5.1M19.5 12a7.5 7.5 0 01-13 5.1M17.5 3.5v3.4h-3.4M6.5 20.5v-3.4h3.4",
   archive: "M3.5 4.5h17v4h-17zM5 8.5v11h14v-11M10 12.5h4",
+  speakers: "M9 11a3.5 3.5 0 100-7 3.5 3.5 0 000 7zM2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6M16 4.3a3.5 3.5 0 010 6.4M18.5 14.4c1.8.8 3 2.8 3 5.6",
   search: "M10.5 4a6.5 6.5 0 110 13 6.5 6.5 0 010-13zM15.5 15.5L20 20",
 };
 const FILLED = new Set(["play", "pause", "skipBack", "skipFwd", "dot", "more"]);

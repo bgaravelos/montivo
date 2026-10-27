@@ -45,6 +45,7 @@ export type Version = {
   callouts: { span: string; text: string; t_in: number; t_out: number }[]; review: Review | null;
   caption_lines: CaptionLine[]; caption_style: CaptionStyle | null; caption_style_note: string | null; bytes: number | null;
   punch: boolean; punch_skip: string[]; punch_ins: PunchIn[];
+  speaker_pins: Record<string, string>; // reframe_speaker_ids: Voice speaker -> the head the crop follows (a human pin)
   planner: { model: string; name: string } | null; // the paper edit's planner: v1 and every re-plan
   plan_compare: PlanCompare | null;
 };
@@ -116,3 +117,10 @@ export type ProjectCard = {
   score: CardScore | null; score_is_shown: boolean; scores: CardScore[];
 };
 export type CardScore = { v: number; overall: number; pass: boolean };
+
+/** The Speakers panel (runs.heads): Voice speakers with the heads the speaker map gave them, and every SAM head. */
+export type HeadsInfo = {
+  speakers: { id: string; who: string | null; ids: string[]; method: string | null; words: number }[];
+  heads: { id: string; t: number; box: number[]; frames: number; speaker: string | null }[];
+  video: string | null;
+};

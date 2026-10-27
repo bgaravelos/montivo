@@ -758,11 +758,11 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
             s["role"] = "hook"
             new["spans"] = [s] + [x for x in new["spans"] if x["id"] != f.target]
             note = f"{f.target} opens the cut: {s['words'][:60]}"
-        elif f.op == "reorder":
+        elif f.op == "reorder":  # before None: to the end (a human drag past the last clip)
             rest = [x for x in new["spans"] if x["id"] != f.target]
-            at = next(i for i, x in enumerate(rest) if x["id"] == f.args["before"])
+            at = next(i for i, x in enumerate(rest) if x["id"] == f.args["before"]) if f.args.get("before") else len(rest)
             new["spans"] = rest[:at] + [s] + rest[at:]
-            note = f"{f.target} moved before {f.args['before']}"
+            note = f"{f.target} moved before {f.args['before']}" if f.args.get("before") else f"{f.target} moved to the end"
         elif f.op == "caption_unforce":
             overrides[:] = [o for o in overrides if not (o.get("span") == f.args["span"] and o.get("top") is not None
                                                           and abs(float(o["src_t"]) - f.args["src_t"]) < 0.01)]

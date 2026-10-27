@@ -108,6 +108,13 @@ export function originLabel(v: Version): string {
   if (o.action === "trim") return "your edit · trimmed a clip";
   if (o.action === "replan") return "your edit · asked Montivo";
   if (o.action === "caption") return `your edit · ${o.fixes?.length === 1 ? "a caption line" : `${o.fixes?.length ?? ""} caption lines`}`;
+  if (o.action === "text") {
+    const f = o.fixes ?? [];
+    return f.length === 1 && f[0].op.startsWith("title") ? "your edit · the title card" : f.every((x) => x.op === "callout_text")
+      ? `your edit · ${f.length === 1 ? "a callout" : `${f.length} callouts`}` : "your edit · title and callouts";
+  }
+  if (o.action === "reorder") return `your edit · moved clip ${o.fixes?.[0]?.target ?? ""}`;
+  if (o.action === "pin") return `your edit · pinned speaker ${o.fixes?.[0]?.target ?? ""}`;
   if (o.action === "punch") {
     const op = o.fixes?.[0]?.op;
     return op === "punch_skip" ? "your edit · removed a punch-in" : `your edit · punch-ins ${op === "punch_off" ? "off" : "on"}`;

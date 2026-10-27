@@ -6,6 +6,8 @@ import type { Issue, Version, Word } from "./types";
 
 export type TrimAsk = { span: string; edge: "in" | "out"; word: number; words: number; dt: number; label: string };
 export type ClipMenu = { x: number; y: number; span: string };
+/** A clip dragged to a new place: in front of `before`, or to the end (null). */
+export type MoveAsk = { span: string; before: string | null; label: string };
 
 const TRACK_H = { text: 24, captions: 24, video: 58, audio: 42 };
 const RULER_H = 30;
@@ -18,11 +20,12 @@ type Props = {
   selected: string | null; zoom: number | null; setZoom: (z: number | null) => void;
   mode: "timeline" | "transcript"; setMode: (m: "timeline" | "transcript") => void; canTrim: boolean;
   onSelect: (key: string | null) => void; onSeek: (a: number, b?: number) => void; onScrub: (t: number) => void;
-  onMenu: (m: ClipMenu) => void; onTrim: (t: TrimAsk) => void;
+  onMenu: (m: ClipMenu) => void; onTrim: (t: TrimAsk) => void; onMove: (m: MoveAsk) => void;
 };
 
 /** The bottom of the editor: a read-mostly multi-track timeline of the selected version (select, seek, delete from the
- *  menu, trim by dragging a clip edge to a word), or the transcript view of the same edit. */
+ *  menu, trim by dragging a clip edge to a word, move a clip by dragging its body), or the transcript view of the
+ *  same edit. */
 export function Timeline(p: Props) {
   const { v, mode, setMode, zoom, setZoom } = p;
   const scroller = useRef<HTMLDivElement>(null);
@@ -118,7 +121,7 @@ function Canvas(p: Props & { v: Version; pps: number; dur: number; scroller: Rea
     <div className="tl-canvas" ref={canvas} style={{ width }}>
       <Ruler pps={pps} dur={dur} issues={v.review?.issues ?? []} onScrub={scrub} onSeek={p.onSeek} />
       <Tracks id={p.id} v={v} blocks={p.blocks} words={p.words} selected={p.selected} canTrim={p.canTrim} pps={pps} dur={dur}
-        timeAt={timeAt} onSelect={p.onSelect} onSeek={p.onSeek} onMenu={p.onMenu} onTrim={p.onTrim} />
+        timeAt={timeAt} onSelect={p.onSelect} onSeek={p.onSeek} onMenu={p.onMenu} onTrim={p.onTrim} onMove={p.onMove} />
       <div className="playhead" style={{ transform: `translateX(${t * pps}px)` }}>
         <span className="ph-handle" onPointerDown={scrub} />
         <span className="ph-line" />
@@ -190,18 +193,21 @@ function usePeaks(url: string | null): { rate: number; peaks: number[] } | null 
 }
 
 type Drag = { key: string; edge: "in" | "out"; snaps: Snap[]; snap: Snap | null; current: number };
+type Move = { key: string; slot: number; t: number }; // a clip being dragged: its insertion slot among the others
+const MOVE_PX = 6; // a press that travels further than this is a drag, not a click
 
-type TrackProps = Pick<Props, "id" | "blocks" | "words" | "selected" | "canTrim" | "onSelect" | "onSeek" | "onMenu" | "onTrim"> & {
+type TrackProps = Pick<Props, "id" | "blocks" | "words" | "selected" | "canTrim" | "onSelect" | "onSeek" | "onMenu" | "onTrim" | "onMove"> & {
   v: Version; pps: number; dur: number; timeAt: (x: number) => number;
 };
 
 const Tracks = memo(function Tracks(p: TrackProps) {
-  const { id, v, blocks, words, pps, selected, canTrim, onSelect, onSeek, onMenu, onTrim, timeAt } = p;
+  const { id, v, blocks, words, pps, selected, canTrim, onSelect, onSeek, onMenu, onTrim, onMove, timeAt } = p;
   const q = v.bytes ? `&b=${v.bytes}` : "";
   const sprite = v.cut ? `/api/runs/${id}/filmstrip?v=${v.n}${q}` : null;
   const frames = useSprite(sprite);
   const peaks = usePeaks(v.cut ? `/api/runs/${id}/peaks?v=${v.n}${q}` : null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [move, setMove] = useState<Move | null>(null);
   const live = blocks.filter((b) => b.kind !== "ghost");
   const tileW = (TRACK_H.video - 6) * (9 / 16);
 
@@ -233,6 +239,34 @@ const Tracks = memo(function Tracks(p: TrackProps) {
       onTrim({ span: b.span!.id, edge, word: s.word, words: n, dt, label: keepEdge });
     };
     window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  const startMove = (e: React.PointerEvent, b: Block) => { // press on a clip body: a click selects, a drag moves it
+    const spans = live.filter((x) => x.kind === "span");
+    const others = spans.filter((x) => x.key !== b.key);
+    const from = spans.findIndex((x) => x.key === b.key);
+    const x0 = e.clientX;
+    let m: Move | null = null;
+    const slotAt = (cx: number) => {
+      const at = timeAt(cx);
+      const slot = others.filter((o) => (o.t0 + o.t1) / 2 < at).length;
+      return { slot, t: slot < others.length ? others[slot].t0 : others.at(-1)?.t1 ?? 0 };
+    };
+    const mv = (ev: PointerEvent) => {
+      if (!m && Math.abs(ev.clientX - x0) < MOVE_PX) return;
+      m = { key: b.key, ...slotAt(ev.clientX) };
+      setMove(m);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", mv);
+      window.removeEventListener("pointerup", up);
+      setMove(null);
+      if (!m || m.slot === from) return;
+      const before = others[m.slot]?.span!.id ?? null;
+      onMove({ span: b.span!.id, before, label: before ? `before ${before}` : "to the end" });
+    };
+    window.addEventListener("pointermove", mv);
     window.addEventListener("pointerup", up);
   };
 
@@ -271,7 +305,11 @@ const Tracks = memo(function Tracks(p: TrackProps) {
           const isDrag = drag?.key === b.key;
           return (
             <div key={b.key} className={`clip ${b.kind} ${b.span?.role ?? ""} ${sel ? "sel" : ""}`} style={{ left: b.t0 * pps + 1, width: w }}
-              onPointerDown={(e) => { if (e.button === 0) { onSelect(b.key); onSeek(b.kind === "title" ? 0 : b.t0 + 0.02); } }}
+              onPointerDown={(e) => {
+                if (e.button !== 0) return;
+                onSelect(b.key); onSeek(b.kind === "title" ? 0 : b.t0 + 0.02);
+                if (b.kind === "span" && canTrim) startMove(e, b);
+              }}
               onContextMenu={(e) => { e.preventDefault(); if (b.kind === "span") { onSelect(b.key); onMenu({ x: e.clientX, y: e.clientY, span: b.span!.id }); } }}
               title={b.kind === "span" ? `${b.span!.id} · ${b.span!.role} · ${(b.t1 - b.t0).toFixed(1)} s\n${b.span!.words}` : "Title card"}>
               <div className="film">
@@ -308,6 +346,18 @@ const Tracks = memo(function Tracks(p: TrackProps) {
         {blocks.filter((b) => b.kind === "ghost").map((b) => (
           <span key={b.key} className="ghost-mark" style={{ left: b.t0 * pps }} title={`${b.span!.id} was deleted from Version ${v.origin.from}: “${b.span!.words}”`} />
         ))}
+        {move && (() => {
+          const b = live.find((x) => x.key === move.key)!;
+          const spans = live.filter((x) => x.kind === "span");
+          const same = move.slot === spans.findIndex((x) => x.key === move.key);
+          return <>
+            <span className="move-ghost" style={{ left: b.t0 * pps + 1, width: Math.max(2, (b.t1 - b.t0) * pps - 2) }} />
+            <span className={`move-mark ${same ? "same" : ""}`} style={{ left: move.t * pps - 1 }} />
+            <span className="trim-tip" style={{ left: move.t * pps }}>
+              {same ? "drop elsewhere to move it" : `move ${b.span!.id} ${move.slot < spans.length - 1 ? `before ${spans.filter((x) => x.key !== move.key)[move.slot].span!.id}` : "to the end"}`}
+            </span>
+          </>;
+        })()}
         {drag?.snap && (() => {
           const b = live.find((x) => x.key === drag.key)!;
           const edgeT = drag.edge === "out" ? b.t1 : b.t0;

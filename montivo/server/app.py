@@ -27,7 +27,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..config import OPEN_MODEL
 from . import media
-from .runs import fingerprint, list_runs, parse_log, progress, read_json, replay_script, run_state
+from .runs import fingerprint, heads, list_runs, parse_log, progress, read_json, replay_script, run_state
 
 STATIC = Path(__file__).parent / "static"
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm"}
@@ -586,6 +586,101 @@ def create_app(root: Path) -> FastAPI:
         job = start_job(st, run_id, "caption", f"Edit {n} caption line{'s' if n > 1 else ''}", args,
                         chat={"role": "user", "text": f"Caption{'s' if n > 1 else ''} in v{frm}: {', '.join(quoted)}.",
                               "chips": [f"v{frm}"], "kind": "caption"})
+        return {"job": job.public()}
+
+    @app.post("/api/runs/{run_id}/text")
+    async def text_edit(run_id: str, request: Request):
+        """Callouts ({"callouts": {span: text}}, "" removes one), the title card on or off ({"title_card": bool}) or new
+        title words ({"title": text}: one Muse Image call, $0.01, so it needs the key): the next version."""
+        d = st.run_dir(run_id)
+        b = await request.json()
+        frm = int(b.get("from") or latest_version(d))
+        passes = int(b.get("review") or 0)
+        callouts = b.get("callouts") or {}
+        title, card = b.get("title"), b.get("title_card")
+        if not isinstance(callouts, dict) or not all(re.fullmatch(r"s\d+", k) and isinstance(v, str) and len(v) <= 80
+                                                     for k, v in callouts.items()):
+            raise HTTPException(400, "callouts: {span id: text up to 80 characters}")
+        if title is not None and (not isinstance(title, str) or not 0 < len(title.strip()) <= 80):
+            raise HTTPException(400, "title: 1 to 80 characters")
+        if card is not None and not isinstance(card, bool):
+            raise HTTPException(400, "title_card: true or false")
+        if not callouts and title is None and card is None:
+            raise HTTPException(400, "nothing to change")
+        if title is not None or passes:
+            need_key("New title card words (Muse Image)" if title is not None else "Reviewing the new cut")
+        args = ["-m", "montivo.human", "text", f"runs/{run_id}", *[f"--callout={k}={v}" for k, v in callouts.items()],
+                *([f"--title={title}"] if title is not None else []),
+                *(["--title-on" if card else "--title-off"] if card is not None else []),
+                "--from", str(frm), "--review", str(passes)]
+        what = [f"{k}: “{v}”" if v else f"{k}: no callout" for k, v in callouts.items()]
+        if title is not None:
+            what.append(f"title: “{title}”")
+        if card is not None:
+            what.append("title card on" if card else "title card off")
+        job = start_job(st, run_id, "text", "Edit text", args,
+                        chat={"role": "user", "text": f"Text in v{frm}: {'; '.join(what)}.", "chips": [f"v{frm}"], "kind": "text"})
+        return {"job": job.public()}
+
+    @app.post("/api/runs/{run_id}/reorder")
+    async def reorder(run_id: str, request: Request):
+        """Move a clip in front of another ({"span": "s4", "before": "s2"}) or to the end ("before": null)."""
+        d = st.run_dir(run_id)
+        b = await request.json()
+        frm = int(b.get("from") or latest_version(d))
+        passes = int(b.get("review") or 0)
+        if passes:
+            need_key("Reviewing the new cut")
+        span, before = str(b.get("span", "")), b.get("before")
+        if not re.fullmatch(r"s\d+", span) or (before is not None and not re.fullmatch(r"s\d+", str(before))):
+            raise HTTPException(400, "span and before: span ids like s3 (before null = to the end)")
+        args = ["-m", "montivo.human", "reorder", f"runs/{run_id}", "--span", span,
+                *(["--before", str(before)] if before is not None else ["--end"]), "--from", str(frm), "--review", str(passes)]
+        job = start_job(st, run_id, "reorder", f"Move clip {span}", args,
+                        chat={"role": "user", "chips": [span, f"v{frm}"], "kind": "reorder",
+                              "text": f"Move clip {span} {'before ' + str(before) if before else 'to the end'} in v{frm}."})
+        return {"job": job.public()}
+
+    @app.get("/api/runs/{run_id}/heads")
+    def run_heads(run_id: str):
+        return heads(st.run_dir(run_id))
+
+    @app.get("/api/runs/{run_id}/head/{hid}.jpg")
+    def head_jpg(run_id: str, hid: str):
+        d = st.run_dir(run_id)
+        info = heads(d)
+        h = next((x for x in info["heads"] if x["id"] == hid), None)
+        if h is None or not info["video"]:
+            raise HTTPException(404, "no such head")
+        src = d / info["video"]
+        scale = 1.0
+        if info["video"] == "proxy.mp4" and info["source"].get("width"):  # the boxes are on the tracked video's pixels
+            from ..engine.ingest import ffprobe
+            scale = ffprobe(src).width / info["source"]["width"]
+        try:
+            out = media.head_thumb(src, h["t"], [c * scale for c in h["box"]], d / "ui" / "cache" / f"head_{hid}.jpg")
+        except subprocess.CalledProcessError:
+            raise HTTPException(500, "head thumbnail failed")
+        return FileResponse(out, headers={"Cache-Control": "max-age=3600"})
+
+    @app.post("/api/runs/{run_id}/pin")
+    async def pin(run_id: str, request: Request):
+        """{"speaker": "A", "head": "3"}: the crop follows that head when A talks; "head": null drops the pin."""
+        d = st.run_dir(run_id)
+        b = await request.json()
+        frm = int(b.get("from") or latest_version(d))
+        passes = int(b.get("review") or 0)
+        if passes:
+            need_key("Reviewing the new cut")
+        spk, head = str(b.get("speaker", "")), b.get("head")
+        if not re.fullmatch(r"[A-Za-z0-9]{1,8}", spk) or (head is not None and not re.fullmatch(r"\d{1,4}", str(head))):
+            raise HTTPException(400, "speaker: a Voice label like A; head: a head id or null")
+        args = ["-m", "montivo.human", "pin", f"runs/{run_id}", "--speaker", spk, "--head", str(head) if head is not None else "none",
+                "--from", str(frm), "--review", str(passes)]
+        job = start_job(st, run_id, "pin", f"Pin speaker {spk}", args,
+                        chat={"role": "user", "chips": [f"v{frm}"], "kind": "pin",
+                              "text": f"Follow head {head} when speaker {spk} talks, in v{frm}." if head is not None
+                              else f"Speaker {spk} back on the speaker map, in v{frm}."})
         return {"job": job.public()}
 
     @app.post("/api/runs/{run_id}/replan")

@@ -122,7 +122,8 @@ def replay_script(lines: list[dict]) -> list[dict]:
 # clip) 1.0 s, the segments 15.4 s, audio + mux 3.9 s
 RENDER_PREP, RENDER_SEGS = 0.05, 0.75
 COMMANDS = {"run": "Run", "render": "Render", "drop": "Delete clip", "trim": "Trim clip", "caption": "Edit captions",
-            "punch": "Punch-ins", "replan": "Ask Montivo", "edges": "Edges"}
+            "punch": "Punch-ins", "replan": "Ask Montivo", "edges": "Edges", "text": "Edit text", "reorder": "Move clip",
+            "pin": "Pin speaker"}
 TO_VERSION = re.compile(r"-> \S*?(?:edl|cut)_v(\d+)\b")
 SEGMENTS = re.compile(r"^render: \d+ spans -> (\d+) segments(?: \((\d+) frames\))?")
 SEG_DONE = re.compile(r"^render: seg (\d+) .*?\((\d+) frames")
@@ -494,6 +495,7 @@ def versions(run_dir: Path) -> list[dict]:
                                       for c in edl.get("captions") or []],
                     "caption_style": edl.get("caption_style"), "caption_style_note": edl.get("caption_style_note"),
                     "punch": bool(edl.get("punch")), "punch_skip": list(edl.get("punch_skip") or []),
+                    "speaker_pins": {str(k): str(v) for k, v in (edl.get("reframe_speaker_ids") or {}).items()},
                     "punch_ins": [{k: e.get(k) for k in ("key", "kind", "word", "span", "excess_db", "t_in", "t_out", "zoom")}
                                   for e in edl.get("punch_ins") or [] if e.get("key")],
                     "bytes": (run_dir / cut).stat().st_size if cut else None,
@@ -501,6 +503,34 @@ def versions(run_dir: Path) -> list[dict]:
                     "plan_compare": cmp,
                     "review": _review(rv, run_dir) if rv else None})
     return out
+
+
+def heads(run_dir: Path) -> dict:
+    """The Speakers panel: every Voice speaker with who watch saw and the head ids the speaker map gave it, and every
+    head of the SAM head track with a frame to show it (the record with the largest box, its time and box on the
+    tracked video)."""
+    voice = read_json(run_dir / "voice" / "voice.json") or {}
+    spk = read_json(run_dir / "speakers.json") or {}
+    track = read_json(run_dir / "track" / "head" / "tracks.json") or {}
+    words: dict[str, int] = {}
+    for w in voice.get("words") or []:
+        words[str(w.get("speaker"))] = words.get(str(w.get("speaker")), 0) + 1
+    speakers = [{"id": str(x), "who": ((spk.get("speakers") or {}).get(str(x)) or {}).get("who"),
+                 "ids": [str(i) for i in ((spk.get("speakers") or {}).get(str(x)) or {}).get("ids") or []],
+                 "method": ((spk.get("speakers") or {}).get(str(x)) or {}).get("method"), "words": words.get(str(x), 0)}
+                for x in voice.get("speakers") or []]
+    out = []
+    for hid, recs in (track.get("objects") or {}).items():
+        boxed = [r for r in recs if r.get("box")]
+        if not boxed:
+            continue
+        r = max(boxed, key=lambda r: (r["box"][2] - r["box"][0]) * (r["box"][3] - r["box"][1]))
+        out.append({"id": str(hid), "t": r["t"], "box": r["box"], "frames": len(boxed),
+                    "speaker": ((spk.get("heads") or {}).get(str(hid)) or {}).get("speaker")})
+    out.sort(key=lambda h: int(h["id"]) if h["id"].isdigit() else 0)
+    return {"speakers": speakers, "heads": out, "source": (track.get("source") or {}),
+            "video": "track/track_source_5fps.mp4" if (run_dir / "track" / "track_source_5fps.mp4").is_file()
+            else "proxy.mp4" if (run_dir / "proxy.mp4").is_file() else None}
 
 
 def turn_words(run_dir: Path) -> dict[str, list[dict]]:

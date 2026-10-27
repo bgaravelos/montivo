@@ -134,7 +134,12 @@ step's expected time (this run's earlier calls in `ledger.json`, else the measur
 on Muse Spark Open, review 26 s) and a bar that moves by time but never past the last checkpoint `run.log` logged
 (Voice, SAM and Watch on a new run have no estimate, so their bar says so); replay drives the same view. The viewer has safe-area guides (Reels, TikTok, Shorts, approximate; G cycles them), N and Shift+N jump to the next
 and previous reviewer issue, Versions marks the version the project opens on apart from the loop's best, and Export
-has a 720 x 1280 preset for messaging and review links. Keys: Space, J/K/L, arrow keys for
+has a 720 x 1280 preset for messaging and review links. The Text panel rewrites, adds or removes callouts and turns
+the title card off or on ($0) or gives it new words (one Muse Image call, $0.01), staged into one version like
+captions; dragging a clip's body on the video track moves it (the reviewer's reorder op, the cuts that now meet
+tightened again, roles by position); the Speakers panel shows every Voice speaker with the head the speaker map
+gave it and every SAM head as a thumbnail, and pins another head for a speaker (EDL `reframe_speaker_ids`). All three
+are `python -m montivo.human text | reorder | pin` and render the next version. Keys: Space, J/K/L, arrow keys for
 one frame, Backspace to delete a clip, Cmd+Z / Shift+Cmd+Z across versions. Spoken instructions through Voice: not
 yet. The server only reads the run folders and starts the engine as a subprocess; the React build is committed, so
 the editor needs Python only.

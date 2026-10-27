@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { dur, tc, usd } from "./api";
 import { Icon } from "./icons";
-import type { TrimAsk } from "./Timeline";
+import type { MoveAsk, TrimAsk } from "./Timeline";
 import type { RunState, Version } from "./types";
 
 function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
@@ -21,18 +21,29 @@ function Modal({ title, onClose, children, wide }: { title: string; onClose: () 
 }
 
 /** Delete clip and trim share one confirm: what changes, the version it makes, and what it costs before you commit. */
-export function EditDialog({ kind, state, v, span, trim, next, onCancel, onConfirm }: {
-  kind: "delete" | "trim"; state: RunState; v: Version; span: string; trim?: TrimAsk; next: number;
+export function EditDialog({ kind, state, v, span, trim, move, next, onCancel, onConfirm }: {
+  kind: "delete" | "trim" | "move"; state: RunState; v: Version; span: string; trim?: TrimAsk; move?: MoveAsk; next: number;
   onCancel: () => void; onConfirm: (review: boolean) => void;
 }) {
   const [review, setReview] = useState(false);
   const sp = v.spans.find((s) => s.id === span);
   const canReview = state.has_key;
-  const title = kind === "delete" ? `Delete clip ${span}?` : `${trim!.words > 0 ? "Extend" : "Trim"} clip ${span}?`;
+  const title = kind === "delete" ? `Delete clip ${span}?` : kind === "move" ? `Move clip ${span} ${move!.label}?`
+    : `${trim!.words > 0 ? "Extend" : "Trim"} clip ${span}?`;
+  const roleNote = kind === "move" && move ? (() => { // the clip that ends up first is the hook, the last the payoff
+    const ids = v.spans.map((s) => s.id).filter((x) => x !== span);
+    const at = move.before ? ids.indexOf(move.before) : ids.length;
+    const order = [...ids.slice(0, at), span, ...ids.slice(at)];
+    const was = v.spans.map((s) => s.id);
+    const notes = [order[0] !== was[0] ? `${order[0]} becomes the hook` : "", order.at(-1) !== was.at(-1) ? `${order.at(-1)} becomes the ending` : ""].filter(Boolean);
+    return notes.length ? ` Roles follow the position: ${notes.join(", ")}.` : "";
+  })() : "";
   return (
     <Modal title={title} onClose={onCancel}>
       <div className="modal-body">
-        {kind === "delete" ? (
+        {kind === "move" ? (
+          <p>Plays “{sp?.words.slice(0, 120)}{(sp?.words.length ?? 0) > 120 ? "…" : ""}” {move!.label === "to the end" ? "at the end" : move!.label}. The cuts that now meet are tightened to the speech again.{roleNote}</p>
+        ) : kind === "delete" ? (
           <p>Removes <b>{sp?.duration.toFixed(1)} s</b>: “{sp?.words.slice(0, 140)}{(sp?.words.length ?? 0) > 140 ? "…" : ""}”. The cuts on either side are tightened to the speech again.</p>
         ) : (
           <p>{trim!.words > 0 ? "Adds" : "Removes"} <b>{Math.abs(trim!.words)} word{Math.abs(trim!.words) === 1 ? "" : "s"}</b> ({trim!.dt >= 0 ? "+" : "−"}{Math.abs(trim!.dt).toFixed(2)} s) at the {trim!.edge === "in" ? "start" : "end"}: the clip {trim!.label}.
@@ -49,7 +60,7 @@ export function EditDialog({ kind, state, v, span, trim, next, onCancel, onConfi
         <span className="grow" />
         <button className="btn quiet" onClick={onCancel}>Cancel</button>
         <button className={`btn ${kind === "delete" ? "danger" : ""}`} autoFocus onClick={() => onConfirm(review && canReview)}>
-          {kind === "delete" ? "Delete clip" : trim!.words > 0 ? "Extend clip" : "Trim clip"}
+          {kind === "delete" ? "Delete clip" : kind === "move" ? "Move clip" : trim!.words > 0 ? "Extend clip" : "Trim clip"}
         </button>
       </div>
     </Modal>
