@@ -234,7 +234,7 @@ end, the cuts that now meet tightened, `roles_by_position` = edl.normalize_roles
 (`media.head_thumb`). UI: Text panel staged edits, drag a clip body on the video track (MoveAsk -> EditDialog "move"),
 Speakers panel (rail). Watch's "who" is shown as "watch's guess": on 014 it names the wrong astronauts. Checked keyless
 with real renders on a throwaway copy of 014 (pin A -> head 0, s8 moved before s2, callouts + title off; removed).
-Reviewer benchmark + Spark Open reviewer (27/10 night, $5.02, `docs/notes/montivo-reviewer-bench_2026-10-27.md`):
+Reviewer benchmark + Spark Open reviewer (27/10 night, $5.02, commit `ff77959`, `docs/notes/montivo-reviewer-bench_2026-10-27.md`):
 Muse Spark Open on Baseten sees `video_url` frames (~1 fps) but hears nothing; `Spark.call(video=)` sends the cut
 inline, `review_render` gives an Open reviewer the heard-words facts (Voice on the cut, `dedupe_heard`,
 `caption_heard_diff`); Spark 1.3's prompt unchanged. `tools/reviewer_bench.py` plants 8 fault types in 012 v2, 015 v3,
