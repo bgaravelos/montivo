@@ -35,6 +35,7 @@ from .api import dump_json
 from .captions import Overlay, build_overlays
 from .graphics import font_path
 from .reframe import ReframeParams, SegmentPath, plan_segment
+from .speakers import follow_for
 
 OUT_W, OUT_H = 1080, 1920
 AUDIO_RATE = 48000
@@ -380,7 +381,10 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     with Timer() as t:
         paths: list[SegmentPath] = []
         for seg in segments:
-            path = plan_segment(seg.t_in, seg.t_out, edl["source"], track, params, span_ids=seg.span_ids)
+            fol = follow_for(edl, seg.span_ids) if concept else None
+            path = plan_segment(seg.t_in, seg.t_out, edl["source"], track, params, span_ids=seg.span_ids,
+                                prefer_x=fol.prefer_x if fol else None, prefer_id=fol.prefer_id if fol else None)
+            path.follow = fol
             path.xs = path.xs[:seg.frames] + [path.xs[-1]] * max(0, seg.frames - len(path.xs))
             bias = segment_bias(edl["spans"], seg.span_ids)
             if bias:
@@ -417,11 +421,13 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
             keyframes.extend(path.keyframes)
             moving = sum(1 for a, b in zip(path.xs, path.xs[1:]) if a != b)
             seg_info.append({"index": seg.index, "t_in": seg.t_in, "t_out": seg.t_out, "duration": seg.duration, "frames": seg.frames,
-                             "spans": seg.span_ids, "track_concept": concept, "track_id": path.track_id, "crop": [path.crop_w, path.crop_h],
+                             "spans": seg.span_ids, "track_concept": concept, "track_id": path.track_id,
+                             "speaker": path.follow.speaker if path.follow else None,
+                             "follow": path.follow.by if path.follow else None, "crop": [path.crop_w, path.crop_h],
                              "x_first": path.xs[0], "x_min": min(path.xs), "x_max": max(path.xs),
                              "frames_moving": moving, "overlays": len(ovs), "file": f.as_posix()})
             log(f"render: seg {seg.index + 1} {seg.t_in:.3f}-{seg.t_out:.3f}s ({seg.frames} frames, {'+'.join(seg.span_ids)}) "
-                f"track {path.track_id} crop {path.crop_w}x{path.crop_h} x {min(path.xs)}..{max(path.xs)}, {len(ovs)} overlays")
+                f"track {path.track_id}{f' ({path.follow.speaker}, {path.follow.by})' if path.follow and path.follow.speaker else ''} crop {path.crop_w}x{path.crop_h} x {min(path.xs)}..{max(path.xs)}, {len(ovs)} overlays")
         audio, loud = render_audio(source, segments, render_dir, lead_s=title_s, loudnorm=loudnorm)
         out = mux(files, audio, run_dir / out_name, render_dir)
     measured = measure_loudness(out)

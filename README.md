@@ -30,6 +30,8 @@ montivo run footage.mp4 --brief "..." --out runs/001
   edl      spans mapped to Voice word boundaries, then every cut edge tightened to the speech in the source audio
            (0.1 s before the onset, 0.15 s after the offset, 0.3 s at the very end) -> edl_v1.json
   reframe  per segment: the head track (person as fallback), largest and most centred id -> smoothed 9:16 crop path (dead zone, EMA, pan clamp)
+           with two people in shot, the head on the side watch's speaker_map gives the span's Voice speaker (or the id
+           pinned in the EDL's reframe_speaker_ids), so the crop follows who talks, not the larger listener
   title    Muse Image 1.0: the plan's title_card_text -> title/title_card.png (generated once, $0.01)
   captions Voice words of the kept spans -> de-doubled, glossary-corrected, 1 to 4 word lines up at least 0.4 s each, placed
            clear of the SAM head box;
