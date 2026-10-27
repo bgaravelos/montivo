@@ -27,7 +27,7 @@ Viral; Open Weight too: the Baseten and Meta credits arrived 26-27/10.
 
 ## Layout
 ```
-montivo/           the engine package (config, ledger, run, cli; engine/{api,ingest,voice,track,spark,schemas,edl,reframe,
+montivo/           the engine package (config, ledger, run, cli, human; server/ = the UI API + static build; engine/{api,ingest,voice,track,spark,schemas,edl,reframe,
                    render,captions,graphics,image,review}.py)
 tests/             offline tests on recorded Voice and SAM streams (make test)
 experiments/       the 26/10 kill-test scripts (research, not product; results/ ignored)
@@ -60,7 +60,10 @@ phrase, else hold); `cut_v2_polish.mp4` in runs 012 / 012-ktb, -14.0 LUFS. Run 0
 source `footage/usgs_uranium_miners_daughter.mp4` (public domain; `footage/nasa_exp72_thanksgiving.mp4` not run yet);
 fixes: captions avoid only the followed head, a title-card issue drops the card, clipped edges widen to the gap; loop
 62 -> 68 -> 72, no pass, $0.78. SAM at 5 fps for every concept (commit `432c45a`): person and head share one upload,
-SAM $0.50 -> $0.33 on 166 s, a 150 s run about $0.48. API + UI (layout A, Review room) in progress in its own session.
+SAM $0.50 -> $0.33 on 166 s, a 150 s run about $0.48. API + UI (layout A, Review room, commit `b5f1f98`): `montivo serve` / `make ui`, `montivo/server/` (FastAPI + SSE,
+reads run folders, engine as subprocess), `montivo/human.py` (drop span, re-plan -> next edl_vN, source human), `web/`
+React/Vite built into `montivo/server/static` (`make web` after editing `web/src`); neutral dark, replay `?replay=4`,
+Compare; test UI actions with `env -u MODEL_API_KEY`. Sample release `sample-012` not created yet (needs Billy's yes).
 Next: the NASA clip (needs speaker -> person mapping), the Open Weight planner test. The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
