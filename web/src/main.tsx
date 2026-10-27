@@ -2,7 +2,7 @@ import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Compare } from "./Compare";
 import { Home } from "./Home";
-import { Room } from "./Room";
+import { Editor } from "./Editor";
 import "./styles.css";
 
 // hash routes: #/  ·  #/run/012[?replay=4]  ·  #/run/012/compare?a=1&b=2
@@ -24,7 +24,7 @@ function App() {
   const replay = Number(q.get("replay") || 0);
   const m = path.match(/^\/run\/([^/]+)(\/compare)?$/);
   if (m && m[2]) return <Compare id={m[1]} a={Number(q.get("a") || 1)} b={Number(q.get("b") || 2)} replay={replay} go={go} />;
-  if (m) return <Room key={`${m[1]}-${replay}`} id={m[1]} replay={replay} go={go} />;
+  if (m) return <Editor key={`${m[1]}-${replay}`} id={m[1]} replay={replay} go={go} />;
   return <Home go={go} />;
 }
 

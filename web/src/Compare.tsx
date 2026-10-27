@@ -22,7 +22,7 @@ export function Compare({ id, a, b, replay, go }: { id: string; a: number; b: nu
     return () => window.clearTimeout(t);
   }, [issue?.k, va?.cut, vb?.cut]); // eslint-disable-line
 
-  if (!state) return <div className="empty">Opening run {id}…</div>;
+  if (!state) return <div className="empty">Opening project {id}…</div>;
   if (!va?.cut || !vb?.cut) return <div className="empty">v{a} or v{b} has no cut. <a href={`#/run/${id}`}>back</a></div>;
 
   const both = () => {
@@ -41,27 +41,27 @@ export function Compare({ id, a, b, replay, go }: { id: string; a: number; b: nu
     <div className="compare">
       <header className="top">
         <a className="mark" href="#/">montivo</a>
-        <span className="run-id">run {id} · compare</span>
+        <span className="run-id">Compare versions</span>
         <span className="brief" title={state.run.brief}>{state.run.brief}</span>
         <span className="grow" />
-        <select value={a} onChange={(e) => pick(Number(e.target.value), b)}>{opts.map((v) => <option key={v.n} value={v.n}>v{v.n}</option>)}</select>
+        <select value={a} onChange={(e) => pick(Number(e.target.value), b)}>{opts.map((v) => <option key={v.n} value={v.n}>Version {v.n}</option>)}</select>
         <span className="mute">|</span>
-        <select value={b} onChange={(e) => pick(a, Number(e.target.value))}>{opts.map((v) => <option key={v.n} value={v.n}>v{v.n}</option>)}</select>
-        <button className="btn quiet" onClick={() => go(`#/run/${id}${replay ? `?replay=${replay}` : ""}`)}>Review room</button>
+        <select value={b} onChange={(e) => pick(a, Number(e.target.value))}>{opts.map((v) => <option key={v.n} value={v.n}>Version {v.n}</option>)}</select>
+        <button className="btn quiet" onClick={() => go(`#/run/${id}${replay ? `?replay=${replay}` : ""}`)}>Back to the editor</button>
       </header>
       <div className="cmp-body">
         <div className="cmp-side">
           <div className="note-card">
-            <div className="nc-v">v{a} <b>{va.review?.overall ?? "·"}</b></div>
+            <div className="nc-v">Version {a} <b>{va.review?.overall ?? "·"}</b></div>
             {issue ? <>
               <div className="nc-line"><span className={`sev ${issue.severity}`}>{issue.severity}</span> {tc(issue.t_s)} · {crit(issue.criterion)}</div>
               <div className="nc-what">“{issue.what}”</div>
             </> : <div className="nc-what mute">no issue flagged in v{a}</div>}
           </div>
-          <Player ref={pa} src={fileUrl(id, va.cut)} compact label={`v${a}`} />
+          <Player ref={pa} src={fileUrl(id, va.cut)} compact scrub label={`Version ${a}`} />
         </div>
         <div className="cmp-mid">
-          <button className="btn big" onClick={both}>{playing ? "❚❚ pause both" : "▶ play both"}</button>
+          <button className="btn big" onClick={both}>{playing ? "❚❚ Pause both" : "▶ Play both"}</button>
           <div className="cmp-issues">
             {issues.map((i) => (
               <button key={i.k} className={`cmp-issue ${i.k === k ? "on" : ""}`} onClick={() => setK(i.k)}>
@@ -72,15 +72,15 @@ export function Compare({ id, a, b, replay, go }: { id: string; a: number; b: nu
         </div>
         <div className="cmp-side">
           <div className="note-card after">
-            <div className="nc-v">v{b} <b>{vb.review?.overall ?? "·"}</b>{vb.review?.pass && <span className="tick"> ✓ pass</span>}</div>
+            <div className="nc-v">Version {b} <b>{vb.review?.overall ?? "·"}</b>{vb.review?.pass && <span className="tick-mark"> ✓ pass</span>}</div>
             {c?.applied ? <>
               <div className="nc-line"><code>{c.applied.op} {c.applied.target}</code></div>
               <div className="nc-what">{c.applied.note}</div>
               {c.after != null && <div className="nc-line">{crit(issue!.criterion)} {c.before} → <b>{c.after}</b></div>}
-            </> : vb.origin.source === "human" ? <div className="nc-what">human: {vb.origin.action === "drop" ? `drop ${vb.origin.fixes?.[0]?.target}` : vb.origin.instruction}</div>
+            </> : vb.origin.source === "human" ? <div className="nc-what">your edit: {vb.origin.action === "drop" ? `deleted clip ${vb.origin.fixes?.[0]?.target}` : vb.origin.action === "trim" ? `trimmed clip ${vb.origin.fixes?.[0]?.target}` : vb.origin.instruction}</div>
               : <div className="nc-what mute">{c?.skipped ? `skipped: ${c.skipped.reason}` : "same moment, the other version"}</div>}
           </div>
-          <Player ref={pb} src={fileUrl(id, vb.cut)} compact label={`v${b}`} />
+          <Player ref={pb} src={fileUrl(id, vb.cut)} compact scrub label={`Version ${b}`} />
         </div>
       </div>
     </div>

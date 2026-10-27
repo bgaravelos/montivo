@@ -47,7 +47,7 @@ export function Home({ go }: { go: (h: string) => void }) {
       </header>
       <div className="home-body">
         <section className="runs">
-          <div className="h">Runs</div>
+          <div className="h">Projects</div>
           {!runs && <div className="mute">loading…</div>}
           {runs && !shown.length && <div className="mute">No run folder with a cut in runs/ yet. Start one, or unpack the sample run (README, “For judges”).</div>}
           <div className="run-grid">
@@ -65,8 +65,8 @@ export function Home({ go }: { go: (h: string) => void }) {
           </div>
         </section>
         <section className="new-run">
-          <div className="h">New run</div>
-          {!hasKey && <div className="warn">MODEL_API_KEY is not set: finished runs open, and “drop span” renders without a model, but a new run needs the key.</div>}
+          <div className="h">New project</div>
+          {!hasKey && <div className="warn">MODEL_API_KEY is not set: finished projects open, and deleting or trimming a clip renders without a model, but a new project needs the key.</div>}
           <label>Footage
             <select value={f} onChange={(e) => setF(e.target.value)}>
               {footage.map((x) => <option key={x.path} value={x.path}>{x.name} · {x.mb} MB</option>)}
@@ -87,7 +87,7 @@ export function Home({ go }: { go: (h: string) => void }) {
           <div className="row">
             <span className="mute">about $0.48 for a 150 s clip with the review loop (SAM is half of it)</span>
             <span className="grow" />
-            <button className="btn" disabled={!hasKey || !f || !brief.trim()} onClick={start}>Start run</button>
+            <button className="btn" disabled={!hasKey || !f || !brief.trim()} onClick={start}>Create project</button>
           </div>
           {err && <div className="warn">{err}</div>}
         </section>

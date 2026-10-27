@@ -31,6 +31,11 @@ export function layout(v: Version, parent: Version | undefined, words: Record<st
   const cur = keptSet(v);
   const blocks: Block[] = [];
   let t = 0;
+  // the render is frame aligned, so its length differs from the spans' sum by a few frames: spread that over the clips
+  // so the timeline ends where the video does
+  const sum = v.spans.reduce((a, s) => a + s.duration, 0);
+  const k = v.duration_s && sum ? (v.duration_s - v.title_s) / sum : 1;
+  const f = k > 0.97 && k < 1.03 ? k : 1;
   if (v.title_s > 0) {
     blocks.push({ key: "title", kind: "title", t0: 0, t1: v.title_s, before: [], kept: [], after: [], label: v.title_card_text ?? "title card" });
     t = v.title_s;
@@ -48,8 +53,8 @@ export function layout(v: Version, parent: Version | undefined, words: Record<st
       for (let i = sp.word_to + 1; i <= p.word_to; i++) if (!cur.has(key(sp.turn_id, i)) && all[i]) after.push(all[i]);
     }
     const kept = all.slice(sp.word_from, sp.word_to + 1);
-    const b: Block = { key: sp.id, kind: "span", span: sp, t0: t, t1: t + sp.duration, before, kept, after, label: sp.id };
-    t += sp.duration;
+    const b: Block = { key: sp.id, kind: "span", span: sp, t0: t, t1: t + sp.duration * f, before, kept, after, label: sp.id };
+    t += sp.duration * f;
     spanBlocks.push({ b, pOrder: p ? pSpans.indexOf(p) : Infinity });
   }
   // spans of the parent that this version dropped whole, at the place they had
@@ -87,3 +92,57 @@ export function blockAt(blocks: Block[], t: number): Block | undefined {
 }
 
 export const sevRank = (s: string) => (s === "blocker" ? 0 : s === "major" ? 1 : 2);
+
+/** The newest version made from this one: redo after an undo. */
+export function childOf(v: Version, all: Version[]): Version | undefined {
+  return [...all].reverse().find((x) => x.n !== v.n && parentOf(x, all)?.n === v.n);
+}
+
+/** What made a version, in the editor's words. */
+export function originLabel(v: Version): string {
+  const o = v.origin;
+  if (o.source === "plan") return "planned";
+  if (o.source === "review") return "reviewer fix";
+  if (o.action === "drop") return "your edit · deleted a clip";
+  if (o.action === "trim") return "your edit · trimmed a clip";
+  if (o.action === "replan") return "your edit · asked Montivo";
+  return "your edit";
+}
+
+export function originKind(v: Version): "plan" | "review" | "human" {
+  return v.origin.source === "plan" ? "plan" : v.origin.source === "review" ? "review" : "human";
+}
+
+/** A human name for the project: the title card text, else the brief's first phrase. */
+export function projectName(v: Version | null, brief: string | undefined): string {
+  if (v?.title_card_text) return v.title_card_text;
+  const b = (brief ?? "").split(/[.:\n]/)[0].trim();
+  return b.length > 52 ? `${b.slice(0, 50).trim()}…` : b || "Untitled";
+}
+
+/** Cut-time positions an edge of a span block can snap to while dragging: the word boundaries of its turn, from two
+ *  words inside the clip out to the words no other clip keeps. */
+export type Snap = { word: number; t: number; label: string };
+
+export function edgeSnaps(b: Block, edge: "in" | "out", v: Version, words: Record<string, Word[]>): Snap[] {
+  const sp = b.span!;
+  const tw = words[String(sp.turn_id)] ?? [];
+  const taken = new Set<number>();
+  for (const s of v.spans) if (s.id !== sp.id && s.turn_id === sp.turn_id) for (let i = s.word_from; i <= s.word_to; i++) taken.add(i);
+  const out: Snap[] = [];
+  const at = (src: number) => b.t0 + (src - sp.t_in);
+  if (edge === "out") {
+    for (let i = sp.word_from + 1; i < tw.length; i++) {
+      if (i > sp.word_to && taken.has(i)) break;
+      if (i > sp.word_to + 25) break;
+      out.push({ word: i, t: i === sp.word_to ? b.t1 : at(tw[i].e), label: tw[i].w });
+    }
+  } else {
+    for (let i = sp.word_to - 1; i >= 0; i--) {
+      if (i < sp.word_from && taken.has(i)) break;
+      if (i < sp.word_from - 25) break;
+      out.push({ word: i, t: i === sp.word_from ? b.t0 : at(tw[i].t), label: tw[i].w });
+    }
+  }
+  return out;
+}

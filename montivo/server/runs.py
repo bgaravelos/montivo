@@ -94,7 +94,18 @@ def replay_script(lines: list[dict]) -> list[dict]:
         picked.append(edges[-1])
     loops = [s for s in order if s > first and any(l["msg"].startswith("review loop:") for l in sessions[s])]
     if loops and loops[-1] not in picked and not any(l["msg"].startswith("review loop:") for l in sessions[first]):
-        picked.append(loops[-1])
+        # the loop's own renders log a `montivo render:` header, which splits it into sessions: take the ones before
+        # its end back to where it started (a render or a review that no earlier loop finished)
+        k = order.index(loops[-1])
+        start = k
+        while start > 0 and order[start - 1] > max(picked):
+            prev = sessions[order[start - 1]]
+            if any(l["msg"].startswith("review loop:") for l in prev):
+                break
+            if not (prev[0]["msg"].startswith("montivo render") or any(l["msg"].startswith("review: ") for l in prev)):
+                break
+            start -= 1
+        picked.extend(order[start:k + 1])
     return [ln for s in picked for ln in sessions[s]]
 
 
@@ -150,23 +161,31 @@ def versions(run_dir: Path) -> list[dict]:
         if not (run_dir / cut).is_file():
             cut = None
         render = edl.get("render") or {}
+        title = render.get("title")
+        card = edl.get("title_card", True) is not False and bool(edl.get("title_card_text"))
+        title_s = float(title.get("seconds", 1.5)) if title else (0.0 if render else 1.5 if card else 0.0)
         patches = edl.get("patches") or []
         origin = {"source": "plan"}
         if n > 1 and patches:
             last = patches[-1]
             origin = {"source": last.get("source") or "review", "from": last.get("from"), "review": last.get("review"),
                       "action": last.get("action") or "review", "instruction": last.get("instruction"),
-                      "fixes": [{k: f.get(k) for k in ("op", "target", "issue", "severity", "t_s", "note")} for f in last.get("fixes") or []]}
+                      "fixes": [{k: f.get(k) for k in ("op", "target", "issue", "severity", "t_s", "note", "args")} for f in last.get("fixes") or []]}
         rv = read_json(run_dir / f"review_v{n}.json")
         if rv and cut and Path(rv.get("cut", "")).name != cut:
             rv = None  # a review of another file of the same name pattern
         out.append({"n": n, "edl": p.name, "cut": cut, "runtime_s": edl.get("runtime_s"),
                     "duration_s": render.get("duration_s"), "title_card": edl.get("title_card", True) is not False,
-                    "title_card_text": edl.get("title_card_text"), "title_s": 1.5 if edl.get("title_card", True) is not False and edl.get("title_card_text") else 0.0,
+                    "title_card_text": edl.get("title_card_text"), "title_s": title_s,
                     "spans": [_span(s) for s in edl.get("spans", [])], "origin": origin,
                     "loudness": render.get("loudness_ebur128"), "captions": render.get("captions"),
                     "callouts": [{"span": c.get("span"), "text": c.get("text"), "t_in": c.get("t_in"), "t_out": c.get("t_out")}
                                  for c in edl.get("callouts") or []],
+                    "caption_lines": [{"id": c.get("id"), "text": c.get("text"), "t_in": c.get("t_in"), "t_out": c.get("t_out"),
+                                       "spans": c.get("spans") or [], "placement": c.get("placement"),
+                                       "over_face": bool(c.get("over_face"))} for c in edl.get("captions") or []],
+                    "caption_style": edl.get("caption_style"), "caption_style_note": edl.get("caption_style_note"),
+                    "bytes": (run_dir / cut).stat().st_size if cut else None,
                     "review": _review(rv, run_dir) if rv else None})
     return out
 
@@ -224,6 +243,20 @@ def stage_summaries(run_dir: Path, vs: list[dict]) -> list[dict]:
     return out
 
 
+def media(run_dir: Path, run: dict) -> dict:
+    """The source clip for the Media panel: ingest.json's probe, the proxy to preview, the transcript's size."""
+    ing = read_json(run_dir / "ingest.json") or {}
+    probe = ing.get("probe") or {}
+    voice = read_json(run_dir / "voice" / "voice.json") or {}
+    return {"footage": run.get("footage") or ing.get("original_source"), "width": probe.get("width"),
+            "height": probe.get("height"), "fps": probe.get("fps"), "duration": probe.get("duration"),
+            "bytes": probe.get("bytes"), "codec": probe.get("codec"), "hflip": bool(ing.get("hflip") or run.get("hflip")),
+            "proxy": "proxy.mp4" if (run_dir / "proxy.mp4").is_file() else None,
+            "title_png": "title/title_card.png" if (run_dir / "title" / "title_card.png").is_file() else None,
+            "words": len(voice.get("words") or []), "turns": len(voice.get("turns") or []),
+            "speakers": len(voice.get("speakers") or [])}
+
+
 def run_state(run_dir: Path) -> dict:
     vs = versions(run_dir)
     ledger = read_json(run_dir / "ledger.json") or {}
@@ -236,7 +269,8 @@ def run_state(run_dir: Path) -> dict:
                 chat.append(json.loads(line))
             except ValueError:
                 pass
-    return {"id": run_dir.name, "run": read_json(run_dir / "run.json") or {}, "summary": read_json(run_dir / "summary.json"),
+    run = read_json(run_dir / "run.json") or {}
+    return {"id": run_dir.name, "run": run, "media": media(run_dir, run), "summary": read_json(run_dir / "summary.json"),
             "ledger": {"total_cost_usd": ledger.get("total_cost_usd", 0), "wall_seconds": ledger.get("wall_seconds", 0),
                        "stages": ledger.get("stages") or {}},
             "loop": loop, "versions": vs, "words": turn_words(run_dir), "stages": stage_summaries(run_dir, vs),

@@ -11,7 +11,7 @@ export type Issue = {
   what: string; fix_op: string; fix_args?: string; params?: Record<string, unknown>;
 };
 
-export type PlannedFix = { op: string; target: string; issue: number; severity: string; t_s?: number; args?: Record<string, unknown>; note?: string };
+export type PlannedFix = { op: string; target: string; issue: number; severity: string; t_s?: number; args?: Record<string, unknown> | null; note?: string };
 
 export type Review = {
   name: string; overall: number; pass: boolean; scores: Record<string, number>; summary: string; issues: Issue[];
@@ -30,6 +30,17 @@ export type Version = {
   title_card: boolean; title_card_text: string | null; title_s: number; spans: Span[]; origin: Origin;
   loudness: { integrated_lufs: number; true_peak_dbtp: number; lra_lu: number } | null; captions: number | null;
   callouts: { span: string; text: string; t_in: number; t_out: number }[]; review: Review | null;
+  caption_lines: CaptionLine[]; caption_style: CaptionStyle | null; caption_style_note: string | null; bytes: number | null;
+};
+
+export type CaptionLine = { id: string; text: string; t_in: number; t_out: number; spans: string[]; placement: string | null; over_face: boolean };
+
+export type CaptionStyle = { font?: number; max_words?: number; default_top?: number; font_path?: string; glossary?: Record<string, string> };
+
+export type Media = {
+  footage: string | null; width: number | null; height: number | null; fps: number | null; duration: number | null;
+  bytes: number | null; codec: string | null; hflip: boolean; proxy: string | null; title_png: string | null;
+  words: number; turns: number; speakers: number;
 };
 
 export type Stage = { id: string; label: string; model: string; artefact: string | null; cost_usd: number; seconds: number; done: boolean };
@@ -43,6 +54,7 @@ export type LogLine = { i: number; t: number; msg: string; stage: string | null;
 export type RunState = {
   id: string;
   run: { footage?: string; brief?: string; target_s?: number; hflip?: boolean; started?: string };
+  media: Media;
   summary: Record<string, unknown> | null;
   ledger: { total_cost_usd: number; wall_seconds: number; stages: Record<string, { seconds: number; cost_usd: number; calls: number; tokens_in: number; tokens_out: number }> };
   loop: { stop: string; passes: { version: number; overall: number; pass: boolean }[]; best: { version: number; overall: number } | null } | null;

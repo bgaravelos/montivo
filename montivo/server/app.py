@@ -24,6 +24,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import media
 from .runs import fingerprint, list_runs, parse_log, read_json, replay_script, run_state
 
 STATIC = Path(__file__).parent / "static"
@@ -199,6 +200,38 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(404, "frame extraction failed")
         return FileResponse(out, headers={"Cache-Control": "max-age=3600"})
 
+    def cut_of(run_id: str, v: int) -> tuple[Path, Path]:
+        d = st.run_dir(run_id)
+        src = d / f"cut_v{v}.mp4"
+        if not src.is_file():
+            raise HTTPException(404, "no cut for this version")
+        return d, src
+
+    @app.get("/api/runs/{run_id}/filmstrip")
+    def filmstrip(run_id: str, v: int):
+        """The timeline's thumbnails: one JPEG row of 54x96 frames, one every 0.5 s of cut_vN.mp4 (cached in ui/cache/)."""
+        d, src = cut_of(run_id, v)
+        try:
+            out = media.filmstrip(src, d / "ui" / "cache" / f"filmstrip_v{v}.jpg")
+        except subprocess.CalledProcessError:
+            raise HTTPException(500, "filmstrip extraction failed")
+        return FileResponse(out, headers={"Cache-Control": "no-cache", "X-Thumb": f"{media.THUMB_W}x{media.THUMB_H}@{media.THUMB_STEP_S}"})
+
+    @app.get("/api/runs/{run_id}/peaks")
+    def peaks(run_id: str, v: int):
+        """The audio track's waveform: the absolute peak of every 10 ms of cut_vN.mp4 (cached in ui/cache/)."""
+        d, src = cut_of(run_id, v)
+        try:
+            return media.peaks(src, d / "ui" / "cache" / f"peaks_v{v}.json")
+        except subprocess.CalledProcessError:
+            raise HTTPException(500, "no audio stream in this cut")
+
+    @app.get("/api/runs/{run_id}/export")
+    def export(run_id: str, v: int):
+        """cut_vN.mp4 as a download named after the run and version."""
+        _, src = cut_of(run_id, v)
+        return FileResponse(src, media_type="video/mp4", filename=f"montivo-{run_id}-v{v}.mp4")
+
     @app.get("/api/runs/{run_id}/log")
     def log(run_id: str, replay: bool = False):
         d = st.run_dir(run_id)
@@ -339,8 +372,32 @@ def create_app(root: Path) -> FastAPI:
         if not re.fullmatch(r"s\d+", span):
             raise HTTPException(400, "span id like s3")
         args = ["-m", "montivo.human", "drop", f"runs/{run_id}", "--span", span, "--from", str(frm), "--review", str(passes)]
-        job = start_job(st, run_id, "drop", f"Drop {span}", args,
-                        chat={"role": "user", "text": f"Drop {span} from v{frm}.", "chips": [span, f"v{frm}"], "kind": "drop"})
+        job = start_job(st, run_id, "drop", f"Delete clip {span}", args,
+                        chat={"role": "user", "text": f"Delete clip {span} from v{frm}.", "chips": [span, f"v{frm}"], "kind": "drop"})
+        return {"job": job.public()}
+
+    @app.post("/api/runs/{run_id}/trim")
+    async def trim(run_id: str, request: Request):
+        """Move one clip edge to a word boundary (a timeline drag): the reviewer's trim_span / extend_span op."""
+        d = st.run_dir(run_id)
+        b = await request.json()
+        span, edge = str(b.get("span", "")), str(b.get("edge", ""))
+        frm = int(b.get("from") or latest_version(d))
+        passes = int(b.get("review") or 0)
+        if passes:
+            need_key("Reviewing the new cut")
+        if not re.fullmatch(r"s\d+", span) or edge not in ("in", "out"):
+            raise HTTPException(400, "span id like s3 and edge in or out")
+        try:
+            word = int(b.get("word"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "word: the turn word index the edge lands on")
+        args = ["-m", "montivo.human", "trim", f"runs/{run_id}", "--span", span, "--edge", edge, "--word", str(word),
+                "--from", str(frm), "--review", str(passes)]
+        side = "start" if edge == "in" else "end"
+        job = start_job(st, run_id, "trim", f"Trim clip {span}", args,
+                        chat={"role": "user", "text": f"Trim the {side} of clip {span} in v{frm}.", "chips": [span, f"v{frm}"],
+                              "kind": "trim"})
         return {"job": job.public()}
 
     @app.post("/api/runs/{run_id}/replan")
@@ -357,7 +414,7 @@ def create_app(root: Path) -> FastAPI:
         instr = text + (f" (about {', '.join(chips)})" if chips else "")
         args = ["-m", "montivo.human", "replan", f"runs/{run_id}", "--instruction", instr, "--from", str(frm),
                 "--review", str(passes)]
-        job = start_job(st, run_id, "replan", "Re-plan", args,
+        job = start_job(st, run_id, "replan", "Ask Montivo", args,
                         chat={"role": "user", "text": text, "chips": chips + [f"v{frm}"], "kind": "instruction"})
         return {"job": job.public()}
 

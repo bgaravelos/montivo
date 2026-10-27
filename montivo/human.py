@@ -1,12 +1,13 @@
-"""The two human actions in the loop, as an engine entry point the UI server runs as a subprocess:
+"""The human actions in the loop, as an engine entry point the UI server runs as a subprocess:
 
     python -m montivo.human drop runs/012 --span s3 [--from 2] [--review 2]
+    python -m montivo.human trim runs/012 --span s3 --edge out --word 41 [--from 2] [--review 2]
     python -m montivo.human replan runs/012 --instruction "drop the agency line" [--from 2] [--review 2]
 
 Each writes the next edl_vN.json (N = one past the highest version in the run folder, so no version is ever
 overwritten) with a `patches` entry marked `source: "human"`, renders cut_vN.mp4 and, with --review, runs the blind
-review loop from it. `drop` goes through the reviewer's own patch path (`apply_fixes`) and calls no model unless
---review is given; `replan` is one Spark plan call (about $0.05) with the instruction added to the brief.
+review loop from it. `drop` and `trim` go through the reviewer's own patch path (`apply_fixes`) and call no model
+unless --review is given; `replan` is one Spark plan call (about $0.05) with the instruction added to the brief.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ from pathlib import Path
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, tighten_edges
 from .engine.edl import build_edl, edl_summary
-from .engine.review import Fix, apply_fixes, refresh_span, review_loop
+from .engine.review import REACH_S, Fix, apply_fixes, kept_elsewhere, refresh_span, review_loop
 from .engine.voice import VoiceResult
 from .ledger import Ledger
 from .run import RunLog, render_run
@@ -83,6 +84,56 @@ def drop(run_dir: Path, span_id: str, from_v: int | None = None, passes: int = 0
     new.setdefault("patches", []).append({"from": from_v, "review": None, "source": "human", "action": "drop",
                                           "fixes": plog})
     log(f"patch v{from_v} -> v{n}: drop_span {span_id}: {plog[0]['note']} (human)")
+    edl_path = run_dir / f"edl_v{n}.json"
+    dump_json(edl_path, new)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
+def trim_fix(edl: dict, words: Words, span_id: str, edge: str, word: int) -> Fix:
+    """The reviewer's own edge op for a human drag on the timeline: `word` is the turn word index the dragged edge
+    should land on (the span's new word_to for edge out, word_from for edge in). Inward = trim_span at a source time
+    picked so trim_at keeps exactly up to that word; outward = extend_span by the length of the added words. Both then
+    take the reviewer's path: a sentence end within two words, the quietest point nearby, the edge pass."""
+    s = next((x for x in edl["spans"] if x["id"] == span_id), None)
+    if s is None:
+        raise SystemExit(f"{span_id} is not a span of this EDL ({', '.join(x['id'] for x in edl['spans'])})")
+    if edge not in ("in", "out"):
+        raise SystemExit("edge is in or out")
+    tw = words.turn(s["turn_id"])
+    a, b = s["word_from"], s["word_to"]
+    if not 0 <= word < len(tw):
+        raise SystemExit(f"word {word} is outside turn {s['turn_id']} (0..{len(tw) - 1})")
+    if (edge == "out" and word == b) or (edge == "in" and word == a):
+        raise SystemExit("the edge is already on that word")
+    if (edge == "out" and word < a + 1) or (edge == "in" and word > b - 1):
+        raise SystemExit("a clip keeps at least two words: delete it instead")
+    mk = lambda op, **args: Fix(op=op, target=span_id, issue=-1, severity="human", t_s=0.0, args=args)  # noqa: E731
+    if edge == "out" and word < b:  # trim_at keeps the words that start before src_t - TRIM_SLACK_S, reach stops at word
+        return mk("trim_span", edge="out", src_t=round(tw[word + 1]["t_start"] + REACH_S - 0.001, 3))
+    if edge == "in" and word > a:  # ... the words that end after src_t + TRIM_SLACK_S, reach starts at word
+        return mk("trim_span", edge="in", src_t=round(tw[word - 1]["t_end"] - REACH_S + 0.001, 3))
+    added = range(b + 1, word + 1) if edge == "out" else range(word, a)
+    if set(added) & kept_elsewhere(edl, s):
+        raise SystemExit("those words are already in another clip")
+    seconds = sum(tw[i]["t_end"] - tw[i]["t_start"] for i in added) - 0.001
+    return mk("extend_span", edge=edge, seconds=round(seconds if edge == "out" else -seconds, 3))
+
+
+def trim(run_dir: Path, span_id: str, edge: str, word: int, from_v: int | None = None, passes: int = 0,
+         budget: float = 0.15) -> dict:
+    """Move one edge of one span of edl_v{from} to a word boundary -> edl_vN, through apply_fixes like a review fix."""
+    log = RunLog(run_dir / "run.log")
+    from_v = from_v or latest_edl(run_dir)
+    edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
+    words, audio = _words(run_dir), Audio.load(run_dir)
+    fix = trim_fix(edl, words, span_id, edge, word)
+    n = next_version(run_dir)
+    log(f"montivo trim: {span_id} {edge} edge to word {word} in edl_v{from_v} -> edl_v{n}")
+    new, plog = apply_fixes(edl, [fix], words, audio)
+    new["version"] = n
+    new.setdefault("patches", []).append({"from": from_v, "review": None, "source": "human", "action": "trim",
+                                          "fixes": plog})
+    log(f"patch v{from_v} -> v{n}: {fix.op} {span_id} {edge}: {plog[0]['note']} (human)")
     edl_path = run_dir / f"edl_v{n}.json"
     dump_json(edl_path, new)
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
@@ -156,11 +207,16 @@ def main(argv: list[str] | None = None) -> int:
     d = sub.add_parser("drop", help="drop one span -> edl_vN -> cut_vN ($0 without --review)")
     d.add_argument("run_dir", type=Path)
     d.add_argument("--span", required=True)
+    t = sub.add_parser("trim", help="move one clip edge to a word boundary -> edl_vN -> cut_vN ($0 without --review)")
+    t.add_argument("run_dir", type=Path)
+    t.add_argument("--span", required=True)
+    t.add_argument("--edge", choices=("in", "out"), required=True)
+    t.add_argument("--word", type=int, required=True, help="turn word index the edge lands on (new word_from / word_to)")
     r = sub.add_parser("replan", help="plan again with an instruction -> edl_vN -> cut_vN (one Spark plan call)")
     r.add_argument("run_dir", type=Path)
     r.add_argument("--instruction", required=True)
     r.add_argument("--target", type=float, default=None, help="runtime target in seconds (default: from the instruction or run.json)")
-    for p in (d, r):
+    for p in (d, t, r):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
         p.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
@@ -169,6 +225,8 @@ def main(argv: list[str] | None = None) -> int:
         ap.error(f"{a.run_dir} is not a run folder")
     if a.cmd == "drop":
         out = drop(a.run_dir, a.span, a.from_v, a.review, a.budget)
+    elif a.cmd == "trim":
+        out = trim(a.run_dir, a.span, a.edge, a.word, a.from_v, a.review, a.budget)
     else:
         out = replan(a.run_dir, a.instruction, a.from_v, a.target, a.review, a.budget)
     print(json.dumps(out, indent=2))
