@@ -163,7 +163,7 @@ reviewer's `caption_text` patch -> next edl_vN; `captions.override_for` now merg
 (later text wins, a forced top stays) and its end is strict (an abutting next line's src_t used to match too). Billy
 confirmed four Voice mishearings -> run 015 v3 / `cut_v3.mp4`: "we edit short form", "Four Meta models do all",
 "watches its own render", "scores it against" (frames checked; "the Muse Spark" left as Voice heard it).
-Editor gaps closed (27/10 evening, $0.11): the Captions panel retexts lines (double-click or the pencil, edits staged,
+Editor gaps closed (27/10 evening, $0.11, commit `0b171cb`): the Captions panel retexts lines (double-click or the pencil, edits staged,
 "Make Version N" -> POST `/api/runs/{id}/caption` -> `montivo.human caption`, one render for all; a corrected line
 shows what Voice heard, `caption_lines[].heard`); a re-plan carries the caption texts to the new spans
 (`human.carry_caption_text`, with `voice` = the words Voice heard, applied only where the new plan breaks the line the
