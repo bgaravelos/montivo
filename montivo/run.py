@@ -38,6 +38,7 @@ class RunOptions:
     skip_track: bool = False
     resume: bool = False
     model: str = SPARK_MODEL
+    planner: str | None = None  # model id for the plan call only (config.PLANNERS["open"] = Muse Spark Open); None = model
     render: bool = True
     hflip: bool = False  # mirror the footage once in ingest (selfie / mirror-mode clips)
     title: bool = True  # Muse Image title card in front of the cut ($0.01)
@@ -66,7 +67,7 @@ def run(opts: RunOptions) -> dict:
     log = RunLog(out / "run.log")
     ledger = Ledger.resume(out / "ledger.json") if opts.resume else Ledger(out / "ledger.json")
     dump_json(out / "run.json", {"footage": str(opts.footage), "brief": opts.brief, "concepts": opts.concepts, "reframe_concept": opts.reframe_concept, "reframe_fps": opts.reframe_fps,
-                                 "target_s": opts.target_s, "model": opts.model, "hflip": opts.hflip, "started": time.strftime("%Y-%m-%dT%H:%M:%S")})
+                                 "target_s": opts.target_s, "model": opts.model, "planner": opts.planner or opts.model, "hflip": opts.hflip, "started": time.strftime("%Y-%m-%dT%H:%M:%S")})
     log(f"montivo run: {opts.footage.name} -> {out}")
 
     def have(*parts: str) -> bool:
@@ -163,7 +164,8 @@ def run(opts: RunOptions) -> dict:
     wps = voice.speech_rate()
     log(f"plan: speech rate {wps:.2f} words/s ({len(voice.words)} words over the spoken seconds of {len(voice.turns)} turns), "
         f"target {opts.target_s:.0f} s = about {opts.target_s * wps:.0f} to {opts.target_s * 1.2 * wps:.0f} words")
-    planned = spark.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
+    planner = Spark(out, ledger, model=opts.planner, log=log) if opts.planner and opts.planner != opts.model else spark
+    planned = planner.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
                          file_id=ing.file_id if opts.plan_with_video else None, reasoning_effort=opts.plan_effort,
                          words_per_s=wps)
     dump_json(out / "plan.json", planned.parsed)
@@ -176,6 +178,7 @@ def run(opts: RunOptions) -> dict:
     track_summary = {c: t.summary() for c, t in tracks.items()}
     edl = build_edl(planned.parsed, voice, watch.parsed, source, opts.brief, track_summary,
                     reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out))
+    edl["planner"] = planner.model
     if edl.get("edge_pass"):
         ep = edl["edge_pass"]
         log(f"edges: {ep['moved']} cut edges tightened to the speech, {ep['removed_s']} s of pause removed "
@@ -276,6 +279,56 @@ def render_run(run_dir: Path, edl_path: Path | None = None, source: Path | None 
     return {"out": info["output"], "runtime_s": edl["runtime_s"], "duration_s": info["duration_s"], "segments": len(info["segments"]),
             "captions": info["captions"], "callouts": info["callouts"], "loudness": info["loudness_ebur128"],
             "seconds": info["seconds"], "cost_usd": ledger.total_cost()}
+
+
+def plan_run(run_dir: Path, model: str, tag: str = "open", target_s: float | None = None, effort: str | None = None,
+             render: bool = True, log=None) -> dict:
+    """`montivo plan runs/012 --planner open`: the plan call again on a finished run folder with another planner (the
+    Open Weight A/B), reusing voice, watch and the tracks: one text call, no Voice, SAM or video spend. Writes
+    plan_<tag>.json, spark/plan_<tag>_*.json, edl_<tag>.json and cut_<tag>.mp4, and compares it with edl_v1.json.
+    The title card keeps v1's text (no new Muse Image call); the planner's own title goes in title_card_text_planned."""
+    v1_path = run_dir / "edl_v1.json"
+    for need in (v1_path, run_dir / "run.json", run_dir / "watch.json", run_dir / "voice" / "voice.json"):
+        if not need.is_file():
+            raise SystemExit(f"{need} not found: plan_run needs a finished `montivo run` folder")
+    log = log or RunLog(run_dir / "run.log")
+    v1 = json.loads(v1_path.read_text())
+    info = json.loads((run_dir / "run.json").read_text())
+    voice = VoiceResult.from_json(json.loads((run_dir / "voice" / "voice.json").read_text()))
+    watch = json.loads((run_dir / "watch.json").read_text())
+    target = target_s or float(info.get("target_s") or 40.0)
+    ledger = Ledger.resume(run_dir / "ledger.json")
+    v1_plan = next((e for e in ledger.entries if e.stage == "spark.plan"), None)  # read before this call adds its own
+    log(f"montivo plan: {run_dir} with {model} -> edl_{tag}.json (target {target:.0f} s)")
+    planned = Spark(run_dir, ledger, model=model, log=log).plan(
+        info["brief"], voice.transcript_text(), watch, target, reasoning_effort=effort,
+        words_per_s=voice.speech_rate(), name=f"plan_{tag}")
+    dump_json(run_dir / f"plan_{tag}.json", planned.parsed)
+    edl = build_edl(planned.parsed, voice, watch, v1["source"], info["brief"], v1.get("tracks") or {},
+                    reframe_concept=v1.get("reframe_concept") or "person", audio=Audio.load(run_dir))
+    if not edl["spans"]:
+        raise SystemExit(f"the {model} plan placed no span on the transcript (see spark/plan_{tag}_response.json)")
+    edl["planner"] = model
+    edl["title_card_text_planned"] = edl["title_card_text"]
+    edl["title_card_text"] = v1.get("title_card_text") or edl["title_card_text"]
+    if v1.get("title_card") is False:
+        edl["title_card"] = False
+    edl_path = run_dir / f"edl_{tag}.json"
+    dump_json(edl_path, edl)
+    for s in edl["spans"]:
+        log(f"  {s['id']} {s['role']:6s} {s['t_in']:7.2f}-{s['t_out']:7.2f}s {s['words'][:80]}")
+
+    def side(e: dict, cost: float | None, seconds: float | None) -> dict:
+        return {"planner": e.get("planner") or info.get("model") or SPARK_MODEL, "spans": len(e["spans"]),
+                "runtime_s": e["runtime_s"], "verbatim_rate": e["verbatim_rate"], "unplaced": len(e.get("unplaced") or []),
+                "hook": e["spans"][0]["words"][:80] if e["spans"] else "", "plan_cost_usd": cost, "plan_seconds": seconds}
+    out = {"target_s": target, "v1": side(v1, v1_plan.cost_usd if v1_plan else None, v1_plan.seconds if v1_plan else None),
+           tag: side(edl, planned.cost_usd, planned.seconds), "edl": str(edl_path)}
+    log(f"plan: v1 {out['v1']['runtime_s']} s / {out['v1']['spans']} spans / verbatim {out['v1']['verbatim_rate']:.0%} vs "
+        f"{tag} {edl['runtime_s']} s / {len(edl['spans'])} spans / verbatim {edl['verbatim_rate']:.0%}, ${planned.cost_usd:.4f}")
+    if render:
+        out["render"] = render_run(run_dir, edl_path=edl_path, out_name=f"cut_{tag}.mp4", ledger=ledger, log=log)
+    return out
 
 
 def edges_run(run_dir: Path, edl_path: Path | None = None, dry_run: bool = False, log=None) -> dict:

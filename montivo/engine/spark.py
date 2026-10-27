@@ -3,6 +3,8 @@
 Rules measured on 26/10/2026: always 1.3 (1.2 degenerates with a strict schema and video), always hand it the Voice
 transcript as text (1.3 fabricates quotes when asked to transcribe), one uploaded proxy reused by every call.
 Every call writes <name>_request.json and <name>_response.json and a ledger entry with tokens and dollars.
+A Muse Spark Open model id (config.is_open) goes to the Open Weight host as a Chat Completions call with the same
+strict schema; its usage is mapped to the Responses names, so the ledger and the dollars read the same. Text only.
 """
 from __future__ import annotations
 
@@ -12,10 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..config import SPARK_MODEL, spark_cost
+from ..config import SPARK_MODEL, is_open, spark_cost
 from ..ledger import Entry, Ledger, Timer
 from . import schemas
-from .api import dump_json, output_text, responses_create
+from .api import chat_create, dump_json, output_text, responses_create
 
 
 @dataclass
@@ -42,23 +44,29 @@ class Spark:
     def call(self, name: str, prompt: str, schema: dict, file_id: str | None = None, max_output_tokens: int = 12000,
              reasoning_effort: str | None = None, stage: str | None = None, schema_name: str | None = None) -> SparkCall:
         """`name` names the request/response files; `stage` the ledger entry (default spark.<name>)."""
-        content: list[dict] = [{"type": "input_text", "text": prompt}]
-        if file_id:
-            content.append({"type": "input_file", "file_id": file_id})
-        body: dict = {"model": self.model, "max_output_tokens": max_output_tokens,
-                      "input": [{"type": "message", "role": "user", "content": content}],
-                      "text": {"format": {"type": "json_schema", "name": schema_name or name, "strict": True, "schema": schema}}}
-        if reasoning_effort:
-            body["reasoning"] = {"effort": reasoning_effort}
+        if is_open(self.model):
+            if file_id:
+                raise ValueError(f"{self.model} is called text only here; watch and review need {SPARK_MODEL}")
+            body = chat_body(self.model, prompt, schema, schema_name or name, max_output_tokens, reasoning_effort)
+        else:
+            content: list[dict] = [{"type": "input_text", "text": prompt}]
+            if file_id:
+                content.append({"type": "input_file", "file_id": file_id})
+            body = {"model": self.model, "max_output_tokens": max_output_tokens,
+                    "input": [{"type": "message", "role": "user", "content": content}],
+                    "text": {"format": {"type": "json_schema", "name": schema_name or name, "strict": True, "schema": schema}}}
+            if reasoning_effort:
+                body["reasoning"] = {"effort": reasoning_effort}
         dump_json(self.dir / f"{name}_request.json", body)
         self.log(f"spark: {name} -> {self.model}{' + video' if file_id else ''} ...")
         with Timer() as t:
-            resp = responses_create(body)
+            resp = chat_create(body) if is_open(self.model) else responses_create(body)
         dump_json(self.dir / f"{name}_response.json", resp)
-        usage = resp.get("usage") or {}
+        if is_open(self.model):
+            usage, status, text = chat_result(resp)
+        else:
+            usage, status, text = resp.get("usage") or {}, resp.get("status", "?"), output_text(resp)
         cost = spark_cost(usage, self.model)
-        status = resp.get("status", "?")
-        text = output_text(resp)
         parsed, err = _parse_json(text)
         entry_status = status if parsed is not None else f"{status}/parse_error"
         self.ledger.add(Entry(stage=stage or f"spark.{name}", model=self.model, seconds=t.seconds, cost_usd=round(cost, 4),
@@ -93,8 +101,9 @@ class Spark:
         return self.call("watch", prompt, schemas.WATCH, file_id=file_id)
 
     def plan(self, brief: str, transcript_text: str, watch: dict, target_s: float, file_id: str | None = None,
-             reasoning_effort: str | None = None, words_per_s: float = 2.5) -> SparkCall:
-        """`words_per_s` is the speech rate measured by Voice on this clip (VoiceResult.speech_rate); 2.5 when unknown."""
+             reasoning_effort: str | None = None, words_per_s: float = 2.5, name: str = "plan") -> SparkCall:
+        """`words_per_s` is the speech rate measured by Voice on this clip (VoiceResult.speech_rate); 2.5 when unknown.
+        `name` names the request/response files (the ledger stage stays spark.plan)."""
         wps = words_per_s if words_per_s and words_per_s > 0 else 2.5
         shot_log = "\n".join(
             f"- {s['start_s']:.1f}-{s['end_s']:.1f}s {s['shot_type']}: {s['visual']}"
@@ -130,7 +139,8 @@ class Spark:
             "- Propose a short title card text (max 6 words), a caption style note and a one-sentence reframe note.\n"
             f"- estimated_runtime_s = total kept words / {wps:.1f}.\n\n"
             f"TRANSCRIPT (authoritative):\n{transcript_text}")
-        return self.call("plan", prompt, schemas.PLAN, file_id=file_id, max_output_tokens=16000, reasoning_effort=reasoning_effort)
+        return self.call(name, prompt, schemas.PLAN, file_id=file_id, max_output_tokens=16000, reasoning_effort=reasoning_effort,
+                         stage="spark.plan", schema_name="plan")
 
     def review(self, file_id: str, brief: str, facts: str, duration_s: float, name: str = "review",
                reasoning_effort: str | None = "low", max_output_tokens: int = 16000) -> SparkCall:
@@ -190,6 +200,31 @@ FIX_OP_GUIDE = "\n".join(f"- {op}: {d}" for op, d in {
 
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.S)
+
+
+def chat_body(model: str, prompt: str, schema: dict, schema_name: str, max_tokens: int,
+              reasoning_effort: str | None = None) -> dict:
+    """The Chat Completions request for the Open Weight host: one user message, the same strict JSON schema."""
+    body: dict = {"model": model, "max_tokens": max_tokens, "messages": [{"role": "user", "content": prompt}],
+                  "response_format": {"type": "json_schema",
+                                      "json_schema": {"name": schema_name, "strict": True, "schema": schema}}}
+    if reasoning_effort:
+        body["reasoning_effort"] = reasoning_effort
+    return body
+
+
+def chat_result(resp: dict) -> tuple[dict, str, str]:
+    """(usage in the Responses names, status, text) of a Chat Completions response. A finish_reason "length" is
+    reported as "incomplete", as Responses does when max_output_tokens runs out."""
+    u = resp.get("usage") or {}
+    usage = {"input_tokens": u.get("prompt_tokens") or 0, "output_tokens": u.get("completion_tokens") or 0,
+             "input_tokens_details": {"cached_tokens": (u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0}}
+    choice = (resp.get("choices") or [{}])[0]
+    content = (choice.get("message") or {}).get("content")
+    if isinstance(content, list):  # some hosts return content parts
+        content = "".join(c.get("text", "") for c in content if isinstance(c, dict))
+    status = "incomplete" if choice.get("finish_reason") == "length" else "completed"
+    return usage, status, content or ""
 
 
 def _parse_json(text: str) -> tuple[Any, str | None]:

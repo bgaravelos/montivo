@@ -7,7 +7,7 @@ from montivo.ledger import Ledger
 
 
 class _Capture(Spark):
-    def call(self, name, prompt, schema, file_id=None, max_output_tokens=12000, reasoning_effort=None):  # noqa: D401
+    def call(self, name, prompt, schema, file_id=None, max_output_tokens=12000, reasoning_effort=None, **kw):  # noqa: D401
         self.captured = (name, prompt, schema)
         return None
 

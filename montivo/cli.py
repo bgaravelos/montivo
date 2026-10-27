@@ -3,6 +3,7 @@
     montivo run footage.mp4 --brief "..." --out runs/001
     montivo render runs/001
     montivo review runs/001
+    montivo plan runs/001 --planner open
     montivo probe footage.mp4
     montivo serve
 """
@@ -37,6 +38,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--plan-effort", default=None, choices=["low", "medium", "high"], help="reasoning effort for the plan call")
     r.add_argument("--resume", action="store_true", help="reuse ingest, voice, watch and tracks already in --out")
     r.add_argument("--model", default=None, help="Spark model id (default muse-spark-1.3)")
+    r.add_argument("--planner", default=None, help="model for the plan call only: 'open' (Muse Spark Open on Baseten, "
+                                                    "needs BASETEN_API_KEY), 'spark' or a model id (default: --model)")
     r.add_argument("--no-render", action="store_true", help="stop after edl_v1.json, do not render cut_v1.mp4")
     r.add_argument("--hflip", action="store_true",
                    help="mirror the footage once before everything else (selfie / mirror-mode clips with reversed text); "
@@ -74,6 +77,15 @@ def main(argv: list[str] | None = None) -> int:
     ed.add_argument("--edl", type=Path, default=None, help="EDL to tighten in place (default <run_dir>/edl_v1.json)")
     ed.add_argument("--dry-run", action="store_true", help="print the moves, write nothing")
 
+    pl = sub.add_parser("plan", help="Open Weight A/B: plan a finished run folder again with another planner (one text call, "
+                                     "voice / watch / tracks reused) -> edl_<tag>.json, cut_<tag>.mp4, compared with edl_v1")
+    pl.add_argument("run_dir", type=Path)
+    pl.add_argument("--planner", default="open", help="'open' (default, Muse Spark Open on Baseten), 'spark' or a model id")
+    pl.add_argument("--tag", default=None, help="name of the outputs (default: the --planner value, 'model' for an id)")
+    pl.add_argument("--target", type=float, default=None, help="target runtime in seconds (default: run.json's)")
+    pl.add_argument("--effort", default=None, choices=["low", "medium", "high"], help="reasoning effort for the plan call")
+    pl.add_argument("--no-render", action="store_true", help="stop at edl_<tag>.json")
+
     p = sub.add_parser("probe", help="ffprobe summary of a file")
     p.add_argument("footage", type=Path)
 
@@ -101,6 +113,16 @@ def main(argv: list[str] | None = None) -> int:
                                     callouts=not args.no_callouts, loudnorm=not args.no_loudnorm), indent=2))
         return 0
 
+    if args.cmd == "plan":
+        from .config import PLANNERS
+        from .run import plan_run
+        if not args.run_dir.is_dir():
+            ap.error(f"{args.run_dir} is not a run folder")
+        tag = args.tag or (args.planner if args.planner in PLANNERS else "model")
+        print(json.dumps(plan_run(args.run_dir, PLANNERS.get(args.planner, args.planner), tag=tag, target_s=args.target,
+                                  effort=args.effort, render=not args.no_render), indent=2))
+        return 0
+
     if args.cmd == "edges":
         from .run import edges_run
         if not args.run_dir.is_dir():
@@ -121,10 +143,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "run":
+        from .config import PLANNERS, is_open
         from .run import RunOptions, run
         if not args.footage.is_file():
             ap.error(f"{args.footage} is not a file")
         out = args.out or Path("runs") / time.strftime("%Y%m%d-%H%M%S")
+        planner = PLANNERS.get(args.planner, args.planner) if args.planner else None
+        if planner and args.plan_with_video and is_open(planner):
+            ap.error(f"--plan-with-video needs a Meta-hosted planner; {planner} is called text only")
         opts = RunOptions(footage=args.footage, brief=args.brief, out=out, concepts=args.concept or ["person"],
                           track_fps=args.track_fps,
                           reframe_concept=None if args.reframe_concept.lower() == "none" else args.reframe_concept,
@@ -133,7 +159,8 @@ def main(argv: list[str] | None = None) -> int:
                           skip_track=args.no_track, resume=args.resume, render=not args.no_render, hflip=args.hflip,
                           title=not args.no_title, captions=not args.no_captions, review=args.review,
                           review_passes=args.review_passes, review_budget=args.review_budget,
-                          model=args.model or RunOptions.__dataclass_fields__["model"].default)
+                          model=args.model or RunOptions.__dataclass_fields__["model"].default,
+                          planner=planner)
         summary = run(opts)
         print(json.dumps(summary, indent=2))
         return 0

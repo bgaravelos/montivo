@@ -10,9 +10,17 @@ VOICE_MODEL = "muse-voice-transcribe-1.0"
 SAM_MODEL = "sam-3.1"
 IMAGE_MODEL = "muse-image-1.0"
 
+# Open Weight: Muse Spark Open, hosted on Baseten (OpenAI-compatible Chat Completions, not Meta's Responses API).
+# Text only here, so it can take the plan call; watch and review need the video and stay on muse-spark-1.3.
+OPEN_BASE_URL = os.environ.get("MONTIVO_OPEN_BASE_URL", "https://inference.baseten.co/v1")
+SPARK_OPEN_MODEL = "meta-models/muse-spark-open-1026"
+PLANNERS = {"spark": SPARK_MODEL, "open": SPARK_OPEN_MODEL}
+
 # USD, from dev.meta.ai/docs/pricing-rate-limits (read 26/10/2026)
 PRICE = {
     "muse-spark-1.3": {"in": 1.25, "out": 4.25, "cached": 0.15},  # per 1M tokens
+    # Baseten list price as an aggregator showed it on 27/10 (not read on baseten.co yet): check the first bill
+    SPARK_OPEN_MODEL: {"in": 1.25, "out": 4.25, "cached": 0.15},
     "sam-video-frame": 0.20 / 1000,  # per processed frame, minimum 50 frames per request
     "voice-hour": 0.18,  # per hour of audio
     "image": 0.01,  # per generated image
@@ -39,6 +47,18 @@ def api_key() -> str:
     key = os.environ.get("MODEL_API_KEY")
     if not key:
         raise SystemExit("MODEL_API_KEY is not set. Export it (dev.meta.ai) before running montivo.")
+    return key
+
+
+def is_open(model: str) -> bool:
+    """Models served by the Open Weight host (Baseten's ids are namespaced, Meta's are not)."""
+    return model.startswith("meta-models/")
+
+
+def open_api_key() -> str:
+    key = os.environ.get("BASETEN_API_KEY")
+    if not key:
+        raise SystemExit("BASETEN_API_KEY is not set. Export it (Baseten, Open Weight credits) to plan with Muse Spark Open.")
     return key
 
 

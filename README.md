@@ -45,6 +45,10 @@ montivo render runs/001 --out cut_v3.mp4   re-render from edl_v1.json + voice.js
                                            generated once if missing, --no-title to skip it)
 montivo review runs/001                    the review loop on a finished run folder: review cut_v1, patch, render cut_v2, review ...
 montivo edges runs/001                     the edge pass on an EDL built before it existed ($0; the old EDL kept under check/)
+montivo plan runs/001 --planner open       Open Weight A/B: the plan call again with Muse Spark Open on Baseten (one text call,
+                                           voice, watch and tracks reused) -> edl_open.json, cut_open.mp4 and a v1-vs-open
+                                           comparison (spans, runtime, verbatim rate, plan $ and seconds); needs BASETEN_API_KEY.
+                                           `montivo run --planner open` plans a new run with it; watch and review stay on 1.3
 ```
 
 The review loop: the reviewer gets the cut (scaled to 720x1280 with a cut-time clock burned in at the top left), the brief,

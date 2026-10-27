@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from ..config import BASE_URL, api_key
+from ..config import BASE_URL, OPEN_BASE_URL, api_key, open_api_key
 
 
 def _headers(**extra: str) -> dict[str, str]:
@@ -36,24 +36,35 @@ def upload_file(path: Path, mime: str, purpose: str = "user_data") -> dict:
 
 def responses_create(body: dict, timeout_s: float = 900, retries: int = 1) -> dict:
     """POST /responses without streaming. Retries once on transport errors and 5xx."""
+    return _post_json(f"{BASE_URL}/responses", _headers(**{"Content-Type": "application/json"}), body, "responses",
+                      timeout_s, retries)
+
+
+def chat_create(body: dict, timeout_s: float = 900, retries: int = 1) -> dict:
+    """POST /chat/completions on the Open Weight host (Muse Spark Open on Baseten), same retry rule."""
+    headers = {"Authorization": f"Bearer {open_api_key()}", "Content-Type": "application/json"}
+    return _post_json(f"{OPEN_BASE_URL}/chat/completions", headers, body, "chat", timeout_s, retries)
+
+
+def _post_json(url: str, headers: dict, body: dict, what: str, timeout_s: float, retries: int) -> dict:
     last: Exception | None = None
     for attempt in range(retries + 1):
         try:
             with httpx.Client(timeout=httpx.Timeout(timeout_s, connect=30)) as http:
-                r = http.post(f"{BASE_URL}/responses", headers=_headers(**{"Content-Type": "application/json"}), json=body)
+                r = http.post(url, headers=headers, json=body)
             if r.status_code >= 500 and attempt < retries:
                 last = httpx.HTTPStatusError(f"{r.status_code}: {r.text[:300]}", request=r.request, response=r)
                 time.sleep(2 + 3 * attempt)
                 continue
             if r.status_code >= 400:
-                raise RuntimeError(f"responses {r.status_code}: {r.text[:1000]}")
+                raise RuntimeError(f"{what} {r.status_code}: {r.text[:1000]}")
             return r.json()
         except (httpx.TransportError, httpx.ReadError) as exc:
             last = exc
             if attempt >= retries:
                 break
             time.sleep(2 + 3 * attempt)
-    raise RuntimeError(f"responses failed after {retries + 1} attempts: {last}")
+    raise RuntimeError(f"{what} failed after {retries + 1} attempts: {last}")
 
 
 def output_text(response: dict) -> str:
