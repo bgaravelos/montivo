@@ -297,6 +297,13 @@ errors. Found: (1) v5's pass held by a reviewer major captions_match_speech on "
 it, the heard-diff fact says so; Billy confirmed the word: a false positive) -> 015 v5 has no pass; (2) Voice heard
 "Four Meta" as "meta meta": the Open re-plan started s5 on the second "meta" and the hand caption "Four Meta models do
 all" did not carry (the line breaks differently), v7 shows "meta models do all" while the audio keeps "Four".
+Hand-checked captions (28/10, $0.031): `review.checked_captions(edl)` = the caption lines a person retexted (a
+`caption_overrides` entry with why "human", mapped to the line through cut_map); `caption_timeline` marks them
+`checked`, `caption_heard_diff` keeps them in the alignment but reports none of their words, the diff fact lists them
+as checked against the recording, `close_gate` lets a reviewer captions_match_speech major on one (the gate's
+`checked_captions`, cut seconds, +-0.3 s) not hold the pass, and `resolve` refuses a caption_text on one. Re-review of
+015 v5 (`runs/015/review_v5.json`): 87, pass (reviewer's own pass too, captions_match_speech 10), gate clear; the only
+issue is brief_covered (commit bba47b9).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
