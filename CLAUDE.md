@@ -234,7 +234,7 @@ end, the cuts that now meet tightened, `roles_by_position` = edl.normalize_roles
 (`media.head_thumb`). UI: Text panel staged edits, drag a clip body on the video track (MoveAsk -> EditDialog "move"),
 Speakers panel (rail). Watch's "who" is shown as "watch's guess": on 014 it names the wrong astronauts. Checked keyless
 with real renders on a throwaway copy of 014 (pin A -> head 0, s8 moved before s2, callouts + title off; removed).
-UI batch C (backlog 7, transcript editing; 27/10 evening, $0, commit pending): in the Transcript view click / drag /
+UI batch C (backlog 7, transcript editing; 27/10 evening, $0, commit `d9c18de`): in the Transcript view click / drag /
 Shift-click words, Backspace -> EditDialog "words" (words, seconds, a line per clip) -> one version: a whole clip ->
 POST `/drop`, one clip edge -> `/trim`, anything else -> POST `/api/runs/{id}/cut` -> `python -m montivo.human cut RUN
 --words s2:19-19 [...]` (`cut_plan`: drop_span / `trim_fix` / split into the kept word runs, new ids past every id in
