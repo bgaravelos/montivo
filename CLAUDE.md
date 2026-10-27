@@ -197,7 +197,7 @@ project (`--planner open`) and Ask Montivo (`human replan --model OPEN_MODEL`), 
 (v1 from run.json, a re-plan from its patch's `model`) and `plan_compare`; the rail's plan stage names the run's planner.
 Checked keyless in the browser on 012-open and 015; offline tests only for the actions, the hook button and an Open
 re-plan never clicked with the keys yet.
-Live progress (UI backlog 3, 27/10 evening, $0, not committed yet): `runs.progress` reads a job's own run.log lines
+Live progress (UI backlog 3, 27/10 evening, $0, commit `caf17d9`): `runs.progress` reads a job's own run.log lines
 (the server keeps run.log's size at job start, `Job.log_pos`) into the step, detail (render "segment k of n" from the
 seg lines, weighted by frames), the bar's floor/ceil from the checkpoints and the expected seconds (the run's ledger
 entries of that stage and model, else `COST` hints `review_s`, `review_prep_s`, `image_s`, `render_s_per_frame`); SSE
