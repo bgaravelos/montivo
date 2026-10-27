@@ -198,6 +198,8 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
     new["title_card_text"] = prev.get("title_card_text") or new["title_card_text"]
     if prev.get("title_card") is False:
         new["title_card"] = False
+    if prev.get("punch"):
+        new["punch"] = True
     note = f"replanned: {len(new['spans'])} spans, {new['runtime_s']} s (was {len(prev['spans'])} spans, {prev['runtime_s']} s)"
     new["patches"] = list(prev.get("patches") or []) + [
         {"from": from_v, "review": None, "source": "human", "action": "replan", "instruction": instruction,

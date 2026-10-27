@@ -134,6 +134,7 @@ montivo run footage.mp4 --brief "..." --out runs/001
   captions Voice words of the kept spans -> de-doubled, glossary-corrected, 1 to 4 word lines up at least 0.4 s each, placed
            clear of the SAM head box;
            the plan's per-span callouts anchored to the SAM person box -> transparent PNGs (Pillow)
+  punch    (--punch) zooms on the loudest content words and an alternating scale across jump cuts, about the head
   render   ffmpeg from the SOURCE: 1.5 s title segment with a fade, then frame-aligned segments, sendcmd-driven crop, overlays
            burned in after the scale, 1080x1920 H.264; audio cut in one pass, 1.5 s of silence in front, two-pass loudness
            (measure, then one fixed gain to -14 LUFS, a 4x oversampled limiter when the peaks need it) -> cut_v1.mp4,
@@ -187,10 +188,10 @@ with libx264 crf 18 and the audio copied, and that file is the source for the pr
 box or crop is ever flipped afterwards; recorded in `ingest.json` and in the EDL's `source`),
 `--track-fps 10` (default 5 fps for every concept, the head track's rate, so person and head share one upload), `--reframe-concept head` and
 `--reframe-fps 5` (the track the crop follows; `none` falls back to the person track), `--no-track`, `--plan-with-video`,
-`--plan-effort low|medium|high`, `--review` (the review loop after cut_v1; `--review-passes 3`, `--review-budget 0.30`), `--resume` (reuse ingest, voice, watch and tracks already in the run folder while
+`--plan-effort low|medium|high`, `--punch` (punch-in zooms, see below), `--review` (the review loop after cut_v1; `--review-passes 3`, `--review-budget 0.30`), `--resume` (reuse ingest, voice, watch and tracks already in the run folder while
 iterating on the plan), `--language none`, `--no-render` (stop at `edl_v1.json`), `--no-title` (no Muse Image title card,
 saves $0.01), `--no-captions`. `montivo render runs/001 [--edl ...] [--source ...] [--out cut_v3.mp4] [--no-title]
-[--no-captions] [--no-callouts] [--no-loudnorm]` renders an EDL again from the run folder's `voice/voice.json` and tracks;
+[--no-captions] [--no-callouts] [--no-loudnorm] [--punch | --no-punch]` renders an EDL again from the run folder's `voice/voice.json` and tracks;
 it calls no model, except Muse Image once when `title/title_card.png` is missing or was made for another title text.
 `montivo review runs/001 [--edl edl_v1.json] [--passes 3] [--budget 0.30] [--no-clock] [--no-apply]` runs the loop on a
 finished run folder (only Spark review calls, about $0.03 each, $0.012 when the same cut is reviewed again and the video
@@ -217,6 +218,17 @@ never share one, and a speaker left without a head takes the one at the position
 render then plans each segment in pieces, one per speaker run, each following that speaker's head (`pieces` in the
 EDL's `render.segments`); captions keep clear of the head followed at that moment. Off-camera voices and single-speaker
 clips keep the plain rule. Verified offline on synthetic frames so far; the NASA crew clip is the first real check.
+Punch-ins (`engine/punch.py`, `--punch` on `run` and `render`, opt-in for now): a 1.12x zoom on the words the speaker
+leans on (a word's level in the source audio at least 3 dB over the median of the kept words, 0.2 s or longer, four
+letters or more, not a stop word; a caption highlight word such as Montivo at any level), at most one per 6 s of cut and
+4 s apart, ramping in over 0.12 s to the word's onset, held 0.35 s past it and out over 0.25 s; and a 1.06x base scale
+on a segment that opens on the head at the place and size where the previous one closed (a jump cut), so takes
+of the same shot alternate. The zoom is about the median centre of the followed head, so the face grows where it is;
+an event is skipped when the zoomed head would leave the top of the frame or touch a caption on screen. ffmpeg's crop
+cannot change size per frame (the graph stalls), so the zoom is a `zoompan` after the scale and before the overlays:
+captions and callouts never zoom. The EDL records `punch` (kept by the review loop and the editor's edits) and
+`punch_ins` (kind, word, level over the median, cut times, zoom, anchor). Offline so far: synthetic frames and a smoke
+render; the first look on real footage is `montivo render runs/012 --punch --out cut_v2_punch.mp4`.
 Captions use `MONTIVO_FONT` when set, else the bundled `montivo/fonts/InterTight-800.ttf` (Inter Tight, SIL OFL 1.1, a
 static wght 800 instance of the Google Fonts variable font), so line breaks and pixels match on every machine; Arial
 Black, Arial Bold and DejaVu Sans Bold are fallbacks only (the path is recorded in the EDL's `caption_style.font_path`).

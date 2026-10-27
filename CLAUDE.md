@@ -77,7 +77,14 @@ Muse Spark Open on Baseten as an OpenAI-compatible chat completion with the plan
 (already in `~/.zshenv`), model id exactly `meta-models/muse-spark-open-1026` (the key works only for it), a reasoning
 model so the call sends `reasoning_effort` low unless `--plan-effort` says otherwise; offline tests only, the planner
 path never called with the real key yet (Billy's 27/10 probe: HTTP 200, effort low answered in 0.8 s).
-Next: the NASA clip (first real check of the speaker mapping), `montivo plan runs/012 --planner open` (the A/B). The evening-by-evening table is in README.md.
+Second cloud round (27/10): README rebuilt for judges (why it is different, mermaid loop, measured results, try it,
+the NLE editor, built during the hackathon, build log); English drafts of the submission form fields in Notion (subpage
+of the Montivo page, waiting for Billy's yes); punch-ins (`engine/punch.py`, `--punch` on run and render, opt-in, stored
+as EDL `punch` so the loop and edits keep it, `punch_ins` records them): 1.12x on words 3 dB over the cut's median level
+or highlight words, 1.06x alternating on jump cuts, zoompan after the scale (crop cannot resize per frame, the graph
+stalls), skipped when the head would leave the top or touch a caption; synthetic tests and a smoke render only.
+Next: the NASA clip (first real check of the speaker mapping), `montivo plan runs/012 --planner open` (the A/B),
+`montivo render runs/012 --punch --out cut_v2_punch.mp4` (first look at the punch-ins). The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

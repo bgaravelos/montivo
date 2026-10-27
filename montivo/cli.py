@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
                         "writes <out>/source_hflip.mp4 (libx264 crf 18) and uses it as the source for proxy, wav, SAM and render")
     r.add_argument("--no-title", action="store_true", help="no Muse Image title card in front of the cut (saves $0.01)")
     r.add_argument("--no-captions", action="store_true", help="render without burned-in captions")
+    r.add_argument("--punch", action="store_true", help="punch-in zooms on stressed words and an alternating scale "
+                                                        "across jump cuts (kept by the review loop and later edits)")
     r.add_argument("--review", action="store_true",
                    help="after cut_v1: blind Spark review -> fix ops -> edl_v2 -> cut_v2 ..., up to --review-passes reviews")
     r.add_argument("--review-passes", type=int, default=3, help="max reviews in the loop (default 3)")
@@ -62,6 +64,10 @@ def main(argv: list[str] | None = None) -> int:
     rr.add_argument("--no-captions", action="store_true", help="no burned-in captions")
     rr.add_argument("--no-callouts", action="store_true", help="no callouts")
     rr.add_argument("--no-loudnorm", action="store_true", help="keep the source loudness")
+    pg = rr.add_mutually_exclusive_group()
+    pg.add_argument("--punch", dest="punch", action="store_const", const=True, default=None,
+                    help="punch-in zooms on stressed words and jump cuts; stored in the EDL so later renders keep it")
+    pg.add_argument("--no-punch", dest="punch", action="store_const", const=False, help="turn the punch-ins off again")
 
     rv = sub.add_parser("review", help="blind review loop on a run folder: review cut_vN with Spark 1.3, patch the EDL with "
                                        "the fix ops, render cut_vN+1, repeat (max passes, $ budget, same fix twice = stop)")
@@ -118,7 +124,8 @@ def main(argv: list[str] | None = None) -> int:
             ap.error(f"{args.run_dir} is not a run folder")
         print(json.dumps(render_run(args.run_dir, edl_path=args.edl, source=args.source, out_name=args.out,
                                     title=not args.no_title, captions=not args.no_captions,
-                                    callouts=not args.no_callouts, loudnorm=not args.no_loudnorm), indent=2))
+                                    callouts=not args.no_callouts, loudnorm=not args.no_loudnorm, punch=args.punch),
+                         indent=2))
         return 0
 
     if args.cmd == "plan":
@@ -177,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
                           target_s=args.target, plan_with_video=args.plan_with_video, plan_effort=args.plan_effort,
                           skip_track=args.no_track, resume=args.resume, render=not args.no_render, hflip=args.hflip,
                           title=not args.no_title, captions=not args.no_captions, review=args.review,
-                          review_passes=args.review_passes, review_budget=args.review_budget,
+                          review_passes=args.review_passes, review_budget=args.review_budget, punch=args.punch,
                           model=args.model or RunOptions.__dataclass_fields__["model"].default,
                           planner_model=OPEN_MODEL if args.planner == "open" else None)
         summary = run(opts)

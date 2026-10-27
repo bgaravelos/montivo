@@ -33,7 +33,9 @@ from ..config import REFRAME_CONCEPT
 from ..ledger import Entry, Ledger, Timer
 from .api import dump_json
 from .captions import Overlay, build_overlays
+from .edges import Audio
 from .graphics import font_path
+from .punch import plan_punches, zoom_filter
 from .reframe import ReframeParams, SegmentPath, plan_segment
 from .speakers import follow_ids
 
@@ -201,14 +203,14 @@ def _overlay_graph(base: str, overlays: list[Overlay], first_input: int) -> tupl
 
 
 def render_segment_video(source: Path, seg: Segment, path: SegmentPath, render_dir: Path,
-                         overlays: list[Overlay] | None = None) -> Path:
+                         overlays: list[Overlay] | None = None, zoom: dict | None = None) -> Path:
     cmds = render_dir / f"seg_{seg.index + 1:02d}_crop.cmd"
     cmds.write_text(path.sendcmd_text())
     out = render_dir / f"seg_{seg.index + 1:02d}.mp4"
     # seek half a frame early so the frame on the grid is never lost to rounding, then rebase pts to 0
     seek = max(0.0, seg.t_in - 0.5 / seg.fps)
     vf = (f"setpts=PTS-STARTPTS,sendcmd=f={cmds.as_posix()},crop={path.crop_w}:{path.crop_h}:{path.xs[0]}:0,"
-          f"scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1")
+          f"scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1" + (f",{zoom_filter(zoom, seg.fps)}" if zoom else ""))
     ov_args, ov_graph = _overlay_graph("[base]", overlays or [], 1)
     graph = f"[0:v]{vf}[base];{ov_graph}"
     _ffmpeg(["-ss", f"{seek:.6f}", "-t", f"{(seg.frames + 2) / seg.fps:.6f}", "-i", str(source), *ov_args,
@@ -382,11 +384,13 @@ def mux(segment_files: list[Path], audio: Path, out: Path, render_dir: Path) -> 
 
 def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str = "cut_v1.mp4",
            params: ReframeParams | None = None, log=print, edl_path: Path | None = None, words: list[dict] | None = None,
-           title_png: Path | None = None, captions: bool = True, callouts: bool = True, loudnorm: bool = True) -> dict:
+           title_png: Path | None = None, captions: bool = True, callouts: bool = True, loudnorm: bool = True,
+           punch: bool = False) -> dict:
     """Render the EDL to run_dir/<out_name>; writes segments, cmd files, overlay PNGs and the audio under run_dir/render/
     and fills the EDL's `reframe` keyframes, `captions` / `callouts` / `caption_corrections` and a `render` block
     (written back to edl_path when given). `words` are the Voice words (voice.json) the captions come from; without
-    them, or with captions=False, the cut has no captions. `title_png` puts the title card in front."""
+    them, or with captions=False, the cut has no captions. `title_png` puts the title card in front. `punch` adds the
+    punch-in zooms (punch.py) and records them in the EDL's `punch_ins`."""
     if not source.is_file():
         raise FileNotFoundError(f"source footage not found: {source}")
     if not edl.get("spans"):
@@ -439,13 +443,21 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
                 + "; ".join(f"{f['from']} -> {f['to']}" for f in fields["caption_corrections"]))
         else:
             edl.update({"captions": [], "callouts": [], "caption_corrections": []})
+        zooms: dict[int, dict] = {}
+        edl["punch_ins"] = []
+        if punch:
+            zooms, edl["punch_ins"] = plan_punches(edl, segments, paths, words or [], Audio.load(run_dir),
+                                                   load_track(run_dir, edl, "head") if concept == "head" else None,
+                                                   edl.get("captions") or [], title_s=title_s)
+            log(f"render: {len(edl['punch_ins'])} punch-ins: " + "; ".join(
+                f"{e['t_in']:.1f}s {e.get('word') or 'jump cut'} x{e['zoom']}" for e in edl["punch_ins"]))
         if title_png is not None:
             tfile, _ = render_title_video(title_png, fps, render_dir)
             files.append(tfile)
             log(f"render: title card {title_png.name} {title_s:.2f}s ({title_frames} frames, fade {TITLE_FADE_S}s)")
         for seg, path in zip(segments, paths):
             ovs = overlays.get(seg.index, [])
-            f = render_segment_video(source, seg, path, render_dir, ovs)
+            f = render_segment_video(source, seg, path, render_dir, ovs, zooms.get(seg.index))
             files.append(f)
             keyframes.extend(path.keyframes)
             moving = sum(1 for a, b in zip(path.xs, path.xs[1:]) if a != b)
@@ -453,7 +465,9 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
                              "spans": seg.span_ids, "track_concept": concept, "track_id": path.track_id, "crop": [path.crop_w, path.crop_h],
                              "x_first": path.xs[0], "x_min": min(path.xs), "x_max": max(path.xs),
                              "frames_moving": moving, "overlays": len(ovs), "file": f.as_posix(),
-                             **({"pieces": path.pieces} if path.pieces else {})})
+                             **({"pieces": path.pieces} if path.pieces else {}),
+                             **({"zoom": {"base": zooms[seg.index]["base"], "events": len(zooms[seg.index]["events"])}}
+                                if seg.index in zooms else {})})
             log(f"render: seg {seg.index + 1} {seg.t_in:.3f}-{seg.t_out:.3f}s ({seg.frames} frames, {'+'.join(seg.span_ids)}) "
                 f"track {'/'.join(f'{p['speaker']}:{p['track_id']}' for p in path.pieces) if path.pieces else path.track_id} crop {path.crop_w}x{path.crop_h} x {min(path.xs)}..{max(path.xs)}, {len(ovs)} overlays")
         audio, loud = render_audio(source, segments, render_dir, lead_s=title_s, loudnorm=loudnorm)

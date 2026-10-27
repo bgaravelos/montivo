@@ -47,6 +47,7 @@ class RunOptions:
     review: bool = False  # blind review loop after cut_v1 (engine/review.py)
     review_passes: int = 3
     review_budget: float = 0.30
+    punch: bool = False  # punch-in zooms on stressed words and jump cuts (engine/punch.py)
 
 
 class RunLog:
@@ -197,6 +198,8 @@ def run(opts: RunOptions) -> dict:
         ep = edl["edge_pass"]
         log(f"edges: {ep['moved']} cut edges tightened to the speech, {ep['removed_s']} s of pause removed "
             f"(floor {ep['floor_db']} dB, speech over {ep['threshold_db']} dB)")
+    if opts.punch:
+        edl["punch"] = True
     dump_json(out / "edl_v1.json", edl)
 
     # 5. title card (muse-image-1.0, $0.01) and render cut_v1.mp4 from the source (ffmpeg only)
@@ -211,7 +214,8 @@ def run(opts: RunOptions) -> dict:
                 log(f"ERROR in title card (rendering without it):\n{errors[-1][1]}")
         try:
             rendered = render_edl(out, edl, ing.source, ledger, log=log, edl_path=out / "edl_v1.json",
-                                  words=[w.__dict__ for w in voice.words] if opts.captions else None, title_png=title_png)
+                                  words=[w.__dict__ for w in voice.words] if opts.captions else None, title_png=title_png,
+                                  punch=opts.punch)
         except Exception:
             errors.append(("render", traceback.format_exc()))
             log(f"ERROR in render:\n{errors[-1][1]}")
@@ -265,10 +269,11 @@ def title_card(run_dir: Path, edl: dict, ledger: Ledger, log=print) -> Path:
 
 def render_run(run_dir: Path, edl_path: Path | None = None, source: Path | None = None, out_name: str = "cut_v1.mp4",
                title: bool = True, captions: bool = True, callouts: bool = True, loudnorm: bool = True,
-               ledger: Ledger | None = None, log=None) -> dict:
+               ledger: Ledger | None = None, log=None, punch: bool | None = None) -> dict:
     """`montivo render runs/001`: ffmpeg only, from an existing EDL and the run's voice.json and tracks; appends a
     `render` entry to the run's ledger. The only possible API call is the title card, when title/title_card.png is
-    missing ($0.01, muse-image-1.0); --no-title skips it."""
+    missing ($0.01, muse-image-1.0); --no-title skips it. `punch` True or False is stored in the EDL (`punch`), so
+    the review loop and the human edits keep it; None keeps what the EDL says."""
     edl_path = edl_path or run_dir / "edl_v1.json"
     if not edl_path.is_file():
         raise SystemExit(f"{edl_path} not found: run `montivo run` first")
@@ -288,8 +293,11 @@ def render_run(run_dir: Path, edl_path: Path | None = None, source: Path | None 
     # the review loop can drop the opening card (swap_hook on the title): the EDL then says title_card false
     title = title and edl.get("title_card", True)
     title_png = title_card(run_dir, edl, ledger, log) if title and edl.get("title_card_text") else None
+    if punch is not None:
+        edl["punch"] = punch
     info = render_edl(run_dir, edl, source, ledger, out_name=out_name, log=log, edl_path=edl_path, words=words,
-                      title_png=title_png, captions=captions, callouts=callouts, loudnorm=loudnorm)
+                      title_png=title_png, captions=captions, callouts=callouts, loudnorm=loudnorm,
+                      punch=bool(edl.get("punch")))
     return {"out": info["output"], "runtime_s": edl["runtime_s"], "duration_s": info["duration_s"], "segments": len(info["segments"]),
             "captions": info["captions"], "callouts": info["callouts"], "loudness": info["loudness_ebur128"],
             "seconds": info["seconds"], "cost_usd": ledger.total_cost()}
