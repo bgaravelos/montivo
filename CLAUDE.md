@@ -140,7 +140,7 @@ hand stay removed"), no console errors. Found: the editor opens on `review/loop.
 human edits and the hook A/B's kept version that came after the loop. Fixed (`web/src/Editor.tsx` `kept`/`opening`): the
 editor opens on the newest version a human edit made or the hook A/B kept, else the loop's best, else the newest;
 checked in the browser on 012 (v2), 012-open (v7), a copy without v6/v7 (v4, was v3), 013 (v3), 014 (v1).
-Three engine fixes (27/10, $0): roles by position for any planner (`edl.normalize_roles` in `build_edl`: one `hook`
+Three engine fixes (27/10, $0, commit `b919f38`): roles by position for any planner (`edl.normalize_roles` in `build_edl`: one `hook`
 first, the `payoff` last, `cta` only after it, `body` between; the planner's label kept in `planner_role`, changes in
 `role_fixes`; the plan prompt now defines each role; the hook A/B takes the last payoff of an old EDL); `run --resume`
 reuses `plan.json` and `edl_v1.json` when brief, target and planner match `run.json` `plan_inputs` (old run.json: its
