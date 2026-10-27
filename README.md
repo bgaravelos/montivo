@@ -103,8 +103,9 @@ tokens come from the cache); `--passes 1` or `--no-apply` reviews once and write
 `montivo edges runs/001 [--edl edl_v1.json] [--dry-run]` tightens an EDL that was built before the edge pass existed: it
 rewrites the EDL in place (the old one goes to `check/<name>_before_edges.json`), clears the render fields so the next
 `render` or `review` renders it again, and logs every move; a second run moves nothing.
-Captions use the first font found of `MONTIVO_FONT`, `~/Library/Fonts/InterTight-800.ttf`, Arial Black, Arial Bold,
-DejaVu Sans Bold (recorded in the EDL's `caption_style.font_path`).
+Captions use `MONTIVO_FONT` when set, else the bundled `montivo/fonts/InterTight-800.ttf` (Inter Tight, SIL OFL 1.1, a
+static wght 800 instance of the Google Fonts variable font), so line breaks and pixels match on every machine; Arial
+Black, Arial Bold and DejaVu Sans Bold are fallbacks only (the path is recorded in the EDL's `caption_style.font_path`).
 
 The UI: `make ui` (or `.venv/bin/montivo serve [--port 8765] [--root .]`). It reads the run folders and starts the
 engine as a subprocess (`montivo run ... --review`, `montivo review`, `python -m montivo.human drop|replan`); it never

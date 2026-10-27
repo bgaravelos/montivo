@@ -14,9 +14,11 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-# first match wins; MONTIVO_FONT overrides
+# first match wins; MONTIVO_FONT overrides. The bundled Inter Tight 800 (OFL, a static instance of the Google Fonts
+# variable font at wght 800) comes first so captions break and render the same on every machine.
+BUNDLED_FONT = Path(__file__).resolve().parent.parent / "fonts" / "InterTight-800.ttf"
 FONT_CANDIDATES = [
-    "~/Library/Fonts/InterTight-800.ttf",
+    str(BUNDLED_FONT),
     "/System/Library/Fonts/Supplemental/Arial Black.ttf",
     "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
