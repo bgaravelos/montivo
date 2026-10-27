@@ -21,10 +21,17 @@ Faults (the window is in cut seconds, computed after the render from the rendere
 
 A fault is caught when an issue of a matching criterion or fix op lies within TOL_S of its window; "major" when that
 issue is a blocker or major (only those become patches in the loop). On the clean control every blocker or major issue
-is a false alarm. Results: runs/bench/results.json and results.md; every review in runs/bench/<base>/rv_*.json.
+is a false alarm. Since the pass gate (review.gate_check, 27/10) the deterministic checks' issues count too, apart:
+"caught with the gate" is the reviewer or a gate issue in the window, "pass" is the gated pass, "reviewer pass" the
+reviewer's own, and every gate reason on a clean cut is a gate false alarm.
+Results: runs/bench/results.json and results.md; every review in runs/bench/<base>/rv_*.json. `--archive round2` first
+moves the selected variants' old rv_* files (every reviewer) to runs/bench/<base>/round2/ and the old results to
+runs/bench/round2/, then `--compare round2` scores those old reviews beside the new ones (before / after).
 
     .venv/bin/python tools/reviewer_bench.py --build-only
     .venv/bin/python tools/reviewer_bench.py --reviewers spark13 open --repeats 2 --budget 8
+    .venv/bin/python tools/reviewer_bench.py --reviewers spark13 --variants clean mid_word framing caption_text weak_hook \
+        --archive round2 --compare round2 --budget 2
 """
 from __future__ import annotations
 
@@ -302,11 +309,21 @@ def dist(a: list[float], b: list[float]) -> float:
     return max(0.0, max(a[0], b[0]) - min(a[1], b[1]))
 
 
-def score(review: dict, fault: str, win: list[float] | None) -> dict:
-    issues = review["issues"]
-    major = [i for i in issues if i["severity"] in R.APPLY_SEVERITY]
+def score(review: dict, fault: str, win: list[float] | None, gate: dict | None = None) -> dict:
+    """The reviewer's issues against the fault window; with `gate` (review_vN.json pass_gate) the gate's issues too,
+    reported as caught_gate (the reviewer or the gate caught it)."""
+    gate_issues = (gate or {}).get("issues") or []
     if fault == "clean":
-        return {"false_alarms": len(major), "false_alarm_criteria": sorted({i["criterion"] for i in major})}
+        major = [i for i in review["issues"] if i["severity"] in R.APPLY_SEVERITY]
+        return {"false_alarms": len(major), "false_alarm_criteria": sorted({i["criterion"] for i in major}),
+                "gate_false_alarms": len((gate or {}).get("reasons") or [])}
+    out = match(review["issues"], fault, win)
+    out["caught_gate"] = out["caught_major"] or match(gate_issues, fault, win)["caught_major"]
+    return out
+
+
+def match(issues: list[dict], fault: str, win: list[float]) -> dict:
+    major = [i for i in issues if i["severity"] in R.APPLY_SEVERITY]
     crits, ops = MATCH[fault]
     best = None
     for i in issues:
@@ -339,10 +356,46 @@ def review_job(root: Path, base: str, variant: str, entry: dict, reviewer: str, 
         rv = R.review_render(out, edl, Path(entry["cut"]), 1, ledger, spark, log=log, name=name, heard=heard,
                              heard_dir=out / "heard" / variant)
         dump_json(path, rv)
+    return score_row(rv, base, variant, entry, reviewer, k)
+
+
+def score_row(rv: dict, base: str, variant: str, entry: dict, reviewer: str, k: int) -> dict:
     win = None if variant == "clean" else window(variant, entry["meta"], json.loads(Path(entry["edl"]).read_text()))
-    sc = score(rv["review"], variant, win)
+    gate = rv.get("pass_gate")
+    sc = score(rv["review"], variant, win, gate)
     return {"base": base, "variant": variant, "reviewer": reviewer, "k": k, "overall": rv["review"]["overall"],
-            "pass": rv["review"]["pass"], "cost_usd": rv["cost_usd"], "seconds": rv["seconds"], "window": win, **sc}
+            "pass": rv["review"]["pass"], "reviewer_pass": rv["review"].get("reviewer_pass", rv["review"]["pass"]),
+            "gate": (gate or {}).get("reasons") or [], "cost_usd": rv["cost_usd"], "seconds": rv["seconds"],
+            "window": win, **sc}
+
+
+def archive(root: Path, bases: list[str], variants: list[str] | None, name: str, log) -> None:
+    """Move the selected variants' rv_* files (every reviewer) to <base>/<name>/ and results.* to root/<name>/, kept."""
+    for b in bases:
+        dest = root / b / name
+        for f in sorted((root / b).glob("rv_*.json")):
+            v = f.stem[3:].rsplit("_", 2)[0]
+            if variants is None or v in variants:
+                dest.mkdir(exist_ok=True)
+                if (dest / f.name).exists():
+                    raise SystemExit(f"{dest / f.name} exists: archive {name} already holds this review")
+                shutil.move(f, dest / f.name)
+        log(f"bench: {b}: old reviews of {variants or 'every variant'} moved to {dest}")
+    for f in ("results.json", "results.md"):
+        if (root / f).is_file() and not (root / name / f).exists():
+            (root / name).mkdir(exist_ok=True)
+            shutil.copy2(root / f, root / name / f)
+
+
+def compare_rows(root: Path, name: str, manifests: dict, rows: list[dict]) -> list[dict]:
+    """The archived reviews of the same (base, variant, reviewer, k) as this run's rows, scored the same way."""
+    old = []
+    for r in rows:
+        f = root / r["base"] / name / f"rv_{r['variant']}_{r['reviewer']}_{r['k']}.json"
+        if f.is_file():
+            old.append(score_row(json.loads(f.read_text()), r["base"], r["variant"], manifests[r["base"]][r["variant"]],
+                           r["reviewer"], r["k"]))
+    return old
 
 
 def prewarm_heard(root: Path, base: str, manifest: dict, log) -> None:
@@ -369,6 +422,8 @@ def summarize(rows: list[dict], reviewers: list[str]) -> dict:
             fr = [r for r in faulty if r["variant"] == f]
             if fr:
                 per[f] = {"n": len(fr), "caught": sum(r["caught"] for r in fr), "caught_major": sum(r["caught_major"] for r in fr),
+                          "caught_gate": sum(r.get("caught_gate", r["caught_major"]) for r in fr),
+                          "blocked": sum(not r["pass"] for r in fr),
                           "mean_overall": round(statistics.mean(r["overall"] for r in fr), 1)}
         sd = []
         for key in {(r["base"], r["variant"]) for r in rr}:
@@ -385,29 +440,47 @@ def summarize(rows: list[dict], reviewers: list[str]) -> dict:
             "clean_pass_rate": round(sum(r["pass"] for r in clean) / len(clean), 3) if clean else None,
             "clean_false_alarms_per_review": round(statistics.mean(r["false_alarms"] for r in clean), 2) if clean else None,
             "faulty_pass_rate": round(sum(r["pass"] for r in faulty) / len(faulty), 3) if faulty else None,
+            "faulty_reviewer_pass_rate": (round(sum(r["reviewer_pass"] for r in faulty) / len(faulty), 3)
+                                          if faulty else None),
+            "detection_gate": (round(sum(r.get("caught_gate", r["caught_major"]) for r in faulty) / len(faulty), 3)
+                               if faulty else None),
+            "gate_blocked_reviewer_pass": sum(1 for r in faulty if r["reviewer_pass"] and not r["pass"]),
+            "clean_gate_false_alarms": sum(r.get("gate_false_alarms", 0) for r in clean),
+            "clean_reviewer_pass_rate": round(sum(r["reviewer_pass"] for r in clean) / len(clean), 3) if clean else None,
             "score_sd_same_cut": round(statistics.mean(sd), 1) if sd else None,
             "unreviewed_v1_mean_overall": round(statistics.mean(r["overall"] for r in raw), 1) if raw else None,
         }
     return out
 
 
-def markdown(summary: dict, rows: list[dict]) -> str:
+def pct(v) -> str:
+    return f"{v:.0%}" if v is not None else "-"
+
+
+def markdown(summary: dict, rows: list[dict], title: str = "# Reviewer benchmark") -> str:
     revs = list(summary)
-    lines = ["# Reviewer benchmark", "", "| | " + " | ".join(revs) + " |", "|---|" + "---|" * len(revs)]
+    lines = [title, "", "| | " + " | ".join(revs) + " |", "|---|" + "---|" * len(revs)]
     def row(label: str, f) -> None:
         lines.append(f"| {label} | " + " | ".join(f(summary[r]) for r in revs) + " |")
     row("reviews", lambda s: str(s["reviews"]))
     row("faults caught (any severity)", lambda s: f"{s['detection']:.0%}" if s["detection"] is not None else "-")
     row("faults caught as blocker/major", lambda s: f"{s['detection_major']:.0%}" if s["detection_major"] is not None else "-")
+    row("faults caught as blocker/major or by the gate", lambda s: pct(s.get("detection_gate")))
     for f in FAULTS:
         row(f"  {f}", lambda s, f=f: (f"{s['per_fault'][f]['caught']}/{s['per_fault'][f]['n']} "
-                                     f"({s['per_fault'][f]['caught_major']} major), score {s['per_fault'][f]['mean_overall']}")
+                                     f"({s['per_fault'][f]['caught_major']} major, "
+                                     f"{s['per_fault'][f].get('caught_gate', s['per_fault'][f]['caught_major'])} with the gate), "
+                                     f"score {s['per_fault'][f]['mean_overall']}")
             if f in s["per_fault"] else "-")
     row("clean (012, 015 kept versions): mean score", lambda s: str(s["clean_mean_overall"]))
-    row("clean: pass rate", lambda s: f"{s['clean_pass_rate']:.0%}" if s["clean_pass_rate"] is not None else "-")
+    row("clean: pass rate (gated)", lambda s: pct(s["clean_pass_rate"]))
+    row("clean: reviewer's own pass rate", lambda s: pct(s.get("clean_reviewer_pass_rate")))
     row("clean: false alarms per review", lambda s: str(s["clean_false_alarms_per_review"]))
+    row("clean: gate false alarms (all reviews)", lambda s: str(s.get("clean_gate_false_alarms", "-")))
     row("v1 that never passed a loop (014): mean score", lambda s: str(s["unreviewed_v1_mean_overall"]))
-    row("faulty cuts passed", lambda s: f"{s['faulty_pass_rate']:.0%}" if s["faulty_pass_rate"] is not None else "-")
+    row("faulty cuts passed (gated)", lambda s: pct(s["faulty_pass_rate"]))
+    row("faulty cuts the reviewer passed", lambda s: pct(s.get("faulty_reviewer_pass_rate")))
+    row("  of those, blocked by the gate", lambda s: str(s.get("gate_blocked_reviewer_pass", "-")))
     row("score SD, same cut", lambda s: str(s["score_sd_same_cut"]))
     row("seconds per review", lambda s: str(s["mean_seconds"]))
     row("cost", lambda s: f"${s['cost_usd']:.3f}")
@@ -430,14 +503,17 @@ def main() -> None:
     ap.add_argument("--budget", type=float, default=8.0, help="dollars for the review calls of this invocation")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--build-only", action="store_true")
+    ap.add_argument("--archive", help="move the selected variants' old reviews to <base>/<ARCHIVE>/ first")
+    ap.add_argument("--compare", help="score the reviews archived under this name beside the new ones")
     args = ap.parse_args()
     log = RunLog(args.root / "bench.log")
     manifests = {b: build(b, args.root, log) for b in args.bases}
     if args.build_only:
         return
-    for b in args.bases:
-        if any(REVIEWERS[r][1] for r in args.reviewers):
-            prewarm_heard(args.root, b, manifests[b], log)
+    if args.archive:
+        archive(args.root, args.bases, args.variants, args.archive, log)
+    for b in args.bases:  # every review needs the cut's Voice transcript now (edge words, caption diff)
+        prewarm_heard(args.root, b, manifests[b], log)
     jobs = [(b, v, e, rev, k) for b in args.bases for v, e in manifests[b].items() if not e.get("skipped")
             and (args.variants is None or v in args.variants)
             for rev in args.reviewers for k in range(1, args.repeats + 1)]
@@ -458,9 +534,16 @@ def main() -> None:
             except Exception as exc:  # one failed call must not lose the others
                 log(f"bench: {futs[f][:2]} {futs[f][3]} #{futs[f][4]} failed: {exc}")
     summary = summarize(rows, args.reviewers)
-    dump_json(args.root / "results.json", {"summary": summary, "rows": rows, "tol_s": TOL_S, "faults": FAULTS})
-    (args.root / "results.md").write_text(markdown(summary, rows))
-    log(markdown(summary, rows))
+    md = markdown(summary, rows)
+    result = {"summary": summary, "rows": rows, "tol_s": TOL_S, "faults": FAULTS}
+    if args.compare:
+        old = compare_rows(args.root, args.compare, manifests, rows)
+        result["compare"] = {"name": args.compare, "summary": summarize(old, args.reviewers), "rows": old}
+        md += "\n" + markdown(result["compare"]["summary"], old,
+                               title=f"# Before: the same reviews in {args.compare} (no gate, no new facts)")
+    dump_json(args.root / "results.json", result)
+    (args.root / "results.md").write_text(md)
+    log(md)
 
 
 if __name__ == "__main__":

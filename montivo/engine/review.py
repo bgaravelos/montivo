@@ -11,6 +11,14 @@ timestamps: the clock is the only way its t_s can land within a second of the fa
 words heard in the cut's own audio (Muse Voice on the cut, `heard_words`): Muse Spark Open sees frames but hears nothing
 (27/10, Baseten), so a review on it gets the speech as text, and its copy goes inline instead of through the Files API.
 
+After the reviewer benchmark (27/10, runs/bench) two deterministic checks go to every reviewer, from the same Voice
+transcript of the cut: the kept words at every cut edge that are not heard where speech still runs at the edge
+(`edge_words_unheard`), and the stretches where the followed head leaves the 9:16 crop (`head_frame_facts`, the crop
+path re-planned as the render plans it); Spark 1.3 also gets the caption-vs-heard diff, without the heard phrases.
+A pass gate (`gate_check`) then overrides the reviewer: a cut does not pass while a loud cut edge, an unheard edge word,
+a forced caption over the head or the head out of frame for 0.5 s is measured, and each of those becomes a major issue
+that `plan_fixes` patches even when the reviewer missed it (`review.pass` is the gated pass, `reviewer_pass` its own).
+
 The reviewer names times in the cut, not spans. `cut_map` maps every span (and the title card) to cut seconds with the
 same merge and frame alignment the render uses, so `plan_fixes` can turn an issue at t_s into a concrete patch:
 
@@ -127,6 +135,7 @@ def caption_face_facts(edl: dict) -> dict:
             continue
         if overlaps(rect, head):
             over.append({"t_in": c["t_in"], "t_out": c["t_out"], "text": c["text"], "caption_top": y,
+                         "placement": c.get("placement"),
                          "head_box_y": [head[1], head[3]], "overlap_px": round(min(rect[3], head[3]) - max(rect[1], head[1]))})
         else:
             clearance.append((round(y - head[3]), c["t_in"], c["text"]))
@@ -173,7 +182,11 @@ def cut_edge_levels(edl: dict, audio: "Audio") -> list[dict]:
 
 def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: float,
                edges: list[dict] | None = None, timeline: list[dict] | None = None,
-               heard: list[dict] | None = None) -> str:
+               heard: list[dict] | None = None, edge_words: dict | None = None, head: dict | None = None,
+               diff_heard: list[dict] | None = None) -> str:
+    """The facts handed to the reviewer, numbered. `heard` adds the heard phrases and the caption diff (a reviewer that
+    cannot hear); `diff_heard` adds only the caption diff (Spark 1.3: in the benchmark the phrases cost it the weak
+    hook, 4/4 -> 2/4, while the diff brought caption text 4/6 -> 6/6)."""
     sil = ", ".join(f"{a:.2f}-{b:.2f} s ({b - a:.2f} s)" for a, b in silences) or "none"
     out = [f"1. Silence gaps in the audio (ffmpeg silencedetect, below {SILENCE_DB:.0f} dB for at least {SILENCE_MIN_S} s), "
            f"cut seconds out of {duration_s:.1f}: {sil}."]
@@ -209,6 +222,30 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
             else:
                 line += "every cut here is below it."
             out.append(line)
+    if edge_words is not None:
+        miss = edge_words["unheard"]
+        line = (f"{len(out) + 1}. The words this cut keeps on both sides of every cut ({edge_words['edge_words']} words "
+                f"at {edge_words['cuts']} cuts) against what a speech model hears in the cut's own audio (the same model "
+                "transcribed the original, so a word missing here was cut off at the edge, not misheard): ")
+        if miss:
+            line += ("; ".join(f"\"{m['w']}\" ({'end of the passage before' if m['edge'] == 'out' else 'start of the passage after'} "
+                               f"the cut at {m['cut_t']:.2f} s) " + (f"heard as \"{m['heard']}\"" if m["heard"] else "not heard")
+                               for m in miss)
+                     + ". A word that is not heard there is clipped by the cut.")
+        else:
+            line += "every one of them is heard."
+        out.append(line)
+    if head is not None:
+        long_ = [r for r in head["out_of_frame"] if r["seconds"] >= HEAD_OUT_MIN_S]
+        line = (f"{len(out) + 1}. The speaker's head (the SAM head box the crop follows) against the 9:16 frame, "
+                f"checked 10 times a second: ")
+        if long_:
+            line += ("out of frame (more than " f"{HEAD_OUT_FRAC:.0%} of the head outside) at "
+                     + "; ".join(f"{r['t_in']:.2f}-{r['t_out']:.2f} s ({r['seconds']:.1f} s, up to {r['max_out']:.0%} "
+                                 f"outside, on the {r['side']})" for r in long_) + ".")
+        else:
+            line += f"inside the frame throughout (at most {head['max_out']:.0%} of its width outside)."
+        out.append(line)
     if timeline:
         out.append(f"{len(out) + 1}. Caption lines exactly as they are on screen, cut seconds: "
                    + "; ".join(f"{c['t_in']:.2f}-{c['t_out']:.2f} s \"{c['text']}\"" for c in timeline)
@@ -220,14 +257,16 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
                    "what is said and where the speech pauses): "
                    + ("; ".join(f"{h['t_in']:.2f}-{h['t_out']:.2f} s \"{h['text']}\"" for h in phrases) or "no speech")
                    + ". That speech model mishears names and similar-sounding words and can add a stray word at a cut.")
-        if timeline:
-            diffs = caption_heard_diff(timeline, heard)
-            out.append(f"{len(out) + 1}. Where the caption words and the heard words differ (the two aligned word by word): "
-                       + ("; ".join(f"{d['t']:.2f} s caption \"{d['caption']}\" / heard \"{d['heard'] or '(nothing)'}\""
-                                    for d in diffs) or "nowhere")
-                       + ". The captions were checked by hand where the speech model got a name wrong, so a pair that "
-                         "sounds alike (\"Muse\" / \"news\") is the speech model's mistake, not the caption's: a caption "
-                         "is wrong only where its word sounds nothing like what was heard.")
+    diff_words = heard if heard is not None else diff_heard
+    if diff_words is not None and timeline:
+        diffs = caption_heard_diff(timeline, diff_words)
+        heard_what = "the heard words" if heard is not None else "the words a speech model hears in the cut's own audio"
+        out.append(f"{len(out) + 1}. Where the caption words and {heard_what} differ (the two aligned word by word): "
+                   + ("; ".join(f"{d['t']:.2f} s caption \"{d['caption']}\" / heard \"{d['heard'] or '(nothing)'}\""
+                                for d in diffs) or "nowhere")
+                   + ". The captions were checked by hand where the speech model got a name wrong, so a pair that "
+                     "sounds alike (\"Muse\" / \"news\") is the speech model's mistake, not the caption's: a caption "
+                     "is wrong only where its word sounds nothing like what was heard.")
     return "\n".join(out)
 
 
@@ -295,6 +334,247 @@ def heard_phrases(words: list[dict], gap_s: float = HEARD_GAP_S, max_words: int 
         phrases.append(cur)
     return [{"t_in": round(p[0]["t_start"], 2), "t_out": round(p[-1]["t_end"], 2), "text": " ".join(w["w"] for w in p)}
             for p in phrases]
+
+
+# --------------------------------------------------------------------------- deterministic checks and the pass gate
+# The reviewer benchmark (27/10, runs/bench) measured what Spark 1.3 misses: a word clipped at a cut (2 of 6; the 015
+# cut 45 % into "Montivo" measured -42.7 dB, under the edge-level line), a head pushed out of the crop on a wide shot
+# (4 of 6) and a wrong caption word (4 of 6); 30 % of faulty cuts still passed. These checks measure the first two
+# without a model, and the gate keeps a cut from passing while one of them (or the loud-edge and caption-over-head
+# facts above) reports a fault, whatever the reviewer said.
+
+EDGE_WORDS = 2  # kept words checked on each side of a cut
+HEARD_SIMILAR = 0.75  # a heard word this close (difflib ratio) to the kept one is the same word heard differently
+HEAD_OUT_FRAC = 0.4  # a head with more than this share of its width outside the crop is out of frame (run 013's
+                     # lean reached 31 % for 0.6 s on its kept cut; the planted framing faults 100 %)
+HEAD_OUT_MIN_S = 0.5  # the gate blocks an out-of-frame stretch at least this long
+HEAD_SAMPLE_FRAMES = 3  # the head is checked every 3rd frame (10 per second at 30 fps)
+
+
+def kept_words(edl: dict, words: Words) -> list[dict]:
+    """The Voice words the EDL keeps, in cut order with cut seconds (from the source Voice transcript, the words the
+    planner chose), each tagged with the cut edge it sits at: `edge` "out" for the last EDGE_WORDS before a join or the
+    end, "in" for the first EDGE_WORDS after a join or at the start, None inside a passage."""
+    cmap = cut_map(edl)
+    edge_of: dict[tuple[str, str], float] = {}  # (span, "in"/"out") -> the cut point's time
+    for t, before, after in cuts(cmap):
+        if before is not None:
+            edge_of[(before.span, "out")] = t
+        if after is not None:
+            edge_of[(after.span, "in")] = t
+    out: list[dict] = []
+    for c in cmap:
+        s = edl["spans"][c.index]
+        tw = words.turn(s["turn_id"])
+        idx = list(range(s["word_from"], min(s["word_to"], len(tw) - 1) + 1))
+        for n, i in enumerate(idx):
+            w = tw[i]
+            a = min(c.cut_out, max(c.cut_in, c.cut_in + w["t_start"] - s["t_in"]))
+            b = min(c.cut_out, max(c.cut_in, c.cut_in + w["t_end"] - s["t_in"]))
+            edge = cut_t = None
+            if (c.span, "out") in edge_of and n >= len(idx) - EDGE_WORDS:
+                edge, cut_t = "out", edge_of[(c.span, "out")]
+            elif (c.span, "in") in edge_of and n < EDGE_WORDS:
+                edge, cut_t = "in", edge_of[(c.span, "in")]
+            out.append({"w": w["w"], "t_start": round(a, 3), "t_end": round(b, 3), "span": c.span, "edge": edge,
+                        "cut_t": round(cut_t, 3) if cut_t is not None else None})
+    return out
+
+
+def _same_word(kept: str, heard: str) -> bool:
+    """The heard word is the kept one heard (differently): close spelling, or a word that contains it or starts like it
+    and is at least as long. A clipped word comes back shorter or not at all; run 012 heard "Montivo" as "montevideo"
+    and run 015 "news" + "Spark" as "newspark" with the whole word there."""
+    if not heard:
+        return False
+    return (kept == heard or difflib.SequenceMatcher(None, kept, heard).ratio() >= HEARD_SIMILAR or kept in heard
+            or (len(heard) >= len(kept) and heard[:3] == kept[:3]))
+
+
+def edge_words_unheard(kept: list[dict], heard: list[dict], speech_at=None) -> dict:
+    """Kept words at the cut edges that Voice does not hear in the cut. Both word lists come from the same speech
+    model (the source transcript and the cut's own), so a name it mishears it mostly mishears the same way twice; a
+    word missing from the cut's transcript, or heard as a different word, may have been cut off at the edge. The two
+    lists are aligned as word sequences (difflib), doubles dropped on both sides first (dedupe_heard).
+    `speech_at(cut_t, edge)` -> (source dB at that edge, speech going on there): a word is only cut off where speech
+    still runs at the edge, so a missing word at an edge in silence is the speech model's slip (run 012-open: "then"
+    heard in one transcript of the same audio and not in another, its edge at -49.5 dB under the clip's -45.1 dB
+    threshold) and goes to `quiet`; the 015 cut inside "Montivo" sat at -42.7 dB, over that clip's -50.4 dB."""
+    kept = dedupe_heard(kept)
+    hw = [w for w in dedupe_heard(heard) if _tok(w["w"])]
+    kt = [_tok(w["w"]) for w in kept]
+    ht = [_tok(w["w"]) for w in hw]
+    got: list[str | None] = [None] * len(kept)
+    sm = difflib.SequenceMatcher(None, kt, ht, autojunk=False)
+    for op, a1, a2, b1, b2 in sm.get_opcodes():
+        if op == "equal" or (op == "replace" and a2 - a1 == b2 - b1):
+            for a, b in zip(range(a1, a2), range(b1, b2)):
+                got[a] = ht[b]
+        elif op == "replace":  # unequal blocks: each kept word takes the heard word nearest in time
+            for a in range(a1, a2):
+                mid = (kept[a]["t_start"] + kept[a]["t_end"]) / 2
+                b = min(range(b1, b2), key=lambda b: abs((hw[b]["t_start"] + hw[b]["t_end"]) / 2 - mid))
+                if abs((hw[b]["t_start"] + hw[b]["t_end"]) / 2 - mid) < 0.6:
+                    got[a] = ht[b]
+    at_edges = [k for k, w in enumerate(kept) if w["edge"] and kt[k]]
+    ok = {k: _same_word(kt[k], got[k] or "") for k in at_edges}
+    missing: list[dict] = []
+    quiet: list[dict] = []
+    for k in at_edges:
+        # only words the cut can have clipped: those with no heard word between them and the cut (014: Voice drops a
+        # quick "smoked" in 3 of 6 transcripts of the same audio while "turkey", the last word before the cut, is heard)
+        nearer = [j for j in at_edges if kept[j]["cut_t"] == kept[k]["cut_t"] and kept[j]["edge"] == kept[k]["edge"]
+                  and (j > k if kept[k]["edge"] == "out" else j < k)]
+        if ok[k] or any(ok[j] for j in nearer):
+            continue
+        db, speech = speech_at(kept[k]["cut_t"], kept[k]["edge"]) if speech_at else (None, True)
+        (missing if speech else quiet).append(
+            {"w": kept[k]["w"], "t": kept[k]["t_start"], "cut_t": kept[k]["cut_t"], "edge": kept[k]["edge"],
+             "span": kept[k]["span"], "heard": got[k] or "", "edge_db": db})
+    return {"edge_words": len(at_edges), "cuts": len({kept[k]["cut_t"] for k in at_edges}), "unheard": missing,
+            "quiet": quiet}
+
+
+def edge_speech(edl: dict, audio: Audio):
+    """speech_at for edge_words_unheard: the source level over 40 ms centred on that edge of the cut, and whether it is
+    over the clip's speech threshold (edges.Audio, floor + 6 dB)."""
+    at: dict[tuple[float, str], float] = {}
+    for t, before, after in cuts(cut_map(edl)):
+        if before is not None:
+            e = edl["spans"][before.index]["t_out"]
+            at[(round(t, 3), "out")] = audio.level(e - EDGE_HALF_S, e + EDGE_HALF_S)
+        if after is not None:
+            i = edl["spans"][after.index]["t_in"]
+            at[(round(t, 3), "in")] = audio.level(i - EDGE_HALF_S, i + EDGE_HALF_S)
+    thr = audio.threshold_db()
+
+    def speech_at(cut_t: float, edge: str) -> tuple[float | None, bool]:
+        db = at.get((round(cut_t, 3), edge))
+        return (db, True) if db is None else (round(db, 1), db > thr)
+    return speech_at
+
+
+def crop_paths(run_dir: Path, edl: dict) -> tuple[str | None, list, list]:
+    """The crop path of every rendered segment, planned exactly as render.render plans it (same track, speaker map,
+    pins and reframe bias): (concept, segments, paths). Deterministic and offline."""
+    from .reframe import plan_segment
+    from .render import apply_bias, follow_pieces, load_reframe_track, load_speaker_ids, segment_bias
+    concept, track = load_reframe_track(run_dir, edl)
+    speaker_ids = load_speaker_ids(run_dir, concept, edl)
+    segs = frame_align(merge_segments(edl["spans"]), float(edl["source"]["fps"]))
+    paths = []
+    for seg in segs:
+        path = plan_segment(seg.t_in, seg.t_out, edl["source"], track, span_ids=seg.span_ids,
+                            follow=follow_pieces(seg, edl["spans"], speaker_ids))
+        path.xs = path.xs[:seg.frames] + [path.xs[-1]] * max(0, seg.frames - len(path.xs))
+        bias = segment_bias(edl["spans"], seg.span_ids)
+        if bias:
+            apply_bias(path, bias, int(edl["source"]["width"]))
+        paths.append(path)
+    return concept, segs, paths
+
+
+def head_frame_facts(run_dir: Path, edl: dict) -> dict | None:
+    """Where the followed head leaves the 9:16 crop: the SAM head box of the head the crop follows (the path's track id,
+    per speaker piece; the largest head when the crop follows the person box) against the crop window of every
+    sampled frame. Stretches with more than HEAD_OUT_FRAC of the head's width outside, in cut seconds, with the side
+    it leaves on and the shift (source px, median over the stretch) that centres it again: a fix that only brought it
+    back inside left run 012's planted fault at the frame edge (bias 420 -> 120). None without a head track.
+    Punch-in zooms are not modelled (they stay clear of a head near the top by design, punch.py)."""
+    from .captions import interp_box, largest_at
+    from .reframe import id_at
+    from .render import load_track
+    head = load_track(run_dir, edl, "head")
+    if not head or not head.get("objects"):
+        return None
+    concept, segs, paths = crop_paths(run_dir, edl)
+    fx = float(edl["source"]["width"]) / float(head["source"]["width"])
+    fy = float(edl["source"]["height"]) / float(head["source"]["height"])
+    objs = {oid: [{"t": r["t"], "box": [r["box"][0] * fx, r["box"][1] * fy, r["box"][2] * fx, r["box"][3] * fy]}
+                  for r in recs] for oid, recs in head["objects"].items()}
+    t0 = title_seconds(edl)
+    samples: list[dict] = []
+    for seg, path in zip(segs, paths):
+        step = HEAD_SAMPLE_FRAMES / seg.fps
+        for k in range(0, len(path.xs), HEAD_SAMPLE_FRAMES):
+            src = seg.t_in + k / seg.fps
+            if concept == "head":
+                hid = id_at(path, src)
+                box = interp_box(objs[hid], src) if hid in objs else None
+            else:
+                box = (largest_at({"objects": objs}, src) or [None])[0]
+            if box is None or box[2] - box[0] <= 1:
+                continue
+            x0, x1 = path.xs[k], path.xs[k] + path.crop_w
+            width = box[2] - box[0]
+            left, right = max(0.0, x0 - box[0]), max(0.0, box[2] - x1)
+            frac = min(1.0, (left + right) / width)
+            shift = (box[0] + box[2]) / 2 - (x0 + path.crop_w / 2)
+            samples.append({"t": round(t0 + k / seg.fps, 2), "step": step, "frac": frac,
+                            "side": "left" if left >= right else "right", "shift": shift, "segment": seg.index})
+        t0 += seg.duration
+    out_runs: list[dict] = []
+    for s in samples:
+        if s["frac"] <= HEAD_OUT_FRAC:
+            continue
+        cur = out_runs[-1] if out_runs else None
+        if cur and cur["segment"] == s["segment"] and cur["side"] == s["side"] and s["t"] - cur["t_out"] <= 1.5 * s["step"]:
+            cur["t_out"] = round(s["t"] + s["step"], 2)
+            cur["fracs"].append(s["frac"])
+            cur["shifts"].append(s["shift"])
+        else:
+            out_runs.append({"t_in": s["t"], "t_out": round(s["t"] + s["step"], 2), "side": s["side"],
+                             "segment": s["segment"], "fracs": [s["frac"]], "shifts": [s["shift"]]})
+    stretches = []
+    for r in out_runs:
+        shifts = sorted(r.pop("shifts"))
+        fr = r.pop("fracs")
+        stretches.append({**r, "seconds": round(r["t_out"] - r["t_in"], 2), "max_out": round(max(fr), 2),
+                          "shift_px": int(round(shifts[len(shifts) // 2] / 2)) * 2})
+    return {"concept": concept, "samples": len(samples), "max_out": round(max((s["frac"] for s in samples), default=0.0), 2),
+            "out_of_frame": stretches}
+
+
+def gate_check(caps: dict, edges: list[dict] | None, edge_words: dict | None, head: dict | None) -> dict:
+    """The pass gate: every fault a deterministic check reports, as a reason and as an issue in the reviewer's form
+    (severity major, so plan_fixes turns it into a patch even when the reviewer called it minor or missed it).
+    Faults: a cut edge inside speech (the level fact), a kept edge word not heard where speech runs at the edge, a
+    caption over the head that the renderer could have placed clear of it (forced there), the head out of frame for
+    HEAD_OUT_MIN_S or more."""
+    reasons: list[str] = []
+    issues: list[dict] = []
+
+    def issue(t: float, t_end: float, criterion: str, op: str, what: str, check: str, **params) -> None:
+        p = {"edge": "none", "seconds": 0, "target_t_s": -1, "text": "", "direction": "none", **params}
+        issues.append({"t_s": round(t, 2), "t_end_s": round(t_end, 2), "criterion": criterion, "severity": "major",
+                       "what": what, "fix_op": op, "params": p, "fix_args": "", "check": check})
+
+    for e in edges or []:
+        if not e["loud"]:
+            continue
+        sides = [s for s, db in (("out", e["end_db"]), ("in", e["start_db"])) if db is not None and db > e["loud_db"]]
+        reasons.append(f"cut at {e['t']:.2f} s inside speech ({' and '.join(sides) or 'out'} edge over {e['loud_db']:.1f} dB)")
+        for side in sides or ["out"]:
+            issue(e["t"], e["t"], "no_cut_mid_word", "move_cut", f"speech still going at the {side} edge of the cut",
+                  "loud_edge", edge=side)
+    for m in (edge_words or {}).get("unheard") or []:
+        heard = f"heard as \"{m['heard']}\"" if m["heard"] else "not heard"
+        reasons.append(f"\"{m['w']}\" at the cut at {m['cut_t']:.2f} s {heard}")
+        issue(m["cut_t"], m["cut_t"], "no_cut_mid_word", "move_cut", f"kept word \"{m['w']}\" {heard} in the cut",
+              "edge_word", edge=m["edge"])
+    for o in caps.get("over_face") or []:
+        if o.get("placement") == "over_head":
+            continue  # the renderer found no clear place (run 013: the head fills the frame), a patch cannot move it
+        reasons.append(f"caption over the head at {o['t_in']:.2f}-{o['t_out']:.2f} s")
+        issue((o["t_in"] + o["t_out"]) / 2, (o["t_in"] + o["t_out"]) / 2, "captions_legible", "caption_fix",
+              f"caption \"{o['text']}\" over the head", "caption_face")
+    for r in (head or {}).get("out_of_frame") or []:
+        if r["seconds"] < HEAD_OUT_MIN_S:
+            continue
+        reasons.append(f"head out of frame {r['t_in']:.2f}-{r['t_out']:.2f} s ({r['max_out']:.0%} outside, {r['side']})")
+        issue((r["t_in"] + r["t_out"]) / 2, r["t_out"], "subject_framed", "reframe_bias",
+              f"head leaves the crop on the {r['side']}", "head_frame", direction=r["side"], px=abs(r["shift_px"]))
+    return {"blocked": bool(reasons), "reasons": reasons, "issues": issues}
 
 
 # --------------------------------------------------------------------------- the copy Spark watches
@@ -542,6 +822,7 @@ class Fix:
     severity: str
     t_s: float
     args: dict = field(default_factory=dict)
+    check: str = ""  # the deterministic check behind it (gate_check), empty for a reviewer issue
 
     @property
     def fingerprint(self) -> str:
@@ -714,7 +995,7 @@ def resolve(issue: dict, k: int, edl: dict, words: Words, cmap: list[CutSpan],
         d = p.get("direction")
         if d not in ("left", "right"):
             return None, "reframe_bias without a direction"
-        return mk("reframe_bias", cs.span, dir=d), ""
+        return mk("reframe_bias", cs.span, dir=d, **({"px": int(p["px"])} if p.get("px") else {})), ""
 
     return None, f"unknown fix_op {op}"
 
@@ -730,21 +1011,26 @@ def claims(fix: Fix) -> set[str]:
     return {f"{fix.target}:in", f"{fix.target}:out", f"{fix.target}:*"}
 
 
-def plan_fixes(review: dict, edl: dict, words: Words, audio: Audio | None = None) -> tuple[list[Fix], list[dict]]:
+def plan_fixes(review: dict, edl: dict, words: Words, audio: Audio | None = None,
+               gate: dict | None = None) -> tuple[list[Fix], list[dict]]:
     """Blocker and major issues -> at most MAX_FIXES fixes, worst first, one per target (per edge for edge ops); the
-    rest with the reason."""
+    rest with the reason. `gate` (gate_check) adds the checks' issues after the reviewer's (issue indices past
+    the reviewer's count are the gate's); at equal severity a check's fix goes first, since it is measured."""
     cmap = cut_map(edl)
-    order = sorted(range(len(review.get("issues") or [])),
-                   key=lambda k: (SEVERITY_RANK.get(review["issues"][k]["severity"], 3), review["issues"][k]["t_s"]))
+    issues = list(review.get("issues") or []) + list((gate or {}).get("issues") or [])
+    order = sorted(range(len(issues)),
+                   key=lambda k: (SEVERITY_RANK.get(issues[k]["severity"], 3), not issues[k].get("check"), issues[k]["t_s"]))
     fixes: list[Fix] = []
     skipped: list[dict] = []
     taken: set[str] = set()
     for k in order:
-        issue = review["issues"][k]
+        issue = issues[k]
         if issue["severity"] not in APPLY_SEVERITY:
             skipped.append({"issue": k, "reason": f"severity {issue['severity']}"})
             continue
         fix, why = resolve(issue, k, edl, words, cmap, audio)
+        if fix is not None and issue.get("check"):
+            fix.check = issue["check"]
         if fix is None:
             skipped.append({"issue": k, "reason": why})
         elif claims(fix) & taken:
@@ -865,8 +1151,14 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
                 s["callout"] = f.args["text"]
             note = f"callout shift {s.get('callout_shift_s', 0)} s, text {s['callout']!r}"
         elif f.op == "reframe_bias":
-            s["reframe_bias_px"] = int(s.get("reframe_bias_px") or 0) + (BIAS_PX if f.args["dir"] == "right" else -BIAS_PX)
-            note = f"crop bias {s['reframe_bias_px']:+d} px"
+            # the render takes a segment's mean bias (render.segment_bias): every span of the segment moves, else a
+            # segment of three spans moved a third of the step
+            step = int(f.args.get("px") or BIAS_PX) * (1 if f.args["dir"] == "right" else -1)
+            seg = next((g.span_ids for g in merge_segments(new["spans"]) if f.target in g.span_ids), [f.target])
+            for x in new["spans"]:
+                if x["id"] in seg:
+                    x["reframe_bias_px"] = int(x.get("reframe_bias_px") or 0) + step
+            note = f"crop bias {s['reframe_bias_px']:+d} px" + (f" ({len(seg)} spans of the segment)" if len(seg) > 1 else "")
         if f.op in ("trim_span", "extend_span") or (f.op == "move_cut" and f.args["mode"] in ("snap", "words")):
             # trim_at / shift_words / resnap put BOTH edges back on Voice boundaries (012-ktb: a trim at the start
             # re-opened the end tightened out of the next word), so both are tightened again
@@ -904,10 +1196,12 @@ def finalize(edl: dict, words: Words) -> None:
 def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Ledger, spark, brief: str | None = None,
                   clock: bool = True, log=print, name: str | None = None, heard: bool | None = None,
                   heard_dir: Path | None = None) -> dict:
-    """Review cut_vN.mp4 blind: facts, review copy, upload, Spark. Writes review_vN.json and returns it.
-    A Muse Spark Open reviewer (spark.model) gets the copy inline and, since it cannot hear, the heard-words fact;
-    `heard` True or False forces that fact either way. `heard_dir` caches the cut's Voice transcript (default
-    review/<name>/heard)."""
+    """Review cut_vN.mp4 blind: facts, checks, review copy, upload, Spark, pass gate. Writes review_vN.json and returns
+    it. Every reviewer gets the deterministic checks (kept edge words heard, head in frame) and the caption-vs-heard
+    diff, from Muse Voice on the cut (cached in `heard_dir`, default review/<name>/heard, about $0.002 per 40 s).
+    A Muse Spark Open reviewer (spark.model) gets the copy inline and, since it cannot hear, the heard phrases too;
+    `heard` True or False forces that fact either way. `review.pass` is the gated pass (the reviewer's own in
+    `review.reviewer_pass`); `pass_gate` holds the reasons and the issues plan_fixes applies."""
     name = name or f"review_v{version}"
     rdir = run_dir / "review" / name
     open_model = is_open_model(spark.model)
@@ -920,33 +1214,52 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
         audio = Audio.load(run_dir)
         edges = cut_edge_levels(edl, audio) if audio else None
         timeline = caption_timeline(edl)
-        words_heard = heard_words(cut, heard_dir or rdir / "heard", ledger, log=log) if heard else None
-        facts = facts_text(sil, caps, duration, edges, timeline, words_heard)
+        words_heard = heard_words(cut, heard_dir or rdir / "heard", ledger, log=log)
+        vpath = run_dir / "voice" / "voice.json"
+        edge_words = (edge_words_unheard(kept_words(edl, Words(json.loads(vpath.read_text())["words"])), words_heard,
+                                         edge_speech(edl, audio) if audio else None)
+                      if vpath.is_file() else None)
+        head = head_frame_facts(run_dir, edl)
+        facts = facts_text(sil, caps, duration, edges, timeline, words_heard if heard else None, edge_words=edge_words,
+                           head=head, diff_heard=words_heard)
+        gate = gate_check(caps, edges, edge_words, head)
         copy_path = review_copy(cut, rdir, clock=clock)
         up = {"id": None} if open_model else upload_file(copy_path, "video/mp4")
     ledger.add(Entry(stage="review.prep", model="ffmpeg" if open_model else "ffmpeg+files", seconds=t.seconds, cost_usd=0.0,
                      note=f"{name}: {copy_path.name} {copy_path.stat().st_size / 1e6:.1f} MB, file {up.get('id')}, "
                           f"{len(sil)} silences, {len(caps['over_face'])} captions over the face, "
-                          f"{sum(e['loud'] for e in edges or [])} loud cuts"))
+                          f"{sum(e['loud'] for e in edges or [])} loud cuts, "
+                          f"{len((edge_words or {}).get('unheard') or [])} edge words not heard, "
+                          f"{sum(1 for r in (head or {}).get('out_of_frame') or [] if r['seconds'] >= HEAD_OUT_MIN_S)} "
+                          f"head-out stretches"))
     log(f"review: {name} facts:\n{facts}")
     call = spark.review(up["id"], brief or edl["brief"], facts, duration, name=name,
                         video=copy_path if open_model else None, hears=not open_model)
     rv = call.parsed
-    log(f"review: {name} overall {rv['overall']} pass {rv['pass']} ({len(rv['issues'])} issues), ${call.cost_usd:.4f}")
+    rv["reviewer_pass"] = bool(rv["pass"])
+    rv["pass"] = rv["reviewer_pass"] and not gate["blocked"]
+    log(f"review: {name} overall {rv['overall']} pass {rv['pass']} ({len(rv['issues'])} issues), ${call.cost_usd:.4f}"
+        + (f"; gate blocks the reviewer's pass: {'; '.join(gate['reasons'])}" if gate["blocked"] and rv["reviewer_pass"]
+           else f"; gate: {'; '.join(gate['reasons'])}" if gate["blocked"] else ""))
     for i in sorted(rv["issues"], key=lambda i: i["t_s"]):
         log(f"  {i['t_s']:6.2f}s {i['severity']:7s} {i['criterion']:22s} {i['fix_op']:14s} {i['what'][:90]}")
     out = {"name": name, "version": version, "cut": cut.as_posix(), "review_copy": copy_path.as_posix(),
            "file_id": up.get("id"), "clock": clock, "duration_s": duration,
            "reviewer": spark.model,
            "facts": {"silences": sil, "captions": caps, "cut_edges": edges, "caption_timeline": timeline,
-                     "heard": words_heard},
-           "facts_text": facts, "review": rv, "cost_usd": call.cost_usd, "seconds": call.seconds,
+                     "heard": words_heard, "edge_words": edge_words, "head_frame": head},
+           "facts_text": facts, "review": rv, "pass_gate": gate, "cost_usd": call.cost_usd, "seconds": call.seconds,
            "response_id": call.response_id}
     dump_json(run_dir / f"{name}.json", out)
     return out
 
 
 # --------------------------------------------------------------------------- the loop
+
+def rank(h: dict) -> tuple[bool, float]:
+    """How the loop compares versions: one the gate lets through beats one it blocks, then the reviewer's score."""
+    return (not h.get("gate"), h["overall"])
+
 
 def edl_version(path: Path, edl: dict) -> int:
     m = re.search(r"_v(\d+)\.json$", path.name)
@@ -987,9 +1300,12 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
             break
         rv = review_fn(edl, cut, n)
         spent += rv["cost_usd"]
-        fixes, skipped = plan_fixes(rv["review"], edl, words, audio)
+        gate = rv.get("pass_gate")
+        fixes, skipped = plan_fixes(rv["review"], edl, words, audio, gate)
         entry = {"version": n, "edl": edl_path.name, "cut": cut.name, "overall": rv["review"]["overall"],
-                 "pass": rv["review"]["pass"], "scores": rv["review"]["scores"], "issues": len(rv["review"]["issues"]),
+                 "pass": rv["review"]["pass"], "reviewer_pass": rv["review"].get("reviewer_pass", rv["review"]["pass"]),
+                 "gate": (gate or {}).get("reasons") or [],
+                 "scores": rv["review"]["scores"], "issues": len(rv["review"]["issues"]),
                  "cost_usd": rv["cost_usd"], "fixes": [{**asdict(f), "fingerprint": f.fingerprint} for f in fixes],
                  "skipped": skipped}
         history.append(entry)
@@ -998,10 +1314,10 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
         if rv["review"]["pass"]:
             stop = "pass"
             break
-        best_before = max(history[:-1], key=lambda h: h["overall"]) if len(history) > 1 else None
-        if best_before and entry["overall"] < best_before["overall"]:
-            stop = (f"regression: v{n} scored {entry['overall']} < v{best_before['version']} {best_before['overall']}, "
-                    f"the best stays v{best_before['version']}")
+        best_before = max(history[:-1], key=rank) if len(history) > 1 else None
+        if best_before and rank(entry) < rank(best_before):
+            stop = (f"regression: v{n} scored {entry['overall']}{' (gated)' if entry['gate'] else ''} < "
+                    f"v{best_before['version']} {best_before['overall']}, the best stays v{best_before['version']}")
             break
         if k == passes - 1:
             stop = f"max passes ({passes})"
@@ -1027,7 +1343,7 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
         edl_path = run_dir / f"edl_v{n}.json"
         dump_json(edl_path, new)
         edl = new
-    best = max(history, key=lambda h: h["overall"]) if history else None
+    best = max(history, key=rank) if history else None
     summary = {"stop": stop, "passes": history, "reviews": len(history), "review_cost_usd": round(spent, 4),
                "best": {"version": best["version"], "cut": best["cut"], "overall": best["overall"]} if best else None,
                "last_edl": edl_path.name, "budget_usd": budget_usd}
