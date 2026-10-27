@@ -101,7 +101,7 @@ export type RunState = {
   ledger: { total_cost_usd: number; wall_seconds: number; stages: Record<string, { seconds: number; cost_usd: number; calls: number; tokens_in: number; tokens_out: number }> };
   loop: { stop: string; passes: { version: number; overall: number; pass: boolean }[]; best: { version: number; overall: number } | null } | null;
   versions: Version[]; words: Record<string, Word[]>; stages: Stage[]; job: Job | null; has_key: boolean; has_open_key: boolean;
-  costs: Costs;
+  costs: Costs; key_note?: string | null; budget?: Budget | null;
 };
 
 /** Rough prices and times for the button hints (server COST). */
@@ -131,3 +131,6 @@ export type HeadsInfo = {
   heads: { id: string; t: number; box: number[]; frames: number; speaker: string | null }[];
   video: string | null;
 };
+
+/** The hosted demo's spend cap on Meta model calls (null on a laptop). */
+export type Budget = { cap: number; spent: number; left: number };

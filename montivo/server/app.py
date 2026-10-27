@@ -4,7 +4,8 @@
     .venv/bin/montivo-ui --port 9000 --root ~/Documents/montivo
 
 GET endpoints only read files, so a finished run folder opens without MODEL_API_KEY; the actions that call a model
-answer 409 when the key is not set (the key itself is never read beyond "is it set").
+answer 409 when the key is not set (the key itself is never read beyond "is it set"). The hosted demo (modal_app.py)
+adds a password and a spend cap from the environment (hosted.py).
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..config import OPEN_MODEL
-from . import media
+from . import hosted, media
 from .runs import fingerprint, heads, list_runs, parse_log, progress, read_json, replay_script, run_state
 
 STATIC = Path(__file__).parent / "static"
@@ -82,6 +83,7 @@ class State:
         self.footage = root / "footage"
         self.jobs: dict[str, Job] = {}  # run id -> its latest job
         self.lock = threading.Lock()
+        self.one_job = os.environ.get("MONTIVO_ONE_JOB") == "1"  # hosted: one engine job at a time over all runs
 
     def run_dir(self, run_id: str) -> Path:
         if not SAFE_NAME.match(run_id):
@@ -190,6 +192,10 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
     with st.lock:
         if st.busy(run_id):
             raise HTTPException(409, f"{st.jobs[run_id].label} is still running on this run")
+        other = next((j for j in st.jobs.values() if j.ended is None), None) if st.one_job else None
+        if other:
+            raise HTTPException(409, f"{other.label} is running on {other.run}: this demo server runs one job at a "
+                                     "time, try again when it finishes")
         (d / "ui").mkdir(parents=True, exist_ok=True)
         jid = time.strftime("%Y%m%d-%H%M%S")
         out = d / "ui" / f"job-{jid}-{kind}.out"
@@ -216,19 +222,72 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
 def create_app(root: Path) -> FastAPI:
     st = State(root.resolve())
     app = FastAPI(title="Montivo", docs_url="/api/docs", openapi_url="/api/openapi.json")
+    cap = hosted.env_float("MONTIVO_BUDGET_USD")
+    budget = hosted.Budget(st.root, cap) if cap is not None else None
+    max_footage_s = hosted.env_float("MONTIVO_MAX_FOOTAGE_S")
+    max_upload_mb = hosted.env_float("MONTIVO_MAX_UPLOAD_MB")
+    hosted.install(app, os.environ.get("MONTIVO_PASSWORD"))
+
+    def key_ok() -> bool:
+        """The key is set and, on the hosted demo, the budget still covers the cheapest paid action."""
+        return has_key() and (budget is None or budget.note() is None)
+
+    copying = threading.Lock()
+
+    def judge_of(request: Request) -> str:
+        return request.cookies.get(hosted.JUDGE) or "guest"
+
+    def owner(d: Path) -> str | None:
+        p = d / "ui" / "owner"
+        return p.read_text().strip() if p.is_file() else None
+
+    def is_sample(d: Path) -> bool:
+        """A run seeded onto the host for everyone (adopted, no owner): the judges edit their own copies of it."""
+        return budget is not None and d.name in budget.baseline and owner(d) is None
+
+    def own(run_id: str, request: Request) -> str:
+        """The run an edit goes to: the run itself, or on the hosted demo the judge's own copy of a sample (made on
+        their first edit, runs/<id>-<judge>), so one judge's edits never become the next judge's opening version."""
+        d = st.run_dir(run_id)
+        if not is_sample(d):
+            return run_id
+        judge = judge_of(request)
+        mine = f"{run_id}-{judge}"
+        with copying:
+            if not (st.runs / mine / "run.json").is_file():
+                tmp = st.root / ".copying" / mine  # outside runs/: the budget and the list never see a half copy
+                shutil.rmtree(tmp, ignore_errors=True)
+                tmp.parent.mkdir(exist_ok=True)
+                shutil.copytree(d, tmp, ignore=shutil.ignore_patterns("job-*.out", "cache", "frames", "heard"))
+                (tmp / "ui").mkdir(exist_ok=True)
+                (tmp / "ui" / "owner").write_text(judge)
+                tmp.rename(st.runs / mine)
+                budget.adopt([mine])  # the copy's ledger so far is the sample's, not the judge's spend
+                chat_append(st.runs / mine, {"role": "agent", "kind": "result", "text": f"Your own copy of the "
+                             f"sample {run_id}: your edits go here and the sample stays as it was for the next judge."})
+        return mine
+
+    def key_info() -> dict:
+        return {"has_key": key_ok(), "key_note": budget.note() if budget else None,
+                "budget": budget.public() if budget else None}
 
     @app.get("/api/health")
     def health():
-        return {"ok": True, "root": str(st.root), "has_key": has_key(), "costs": COST}
+        return {"ok": True, "root": str(st.root), **key_info(), "costs": COST}
 
     @app.get("/api/runs")
-    def runs():
+    def runs(request: Request):
         out = list_runs(st.runs)
+        if budget is not None:  # the hosted demo: the samples (or this judge's copy of one) and their own runs
+            judge = judge_of(request)
+            ids = {r["id"] for r in out}
+            out = [r for r in out if (o := owner(st.runs / r["id"])) == judge
+                   or (o is None and f"{r['id']}-{judge}" not in ids)]
         for r in out:
             j = st.job(r["id"])
             r["job"] = j.public() if j else None
             r["progress"] = job_progress(st, j) if j and j.ended is None else None
-        return {"runs": out, "has_key": has_key(), "has_open_key": has_open_key(), "costs": COST}
+        return {"runs": out, **key_info(), "has_open_key": has_open_key(), "costs": COST}
 
     @app.get("/api/runs/{run_id}")
     def run(run_id: str):
@@ -236,7 +295,7 @@ def create_app(root: Path) -> FastAPI:
         s = run_state(d)
         j = st.job(run_id)
         s["job"] = j.public() if j else None
-        s["has_key"] = has_key()
+        s.update(key_info())
         s["has_open_key"] = has_open_key()
         s["costs"] = COST
         return s
@@ -411,9 +470,12 @@ def create_app(root: Path) -> FastAPI:
 
     # ------------------------------------------------------------------- actions
 
-    def need_key(what: str):
+    def need_key(what: str, est: float = hosted.MIN_PAID_USD):
+        """409 without the key, or on the hosted demo when the budget left does not cover `est` dollars."""
         if not has_key():
             raise HTTPException(409, f"{what} calls Meta models: set MODEL_API_KEY and restart montivo serve")
+        if budget is not None:
+            budget.require(what, est)
 
     def planner_of(b: dict) -> str | None:
         """{"planner": "spark" | "open"} -> None (Spark 1.3, the default) or the Muse Spark Open model id."""
@@ -459,18 +521,29 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(400, "name: letters, digits, . _ - and a video extension")
         st.footage.mkdir(exist_ok=True)
         out = st.footage / name
+        size, limit = 0, (max_upload_mb or 0) * 1e6
         with out.open("wb") as fh:
             async for chunk in request.stream():
+                size += len(chunk)
+                if limit and size > limit:
+                    fh.close()
+                    out.unlink(missing_ok=True)
+                    raise HTTPException(413, f"the demo server takes uploads up to {max_upload_mb:.0f} MB")
                 fh.write(chunk)
         return {"path": f"footage/{name}", "mb": round(out.stat().st_size / 1e6, 1)}
 
     @app.post("/api/runs")
     async def new_run(request: Request):
         b = await request.json()
-        need_key("A new run")
         src = (st.root / b.get("footage", "")).resolve()
         if st.footage.resolve() not in src.parents or not src.is_file():
             raise HTTPException(400, "pick a file in footage/")
+        dur = footage_duration(src) or 0.0
+        if max_footage_s and dur > max_footage_s:
+            raise HTTPException(400, f"this clip is {dur:.0f} s: the demo server takes clips up to {max_footage_s:.0f} s")
+        need_key("A new run", COST["run_fixed"] + COST["run_per_s"] * dur
+                 + (COST["review_loop"] if b.get("review", True) else 0.0)
+                 + (0.07 if b.get("review", True) and b.get("hook_ab") else 0.0))
         brief = (b.get("brief") or "").strip()
         if not brief:
             raise HTTPException(400, "the brief is empty")
@@ -491,19 +564,22 @@ def create_app(root: Path) -> FastAPI:
             args.append("--punch")
         if open_planner:
             args += ["--planner", "open"]
-        (st.runs / rid).mkdir(parents=True, exist_ok=True)
+        (st.runs / rid / "ui").mkdir(parents=True, exist_ok=True)
+        if budget is not None:
+            (st.runs / rid / "ui" / "owner").write_text(judge_of(request))
         job = start_job(st, rid, "run", "Run", args, chat={"role": "user", "text": brief, "kind": "brief"})
         return {"id": rid, "job": job.public()}
 
     @app.post("/api/runs/{run_id}/drop")
     async def drop(run_id: str, request: Request):
+        run_id = own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         span = str(b.get("span", ""))
         frm = int(b.get("from") or latest_version(d))
         passes = int(b.get("review") or 0)
         if passes:
-            need_key("Reviewing the new cut")
+            need_key("Reviewing the new cut", COST["review"] * passes)
         if not re.fullmatch(r"s\d+", span):
             raise HTTPException(400, "span id like s3")
         args = ["-m", "montivo.human", "drop", f"runs/{run_id}", "--span", span, "--from", str(frm), "--review", str(passes)]
@@ -514,13 +590,14 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/runs/{run_id}/trim")
     async def trim(run_id: str, request: Request):
         """Move one clip edge to a word boundary (a timeline drag): the reviewer's trim_span / extend_span op."""
+        run_id = own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         span, edge = str(b.get("span", "")), str(b.get("edge", ""))
         frm = int(b.get("from") or latest_version(d))
         passes = int(b.get("review") or 0)
         if passes:
-            need_key("Reviewing the new cut")
+            need_key("Reviewing the new cut", COST["review"] * passes)
         if not re.fullmatch(r"s\d+", span) or edge not in ("in", "out"):
             raise HTTPException(400, "span id like s3 and edge in or out")
         try:
@@ -538,12 +615,13 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/runs/{run_id}/punch")
     async def punch(run_id: str, request: Request):
         """Punch-ins on or off ({"on": true|false}) or one removed ({"skip": key}): the next version, ffmpeg only."""
+        run_id = own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
         passes = int(b.get("review") or 0)
         if passes:
-            need_key("Reviewing the new cut")
+            need_key("Reviewing the new cut", COST["review"] * passes)
         skip, on = b.get("skip"), b.get("on")
         if skip is not None:
             skip = str(skip)
@@ -562,12 +640,13 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/runs/{run_id}/caption")
     async def caption(run_id: str, request: Request):
         """Retext caption lines ({"edits": [{"at": cut second, "text": words spoken}]}): the next version, ffmpeg only."""
+        run_id = own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
         passes = int(b.get("review") or 0)
         if passes:
-            need_key("Reviewing the new cut")
+            need_key("Reviewing the new cut", COST["review"] * passes)
         edits = b.get("edits") or []
         if not isinstance(edits, list) or not 0 < len(edits) <= 40:
             raise HTTPException(400, "edits: 1 to 40 of {at, text}")
@@ -592,6 +671,7 @@ def create_app(root: Path) -> FastAPI:
     async def text_edit(run_id: str, request: Request):
         """Callouts ({"callouts": {span: text}}, "" removes one), the title card on or off ({"title_card": bool}) or new
         title words ({"title": text}: one Muse Image call, $0.01, so it needs the key): the next version."""
+        run_id = own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
@@ -608,7 +688,8 @@ def create_app(root: Path) -> FastAPI:
         if not callouts and title is None and card is None:
             raise HTTPException(400, "nothing to change")
         if title is not None or passes:
-            need_key("New title card words (Muse Image)" if title is not None else "Reviewing the new cut")
+            need_key("New title card words (Muse Image)" if title is not None else "Reviewing the new cut",
+                     (0.01 if title is not None else 0.0) + COST["review"] * passes)
         args = ["-m", "montivo.human", "text", f"runs/{run_id}", *[f"--callout={k}={v}" for k, v in callouts.items()],
                 *([f"--title={title}"] if title is not None else []),
                 *(["--title-on" if card else "--title-off"] if card is not None else []),
@@ -625,12 +706,13 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/runs/{run_id}/reorder")
     async def reorder(run_id: str, request: Request):
         """Move a clip in front of another ({"span": "s4", "before": "s2"}) or to the end ("before": null)."""
+        run_id = own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
         passes = int(b.get("review") or 0)
         if passes:
-            need_key("Reviewing the new cut")
+            need_key("Reviewing the new cut", COST["review"] * passes)
         span, before = str(b.get("span", "")), b.get("before")
         if not re.fullmatch(r"s\d+", span) or (before is not None and not re.fullmatch(r"s\d+", str(before))):
             raise HTTPException(400, "span and before: span ids like s3 (before null = to the end)")
@@ -645,12 +727,13 @@ def create_app(root: Path) -> FastAPI:
     async def cut(run_id: str, request: Request):
         """Delete the words of a transcript selection ({"words": [{"span": "s2", "from": 16, "to": 18}, ...]}, turn
         word indices) in one version: whole clips dropped, clip edges trimmed, the middle of a clip split."""
+        run_id = own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
         passes = int(b.get("review") or 0)
         if passes:
-            need_key("Reviewing the new cut")
+            need_key("Reviewing the new cut", COST["review"] * passes)
         ranges = b.get("words")
         if not isinstance(ranges, list) or not ranges:
             raise HTTPException(400, "words: a list of {span, from, to}")
@@ -697,12 +780,13 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/runs/{run_id}/pin")
     async def pin(run_id: str, request: Request):
         """{"speaker": "A", "head": "3"}: the crop follows that head when A talks; "head": null drops the pin."""
+        run_id = own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
         passes = int(b.get("review") or 0)
         if passes:
-            need_key("Reviewing the new cut")
+            need_key("Reviewing the new cut", COST["review"] * passes)
         spk, head = str(b.get("speaker", "")), b.get("head")
         if not re.fullmatch(r"[A-Za-z0-9]{1,8}", spk) or (head is not None and not re.fullmatch(r"\d{1,4}", str(head))):
             raise HTTPException(400, "speaker: a Voice label like A; head: a head id or null")
@@ -716,15 +800,16 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/runs/{run_id}/replan")
     async def replan(run_id: str, request: Request):
+        run_id = own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
-        need_key("Re-planning")
         model = planner_of(b)
         text = (b.get("instruction") or "").strip()
         if not text:
             raise HTTPException(400, "the instruction is empty")
         frm = int(b.get("from") or latest_version(d))
         passes = int(b.get("review") or 0)
+        need_key("Re-planning", COST["plan_open" if model else "plan"] + COST["review"] * passes)
         chips = [str(c) for c in b.get("chips") or []]
         instr = text + (f" (about {', '.join(chips)})" if chips else "")
         args = ["-m", "montivo.human", "replan", f"runs/{run_id}", "--instruction", instr, "--from", str(frm),
@@ -735,11 +820,12 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/runs/{run_id}/review")
     async def review(run_id: str, request: Request):
+        run_id = own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
-        need_key("The review loop")
         frm = int(b.get("from") or latest_version(d))
         passes = int(b.get("passes") or 3)
+        need_key("The review loop" if passes > 1 else "A blind review", COST["review"] * passes)
         args = ["-m", "montivo.cli", "review", f"runs/{run_id}", "--edl", f"edl_v{frm}.json", "--passes", str(passes)]
         job = start_job(st, run_id, "review", "Review loop" if passes > 1 else "Blind review", args,
                         chat={"role": "user", "kind": "review",
@@ -750,9 +836,10 @@ def create_app(root: Path) -> FastAPI:
     async def hook(run_id: str, request: Request):
         """The hook A/B on one version: the next version opens on another line, both are reviewed blind, the higher
         (pass, overall) is kept (`montivo hook`, one or two reviews, $0.10 budget)."""
+        run_id = own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
-        need_key("The hook A/B")
+        need_key("The hook A/B", 0.07)
         frm = int(b.get("from") or latest_version(d))
         if not (d / f"edl_v{frm}.json").is_file():
             raise HTTPException(400, f"no edl_v{frm}.json in this run")
@@ -778,6 +865,8 @@ def create_app(root: Path) -> FastAPI:
         d = st.run_dir(run_id)
         if st.busy(run_id):
             raise HTTPException(409, f"{st.jobs[run_id].label} is still running on this run")
+        if is_sample(d):
+            raise HTTPException(403, "the sample projects stay on the demo server for everyone")
         dest = st.runs / ARCHIVE / run_id
         if dest.exists():
             raise HTTPException(409, f"runs/{ARCHIVE}/{run_id} already exists: restore or rename that one first")

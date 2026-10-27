@@ -175,7 +175,7 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
   useEffect(() => { if (focusNonce) { setUseClip(true); box.current?.focus(); } }, [focusNonce]);
   const chips = [...(clip && useClip ? [clip] : []), ...(time != null ? [`@${tc(time)}`] : [])];
   const cost = (planner === "open" ? state.costs.plan_open : state.costs.plan) + (review ? state.costs.review : 0);
-  const blocked = !state.has_key ? "Asking Montivo calls Muse Spark: set MODEL_API_KEY and restart montivo serve."
+  const blocked = !state.has_key ? state.key_note ?? "Asking Montivo calls Muse Spark: set MODEL_API_KEY and restart montivo serve."
     : job?.running ? `${job.label} is running…` : replay ? "Replay is on: turn it off in the menu to edit." : null;
   const send = () => { if (!text.trim() || blocked) return; onSend(text.trim(), chips, review ? 1 : 0, planner); setText(""); setTime(null); };
   return (

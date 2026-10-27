@@ -167,7 +167,7 @@ function HookTry({ state, versions, v, next, canEdit, onPick, onHook }: {
   const reviews = v.review ? 1 : 2;
   const cost = state.costs.review * reviews;
   const opener = v.spans[0]?.words ?? "";
-  const why = !state.has_key ? "The hook A/B reviews both versions on Muse Spark: set MODEL_API_KEY and restart montivo serve."
+  const why = !state.has_key ? state.key_note ?? "The hook A/B reviews both versions on Muse Spark: set MODEL_API_KEY and restart montivo serve."
     : canEdit ? `${canEdit}.` : v.spans.length < 2 ? "One clip only: nothing else to open on." : null;
   return (
     <div className="hook-try">
@@ -235,7 +235,7 @@ function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onRe
             <div className="iec-title">Version {v.n} has not been reviewed yet</div>
             <p>The blind reviewer watches the rendered video, scores it against the rubric and proposes fixes; Montivo applies them and renders again.</p>
             {canEdit ? <span className="mute small">{canEdit}.</span>
-              : <button className="btn" disabled={!state.has_key} onClick={onReview} title={state.has_key ? "" : "needs MODEL_API_KEY"}>Review this version <span className="btn-cost">~{usd(state.costs.review)}</span></button>}
+              : <button className="btn" disabled={!state.has_key} onClick={onReview} title={state.has_key ? "" : state.key_note ?? "needs MODEL_API_KEY"}>Review this version <span className="btn-cost">~{usd(state.costs.review)}</span></button>}
           </div>
         )}
         {r && (

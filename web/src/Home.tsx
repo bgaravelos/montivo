@@ -4,7 +4,7 @@ import { nameOf } from "./edit";
 import { Icon } from "./icons";
 import { PlannerPicker } from "./Panels";
 import { ProgressMini } from "./Progress";
-import type { CardScore, Costs, Planner, RunCard } from "./types";
+import type { Budget, CardScore, Costs, Planner, RunCard } from "./types";
 
 type Footage = { path: string; name: string; mb: number; duration_s: number | null };
 const COSTS: Costs = { plan: 0.05, plan_open: 0.012, plan_s: 35, plan_open_s: 7, review: 0.035, run_per_s: 0.0026, run_fixed: 0.045,
@@ -52,6 +52,8 @@ export function Home({ go }: { go: (h: string) => void }) {
   const [runs, setRuns] = useState<RunCard[] | null>(null);
   const [hasKey, setHasKey] = useState(false);
   const [hasOpen, setHasOpen] = useState(false);
+  const [keyNote, setKeyNote] = useState<string | null>(null);
+  const [budget, setBudget] = useState<Budget | null>(null);
   const [costs, setCosts] = useState<Costs>(COSTS);
   const [planner, setPlanner] = useState<Planner>("spark");
   const [footage, setFootage] = useState<Footage[]>([]);
@@ -71,10 +73,11 @@ export function Home({ go }: { go: (h: string) => void }) {
   const [showArchived, setShowArchived] = useState(false);
   const [toast, setToast] = useState<{ text: string; undo?: string; tone?: string } | null>(null);
 
-  const loadRuns = () => api<{ runs: RunCard[]; has_key: boolean; has_open_key: boolean; costs: Costs }>("/api/runs").then((r) => {
+  const loadRuns = () => api<{ runs: RunCard[]; has_key: boolean; has_open_key: boolean; costs: Costs; key_note?: string | null; budget?: Budget | null }>("/api/runs").then((r) => {
     const recv = performance.now();
     setRuns(r.runs.map((x) => (x.progress ? { ...x, progress: { ...x.progress, recv } } : x)));
     setHasKey(r.has_key); setHasOpen(r.has_open_key); if (r.costs) setCosts(r.costs);
+    setKeyNote(r.key_note ?? null); setBudget(r.budget ?? null);
   });
   const loadArchived = () => api<{ runs: RunCard[] }>("/api/archive").then((r) => setArchived(r.runs)).catch(() => setArchived([]));
   const load = () => {
@@ -202,7 +205,8 @@ export function Home({ go }: { go: (h: string) => void }) {
         </section>
         <section className="new-run">
           <div className="h">New project</div>
-          {!hasKey && <div className="warn">MODEL_API_KEY is not set: finished projects open, and deleting or trimming a clip renders without a model, but a new project needs the key.</div>}
+          {!hasKey && <div className="warn">{keyNote ?? "MODEL_API_KEY is not set: finished projects open, and deleting or trimming a clip renders without a model, but a new project needs the key."}</div>}
+          {budget && hasKey && <div className="mute small">Demo budget for Meta model calls: {usd(budget.left)} of {usd(budget.cap)} left, shared by everyone on this server.</div>}
           <label>Footage
             <select value={f} onChange={(e) => setF(e.target.value)}>
               {footage.map((x) => <option key={x.path} value={x.path}>{x.name} · {x.duration_s ? `${tc(x.duration_s, 0)} · ` : ""}{x.mb} MB</option>)}

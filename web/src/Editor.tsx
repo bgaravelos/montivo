@@ -106,8 +106,11 @@ export function Editor({ id, replay, go }: Props) {
 
   const flash = useCallback((text: string, tone?: string) => { setToast({ text, tone }); window.setTimeout(() => setToast(null), 4500); }, []);
   const act = useCallback(async (path: string, body: unknown) => {
-    try { await api(`/api/runs/${id}/${path}`, body); } catch (e) { flash(String((e as Error).message), "error"); }
-  }, [id, flash]);
+    try {
+      const r = await api<{ job?: { run?: string } }>(`/api/runs/${id}/${path}`, body);
+      if (r.job?.run && r.job.run !== id) go(`#/run/${r.job.run}`); // the hosted demo edits the judge's own copy of a sample
+    } catch (e) { flash(String((e as Error).message), "error"); }
+  }, [id, flash, go]);
   const seek = useCallback((a: number, b?: number) => player.current?.seek(a, b), []);
   const scrub = useCallback((x: number) => { player.current?.pause(); player.current?.seek(x); }, []);
   const onTime = useCallback((x: number) => { tRef.current = x; setT(x); }, []);

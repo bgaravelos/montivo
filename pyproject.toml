@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+host = ["modal>=1.6"]  # modal_app.py: the hosted demo for the judges
 
 [project.scripts]
 montivo = "montivo.cli:main"
