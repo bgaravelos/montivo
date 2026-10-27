@@ -174,7 +174,7 @@ callouts on "make it about 30 seconds"); a later review keeps the agent loop's `
 Ask Montivo on the sandbox `runs/015-ui` (v4 + two test caption edits) -> v5 7 spans 32.0 s, review 100 pass, captions
 carried, callouts lost -> after the fix v6 kept both. `.claude/launch.json` "montivo-ui-key" serves WITH the key on 8767
 (it spends: stop it after use). The evening-by-evening table is in README.md.
-Brand (27/10 evening, $0): Billy chose direction A, In/Out + v-tag, dark + marker yellow. `assets/brand/`
+Brand (27/10 evening, $0, commit `4c17218`): Billy chose direction A, In/Out + v-tag, dark + marker yellow. `assets/brand/`
 (guide in its README.md): symbol = in/out brackets with a marker V between them (reads M and [v]), 64 grid, 8-unit
 brackets; wordmark lowercase Inter Tight 700 outlined with HarfBuzz kerning, -0.02 em; lockups dark/light/mono, stacked,
 app icons (ink tile, marker tile), favicon; tokens.json (ink #141414, paper #F3F0E8, marker #FFC629, graphite, slate,
