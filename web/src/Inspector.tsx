@@ -2,7 +2,7 @@ import { Fragment } from "react";
 import { crit, fileUrl, frameUrl, tc, usd } from "./api";
 import { chain, originLabel, parentOf, punchLabel, sevRank, type Block } from "./edit";
 import { Icon } from "./icons";
-import type { Issue, PunchIn, RunState, Version, Word } from "./types";
+import type { Issue, PunchIn, Review, RunState, Version, Word } from "./types";
 
 export type PunchAsk = { on: boolean } | { skip: string };
 
@@ -253,10 +253,12 @@ function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onRe
               })}
             </div>
             <p className="summary">{r.summary}</p>
+            <GateNote r={r} />
             <div className="facts" title={r.facts_text}>
               <span className="fact">silent gaps <b>{r.facts.silences}</b></span>
               <span className="fact">captions over the face <b>{r.facts.over_face}</b></span>
               <span className="fact">loud cuts <b>{r.facts.loud_edges}</b> of {r.facts.cut_edges}</span>
+              {r.gate && <span className="fact">measured faults <b>{r.gate.checks.length}</b></span>}
             </div>
             <div className="pn-k">Notes</div>
             <div className="issues">
@@ -265,11 +267,47 @@ function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onRe
               ))}
               {!r.issues.length && <p className="mute small">No notes: {r.pass ? "the cut passes." : "nothing flagged."}</p>}
             </div>
+            {!!r.gate?.issues.length && <>
+              <div className="pn-k" title="Faults the deterministic checks measured in the cut: each one holds the pass and becomes a fix, whatever the reviewer said">Measured checks</div>
+              <div className="issues">
+                {r.gate.issues.map((i) => <IssueCard key={i.k} id={id} issue={i} v={v} all={state.versions} onSeek={onSeek} />)}
+              </div>
+            </>}
             <div className="rv-cost mute">review {usd(r.cost_usd, 3)} · {r.seconds?.toFixed(0)} s · watched {r.duration_s?.toFixed(1)} s</div>
           </>
         )}
       </div>
     </section>
+  );
+}
+
+/** The deterministic checks of the pass gate (review.gate_check), in the editor's words. */
+export const CHECKS: Record<string, string> = {
+  loud_edge: "cut inside speech", edge_word: "edge word not heard", caption_face: "caption over the head", head_frame: "head out of frame",
+};
+
+/** Why a reviewed version does not pass although it may score high: the gate's measured faults and the reviewer's own
+ *  open blockers and majors, with the reviewer's own verdict beside them. Nothing when the gate lets it through. */
+export function GateNote({ r, compact }: { r: Review; compact?: boolean }) {
+  const g = r.gate;
+  if (!g?.blocked) return null;
+  const lines = [
+    ...g.checks.map((c) => ({ k: "measured", text: c })),
+    ...g.open_majors.map((m) => ({ k: "reviewer", text: `${m.severity} open: ${crit(m.criterion)} at ${tc(m.t_s)}` })),
+  ];
+  const shown = compact ? lines.slice(0, 2) : lines;
+  return (
+    <div className={`gate-note ${compact ? "compact" : ""}`} title={g.reasons.join("\n")}>
+      <div className="gn-top">
+        <span className="gate-tag">gate</span>
+        <span className="gn-what">{r.reviewer_pass ? "holds the reviewer's pass" : "no pass"}</span>
+        <span className={`gn-rp ${r.reviewer_pass ? "pass" : ""}`}>reviewer: {r.reviewer_pass ? "pass" : "no pass"}</span>
+      </div>
+      <ul className="gn-list">
+        {shown.map((l, k) => <li key={k}><span className={`gn-k ${l.k}`}>{l.k}</span><span>{l.text}</span></li>)}
+        {lines.length > shown.length && <li className="mute small">+{lines.length - shown.length} more</li>}
+      </ul>
+    </div>
   );
 }
 
@@ -284,6 +322,7 @@ export function IssueCard({ id, issue, v, all, onSeek }: { id: string; issue: Is
         <button className="time" onClick={loop} title="Play this moment in a loop">{tc(issue.t_s)}</button>
         <span className={`sev ${issue.severity}`}>{issue.severity}</span>
         <span className="crit">{crit(issue.criterion)}</span>
+        {issue.check && <span className="measured" title={`${CHECKS[issue.check] ?? issue.check}: measured by a deterministic check, not the reviewer's opinion`}>measured</span>}
         {resolved && <span className="resolved"><Icon name="check" size={12} /> fixed in v{c.next!.n}</span>}
       </div>
       <div className="i-body">

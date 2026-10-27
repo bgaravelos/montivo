@@ -270,7 +270,12 @@ blocker). The UI reads `review.pass`, so a gated cut now shows no pass without t
 Pass rule (27/10 night, $0, Billy's choice): `review.close_gate` also holds the pass while the reviewer has a blocker or
 major open (`PASS_IGNORES` = brief_covered, since 015's brief asks for a line never said); `pass_gate` gains `checks`
 (measured), `open_majors`, `reasons` = both; the loop ranks on `checks`; the bench re-scores stored reviews with the
-current rule at $0. Round 3 re-scored: faulty cuts passing 36 -> 18 %, clean 012/015 pass stays 75 %.
+current rule at $0. Round 3 re-scored: faulty cuts passing 36 -> 18 %, clean 012/015 pass stays 75 % (commit `a2b041c`).
+Gate in the UI (27/10 night, $0): `runs._review` serves `reviewer_pass` and `gate` {blocked, reasons, checks,
+open_majors, issues numbered after the reviewer's}, origin fixes keep `check`; `GateNote` (web/src/Inspector.tsx) shows
+"gate" with each reason tagged measured / reviewer and the reviewer's own verdict, in the review inspector and on the
+Loop film cards; "Measured checks" issue cards (tag "measured") under the notes; the Loop film's fix lines read
+"measured · ..." for a gate fix. Checked keyless on a throwaway copy of 015 with a written pass_gate (removed).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

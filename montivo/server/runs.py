@@ -427,11 +427,27 @@ def _span(s: dict) -> dict:
     return {k: s.get(k) for k in keys}
 
 
+def _gate(rv: dict) -> dict | None:
+    """The pass gate of a review (review.gate_check + close_gate): why the cut does not pass although the reviewer may
+    have passed it. `checks` are the measured faults, `open_majors` the reviewer's own blockers and majors still open;
+    `issues` are the measured faults in the reviewer's issue form, numbered after its issues as plan_fixes numbers them.
+    None for a review written before the gate."""
+    g = rv.get("pass_gate")
+    if g is None:
+        return None
+    n = len((rv.get("review") or {}).get("issues") or [])
+    checks = g.get("checks", g.get("reasons")) or []
+    return {"blocked": bool(g.get("blocked")), "reasons": g.get("reasons") or [], "checks": checks,
+            "open_majors": g.get("open_majors") or [],
+            "issues": [{"k": n + j, **i} for j, i in enumerate(g.get("issues") or [])]}
+
+
 def _review(rv: dict, run_dir: Path) -> dict:
     r = rv.get("review") or {}
     facts = rv.get("facts") or {}
     copy = rv.get("review_copy")
-    return {"name": rv.get("name"), "overall": r.get("overall"), "pass": r.get("pass"), "scores": r.get("scores") or {},
+    return {"name": rv.get("name"), "overall": r.get("overall"), "pass": r.get("pass"),
+            "reviewer_pass": r.get("reviewer_pass", r.get("pass")), "gate": _gate(rv), "scores": r.get("scores") or {},
             "summary": r.get("summary", ""), "issues": [{"k": k, **i} for k, i in enumerate(r.get("issues") or [])],
             "fixes": rv.get("fixes") or [], "skipped": rv.get("skipped") or [], "facts_text": rv.get("facts_text", ""),
             "facts": {"silences": len(facts.get("silences") or []),
@@ -472,7 +488,7 @@ def versions(run_dir: Path) -> list[dict]:
             origin = {"source": last.get("source") or "review", "from": last.get("from"), "review": last.get("review"),
                       "action": last.get("action") or "review", "instruction": last.get("instruction"),
                       "result": last.get("result"), "challenger": last.get("challenger"), "why": last.get("why"),
-                      "fixes": [{k: f.get(k) for k in ("op", "target", "issue", "severity", "t_s", "note", "args")} for f in last.get("fixes") or []]}
+                      "fixes": [{k: f.get(k) for k in ("op", "target", "issue", "severity", "t_s", "note", "args", "check")} for f in last.get("fixes") or []]}
         # the planner that made this paper edit: v1's for the plan, a re-plan's own model; patches keep their parent's
         planner = first_planner if origin["source"] == "plan" else last.get("model") if origin.get("action") == "replan" else None
         if origin.get("action") == "replan" and not planner:

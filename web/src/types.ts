@@ -9,12 +9,19 @@ export type Span = {
 export type Issue = {
   k: number; criterion: string; severity: "blocker" | "major" | "minor" | string; t_s: number; t_end_s: number;
   what: string; fix_op: string; fix_args?: string; params?: Record<string, unknown>;
+  check?: string; // a measured fault of the pass gate (loud_edge, edge_word, caption_face, head_frame), not the reviewer's
 };
 
-export type PlannedFix = { op: string; target: string; issue: number; severity: string; t_s?: number; args?: Record<string, unknown> | null; note?: string };
+export type PlannedFix = { op: string; target: string; issue: number; severity: string; t_s?: number; args?: Record<string, unknown> | null; note?: string;
+  check?: string }; // check: the measured fault behind the fix, empty for a reviewer issue
+
+/** Why a reviewed cut does not pass (review_vN.json pass_gate): measured checks, and the reviewer's own open majors. */
+export type Gate = { blocked: boolean; reasons: string[]; checks: string[];
+  open_majors: { t_s: number; criterion: string; severity: string }[]; issues: Issue[] };
 
 export type Review = {
   name: string; overall: number; pass: boolean; scores: Record<string, number>; summary: string; issues: Issue[];
+  reviewer_pass: boolean; gate: Gate | null; // pass is the gated pass, reviewer_pass the reviewer's own
   fixes: PlannedFix[]; skipped: { issue: number; reason: string }[]; facts_text: string;
   facts: { silences: number; over_face: number; caption_lines: number; cut_edges: number; loud_edges: number };
   cost_usd: number; seconds: number; duration_s: number; clock: boolean; has_copy: boolean;

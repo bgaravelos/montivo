@@ -591,3 +591,33 @@ def test_heads_lists_speakers_and_thumbnails_a_head(tmp_path):
     r = c.get("/api/runs/r1/head/1.jpg")
     assert r.status_code == 200 and r.content[:2] == b"\xff\xd8"
     assert c.get("/api/runs/r1/head/2.jpg").status_code == 404
+
+
+def test_a_gated_review_serves_its_reasons_and_measured_issues(tmp_path):
+    import json
+
+    from montivo.server.runs import versions
+    d = _run_folder(tmp_path)
+    issue = {"t_s": 3.0, "t_end_s": 3.0, "criterion": "pacing", "severity": "major", "what": "x", "fix_op": "drop_span"}
+    gi = dict(issue, t_s=17.42, criterion="no_cut_mid_word", fix_op="move_cut", check="edge_word")
+    gate = {"blocked": True, "reasons": ['"Montivo" at the cut at 17.42 s not heard', "reviewer's major still open: pacing at 3.00 s"],
+            "checks": ['"Montivo" at the cut at 17.42 s not heard'], "issues": [gi],
+            "open_majors": [{"t_s": 3.0, "criterion": "pacing", "severity": "major"}]}
+    (d / "review_v1.json").write_text(json.dumps({"name": "review_v1", "pass_gate": gate,
+                                                   "review": {"overall": 88, "pass": False, "reviewer_pass": True, "issues": [issue]},
+                                                   "fixes": [{"op": "move_cut", "target": "s4", "issue": 1, "check": "edge_word"}]}))
+    (d / "review_v2.json").write_text(json.dumps({"name": "review_v2", "review": {"overall": 90, "pass": True, "issues": []}}))
+    e = json.loads((d / "edl_v2.json").read_text())
+    e["patches"][-1]["fixes"][0]["check"] = "edge_word"
+    (d / "edl_v2.json").write_text(json.dumps(e))
+    v1, v2, _ = versions(d)
+    r = v1["review"]
+    assert not r["pass"] and r["reviewer_pass"] and r["gate"]["blocked"]
+    assert r["gate"]["checks"] == gate["checks"] and r["gate"]["open_majors"][0]["criterion"] == "pacing"
+    assert r["gate"]["issues"][0]["k"] == 1 and r["gate"]["issues"][0]["check"] == "edge_word"  # numbered after the reviewer's
+    assert r["fixes"][0]["check"] == "edge_word" and v2["origin"]["fixes"][0]["check"] == "edge_word"
+    assert v2["review"]["gate"] is None and v2["review"]["reviewer_pass"] is True  # written before the gate
+    gate = {"blocked": True, "reasons": gate.pop("checks"), "issues": [gi]}  # a round-3 gate: only measured reasons
+    (d / "review_v1.json").write_text(json.dumps({"name": "review_v1", "pass_gate": gate, "review": {"overall": 88, "pass": False, "issues": [issue]}}))
+    g = versions(d)[0]["review"]["gate"]
+    assert g["checks"] == g["reasons"] and g["open_majors"] == []

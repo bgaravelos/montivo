@@ -315,10 +315,25 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .bn i { font-style: normal; margin-left: 4px; font-size: 10.5px; }
 .bn i.up { color: var(--pass); } .bn i.down { color: var(--blocker); }
 .summary { margin: 0; color: var(--text-2); font-size: 12.5px; }
+.gate-note { border: 1px solid #5a2622; background: #221413; border-radius: var(--r); padding: 8px 10px; display: grid; gap: 6px; cursor: help; }
+.gate-note.compact { padding: 6px 8px; gap: 4px; min-width: 0; overflow: hidden; }
+.gate-note.compact .gn-top { flex-wrap: wrap; row-gap: 2px; }
+.gate-note.compact .gn-list li { min-width: 0; }
+.gn-top { display: flex; align-items: center; gap: 7px; font-size: 12px; }
+.gate-tag { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--blocker); border: 1px solid var(--blocker); border-radius: 99px; padding: 0 6px; }
+.gn-what { color: var(--text-2); }
+.gn-rp { margin-left: auto; font-size: 11px; color: var(--mute); white-space: nowrap; }
+.gn-rp.pass { color: var(--pass); }
+.gn-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; font-size: 12px; color: var(--text-2); }
+.gn-list li { display: flex; gap: 6px; align-items: baseline; }
+.gn-k { flex: none; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--mute); }
+.gn-k.measured { color: var(--accent); }
+.gate-note.compact .gn-list li span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.measured { font-size: 10.5px; font-weight: 600; color: var(--accent); border: 1px solid var(--accent); border-radius: 99px; padding: 0 6px; white-space: nowrap; }
 .issues { display: flex; flex-direction: column; gap: 8px; }
 .issue { border: 1px solid var(--line-2); border-left: 3px solid var(--minor); border-radius: var(--r); background: var(--panel-2); padding: 9px 10px; animation: rise 0.3s ease-out; }
 .issue.blocker { border-left-color: var(--blocker); } .issue.major { border-left-color: var(--major); }
-.i-top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.i-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
 .time { font-family: var(--mono); font-size: 11.5px; background: var(--panel-3); border: 1px solid var(--line-2); padding: 1px 7px; border-radius: 4px; }
 .time:hover { border-color: var(--accent); color: var(--accent); }
 .sev { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }

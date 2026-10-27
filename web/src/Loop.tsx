@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { crit, dur, fileUrl, frameUrl, tc, usd, useRun } from "./api";
 import { chain, originKind, originLabel, parentOf, projectName, sevRank } from "./edit";
 import { Icon } from "./icons";
+import { GateNote } from "./Inspector";
 import type { PlanSide, RunState, Version } from "./types";
 
 /** The agent loop as one film strip: every version left to right, the frame, the blind score and the reviewer's
@@ -88,6 +89,7 @@ function Card({ id, state, v, best }: { id: string; state: RunState; v: Version;
           {delta ? <span className={`lfc-d ${delta > 0 ? "up" : "down"}`}>{delta > 0 ? `+${delta}` : delta}</span> : null}
         </> : <span className="mute">not reviewed</span>}
       </div>
+      {r && <GateNote r={r} compact />}
       <div className="lfc-meta mute small">{v.spans.length} clips · {tc(v.duration_s ?? v.runtime_s)}{v.punch_ins.length ? ` · ${v.punch_ins.length} punch-ins` : ""}</div>
       {r && (
         <ul className="lfc-issues">
@@ -126,9 +128,10 @@ function Link({ state, v, prev, compare }: { state: RunState; v: Version; prev: 
   if (o.source === "review") {
     who = "Agent";
     lines = (o.fixes ?? []).map((f) => {
-      const issue = parent?.review?.issues.find((i) => i.k === f.issue);
-      const moved = issue ? ` · ${crit(issue.criterion)} ${parent!.review!.scores[issue.criterion]} → ${v.review?.scores[issue.criterion] ?? "?"}` : "";
-      return `${f.op.replace(/_/g, " ")} ${f.target}${moved}`;
+      const pr = parent?.review;
+      const issue = [...(pr?.issues ?? []), ...(pr?.gate?.issues ?? [])].find((i) => i.k === f.issue);
+      const moved = issue ? ` · ${crit(issue.criterion)} ${pr!.scores[issue.criterion]} → ${v.review?.scores[issue.criterion] ?? "?"}` : "";
+      return `${f.check ? "measured · " : ""}${f.op.replace(/_/g, " ")} ${f.target}${moved}`;
     });
   } else if (o.source === "hook_ab") {
     who = "Hook A/B";
