@@ -22,7 +22,14 @@ export type Review = {
 
 export type Origin = {
   source: "plan" | "review" | "human" | string; from?: number; review?: string | null; action?: string;
-  instruction?: string | null; fixes?: PlannedFix[];
+  instruction?: string | null; fixes?: PlannedFix[]; result?: HookResult | null;
+};
+
+/** The hook A/B's verdict on the version it made (engine/hook.py): which opener the blind reviewer preferred. */
+export type HookResult = {
+  winner: "a" | "b"; kept: number; reason: string; margin: number; decisive: boolean;
+  a: { version: number; opener: string; overall: number; pass: boolean; hook: number | null };
+  b: { version: number; opener: string; overall: number; pass: boolean; hook: number | null };
 };
 
 export type Version = {

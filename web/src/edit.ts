@@ -103,6 +103,7 @@ export function originLabel(v: Version): string {
   const o = v.origin;
   if (o.source === "plan") return "planned";
   if (o.source === "review") return "reviewer fix";
+  if (o.source === "hook_ab") return "hook A/B";
   if (o.action === "drop") return "your edit · deleted a clip";
   if (o.action === "trim") return "your edit · trimmed a clip";
   if (o.action === "replan") return "your edit · asked Montivo";
@@ -114,7 +115,7 @@ export function originLabel(v: Version): string {
 }
 
 export function originKind(v: Version): "plan" | "review" | "human" {
-  return v.origin.source === "plan" ? "plan" : v.origin.source === "review" ? "review" : "human";
+  return v.origin.source === "plan" ? "plan" : v.origin.source === "review" || v.origin.source === "hook_ab" ? "review" : "human";
 }
 
 /** What a punch-in is, in the editor's words. */

@@ -118,12 +118,18 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
       if (fixes) out.push({ who: "tool", text: fixes, v: v.n });
     } else if (o.source === "review") {
       out.push({ who: "tool", text: fixes || "patched", v: v.n });
+    } else if (o.source === "hook_ab") {
+      out.push({ who: "tool", text: `Hook A/B: ${fixes}`, v: v.n });
     }
     out.push({ who: "agent", text: `${vName(v.n)} is ready: ${v.spans.length} clips, ${tc(v.duration_s ?? v.runtime_s)}.`, v: v.n });
     if (v.review) {
       const r = v.review;
       const top = [...r.issues].sort((a, b) => sevRank(a.severity) - sevRank(b.severity))[0];
       out.push({ who: "reviewer", text: `Scored ${vName(v.n)} ${r.overall}/100${r.pass ? ", a pass" : ""}. ${top ? `Worst at ${tc(top.t_s)}: ${top.what}` : r.summary}`, v: v.n, tone: r.pass ? "pass" : "" });
+    }
+    const ab = o.source === "hook_ab" ? o.result : null;
+    if (ab) {
+      out.push({ who: "agent", text: `Hook A/B: keeping ${vName(ab.kept)} (${ab.reason}${ab.decisive ? "" : "; within the reviewer's 10-point noise"}).`, v: v.n });
     }
     if (!replay && state.loop?.stop && v.n === state.loop.passes.at(-1)?.version) {
       const stop = state.loop.stop.split(":")[0];

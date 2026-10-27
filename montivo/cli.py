@@ -78,6 +78,15 @@ def main(argv: list[str] | None = None) -> int:
     rv.add_argument("--budget", type=float, default=0.30, help="max dollars for review calls (default 0.30)")
     rv.add_argument("--no-clock", action="store_true", help="do not burn the cut-time clock into the copy Spark watches")
     rv.add_argument("--no-apply", action="store_true", help="review once and write the proposed fixes, no patch, no render")
+    rv.add_argument("--hook-ab", action="store_true", help="after the loop, a hook A/B on its best version (one more review)")
+    rv.add_argument("--hook-budget", type=float, default=0.10, help="max dollars for the hook A/B reviews (default 0.10)")
+
+    hk = sub.add_parser("hook", help="hook A/B: the next version opens on another line, the blind reviewer judges both, the "
+                                     "better one is kept (two reviews, one when the version was reviewed already)")
+    hk.add_argument("run_dir", type=Path)
+    hk.add_argument("--edl", type=Path, default=None, help="version A (default: the newest edl_vN.json)")
+    hk.add_argument("--budget", type=float, default=0.10, help="max dollars for the review calls (default 0.10)")
+    hk.add_argument("--no-clock", action="store_true", help="do not burn the cut-time clock into the copy Spark watches")
 
     ed = sub.add_parser("edges", help="tighten a run folder's EDL to the speech onset and offset in the source audio "
                                       "($0; new runs get this in edl_v1 already); the old EDL is kept under check/")
@@ -165,8 +174,23 @@ def main(argv: list[str] | None = None) -> int:
             ap.error(f"{args.run_dir} is not a run folder")
         edl = args.edl if args.edl is None or args.edl.is_absolute() or args.edl.is_file() else args.run_dir / args.edl
         log = RunLog(args.run_dir / "run.log")
-        print(json.dumps(review_loop(args.run_dir, edl_path=edl, passes=args.passes, budget_usd=args.budget, log=log,
-                                     clock=not args.no_clock, apply=not args.no_apply), indent=2))
+        out = review_loop(args.run_dir, edl_path=edl, passes=args.passes, budget_usd=args.budget, log=log,
+                          clock=not args.no_clock, apply=not args.no_apply)
+        if args.hook_ab and out.get("best"):
+            from .engine.hook import hook_ab
+            out["hook_ab"] = hook_ab(args.run_dir, args.run_dir / f"edl_v{out['best']['version']}.json",
+                                     budget_usd=args.hook_budget, log=log, clock=not args.no_clock)
+        print(json.dumps(out, indent=2))
+        return 0
+
+    if args.cmd == "hook":
+        from .engine.hook import hook_ab
+        from .run import RunLog
+        if not args.run_dir.is_dir():
+            ap.error(f"{args.run_dir} is not a run folder")
+        edl = args.edl if args.edl is None or args.edl.is_absolute() or args.edl.is_file() else args.run_dir / args.edl
+        print(json.dumps(hook_ab(args.run_dir, edl_path=edl, budget_usd=args.budget,
+                                 log=RunLog(args.run_dir / "run.log"), clock=not args.no_clock), indent=2))
         return 0
 
     if args.cmd == "run":

@@ -28,6 +28,9 @@ edit and renders again:
   `drop_span`, `extend_span`, `swap_hook`, `reorder`, `caption_fix`, `retime_callout`, `reframe_bias`, `none`). The
   patcher maps the time to a span, a cut, a caption line or a callout and writes the next `edl_vN.json` with a
   `patches` record of what changed and why. Then it renders and reviews again.
+- **A hook A/B the reviewer decides.** `montivo hook` makes a version that opens on another line (the one the reviewer
+  itself asked for, else the planner's), renders it, reviews it blind next to the current one and keeps the better
+  opener, with both scores and the reason on record.
 - **Guards, so the loop cannot wreck the cut:** at most 3 reviews, a dollar budget checked before each one, the same
   fix twice stops the loop, a version that scores below the best stops it and the best is kept, the hook is never
   dropped whole, and a clipped word is fixed by moving its edge to the quiet point, never by deleting the word.
@@ -150,6 +153,9 @@ montivo edges runs/001                     the edge pass on an EDL built before 
 montivo speakers runs/001                  which SAM head is which Voice speaker ($0) -> speakers.json; the next render follows it
 montivo plan runs/001 --planner open       a fresh paper edit from the run's brief, voice and watch on Muse Spark Open (Baseten)
                                            -> the next edl_vN / cut_vN beside Spark 1.3's v1 (the Open Weight A/B, one call)
+montivo hook runs/001 [--edl edl_v2.json]  hook A/B: the next version opens on another line, both reviewed blind, the better
+                                           one kept (review/hook_ab_vA_vB.json); `montivo review ... --hook-ab` runs it on
+                                           the loop's best version
 ```
 
 The review loop: the reviewer gets the cut (scaled to 720x1280 with a cut-time clock burned in at the top left), the brief,
@@ -211,6 +217,21 @@ the answer is read back in the Responses shape and logged in the ledger like any
 Spark 1.3. `montivo plan runs/001 --planner open` does it on a finished run folder: a fresh plan from the run's own
 brief (blind to the current cut), the next `edl_vN` with a `replan` patch that names the model, rendered, so the UI's
 Compare shows the two planners side by side; `--review 3` runs the loop on it.
+
+Hook A/B (`engine/hook.py`, `montivo hook runs/001 [--edl edl_vN.json] [--budget 0.10]`, or `montivo review runs/001
+--hook-ab [--hook-budget 0.10]` after the loop): version A is the EDL as it is, version B the next free version with one
+`swap_hook` patch through the reviewer's own patch path (the challenger moved to the front, every other span in A's order,
+the old opener kept as a body span), rendered and reviewed blind; the higher (pass, overall) is kept and a tie keeps A.
+The challenger is chosen deterministically: the line the reviewer asked to open with (a `swap_hook` target in this run's
+reviews, newest first), else another span the planner marked `hook`, else the planner's first `payoff` (a cold open),
+else the first span after the opener that starts a new passage. A's review is reused when `cut_vA` was already
+reviewed (then the A/B is one review, about $0.03; two reviews about $0.06 on a 45 s cut), the budget is checked for
+every review still needed before the first one, a challenger already compared against the same A is not tried again,
+and nothing is overwritten. The reviewer varies by about 10 points on an identical cut, so the record says whether the
+margin reaches that (`decisive`). Both versions, the challenger and why, both scores with the hook criterion, the
+winner and the reason go into `review/hook_ab_vA_vB.json` and into B's patch entry (`source: hook_ab`, `result`); the
+editor labels B "hook A/B" and the Assistant says which version was kept. Offline so far (the review call replaced in
+the tests, the render real on a synthetic run); the first real A/B is `montivo hook runs/012`.
 
 Speaker to head mapping (`engine/speakers.py`, run step and `montivo speakers runs/001`): with two or more voices and two
 or more heads, every head box gets a mouth-minus-eyes motion series on the 5 fps grid SAM saw (mean absolute frame
@@ -458,7 +479,7 @@ loudnorm figures and the ebur128 measurement of the finished file).
 | Date | Built |
 |---|---|
 | 26/10 evening (kickoff day) | engine skeleton, run to `edl_v1.json` with a ledger; reframe and render to `cut_v1.mp4`; kill test (a) on the NASA clip; captions, callouts, the Muse Image title card, loudness; the blind review loop; kill test (b) 3 of 3 in 3 of 3 |
-| 27/10 | the edge pass (loops 76 to 100 and 65 to 85); two-pass loudness and a minimum caption duration; a second source (run 013) and its three fixes; SAM at 5 fps for every concept; the API and the review room, then the NLE editor with trim by drag; the bundled caption font and CI; speaker to head mapping; the Open Weight planner |
+| 27/10 | the edge pass (loops 76 to 100 and 65 to 85); two-pass loudness and a minimum caption duration; a second source (run 013) and its three fixes; SAM at 5 fps for every concept; the API and the review room, then the NLE editor with trim by drag; the bundled caption font and CI; speaker to head mapping; the Open Weight planner; punch-ins, then their switch, markers and removal in the editor; the hook A/B |
 | 28/10 to 4/11 | runs on more footage, the planner A/B, polish, the demo video, the submission |
 
 Design rules fixed on 26/10:
