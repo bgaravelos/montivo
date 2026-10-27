@@ -206,7 +206,7 @@ card (polls 2 s while a job runs); `web/src/Progress.tsx` (top bar, Assistant ca
 segments line carries the frame total, `review_render` logs a line when the prep starts. `replay_script` now keeps the
 whole run process (015's replay used to stop at the loop's first `montivo render:` header). Checked keyless on 015
 replay 4x and live punch jobs on a copy (deleted).
-Home cards (UI backlog 4, 27/10 evening, $0, not committed yet): `runs.project_card` per run in `/api/runs` `card`:
+Home cards (UI backlog 4, 27/10 evening, $0, commit `ab89e65`): `runs.project_card` per run in `/api/runs` `card`:
 the version the editor opens on (same rule as Editor.tsx `opening`), its title card text as the name, a poster time a
 third into the cut after the title card (`/frame?clean=1`), its blind score (else the best, named) and every reviewed
 version's score in order for the sparkline; EDL and review fields cached on mtime + size (list 28 ms cold, 3 ms warm).
