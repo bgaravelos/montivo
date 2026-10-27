@@ -3,15 +3,19 @@
     python -m montivo.human drop runs/012 --span s3 [--from 2] [--review 2]
     python -m montivo.human trim runs/012 --span s3 --edge out --word 41 [--from 2] [--review 2]
     python -m montivo.human replan runs/012 --instruction "drop the agency line" [--from 2] [--review 2]
+    python -m montivo.human punch runs/012 --on|--off [--from 2] [--review 2]
+    python -m montivo.human punch runs/012 --skip "emphasis:Montivo@47.120" [--from 2] [--review 2]
 
 Each writes the next edl_vN.json (N = one past the highest version in the run folder, so no version is ever
 overwritten) with a `patches` entry marked `source: "human"`, renders cut_vN.mp4 and, with --review, runs the blind
 review loop from it. `drop` and `trim` go through the reviewer's own patch path (`apply_fixes`) and call no model
 unless --review is given; `replan` is one Spark plan call (about $0.05) with the instruction added to the brief.
+`punch` turns the punch-in zooms (engine/punch.py) on or off, or removes one of them by its key; $0, ffmpeg only.
 """
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import re
 import shutil
@@ -22,6 +26,7 @@ from pathlib import Path
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, tighten_edges
 from .engine.edl import build_edl, edl_summary
+from .engine.punch import parse_key
 from .engine.review import REACH_S, Fix, apply_fixes, kept_elsewhere, refresh_span, review_loop
 from .engine.voice import VoiceResult
 from .ledger import Ledger
@@ -139,6 +144,51 @@ def trim(run_dir: Path, span_id: str, edge: str, word: int, from_v: int | None =
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
 
 
+def punch(run_dir: Path, on: bool | None = None, skip: str | None = None, from_v: int | None = None, passes: int = 0,
+          budget: float = 0.15) -> dict:
+    """Punch-ins on or off (`on`), or one punch-in removed (`skip`, a key from edl_v{from}'s `punch_ins`) ->
+    edl_vN, rendered. The EDL's `punch` and `punch_skip` travel with every later version (review patches deep-copy the
+    EDL, replan carries them), so a removed punch-in stays removed and the next render plans the rest again."""
+    if (on is None) == (skip is None):
+        raise SystemExit("give --on, --off or --skip KEY")
+    log = RunLog(run_dir / "run.log")
+    from_v = from_v or latest_edl(run_dir)
+    edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
+    new = copy.deepcopy(edl)
+    if skip is not None:
+        try:
+            parse_key(skip)
+        except ValueError as e:
+            raise SystemExit(str(e))
+        entry = next((e for e in edl.get("punch_ins") or [] if e.get("key") == skip), None)
+        if not edl.get("punch") or entry is None:
+            have = ", ".join(e["key"] for e in edl.get("punch_ins") or [] if e.get("key")) or "none"
+            raise SystemExit(f"{skip} is not a punch-in of edl_v{from_v} (punch-ins: {have})")
+        new["punch_skip"] = list(edl.get("punch_skip") or []) + [skip]
+        what = entry.get("word") or f"the jump cut into {entry.get('span')}"
+        fix = {"op": "punch_skip", "target": skip, "issue": -1, "severity": "human",
+               "note": f"punch-in removed: {what} at {entry['t_in']:.2f} s (x{entry['zoom']})"}
+    else:
+        if bool(edl.get("punch")) == on:
+            raise SystemExit(f"punch-ins are already {'on' if on else 'off'} in edl_v{from_v}")
+        new["punch"] = on
+        n_skip = len(edl.get("punch_skip") or [])
+        fix = {"op": "punch_on" if on else "punch_off", "target": "cut", "issue": -1, "severity": "human",
+               "note": f"punch-ins {'on' if on else 'off'}" + (f" ({n_skip} removed by hand stay removed)" if n_skip else "")}
+    n = next_version(run_dir)
+    log(f"montivo punch: {fix['op']} {fix['target']} in edl_v{from_v} -> edl_v{n}")
+    for k in ("captions", "callouts", "reframe", "punch_ins"):
+        new[k] = []
+    new.pop("render", None)
+    new["version"] = n
+    new.setdefault("patches", []).append({"from": from_v, "review": None, "source": "human", "action": "punch",
+                                          "fixes": [fix]})
+    log(f"patch v{from_v} -> v{n}: {fix['op']} {fix['target']}: {fix['note']} (human)")
+    edl_path = run_dir / f"edl_v{n}.json"
+    dump_json(edl_path, new)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
 def target_from(instruction: str) -> float | None:
     """'make it 30 seconds' -> 30.0: a runtime named in the instruction replaces the run's target."""
     m = re.search(r"(\d{2,3})\s*(?:s\b|sec|second)", instruction, re.I)
@@ -146,23 +196,33 @@ def target_from(instruction: str) -> float | None:
 
 
 def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s: float | None = None,
-           passes: int = 0, budget: float = 0.15) -> dict:
+           passes: int = 0, budget: float = 0.15, model: str | None = None, reasoning_effort: str | None = None) -> dict:
     """Plan again with the instruction added to the brief and the current paper edit for reference, reusing voice,
-    watch and the tracks (no ingest, Voice or SAM spend), -> edl_vN on word boundaries with the edge pass, render."""
+    watch and the tracks (no ingest, Voice or SAM spend), -> edl_vN on word boundaries with the edge pass, render.
+    With no instruction it is a fresh plan from the run's own brief, blind to the current cut (`montivo plan`, the
+    planner A/B); `model` picks the planner (default muse-spark-1.3, config.OPEN_MODEL for Muse Spark Open)."""
+    from .config import SPARK_MODEL
     from .engine.spark import Spark
     log = RunLog(run_dir / "run.log")
+    model = model or SPARK_MODEL
     from_v = from_v or latest_edl(run_dir)
     prev = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
     run = json.loads((run_dir / "run.json").read_text())
     n = next_version(run_dir)
-    target = target_s or target_from(instruction) or float(run.get("target_s") or 40.0)
-    log(f"montivo replan: edl_v{from_v} + \"{instruction}\" -> edl_v{n} (target {target:.0f} s)")
+    target = target_s or (target_from(instruction) if instruction else None) or float(run.get("target_s") or 40.0)
+    log(f"montivo replan: edl_v{from_v} + \"{instruction or 'fresh plan'}\" -> edl_v{n} (target {target:.0f} s, {model})")
     voice = VoiceResult.from_json(json.loads((run_dir / "voice" / "voice.json").read_text()))
     watch = json.loads((run_dir / "watch.json").read_text())
-    brief = f"{run['brief']}\n\nEditor's note for this version (it overrides the brief where they conflict): {instruction}"
-    plan_brief = f"{brief}\n\nThe current cut (v{from_v}), for reference:\n{edl_summary(prev)}"
+    fresh = not instruction
+    if instruction:
+        brief = f"{run['brief']}\n\nEditor's note for this version (it overrides the brief where they conflict): {instruction}"
+        plan_brief = f"{brief}\n\nThe current cut (v{from_v}), for reference:\n{edl_summary(prev)}"
+    else:
+        brief = plan_brief = run["brief"]
+        instruction = f"plan again from scratch with {model}"
     ledger = Ledger.resume(run_dir / "ledger.json")
-    spark = Spark(run_dir, ledger, log=log)
+    v1_call = next((e for e in ledger.entries if e.stage == "spark.plan"), None)  # read before this call adds its own
+    spark = Spark(run_dir, ledger, model=model, log=log)
     sdir = run_dir / "spark"
     # Spark names its files after the call ("plan"): v1's request and response are copied to plan_v1_* on disk
     # first (they survive a kill), the new ones become plan_vN_* and v1's go back in place
@@ -172,7 +232,8 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
             shutil.copy2(p, v1)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # the UI's stop button: run the finally below
     try:
-        planned = spark.plan(plan_brief, voice.transcript_text(), watch, target, words_per_s=voice.speech_rate())
+        planned = spark.plan(plan_brief, voice.transcript_text(), watch, target, words_per_s=voice.speech_rate(),
+                             reasoning_effort=reasoning_effort)
     finally:
         for part in ("request", "response"):
             p, v1 = sdir / f"plan_{part}.json", sdir / f"plan_v1_{part}.json"
@@ -189,16 +250,44 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
     new["title_card_text"] = prev.get("title_card_text") or new["title_card_text"]
     if prev.get("title_card") is False:
         new["title_card"] = False
+    if prev.get("punch"):
+        new["punch"] = True
+    if prev.get("punch_skip"):
+        new["punch_skip"] = list(prev["punch_skip"])
+    if prev.get("reframe_speaker_ids"):
+        new["reframe_speaker_ids"] = dict(prev["reframe_speaker_ids"])
     note = f"replanned: {len(new['spans'])} spans, {new['runtime_s']} s (was {len(prev['spans'])} spans, {prev['runtime_s']} s)"
     new["patches"] = list(prev.get("patches") or []) + [
         {"from": from_v, "review": None, "source": "human", "action": "replan", "instruction": instruction,
-         "fixes": [{"op": "replan", "target": "plan", "issue": -1, "severity": "human", "note": note}]}]
+         "model": model, "fixes": [{"op": "replan", "target": "plan", "issue": -1, "severity": "human", "note": note}]}]
     log(f"patch v{from_v} -> v{n}: replan: {note} (human)")
     for s in new["spans"]:
         log(f"  {s['id']} {s['role']:6s} {s['t_in']:7.2f}-{s['t_out']:7.2f}s {s['words'][:80]}")
     edl_path = run_dir / f"edl_v{n}.json"
     dump_json(edl_path, new)
-    return _finish(run_dir, edl_path, n, passes, budget, ledger, log)
+    compare = None
+    if fresh and (run_dir / "edl_v1.json").is_file():
+        v1 = json.loads((run_dir / "edl_v1.json").read_text())
+        compare = compare_plans(v1, new, run.get("planner_model") or run.get("model") or SPARK_MODEL, model,
+                                v1_call, planned, target)
+        dump_json(run_dir / f"plan_compare_v1_v{n}.json", compare)
+        a, b = compare["v1"], compare[f"v{n}"]
+        log(f"plan A/B: v1 {a['runtime_s']} s / {a['spans']} spans / verbatim {a['verbatim_rate']:.0%} vs "
+            f"v{n} {b['runtime_s']} s / {b['spans']} spans / verbatim {b['verbatim_rate']:.0%}, ${planned.cost_usd:.4f}")
+    out = _finish(run_dir, edl_path, n, passes, budget, ledger, log)
+    return {**out, "compare": compare} if compare else out
+
+
+def compare_plans(v1: dict, new: dict, v1_model: str, model: str, v1_call, planned, target_s: float) -> dict:
+    """The planner A/B side by side (`montivo plan RUN --planner open`): spans, runtime, verbatim rate, unplaced
+    passages, the hook and what each plan call cost. `v1_call` is v1's ledger entry (None when the ledger lost it)."""
+    def side(e: dict, planner: str, cost: float | None, seconds: float | None) -> dict:
+        return {"planner": planner, "spans": len(e["spans"]), "runtime_s": e["runtime_s"],
+                "verbatim_rate": e["verbatim_rate"], "unplaced": len(e.get("unplaced") or []),
+                "hook": e["spans"][0]["words"][:80] if e["spans"] else "", "plan_cost_usd": cost, "plan_seconds": seconds}
+    return {"target_s": target_s,
+            "v1": side(v1, v1_model, v1_call.cost_usd if v1_call else None, v1_call.seconds if v1_call else None),
+            f"v{new['version']}": side(new, model, planned.cost_usd, planned.seconds)}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -216,7 +305,14 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("run_dir", type=Path)
     r.add_argument("--instruction", required=True)
     r.add_argument("--target", type=float, default=None, help="runtime target in seconds (default: from the instruction or run.json)")
-    for p in (d, t, r):
+    r.add_argument("--model", default=None, help="planner model id (default muse-spark-1.3)")
+    pu = sub.add_parser("punch", help="punch-ins on or off, or remove one -> edl_vN -> cut_vN ($0 without --review)")
+    pu.add_argument("run_dir", type=Path)
+    g = pu.add_mutually_exclusive_group(required=True)
+    g.add_argument("--on", dest="on", action="store_const", const=True, default=None)
+    g.add_argument("--off", dest="on", action="store_const", const=False)
+    g.add_argument("--skip", default=None, metavar="KEY", help="a punch_ins key of the EDL: emphasis:<word>@<s> or jump_cut:<span>")
+    for p in (d, t, r, pu):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
         p.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
@@ -227,8 +323,10 @@ def main(argv: list[str] | None = None) -> int:
         out = drop(a.run_dir, a.span, a.from_v, a.review, a.budget)
     elif a.cmd == "trim":
         out = trim(a.run_dir, a.span, a.edge, a.word, a.from_v, a.review, a.budget)
+    elif a.cmd == "punch":
+        out = punch(a.run_dir, a.on, a.skip, a.from_v, a.review, a.budget)
     else:
-        out = replan(a.run_dir, a.instruction, a.from_v, a.target, a.review, a.budget)
+        out = replan(a.run_dir, a.instruction, a.from_v, a.target, a.review, a.budget, model=a.model)
     print(json.dumps(out, indent=2))
     return 0
 

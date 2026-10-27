@@ -4,7 +4,7 @@ import { Assistant } from "./Assistant";
 import { EditDialog, ExportDialog, LedgerDialog, ShortcutsDialog } from "./Dialogs";
 import { childOf, layout, parentOf, projectName } from "./edit";
 import { Icon } from "./icons";
-import { Inspector } from "./Inspector";
+import { Inspector, type PunchAsk } from "./Inspector";
 import { CaptionsPanel, MediaPanel, TextPanel, VersionsPanel } from "./Panels";
 import { FPS, Player, type PlayerHandle } from "./Player";
 import { Timeline, ZOOM_MAX, ZOOM_MIN, type ClipMenu, type TrimAsk } from "./Timeline";
@@ -69,6 +69,7 @@ export function Editor({ id, replay, go }: Props) {
   const parent = v && state ? parentOf(v, state.versions) : undefined;
   const blocks = useMemo(() => (v && state ? layout(v, parent, state.words) : []), [v, parent, state]);
   const block = blocks.find((b) => b.key === selKey && b.kind !== "ghost") ?? null;
+  const punch = v && selKey?.startsWith("punch:") ? v.punch_ins.find((x) => `punch:${x.key}` === selKey) ?? null : null;
   useEffect(() => { if (selKey && v && !blocks.some((b) => b.key === selKey && b.kind !== "ghost")) setSelKey(null); }, [v?.n]); // eslint-disable-line
 
   const undoTo = v && state ? visible.find((x) => x.n === parent?.n) : undefined;
@@ -89,6 +90,7 @@ export function Editor({ id, replay, go }: Props) {
   const askDelete = useCallback((span: string) => { setCtx(null); setDialog({ kind: "delete", span }); }, []);
   const askTrim = useCallback((a: TrimAsk) => setDialog({ kind: "trim", ask: a }), []);
   const pick = useCallback((n: number) => setSel(n), []);
+  const onPunch = (a: PunchAsk) => { setSelKey(null); setPanel("assistant"); act("punch", { ...a, from: v?.n }); };
   const step = (dir: -1 | 1) => {
     const to = dir < 0 ? undoTo : redoTo;
     if (!to) return flash(dir < 0 ? "Nothing to undo: this is the first version." : "Nothing to redo.");
@@ -114,7 +116,11 @@ export function Editor({ id, replay, go }: Props) {
       case "ArrowLeft": e.preventDefault(); p?.step(e.shiftKey ? -1 : -1 / FPS); break;
       case "ArrowRight": e.preventDefault(); p?.step(e.shiftKey ? 1 : 1 / FPS); break;
       case "Delete": case "Backspace":
-        if (block?.kind === "span") {
+        if (punch) {
+          e.preventDefault();
+          if (canEdit) flash(`Cannot remove it now: ${canEdit.toLowerCase()}.`);
+          else onPunch({ skip: punch.key });
+        } else if (block?.kind === "span") {
           e.preventDefault();
           if (canEdit) flash(`Cannot delete now: ${canEdit.toLowerCase()}.`);
           else if (v && v.spans.length < 2) flash("That is the only clip.");
@@ -226,8 +232,8 @@ export function Editor({ id, replay, go }: Props) {
       </main>
 
       <aside className="insp">
-        <Inspector id={id} state={state} versions={visible} v={v} block={block} words={state.words} busy={busy} canEdit={canEdit}
-          onSeek={seek} onPick={pick} onDelete={askDelete} onAsk={ask} onClear={() => setSelKey(null)}
+        <Inspector id={id} state={state} versions={visible} v={v} block={block} punch={punch} next={next} words={state.words} busy={busy}
+          canEdit={canEdit} onSeek={seek} onPick={pick} onDelete={askDelete} onAsk={ask} onPunch={onPunch} onClear={() => setSelKey(null)}
           onReview={() => v && act("review", { from: v.n, passes: 1 })} />
       </aside>
 

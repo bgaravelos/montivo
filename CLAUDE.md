@@ -4,7 +4,7 @@ This folder (`~/Documents/montivo`, public repo https://github.com/bgaravelos/mo
 hackathon project lives. Work here, not in `~/Documents/nocta-digital` (Nocta's agency work, off limits for this project).
 
 ## What this is
-Montivo is Nocta Digital's entry for the Meta Global AI Developer Hackathon (build window 27/10 to 4/11/2026,
+Montivo is Nocta Digital's entry for the Meta Global AI Developer Hackathon (build window 26/10 to 4/11/2026, kickoff 26/10 18:00 Athens,
 submission on cerebralvalley.ai by Wed 4/11 evening, deadline Thu 5/11 04:00 Athens). An agent-first video editor:
 Muse Spark 1.3 watches the footage and plans a paper edit, Muse Voice gives turns and word timings, SAM 3.1 tracks
 the speaker for the 9:16 reframe and callouts, ffmpeg renders, then Spark reviews its own render against a rubric and
@@ -68,15 +68,38 @@ NLE redesign (27/10, commit `767e5f2`): `web/src/Editor.tsx` replaces `Room.tsx`
 multi-track timeline with filmstrip / waveform / issue markers, J/K/L, export), trim by drag via `montivo.human trim`
 (snaps to word boundaries, reviewer rules), `montivo/server/media.py` (filmstrip, peaks). Caption style is read-only (one
 renderer style); Ask Montivo and "Review this version" not yet clicked with a key.
-Cloud session (27/10, offline, no key, commits `397c94f`, `065420a`, `391a297`): tests pass on any machine (font-independent
-span test, `pythonpath`); `engine/speakers.py` makes the crop follow the span's Voice speaker on the side watch's
-`speaker_map` gives (EDL pin `reframe_speaker_ids` {"A": "3"} wins; off camera / centre / varies = old pick), checked on a
-synthetic two-shot render only; Open Weight planner: `meta-models/muse-spark-open-1026` on Baseten via Chat Completions
-(`BASETEN_API_KEY`, text only), `montivo run --planner open`, `montivo plan RUN --planner open` -> `edl_open.json`,
-`cut_open.mp4` + v1 comparison. Not yet called with a key: endpoint, auth and the price in `config.py` (an aggregator's) are
-unverified.
-Next: `montivo plan runs/012 --planner open` (first real Baseten call), a run on `footage/nasa_exp72_thanksgiving.mp4` to
-check the speaker mapping on real watch output. The evening-by-evening table is in README.md.
+Cloud session (27/10 morning, branch `claude/nice-albattani-wsocse`): bundled Inter Tight 800 (`montivo/fonts/`, OFL) so
+captions and tests match on every machine, pytest `pythonpath`, GitHub Actions `make test`; speaker -> head mapping
+(`engine/speakers.py`, mouth-minus-eyes motion vs Voice word times, watch position as fallback, `speakers.json`,
+`montivo speakers RUN`, $0): the render follows the talking speaker's head per span run; synthetic tests only so far.
+Open Weight planner (same session): `--planner open` on `montivo run`, `montivo plan RUN --planner open` -> next edl_vN;
+Muse Spark Open on Baseten as an OpenAI-compatible chat completion with the plan's strict schema, `BASETEN_API_KEY`
+(already in `~/.zshenv`), model id exactly `meta-models/muse-spark-open-1026` (the key works only for it), a reasoning
+model so the call sends `reasoning_effort` low unless `--plan-effort` says otherwise; offline tests only, the planner
+path never called with the real key yet (Billy's 27/10 probe: HTTP 200, effort low answered in 0.8 s).
+Second cloud round (27/10): README rebuilt for judges (why it is different, mermaid loop, measured results, try it,
+the NLE editor, built during the hackathon, build log); English drafts of the submission form fields in Notion (subpage
+of the Montivo page, waiting for Billy's yes); punch-ins (`engine/punch.py`, `--punch` on run and render, opt-in, stored
+as EDL `punch` so the loop and edits keep it, `punch_ins` records them): 1.12x on words 3 dB over the cut's median level
+or highlight words, 1.06x alternating on jump cuts, zoompan after the scale (crop cannot resize per frame, the graph
+stalls), skipped when the head would leave the top or touch a caption; synthetic tests and a smoke render only.
+Third cloud round (27/10, same branch, $0): demo video script and storyboard in Notion (subpage of the Montivo page,
+waiting for Billy's yes; shots 7a/7b only if punch-ins / speaker mapping look good on the Mac). Punch-ins in the editor
+(commit `36e137e`): every `punch_ins` entry has a `key` (`emphasis:<word>@<onset>`, `jump_cut:<span>`), the EDL's
+`punch_skip` removes one while it keeps its place (budget, spacing, alternation), `python -m montivo.human punch RUN
+--on|--off|--skip KEY` -> next edl_vN, POST `/api/runs/{id}/punch`, a switch in the cut inspector, pink markers on the
+video track, a punch-in inspector with Remove; checked in Chromium on a synthetic run folder. Hook A/B (commit `eed0ef2`):
+`engine/hook.py`, `montivo hook RUN [--edl] [--budget 0.10]` and `montivo review RUN --hook-ab`: B = A + one swap_hook
+patch (challenger: the reviewer's swap_hook target, else a planner hook, else the first payoff, else the first new
+passage), both reviewed blind, higher (pass, overall) kept, tie keeps A, record in `review/hook_ab_vA_vB.json` and B's
+patch `result`; offline tests only, the review call never made for real.
+Merge (27/10): the branch above is in `main`; a second cloud session had built the same two features on `main`
+(commits `065420a`, `391a297`), the branch's versions were kept and only two pieces carried over: the EDL pin
+`reframe_speaker_ids` {"A": "3"} in `render.load_speaker_ids` (replaces the mapped heads of that speaker, kept by
+replan) and the v1-vs-new comparison of `montivo plan` (`plan_compare_v1_vN.json`, in the output and run log).
+Next: the NASA clip (first real check of the speaker mapping), `montivo plan runs/012 --planner open` (the A/B),
+`montivo render runs/012 --punch --out cut_v2_punch.mp4` (first look at the punch-ins, then the switch and Remove in
+`make ui` on a copy of 012), `montivo hook runs/012` (the first real hook A/B, about $0.03 with v2's review reused). The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

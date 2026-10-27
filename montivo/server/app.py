@@ -30,6 +30,7 @@ from .runs import fingerprint, list_runs, parse_log, read_json, replay_script, r
 STATIC = Path(__file__).parent / "static"
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
+PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 
 # rough prices for the cost hint on each button (README "Measured behaviour")
 COST = {"plan": 0.05, "review": 0.035, "run_per_s": 0.004}
@@ -398,6 +399,30 @@ def create_app(root: Path) -> FastAPI:
         job = start_job(st, run_id, "trim", f"Trim clip {span}", args,
                         chat={"role": "user", "text": f"Trim the {side} of clip {span} in v{frm}.", "chips": [span, f"v{frm}"],
                               "kind": "trim"})
+        return {"job": job.public()}
+
+    @app.post("/api/runs/{run_id}/punch")
+    async def punch(run_id: str, request: Request):
+        """Punch-ins on or off ({"on": true|false}) or one removed ({"skip": key}): the next version, ffmpeg only."""
+        d = st.run_dir(run_id)
+        b = await request.json()
+        frm = int(b.get("from") or latest_version(d))
+        passes = int(b.get("review") or 0)
+        if passes:
+            need_key("Reviewing the new cut")
+        skip, on = b.get("skip"), b.get("on")
+        if skip is not None:
+            skip = str(skip)
+            if not PUNCH_KEY.fullmatch(skip):
+                raise HTTPException(400, "skip: a punch-in key like emphasis:Montivo@47.120 or jump_cut:s4")
+            flag, label, text = ["--skip", skip], "Remove a punch-in", f"Remove the punch-in {skip} from v{frm}."
+        elif isinstance(on, bool):
+            flag, label = ["--on" if on else "--off"], f"Punch-ins {'on' if on else 'off'}"
+            text = f"Turn the punch-ins {'on' if on else 'off'} in v{frm}."
+        else:
+            raise HTTPException(400, "on: true or false, or skip: a punch-in key")
+        args = ["-m", "montivo.human", "punch", f"runs/{run_id}", *flag, "--from", str(frm), "--review", str(passes)]
+        job = start_job(st, run_id, "punch", label, args, chat={"role": "user", "text": text, "chips": [f"v{frm}"], "kind": "punch"})
         return {"job": job.public()}
 
     @app.post("/api/runs/{run_id}/replan")

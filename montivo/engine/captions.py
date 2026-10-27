@@ -24,6 +24,7 @@ from pathlib import Path
 
 from .edl import norm
 from .graphics import CaptionStyle, callout_size, draw_callout, draw_caption, line_width
+from .reframe import id_at
 
 OUT_W, OUT_H = 1080, 1920
 CAPTION_TOP = 1300  # default caption top in the 1080x1920 frame (lower third, above the Reels/TikTok UI)
@@ -431,12 +432,13 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
 
     def subject_head(i: int):
         """Box picker for the head segment i keeps clear of (see the docstring), in the union_out `pick` form."""
-        tid = getattr(paths[i], "track_id", None)
+        path = paths[i]
+        tid = getattr(path, "track_id", None)
         if reframe_concept == "head" and head_src and tid in head_src["objects"]:
-            recs = head_src["objects"][tid]
-
             def followed(track, t):
-                b = interp_box(recs, t)
+                # a segment steered by the speaker map follows a different head per piece
+                cur = id_at(path, t) if getattr(path, "pieces", None) else tid
+                b = interp_box(head_src["objects"][cur], t) if cur in head_src["objects"] else None
                 return [b] if b is not None else largest_at(track, t)
             return followed
         return largest_at

@@ -3,6 +3,7 @@
     montivo run footage.mp4 --brief "..." --out runs/001
     montivo render runs/001
     montivo review runs/001
+    montivo speakers runs/001
     montivo plan runs/001 --planner open
     montivo probe footage.mp4
     montivo serve
@@ -38,14 +39,17 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--plan-effort", default=None, choices=["low", "medium", "high"], help="reasoning effort for the plan call")
     r.add_argument("--resume", action="store_true", help="reuse ingest, voice, watch and tracks already in --out")
     r.add_argument("--model", default=None, help="Spark model id (default muse-spark-1.3)")
-    r.add_argument("--planner", default=None, help="model for the plan call only: 'open' (Muse Spark Open on Baseten, "
-                                                    "needs BASETEN_API_KEY), 'spark' or a model id (default: --model)")
+    r.add_argument("--planner", choices=("spark", "open"), default="spark",
+                   help="who writes the paper edit: spark = the --model above, open = Muse Spark Open on Baseten "
+                        "(text only, needs BASETEN_API_KEY); watch and review stay on Spark 1.3")
     r.add_argument("--no-render", action="store_true", help="stop after edl_v1.json, do not render cut_v1.mp4")
     r.add_argument("--hflip", action="store_true",
                    help="mirror the footage once before everything else (selfie / mirror-mode clips with reversed text); "
                         "writes <out>/source_hflip.mp4 (libx264 crf 18) and uses it as the source for proxy, wav, SAM and render")
     r.add_argument("--no-title", action="store_true", help="no Muse Image title card in front of the cut (saves $0.01)")
     r.add_argument("--no-captions", action="store_true", help="render without burned-in captions")
+    r.add_argument("--punch", action="store_true", help="punch-in zooms on stressed words and an alternating scale "
+                                                        "across jump cuts (kept by the review loop and later edits)")
     r.add_argument("--review", action="store_true",
                    help="after cut_v1: blind Spark review -> fix ops -> edl_v2 -> cut_v2 ..., up to --review-passes reviews")
     r.add_argument("--review-passes", type=int, default=3, help="max reviews in the loop (default 3)")
@@ -60,6 +64,10 @@ def main(argv: list[str] | None = None) -> int:
     rr.add_argument("--no-captions", action="store_true", help="no burned-in captions")
     rr.add_argument("--no-callouts", action="store_true", help="no callouts")
     rr.add_argument("--no-loudnorm", action="store_true", help="keep the source loudness")
+    pg = rr.add_mutually_exclusive_group()
+    pg.add_argument("--punch", dest="punch", action="store_const", const=True, default=None,
+                    help="punch-in zooms on stressed words and jump cuts; stored in the EDL so later renders keep it")
+    pg.add_argument("--no-punch", dest="punch", action="store_const", const=False, help="turn the punch-ins off again")
 
     rv = sub.add_parser("review", help="blind review loop on a run folder: review cut_vN with Spark 1.3, patch the EDL with "
                                        "the fix ops, render cut_vN+1, repeat (max passes, $ budget, same fix twice = stop)")
@@ -70,6 +78,15 @@ def main(argv: list[str] | None = None) -> int:
     rv.add_argument("--budget", type=float, default=0.30, help="max dollars for review calls (default 0.30)")
     rv.add_argument("--no-clock", action="store_true", help="do not burn the cut-time clock into the copy Spark watches")
     rv.add_argument("--no-apply", action="store_true", help="review once and write the proposed fixes, no patch, no render")
+    rv.add_argument("--hook-ab", action="store_true", help="after the loop, a hook A/B on its best version (one more review)")
+    rv.add_argument("--hook-budget", type=float, default=0.10, help="max dollars for the hook A/B reviews (default 0.10)")
+
+    hk = sub.add_parser("hook", help="hook A/B: the next version opens on another line, the blind reviewer judges both, the "
+                                     "better one is kept (two reviews, one when the version was reviewed already)")
+    hk.add_argument("run_dir", type=Path)
+    hk.add_argument("--edl", type=Path, default=None, help="version A (default: the newest edl_vN.json)")
+    hk.add_argument("--budget", type=float, default=0.10, help="max dollars for the review calls (default 0.10)")
+    hk.add_argument("--no-clock", action="store_true", help="do not burn the cut-time clock into the copy Spark watches")
 
     ed = sub.add_parser("edges", help="tighten a run folder's EDL to the speech onset and offset in the source audio "
                                       "($0; new runs get this in edl_v1 already); the old EDL is kept under check/")
@@ -77,14 +94,20 @@ def main(argv: list[str] | None = None) -> int:
     ed.add_argument("--edl", type=Path, default=None, help="EDL to tighten in place (default <run_dir>/edl_v1.json)")
     ed.add_argument("--dry-run", action="store_true", help="print the moves, write nothing")
 
-    pl = sub.add_parser("plan", help="Open Weight A/B: plan a finished run folder again with another planner (one text call, "
-                                     "voice / watch / tracks reused) -> edl_<tag>.json, cut_<tag>.mp4, compared with edl_v1")
+    pl = sub.add_parser("plan", help="a fresh paper edit for an existing run folder from its own brief, voice and watch "
+                                     "(one plan call, no Voice / SAM) -> the next edl_vN and cut_vN; the planner A/B")
     pl.add_argument("run_dir", type=Path)
-    pl.add_argument("--planner", default="open", help="'open' (default, Muse Spark Open on Baseten), 'spark' or a model id")
-    pl.add_argument("--tag", default=None, help="name of the outputs (default: the --planner value, 'model' for an id)")
-    pl.add_argument("--target", type=float, default=None, help="target runtime in seconds (default: run.json's)")
-    pl.add_argument("--effort", default=None, choices=["low", "medium", "high"], help="reasoning effort for the plan call")
-    pl.add_argument("--no-render", action="store_true", help="stop at edl_<tag>.json")
+    pl.add_argument("--planner", choices=("spark", "open"), default="open",
+                    help="open = Muse Spark Open on Baseten (default, needs BASETEN_API_KEY), spark = muse-spark-1.3")
+    pl.add_argument("--target", type=float, default=None, help="runtime target in seconds (default: run.json)")
+    pl.add_argument("--plan-effort", default=None, choices=["low", "medium", "high"],
+                    help="reasoning effort for the plan call (default: low on the open model, the model's own on Spark)")
+    pl.add_argument("--review", type=int, default=0, help="review passes after the render (default 0; reviews run on Spark 1.3)")
+    pl.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
+
+    sp = sub.add_parser("speakers", help="map Voice speakers to SAM head ids from mouth motion ($0, ffmpeg) -> "
+                                         "speakers.json; the next render follows whoever talks")
+    sp.add_argument("run_dir", type=Path)
 
     p = sub.add_parser("probe", help="ffprobe summary of a file")
     p.add_argument("footage", type=Path)
@@ -110,17 +133,30 @@ def main(argv: list[str] | None = None) -> int:
             ap.error(f"{args.run_dir} is not a run folder")
         print(json.dumps(render_run(args.run_dir, edl_path=args.edl, source=args.source, out_name=args.out,
                                     title=not args.no_title, captions=not args.no_captions,
-                                    callouts=not args.no_callouts, loudnorm=not args.no_loudnorm), indent=2))
+                                    callouts=not args.no_callouts, loudnorm=not args.no_loudnorm, punch=args.punch),
+                         indent=2))
         return 0
 
     if args.cmd == "plan":
-        from .config import PLANNERS
-        from .run import plan_run
+        from .config import OPEN_MODEL, SPARK_MODEL
+        from .human import replan
         if not args.run_dir.is_dir():
             ap.error(f"{args.run_dir} is not a run folder")
-        tag = args.tag or (args.planner if args.planner in PLANNERS else "model")
-        print(json.dumps(plan_run(args.run_dir, PLANNERS.get(args.planner, args.planner), tag=tag, target_s=args.target,
-                                  effort=args.effort, render=not args.no_render), indent=2))
+        model = OPEN_MODEL if args.planner == "open" else SPARK_MODEL
+        print(json.dumps(replan(args.run_dir, "", target_s=args.target, passes=args.review, budget=args.budget,
+                                model=model, reasoning_effort=args.plan_effort), indent=2))
+        return 0
+
+    if args.cmd == "speakers":
+        from .engine.speakers import speakers_run
+        from .run import RunLog
+        if not args.run_dir.is_dir():
+            ap.error(f"{args.run_dir} is not a run folder")
+        try:
+            res = speakers_run(args.run_dir, log=RunLog(args.run_dir / "run.log"))
+        except FileNotFoundError as exc:
+            ap.error(str(exc))
+        print(json.dumps(res["speakers"], indent=2))
         return 0
 
     if args.cmd == "edges":
@@ -138,19 +174,33 @@ def main(argv: list[str] | None = None) -> int:
             ap.error(f"{args.run_dir} is not a run folder")
         edl = args.edl if args.edl is None or args.edl.is_absolute() or args.edl.is_file() else args.run_dir / args.edl
         log = RunLog(args.run_dir / "run.log")
-        print(json.dumps(review_loop(args.run_dir, edl_path=edl, passes=args.passes, budget_usd=args.budget, log=log,
-                                     clock=not args.no_clock, apply=not args.no_apply), indent=2))
+        out = review_loop(args.run_dir, edl_path=edl, passes=args.passes, budget_usd=args.budget, log=log,
+                          clock=not args.no_clock, apply=not args.no_apply)
+        if args.hook_ab and out.get("best"):
+            from .engine.hook import hook_ab
+            out["hook_ab"] = hook_ab(args.run_dir, args.run_dir / f"edl_v{out['best']['version']}.json",
+                                     budget_usd=args.hook_budget, log=log, clock=not args.no_clock)
+        print(json.dumps(out, indent=2))
+        return 0
+
+    if args.cmd == "hook":
+        from .engine.hook import hook_ab
+        from .run import RunLog
+        if not args.run_dir.is_dir():
+            ap.error(f"{args.run_dir} is not a run folder")
+        edl = args.edl if args.edl is None or args.edl.is_absolute() or args.edl.is_file() else args.run_dir / args.edl
+        print(json.dumps(hook_ab(args.run_dir, edl_path=edl, budget_usd=args.budget,
+                                 log=RunLog(args.run_dir / "run.log"), clock=not args.no_clock), indent=2))
         return 0
 
     if args.cmd == "run":
-        from .config import PLANNERS, is_open
+        from .config import OPEN_MODEL
         from .run import RunOptions, run
         if not args.footage.is_file():
             ap.error(f"{args.footage} is not a file")
+        if args.planner == "open" and args.plan_with_video:
+            ap.error("--planner open plans from text only; drop --plan-with-video")
         out = args.out or Path("runs") / time.strftime("%Y%m%d-%H%M%S")
-        planner = PLANNERS.get(args.planner, args.planner) if args.planner else None
-        if planner and args.plan_with_video and is_open(planner):
-            ap.error(f"--plan-with-video needs a Meta-hosted planner; {planner} is called text only")
         opts = RunOptions(footage=args.footage, brief=args.brief, out=out, concepts=args.concept or ["person"],
                           track_fps=args.track_fps,
                           reframe_concept=None if args.reframe_concept.lower() == "none" else args.reframe_concept,
@@ -158,9 +208,9 @@ def main(argv: list[str] | None = None) -> int:
                           target_s=args.target, plan_with_video=args.plan_with_video, plan_effort=args.plan_effort,
                           skip_track=args.no_track, resume=args.resume, render=not args.no_render, hflip=args.hflip,
                           title=not args.no_title, captions=not args.no_captions, review=args.review,
-                          review_passes=args.review_passes, review_budget=args.review_budget,
+                          review_passes=args.review_passes, review_budget=args.review_budget, punch=args.punch,
                           model=args.model or RunOptions.__dataclass_fields__["model"].default,
-                          planner=planner)
+                          planner_model=OPEN_MODEL if args.planner == "open" else None)
         summary = run(opts)
         print(json.dumps(summary, indent=2))
         return 0

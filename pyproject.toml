@@ -28,7 +28,8 @@ include = ["montivo*"]
 
 [tool.setuptools.package-data]
 "montivo.server" = ["static/**/*"]
+"montivo" = ["fonts/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]  # test_ui imports tests.test_review
+pythonpath = ["."]  # tests import shared helpers as tests.<module>

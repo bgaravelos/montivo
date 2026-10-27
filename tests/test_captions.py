@@ -212,3 +212,9 @@ def test_captions_keep_clear_of_the_head_the_crop_follows(tmp_path):
                                reframe_concept="person")
     c = fields["captions"][0]
     assert c["placement"] == "over_head" and c["box"][1] == SAFE_BOTTOM - c["box"][3] > CAPTION_TOP
+
+
+def test_bundled_font_wins(monkeypatch):
+    from montivo.engine.graphics import BUNDLED_FONT, font_path
+    monkeypatch.delenv("MONTIVO_FONT", raising=False)
+    assert BUNDLED_FONT.is_file() and font_path() == str(BUNDLED_FONT)

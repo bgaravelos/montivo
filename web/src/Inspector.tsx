@@ -1,21 +1,27 @@
 import { Fragment } from "react";
 import { crit, fileUrl, frameUrl, tc, usd } from "./api";
-import { chain, originLabel, parentOf, sevRank, type Block } from "./edit";
+import { chain, originLabel, parentOf, punchLabel, sevRank, type Block } from "./edit";
 import { Icon } from "./icons";
-import type { Issue, RunState, Version, Word } from "./types";
+import type { Issue, PunchIn, RunState, Version, Word } from "./types";
+
+export type PunchAsk = { on: boolean } | { skip: string };
 
 type Seek = (a: number, b?: number) => void;
 
-/** The right column: what is selected (a clip, the title card), or with nothing selected the whole cut's review. */
-export function Inspector({ id, state, versions, v, block, words, busy, canEdit, onSeek, onPick, onDelete, onAsk, onReview, onClear }: {
-  id: string; state: RunState; versions: Version[]; v: Version | null; block: Block | null; words: Record<string, Word[]>;
-  busy: boolean; canEdit: string | null; onSeek: Seek; onPick: (n: number) => void; onDelete: (span: string) => void;
-  onAsk: (span: string) => void; onReview: () => void; onClear: () => void;
+/** The right column: what is selected (a clip, the title card, a punch-in), or with nothing selected the whole cut's
+ *  review. */
+export function Inspector({ id, state, versions, v, block, punch, next, words, busy, canEdit, onSeek, onPick, onDelete, onAsk, onReview, onPunch, onClear }: {
+  id: string; state: RunState; versions: Version[]; v: Version | null; block: Block | null; punch: PunchIn | null; next: number;
+  words: Record<string, Word[]>; busy: boolean; canEdit: string | null; onSeek: Seek; onPick: (n: number) => void;
+  onDelete: (span: string) => void; onAsk: (span: string) => void; onReview: () => void; onPunch: (a: PunchAsk) => void;
+  onClear: () => void;
 }) {
   if (!v) return <section className="inspector"><div className="insp-empty">Nothing rendered yet.</div></section>;
+  if (punch) return <PunchInspector id={id} v={v} p={punch} next={next} canEdit={canEdit} onSeek={onSeek} onPunch={onPunch} onClear={onClear} />;
   if (block?.kind === "span") return <ClipInspector id={id} state={state} v={v} b={block} words={words} busy={busy} canEdit={canEdit} onSeek={onSeek} onDelete={onDelete} onAsk={onAsk} onClear={onClear} />;
   if (block?.kind === "title") return <TitleInspector state={state} v={v} onClear={onClear} />;
-  return <CutReview id={id} state={state} versions={versions} v={v} canEdit={canEdit} onSeek={onSeek} onPick={onPick} onReview={onReview} />;
+  return <CutReview id={id} state={state} versions={versions} v={v} next={next} canEdit={canEdit} onSeek={onSeek} onPick={onPick}
+    onReview={onReview} onPunch={onPunch} />;
 }
 
 function Head({ title, sub, onClear }: { title: string; sub?: string; onClear?: () => void }) {
@@ -95,9 +101,65 @@ function TitleInspector({ state, v, onClear }: { state: RunState; v: Version; on
   );
 }
 
-function CutReview({ id, state, versions, v, canEdit, onSeek, onPick, onReview }: {
-  id: string; state: RunState; versions: Version[]; v: Version; canEdit: string | null; onSeek: Seek; onPick: (n: number) => void;
-  onReview: () => void;
+function PunchInspector({ id, v, p, next, canEdit, onSeek, onPunch, onClear }: {
+  id: string; v: Version; p: PunchIn; next: number; canEdit: string | null; onSeek: Seek; onPunch: (a: PunchAsk) => void;
+  onClear: () => void;
+}) {
+  const play = () => onSeek(Math.max(0, p.t_in - 0.6), p.t_out + 0.4);
+  const peak = p.kind === "emphasis" ? p.t_in + Math.min(0.3, (p.t_out - p.t_in) / 2) : p.t_in + 0.3;
+  return (
+    <section className="inspector">
+      <Head title="Punch-in" sub={p.kind === "jump_cut" ? "jump cut" : "emphasis"} onClear={onClear} />
+      <div className="panel-body">
+        <div className="insp-thumb-row">
+          <button className="insp-thumb" onClick={play} title="Play the punch-in">
+            <img src={frameUrl(id, v.n, peak)} alt="" />
+          </button>
+          <dl className="props">
+            <dt>On</dt><dd>{punchLabel(p)}</dd>
+            <dt>In</dt><dd className="mono">{tc(p.t_in, 2)}</dd>
+            <dt>Out</dt><dd className="mono">{tc(p.t_out, 2)}</dd>
+            <dt>Zoom</dt><dd className="mono">{p.zoom}×</dd>
+            {p.excess_db != null && <><dt>Level</dt><dd>{p.excess_db >= 0 ? "+" : ""}{p.excess_db} dB over the cut's median</dd></>}
+          </dl>
+        </div>
+        <p className="mute small">
+          {p.kind === "jump_cut"
+            ? `Two takes of the same shot meet here, so this one plays ${p.zoom}× closer and the cut reads as a choice.`
+            : `A ${p.zoom}× zoom about your head on a word you lean on (or a name such as Montivo). Captions never zoom.`}
+        </p>
+        <div className="insp-actions">
+          <button className="btn danger-quiet" disabled={!!canEdit} title={canEdit ?? `Makes Version ${next} without it; later versions, the review loop and re-plans keep it out`}
+            onClick={() => onPunch({ skip: p.key })}>
+            <Icon name="trash" /> Remove punch-in <span className="btn-cost">$0</span>
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function PunchToggle({ v, next, canEdit, onPunch }: { v: Version; next: number; canEdit: string | null; onPunch: (a: PunchAsk) => void }) {
+  const n = v.punch_ins.length, gone = v.punch_skip.length;
+  const what = v.punch ? `${n} in this version${gone ? ` · ${gone} removed by hand` : ""}` : "Zooms on stressed words and jump cuts";
+  return (
+    <div className="punch-row">
+      <div className="pr-text">
+        <span className="pr-title">Punch-ins</span>
+        <span className="mute small">{what}</span>
+      </div>
+      <button className={`switch ${v.punch ? "on" : ""}`} role="switch" aria-checked={v.punch} aria-label="Punch-ins" disabled={!!canEdit}
+        title={canEdit ?? `Turn the punch-ins ${v.punch ? "off" : "on"}: makes Version ${next} ($0, a re-render)`}
+        onClick={() => onPunch({ on: !v.punch })}>
+        <span className="knob" />
+      </button>
+    </div>
+  );
+}
+
+function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onReview, onPunch }: {
+  id: string; state: RunState; versions: Version[]; v: Version; next: number; canEdit: string | null; onSeek: Seek;
+  onPick: (n: number) => void; onReview: () => void; onPunch: (a: PunchAsk) => void;
 }) {
   const reviewed = versions.filter((x) => x.review);
   const r = v.review;
@@ -117,6 +179,7 @@ function CutReview({ id, state, versions, v, canEdit, onSeek, onPick, onReview }
           <span>{v.spans.length} clips · {tc(v.duration_s ?? v.runtime_s)}{parent?.duration_s && v.duration_s ? ` (${v.duration_s - parent.duration_s >= 0 ? "+" : ""}${(v.duration_s - parent.duration_s).toFixed(1)} s)` : ""}</span>
           {v.loudness && <span title={`true peak ${v.loudness.true_peak_dbtp} dBTP`}>{v.loudness.integrated_lufs} LUFS</span>}
         </div>
+        {v.cut && <PunchToggle v={v} next={next} canEdit={canEdit} onPunch={onPunch} />}
         {reviewed.length > 0 && (
           <div className="history" title="The same cut reviewed twice can differ by about 10 points.">
             {reviewed.map((x, k) => (

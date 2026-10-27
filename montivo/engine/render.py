@@ -33,9 +33,11 @@ from ..config import REFRAME_CONCEPT
 from ..ledger import Entry, Ledger, Timer
 from .api import dump_json
 from .captions import Overlay, build_overlays
+from .edges import Audio
 from .graphics import font_path
+from .punch import plan_punches, zoom_filter
 from .reframe import ReframeParams, SegmentPath, plan_segment
-from .speakers import follow_for
+from .speakers import follow_ids
 
 OUT_W, OUT_H = 1080, 1920
 AUDIO_RATE = 48000
@@ -125,6 +127,39 @@ def load_reframe_track(run_dir: Path, edl: dict) -> tuple[str | None, dict | Non
     return None, None
 
 
+def load_speaker_ids(run_dir: Path, concept: str | None, edl: dict | None = None) -> dict[str, list[str]]:
+    """speaker -> head ids from run_dir/speakers.json (speakers.py); only meaningful when the crop follows heads.
+    A human pin in the EDL, `reframe_speaker_ids` {"A": "3"} (Voice label -> head id), replaces the mapped ids of its
+    speaker: the pinned head is followed while it covers the piece, the plain rule when it leaves the frame."""
+    if concept != "head":
+        return {}
+    p = run_dir / "speakers.json"
+    ids = follow_ids(json.loads(p.read_text())) if p.is_file() else {}
+    ids.update({str(spk): [str(oid)] for spk, oid in ((edl or {}).get("reframe_speaker_ids") or {}).items()})
+    return ids
+
+
+def follow_pieces(seg: Segment, spans: list[dict], speaker_ids: dict[str, list[str]]) -> list[dict] | None:
+    """The segment cut into runs of spans by one speaker, each with that speaker's head ids; None when no span's
+    speaker has a head (the crop keeps the plain rule)."""
+    if not speaker_ids:
+        return None
+    by_id = {s["id"]: s for s in spans}
+    ordered = [by_id[sid] for sid in seg.span_ids if sid in by_id]
+    if not ordered or not any(str(s.get("speaker")) in speaker_ids for s in ordered):
+        return None
+    pieces: list[dict] = []
+    for k, s in enumerate(ordered):
+        a = seg.t_in if k == 0 else max(seg.t_in, min(seg.t_out, float(s["t_in"])))
+        b = seg.t_out if k == len(ordered) - 1 else max(a, min(seg.t_out, float(ordered[k + 1]["t_in"])))
+        spk = str(s.get("speaker"))
+        if pieces and pieces[-1]["speaker"] == spk:
+            pieces[-1]["t_out"] = b
+        else:
+            pieces.append({"t_in": a, "t_out": b, "speaker": spk, "ids": speaker_ids.get(spk)})
+    return pieces
+
+
 def segment_bias(spans: list[dict], span_ids: list[str]) -> int:
     """The review's reframe_bias for a segment: the `reframe_bias_px` of its spans (source px, + moves the crop right)."""
     vals = [int(s.get("reframe_bias_px") or 0) for s in spans if s["id"] in span_ids]
@@ -172,14 +207,14 @@ def _overlay_graph(base: str, overlays: list[Overlay], first_input: int) -> tupl
 
 
 def render_segment_video(source: Path, seg: Segment, path: SegmentPath, render_dir: Path,
-                         overlays: list[Overlay] | None = None) -> Path:
+                         overlays: list[Overlay] | None = None, zoom: dict | None = None) -> Path:
     cmds = render_dir / f"seg_{seg.index + 1:02d}_crop.cmd"
     cmds.write_text(path.sendcmd_text())
     out = render_dir / f"seg_{seg.index + 1:02d}.mp4"
     # seek half a frame early so the frame on the grid is never lost to rounding, then rebase pts to 0
     seek = max(0.0, seg.t_in - 0.5 / seg.fps)
     vf = (f"setpts=PTS-STARTPTS,sendcmd=f={cmds.as_posix()},crop={path.crop_w}:{path.crop_h}:{path.xs[0]}:0,"
-          f"scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1")
+          f"scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1" + (f",{zoom_filter(zoom, seg.fps)}" if zoom else ""))
     ov_args, ov_graph = _overlay_graph("[base]", overlays or [], 1)
     graph = f"[0:v]{vf}[base];{ov_graph}"
     _ffmpeg(["-ss", f"{seek:.6f}", "-t", f"{(seg.frames + 2) / seg.fps:.6f}", "-i", str(source), *ov_args,
@@ -353,11 +388,13 @@ def mux(segment_files: list[Path], audio: Path, out: Path, render_dir: Path) -> 
 
 def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str = "cut_v1.mp4",
            params: ReframeParams | None = None, log=print, edl_path: Path | None = None, words: list[dict] | None = None,
-           title_png: Path | None = None, captions: bool = True, callouts: bool = True, loudnorm: bool = True) -> dict:
+           title_png: Path | None = None, captions: bool = True, callouts: bool = True, loudnorm: bool = True,
+           punch: bool = False) -> dict:
     """Render the EDL to run_dir/<out_name>; writes segments, cmd files, overlay PNGs and the audio under run_dir/render/
     and fills the EDL's `reframe` keyframes, `captions` / `callouts` / `caption_corrections` and a `render` block
     (written back to edl_path when given). `words` are the Voice words (voice.json) the captions come from; without
-    them, or with captions=False, the cut has no captions. `title_png` puts the title card in front."""
+    them, or with captions=False, the cut has no captions. `title_png` puts the title card in front. `punch` adds the
+    punch-in zooms (punch.py) and records them in the EDL's `punch_ins`."""
     if not source.is_file():
         raise FileNotFoundError(f"source footage not found: {source}")
     if not edl.get("spans"):
@@ -371,9 +408,11 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     ov_dir.mkdir()
     fps = float(edl["source"]["fps"])
     concept, track = load_reframe_track(run_dir, edl)
+    speaker_ids = load_speaker_ids(run_dir, concept, edl)
     segments = frame_align(merge_segments(edl["spans"]), fps)
     log(f"render: {len(edl['spans'])} spans -> {len(segments)} segments, source {source.name}, "
-        f"track {concept or 'none (centre crop)'}")
+        f"track {concept or 'none (centre crop)'}"
+        + (f", following speakers {', '.join(f'{k}->{'/'.join(v)}' for k, v in speaker_ids.items())}" if speaker_ids else ""))
 
     keyframes: list[dict] = []
     seg_info: list[dict] = []
@@ -381,10 +420,8 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     with Timer() as t:
         paths: list[SegmentPath] = []
         for seg in segments:
-            fol = follow_for(edl, seg.span_ids) if concept else None
             path = plan_segment(seg.t_in, seg.t_out, edl["source"], track, params, span_ids=seg.span_ids,
-                                prefer_x=fol.prefer_x if fol else None, prefer_id=fol.prefer_id if fol else None)
-            path.follow = fol
+                                follow=follow_pieces(seg, edl["spans"], speaker_ids))
             path.xs = path.xs[:seg.frames] + [path.xs[-1]] * max(0, seg.frames - len(path.xs))
             bias = segment_bias(edl["spans"], seg.span_ids)
             if bias:
@@ -410,24 +447,33 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
                 + "; ".join(f"{f['from']} -> {f['to']}" for f in fields["caption_corrections"]))
         else:
             edl.update({"captions": [], "callouts": [], "caption_corrections": []})
+        zooms: dict[int, dict] = {}
+        edl["punch_ins"] = []
+        if punch:
+            zooms, edl["punch_ins"] = plan_punches(edl, segments, paths, words or [], Audio.load(run_dir),
+                                                   load_track(run_dir, edl, "head") if concept == "head" else None,
+                                                   edl.get("captions") or [], title_s=title_s)
+            log(f"render: {len(edl['punch_ins'])} punch-ins: " + "; ".join(
+                f"{e['t_in']:.1f}s {e.get('word') or 'jump cut'} x{e['zoom']}" for e in edl["punch_ins"]))
         if title_png is not None:
             tfile, _ = render_title_video(title_png, fps, render_dir)
             files.append(tfile)
             log(f"render: title card {title_png.name} {title_s:.2f}s ({title_frames} frames, fade {TITLE_FADE_S}s)")
         for seg, path in zip(segments, paths):
             ovs = overlays.get(seg.index, [])
-            f = render_segment_video(source, seg, path, render_dir, ovs)
+            f = render_segment_video(source, seg, path, render_dir, ovs, zooms.get(seg.index))
             files.append(f)
             keyframes.extend(path.keyframes)
             moving = sum(1 for a, b in zip(path.xs, path.xs[1:]) if a != b)
             seg_info.append({"index": seg.index, "t_in": seg.t_in, "t_out": seg.t_out, "duration": seg.duration, "frames": seg.frames,
-                             "spans": seg.span_ids, "track_concept": concept, "track_id": path.track_id,
-                             "speaker": path.follow.speaker if path.follow else None,
-                             "follow": path.follow.by if path.follow else None, "crop": [path.crop_w, path.crop_h],
+                             "spans": seg.span_ids, "track_concept": concept, "track_id": path.track_id, "crop": [path.crop_w, path.crop_h],
                              "x_first": path.xs[0], "x_min": min(path.xs), "x_max": max(path.xs),
-                             "frames_moving": moving, "overlays": len(ovs), "file": f.as_posix()})
+                             "frames_moving": moving, "overlays": len(ovs), "file": f.as_posix(),
+                             **({"pieces": path.pieces} if path.pieces else {}),
+                             **({"zoom": {"base": zooms[seg.index]["base"], "events": len(zooms[seg.index]["events"])}}
+                                if seg.index in zooms else {})})
             log(f"render: seg {seg.index + 1} {seg.t_in:.3f}-{seg.t_out:.3f}s ({seg.frames} frames, {'+'.join(seg.span_ids)}) "
-                f"track {path.track_id}{f' ({path.follow.speaker}, {path.follow.by})' if path.follow and path.follow.speaker else ''} crop {path.crop_w}x{path.crop_h} x {min(path.xs)}..{max(path.xs)}, {len(ovs)} overlays")
+                f"track {'/'.join(f'{p['speaker']}:{p['track_id']}' for p in path.pieces) if path.pieces else path.track_id} crop {path.crop_w}x{path.crop_h} x {min(path.xs)}..{max(path.xs)}, {len(ovs)} overlays")
         audio, loud = render_audio(source, segments, render_dir, lead_s=title_s, loudnorm=loudnorm)
         out = mux(files, audio, run_dir / out_name, render_dir)
     measured = measure_loudness(out)

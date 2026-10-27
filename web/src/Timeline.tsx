@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { crit, tc } from "./api";
-import { blockAt, edgeSnaps, sevRank, type Block, type Snap } from "./edit";
+import { blockAt, edgeSnaps, punchLabel, sevRank, type Block, type Snap } from "./edit";
 import { Icon } from "./icons";
 import type { Issue, Version, Word } from "./types";
 
@@ -291,6 +291,18 @@ const Tracks = memo(function Tracks(p: TrackProps) {
                 <span className="trim-h out" onPointerDown={(e) => startTrim(e, b, "out")} title="Drag to trim or extend the end (snaps to words)" />
               </>}
             </div>
+          );
+        })}
+        {v.punch_ins.map((pi) => { // the zooms this render made: select one to see it or remove it
+          const key = `punch:${pi.key}`;
+          return (
+            <button key={pi.key} className={`punch ${pi.kind} ${selected === key ? "sel" : ""}`}
+              style={{ left: pi.t_in * pps, width: Math.max(12, (pi.t_out - pi.t_in) * pps - 1) }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); onSelect(key); onSeek(Math.max(0, pi.t_in - 0.6), pi.t_out + 0.4); }}
+              title={`Punch-in ${pi.zoom}× · ${punchLabel(pi)} · ${tc(pi.t_in)}`}>
+              <span>{pi.zoom}×{pi.kind === "emphasis" && pi.word ? ` ${pi.word}` : ""}</span>
+            </button>
           );
         })}
         {blocks.filter((b) => b.kind === "ghost").map((b) => (

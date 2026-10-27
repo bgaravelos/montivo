@@ -34,24 +34,13 @@ def upload_file(path: Path, mime: str, purpose: str = "user_data") -> dict:
     return data
 
 
-def responses_create(body: dict, timeout_s: float = 900, retries: int = 1) -> dict:
-    """POST /responses without streaming. Retries once on transport errors and 5xx."""
-    return _post_json(f"{BASE_URL}/responses", _headers(**{"Content-Type": "application/json"}), body, "responses",
-                      timeout_s, retries)
-
-
-def chat_create(body: dict, timeout_s: float = 900, retries: int = 1) -> dict:
-    """POST /chat/completions on the Open Weight host (Muse Spark Open on Baseten), same retry rule."""
-    headers = {"Authorization": f"Bearer {open_api_key()}", "Content-Type": "application/json"}
-    return _post_json(f"{OPEN_BASE_URL}/chat/completions", headers, body, "chat", timeout_s, retries)
-
-
-def _post_json(url: str, headers: dict, body: dict, what: str, timeout_s: float, retries: int) -> dict:
+def _post_json(url: str, headers: dict[str, str], body: dict, what: str, timeout_s: float, retries: int) -> dict:
+    """POST a JSON body and return the JSON answer. Retries on transport errors and 5xx."""
     last: Exception | None = None
     for attempt in range(retries + 1):
         try:
             with httpx.Client(timeout=httpx.Timeout(timeout_s, connect=30)) as http:
-                r = http.post(url, headers=headers, json=body)
+                r = http.post(url, headers={**headers, "Content-Type": "application/json"}, json=body)
             if r.status_code >= 500 and attempt < retries:
                 last = httpx.HTTPStatusError(f"{r.status_code}: {r.text[:300]}", request=r.request, response=r)
                 time.sleep(2 + 3 * attempt)
@@ -65,6 +54,31 @@ def _post_json(url: str, headers: dict, body: dict, what: str, timeout_s: float,
                 break
             time.sleep(2 + 3 * attempt)
     raise RuntimeError(f"{what} failed after {retries + 1} attempts: {last}")
+
+
+def responses_create(body: dict, timeout_s: float = 900, retries: int = 1) -> dict:
+    """POST /responses without streaming. Retries once on transport errors and 5xx."""
+    return _post_json(f"{BASE_URL}/responses", _headers(), body, "responses", timeout_s, retries)
+
+
+def chat_create(body: dict, timeout_s: float = 900, retries: int = 1) -> dict:
+    """POST /chat/completions on the Open Weight host (Baseten, OpenAI-compatible) without streaming."""
+    return _post_json(f"{OPEN_BASE_URL}/chat/completions", {"Authorization": f"Bearer {open_api_key()}"}, body,
+                      "chat", timeout_s, retries)
+
+
+def chat_as_response(chat: dict) -> dict:
+    """A chat completion in the Responses shape the rest of the engine reads: output_text parts, status, and usage
+    with input_tokens / output_tokens / input_tokens_details.cached_tokens."""
+    choice = (chat.get("choices") or [{}])[0]
+    text = (choice.get("message") or {}).get("content") or ""
+    finish = choice.get("finish_reason")
+    usage = chat.get("usage") or {}
+    return {"id": chat.get("id", ""), "model": chat.get("model", ""),
+            "status": {"stop": "completed", "length": "incomplete"}.get(finish, finish or "?"),
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": text}]}],
+            "usage": {"input_tokens": usage.get("prompt_tokens") or 0, "output_tokens": usage.get("completion_tokens") or 0,
+                      "input_tokens_details": {"cached_tokens": (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0}}}
 
 
 def output_text(response: dict) -> str:

@@ -170,6 +170,7 @@ def versions(run_dir: Path) -> list[dict]:
             last = patches[-1]
             origin = {"source": last.get("source") or "review", "from": last.get("from"), "review": last.get("review"),
                       "action": last.get("action") or "review", "instruction": last.get("instruction"),
+                      "result": last.get("result"),
                       "fixes": [{k: f.get(k) for k in ("op", "target", "issue", "severity", "t_s", "note", "args")} for f in last.get("fixes") or []]}
         rv = read_json(run_dir / f"review_v{n}.json")
         if rv and cut and Path(rv.get("cut", "")).name != cut:
@@ -185,6 +186,9 @@ def versions(run_dir: Path) -> list[dict]:
                                        "spans": c.get("spans") or [], "placement": c.get("placement"),
                                        "over_face": bool(c.get("over_face"))} for c in edl.get("captions") or []],
                     "caption_style": edl.get("caption_style"), "caption_style_note": edl.get("caption_style_note"),
+                    "punch": bool(edl.get("punch")), "punch_skip": list(edl.get("punch_skip") or []),
+                    "punch_ins": [{k: e.get(k) for k in ("key", "kind", "word", "span", "excess_db", "t_in", "t_out", "zoom")}
+                                  for e in edl.get("punch_ins") or [] if e.get("key")],
                     "bytes": (run_dir / cut).stat().st_size if cut else None,
                     "review": _review(rv, run_dir) if rv else None})
     return out
