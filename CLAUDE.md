@@ -184,7 +184,7 @@ generated: `python3 assets/brand/build.py --png` (fonttools, uharfbuzz, headless
 touch icon and lockup into `web/public`. Applied: editor tokens and logo (`web/src/styles.css`, Home, Editor, major
 issues now orange #FF8A3D), render accent `graphics.ACCENT` = marker, Muse Image title prompt with the brand hexes (not
 called yet). `.gitignore` lets brand PNG/MP4 and the UI icons in. GitHub social preview upload is manual (needs Billy).
-UI backlog 1 + 2 (27/10 evening, $0; the 12-item list is in Claude Code memory `project-montivo-ui-backlog`): Loop film
+UI backlog 1 + 2 (27/10 evening, $0, commit `89bfe80`; the 12-item list is in Claude Code memory `project-montivo-ui-backlog`): Loop film
 (`web/src/Loop.tsx`, `#/run/<id>/loop`, Loop button in the top bar and Versions): every version left to right with a clean
 poster (`/frame?clean=1`, from cut_vN not the review copy), blind score and delta, worst 3 notes (tick where fixed), and
 between two versions the patch that made the second (reviewer fixes with the criterion score moved, human edit, re-plan
