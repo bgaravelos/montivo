@@ -55,15 +55,24 @@ export function Editor({ id, replay, go }: Props) {
   }, [state, replay, seen]);
 
   const newest = visible.length ? visible[visible.length - 1].n : null;
+  // open on the newest version a human edit made or the hook A/B kept (both come after the loop: runs/012-open opened
+  // on the loop's v3 while the hook had kept v4), else the loop's best, else the newest
+  const kept = useMemo(() => {
+    const ns = visible.flatMap((v) => v.origin.source === "human" ? [v.n]
+      : v.origin.source === "hook_ab" && v.origin.result?.kept != null ? [v.origin.result.kept] : []);
+    const ok = ns.filter((n) => visible.some((v) => v.n === n));
+    return ok.length ? Math.max(...ok) : null;
+  }, [visible]);
   const best = state?.loop?.best?.version;
+  const opening = kept ?? (best && visible.some((v) => v.n === best) ? best : newest);
   const seenNewest = useRef<number | null>(null);
-  useEffect(() => { // open on the loop's best; follow every version that appears after that (a job, the replay)
+  useEffect(() => { // open on `opening`; follow every version that appears after that (a job, the replay)
     if (!visible.length) return setSel(null);
     const grew = seenNewest.current != null && newest != null && newest > seenNewest.current;
     seenNewest.current = newest;
     if (grew || replay) return setSel(newest);
-    setSel((s) => (s != null && visible.some((v) => v.n === s) ? s : best && visible.some((v) => v.n === best) ? best : newest));
-  }, [visible.length, newest, best, replay]); // eslint-disable-line
+    setSel((s) => (s != null && visible.some((v) => v.n === s) ? s : opening));
+  }, [visible.length, newest, opening, replay]); // eslint-disable-line
 
   const v = visible.find((x) => x.n === sel) ?? null;
   const parent = v && state ? parentOf(v, state.versions) : undefined;

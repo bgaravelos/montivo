@@ -128,7 +128,14 @@ the mic in the run; centre distances still got A and D wrong (mic held low; a fi
 the stillness rule got all four right (shares 86/100/80/99.5 %), `montivo speakers` + render -> cut_v1 follows the right
 astronaut everywhere. The resume re-planned (9 spans, 48.8 s); the earlier state is in `runs/014/check/before_mic/`.
 Run 014 total $0.52.
-Next: the punch-in switch and Remove in `make ui` on `runs/012-open`. The evening-by-evening table is in README.md.
+Punch-ins in the editor, first real use (27/10, `runs/012-open`, $0, Chromium in the app's browser pane, no key via
+`.claude/launch.json` "montivo-ui"): v4's 9 pink markers, the punch-in inspector ("word", 1.12x, +4.3 dB), Remove ->
+v6 with 8 (`punch_skip` emphasis:word@69.860, nothing took its place), the switch off -> v7 with none ("1 removed by
+hand stay removed"), no console errors. Found: the editor opens on `review/loop.json`'s best (v3 here), ignoring the
+human edits and the hook A/B's kept version that came after the loop. Fixed (`web/src/Editor.tsx` `kept`/`opening`): the
+editor opens on the newest version a human edit made or the hook A/B kept, else the loop's best, else the newest;
+checked in the browser on 012 (v2), 012-open (v7), a copy without v6/v7 (v4, was v3), 013 (v3), 014 (v1).
+Next: Billy's own clip when it lands in `~/Downloads` (a fresh run: worth its own session). The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

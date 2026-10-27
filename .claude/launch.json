@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "montivo-ui",
+      "runtimeExecutable": "env",
+      "runtimeArgs": ["-u", "MODEL_API_KEY", "-u", "BASETEN_API_KEY", ".venv/bin/montivo", "serve"],
+      "port": 8765
+    }
+  ]
+}
