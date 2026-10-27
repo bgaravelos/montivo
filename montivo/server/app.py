@@ -26,7 +26,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..config import OPEN_MODEL
 from . import media
-from .runs import fingerprint, list_runs, parse_log, read_json, replay_script, run_state
+from .runs import fingerprint, list_runs, parse_log, progress, read_json, replay_script, run_state
 
 STATIC = Path(__file__).parent / "static"
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm"}
@@ -34,8 +34,11 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 
 # rough prices and times for the hint on each button (README "Measured behaviour"; the planner A/B on runs/012-open:
-# Spark 1.3 $0.050 in 35 s, Muse Spark Open $0.012 in 6.8 s)
-COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_per_s": 0.004}
+# Spark 1.3 $0.050 in 35 s, Muse Spark Open $0.012 in 6.8 s). The *_s times are the progress bar's expectation when the
+# run's own ledger has no earlier call of that stage (run 015: review prep 8.3 s, Spark review 26 s, title card 10.3 s,
+# render 20.3 s for 1161 frames)
+COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_per_s": 0.004,
+        "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175}
 
 
 @dataclass
@@ -50,6 +53,7 @@ class Job:
     ended: float | None = None
     rc: int | None = None
     out: str = ""
+    log_pos: int = 0  # run.log's size when the job started: its own lines come after
 
     def public(self) -> dict:
         return {"id": self.id, "run": self.run, "kind": self.kind, "label": self.label, "started": self.started,
@@ -86,6 +90,29 @@ class State:
     def busy(self, run_id: str) -> bool:
         j = self.jobs.get(run_id)
         return bool(j and j.ended is None)
+
+
+def job_progress(st: "State", job: Job) -> dict | None:
+    """The job's progress from its own run.log lines (runs.progress), with the clock brought up to now: the stage
+    keeps running between two lines, so the seconds since the last write are added."""
+    logp = st.runs / job.run / "run.log"
+    try:
+        with logp.open("rb") as fh:
+            fh.seek(job.log_pos)
+            text = fh.read().decode(errors="replace")
+        since = max(0.0, time.time() - logp.stat().st_mtime)
+    except OSError:
+        text, since = "", 0.0
+    end = job.ended or time.time()
+    p = progress(parse_log(text), label=job.label, ledger=read_json(st.runs / job.run / "ledger.json"), costs=COST) or {
+        "label": job.label, "kind": job.kind, "stage": None, "title": "Starting", "detail": None, "floor": 0.0,
+        "ceil": 0.95, "expected_s": None, "expected_from": None, "stage_elapsed": 0.0, "steps": [], "finished": False,
+        "error": False, "version": None}
+    if job.ended is None:
+        p["stage_elapsed"] = round(p["stage_elapsed"] + since, 1)
+    p.update(active=job.ended is None, job_elapsed=round(end - job.started, 1), rate=1.0 if job.ended is None else 0.0,
+             cap=None, failed=bool(job.rc))
+    return p
 
 
 def has_key() -> bool:
@@ -160,7 +187,9 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
         jid = time.strftime("%Y%m%d-%H%M%S")
         out = d / "ui" / f"job-{jid}-{kind}.out"
         cmd = [sys.executable, *args]
-        job = Job(id=jid, run=run_id, kind=kind, label=label, cmd=cmd, out=str(out))
+        logp = d / "run.log"
+        job = Job(id=jid, run=run_id, kind=kind, label=label, cmd=cmd, out=str(out),
+                  log_pos=logp.stat().st_size if logp.is_file() else 0)
         fh = out.open("w")
         job.proc = subprocess.Popen(cmd, cwd=st.root, stdout=fh, stderr=subprocess.STDOUT, env=os.environ.copy())
         st.jobs[run_id] = job
@@ -191,6 +220,7 @@ def create_app(root: Path) -> FastAPI:
         for r in out:
             j = st.job(r["id"])
             r["job"] = j.public() if j else None
+            r["progress"] = job_progress(st, j) if j and j.ended is None else None
         return {"runs": out, "has_key": has_key(), "has_open_key": has_open_key(), "costs": COST}
 
     @app.get("/api/runs/{run_id}")
@@ -290,6 +320,7 @@ def create_app(root: Path) -> FastAPI:
                 for ln in lines:
                     if ln["session"] == last_session:
                         yield sse("line", ln)
+                yield sse("progress", job_progress(st, j))
             pos = len(text.encode())
             fp = fingerprint(d)
             seen_job = (j.id, j.ended) if j else None
@@ -297,7 +328,9 @@ def create_app(root: Path) -> FastAPI:
             buf = ""
             while not await request.is_disconnected():
                 await asyncio.sleep(0.4)
+                grew = False
                 if logp.is_file() and logp.stat().st_size > pos:
+                    grew = True
                     with logp.open("rb") as fh:
                         fh.seek(pos)
                         chunk = fh.read()
@@ -316,24 +349,41 @@ def create_app(root: Path) -> FastAPI:
                 if key != seen_job:
                     seen_job = key
                     yield sse("job", j.public())
+                    yield sse("progress", job_progress(st, j))
+                elif grew and j and j.ended is None:
+                    yield sse("progress", job_progress(st, j))
                 new_fp = fingerprint(d)
                 if new_fp != fp:
                     fp = new_fp
                     yield sse("changed", {})
 
+        def pause(a: dict, b: dict) -> float:
+            """Replay: the wall seconds between two lines (the log's own gap at `replay` speed, capped at 2.5 s)."""
+            gap = (b["t"] - a["t"]) if b["session"] == a["session"] else 1.0
+            return min(max(gap, 0) / max(replay, 0.25), 2.5)
+
         async def replay_gen(speed: float):
             text = logp.read_text(errors="replace") if logp.is_file() else ""
             script = replay_script(parse_log(text))
             yield sse("hello", {"mode": "replay", "speed": speed, "lines": len(script)})
+            ledger = read_json(d / "ledger.json")
             prev = None
-            for ln in script:
+            for k, ln in enumerate(script):
                 if await request.is_disconnected():
                     return
                 if prev is not None:
-                    gap = (ln["t"] - prev["t"]) if ln["session"] == prev["session"] else 1.0
-                    await asyncio.sleep(min(max(gap, 0) / speed, 2.5))
+                    await asyncio.sleep(pause(prev, ln))
                 prev = ln
                 yield sse("line", ln)
+                # the same progress a live job shows; the clock runs on the log's time, at the pace the next pause plays it
+                p = progress(script[:k + 1], ledger=ledger, costs=COST)
+                if p:
+                    nxt = script[k + 1] if k + 1 < len(script) else None
+                    same = nxt is not None and nxt["t"] >= ln["t"]  # the same engine clock (a session header keeps it)
+                    wait = pause(ln, nxt) if nxt else 0.0
+                    p.update(active=not p["finished"], replay=True, cap=round(nxt["t"] - ln["t"], 2) if same else 0.0,
+                             rate=round((nxt["t"] - ln["t"]) / wait, 3) if same and wait > 0 else 0.0)
+                    yield sse("progress", p)
             yield sse("replay_end", {})
             while not await request.is_disconnected():
                 await asyncio.sleep(15)

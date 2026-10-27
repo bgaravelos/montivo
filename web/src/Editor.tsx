@@ -5,6 +5,7 @@ import { EditDialog, ExportDialog, LedgerDialog, ShortcutsDialog } from "./Dialo
 import { childOf, layout, parentOf, projectName } from "./edit";
 import { Icon } from "./icons";
 import { Inspector, type PunchAsk } from "./Inspector";
+import { ProgressInline } from "./Progress";
 import { CaptionsPanel, MediaPanel, TextPanel, VersionsPanel } from "./Panels";
 import { FPS, Player, type PlayerHandle } from "./Player";
 import { Timeline, ZOOM_MAX, ZOOM_MIN, type ClipMenu, type TrimAsk } from "./Timeline";
@@ -31,7 +32,7 @@ const typing = (el: EventTarget | null) => {
  *  view through the Assistant (the pipeline checklist and every version's story), the score chip and the review
  *  markers on the ruler; every edit makes a new version, so undo and redo walk the version tree. */
 export function Editor({ id, replay, go }: Props) {
-  const { state, error, lines, job, seen } = useRun(id, replay);
+  const { state, error, lines, job, seen, progress } = useRun(id, replay);
   const [sel, setSel] = useState<number | null>(null);
   const [selKey, setSelKey] = useState<string | null>(null); // a span id or "title"
   const [t, setT] = useState(0);
@@ -179,7 +180,8 @@ export function Editor({ id, replay, go }: Props) {
         <span className="divider" />
         <div className="title-block">
           <span className="proj" title={state.run.brief}>{name}</span>
-          <span className="saved">{busy ? <><span className="pulse" /> {job!.label}…</> : v ? <>Saved · Version {v.n} of {newest}</> : "No version yet"}</span>
+          <span className="saved">{progress?.active && (busy || replay) ? <ProgressInline p={progress} />
+            : busy ? <><span className="pulse" /> {job!.label}…</> : v ? <>Saved · Version {v.n} of {newest}</> : "No version yet"}</span>
         </div>
         <span className="undo-redo">
           <button className="icon-btn" disabled={!undoTo} onClick={() => step(-1)} title={undoTo ? `Undo: back to Version ${undoTo.n} (⌘Z)` : "Nothing to undo"}><Icon name="undo" /></button>
@@ -231,7 +233,7 @@ export function Editor({ id, replay, go }: Props) {
 
       <aside className="panel">
         {panel === "assistant" && (
-          <Assistant state={state} versions={visible} lines={lines} job={job} seen={seen} replay={replay} v={v}
+          <Assistant state={state} versions={visible} lines={lines} job={job} seen={seen} progress={progress} replay={replay} v={v}
             clip={block?.kind === "span" ? block.span!.id : null} getTime={getTime} focusNonce={askNonce}
             onSend={(text, chips, review, planner) => act("replan", { instruction: text, chips, from: v?.n, review, planner })}
             onStop={() => act("stop", {})} />

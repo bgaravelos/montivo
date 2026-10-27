@@ -822,6 +822,7 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
     """Review cut_vN.mp4 blind: facts, review copy, upload, Spark 1.3. Writes review_vN.json and returns it."""
     name = name or f"review_v{version}"
     rdir = run_dir / "review" / name
+    log(f"review: {name}: facts, review copy and upload ...")  # the UI's progress: prep starts here, not at the facts
     with Timer() as t:
         duration = media_duration(cut)
         sil = silences_in(cut)

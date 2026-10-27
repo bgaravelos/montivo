@@ -410,8 +410,8 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     concept, track = load_reframe_track(run_dir, edl)
     speaker_ids = load_speaker_ids(run_dir, concept, edl)
     segments = frame_align(merge_segments(edl["spans"]), fps)
-    log(f"render: {len(edl['spans'])} spans -> {len(segments)} segments, source {source.name}, "
-        f"track {concept or 'none (centre crop)'}"
+    log(f"render: {len(edl['spans'])} spans -> {len(segments)} segments ({sum(s.frames for s in segments)} frames), "
+        f"source {source.name}, track {concept or 'none (centre crop)'}"
         + (f", following speakers {', '.join(f'{k}->{'/'.join(v)}' for k, v in speaker_ids.items())}" if speaker_ids else ""))
 
     keyframes: list[dict] = []

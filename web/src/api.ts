@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Job, LogLine, RunState } from "./types";
+import type { Job, LogLine, Progress, RunState } from "./types";
 
 export async function api<T = unknown>(path: string, body?: unknown, method?: string): Promise<T> {
   const res = await fetch(path, {
@@ -28,6 +28,7 @@ export function useRun(id: string, replay: number) {
   const [lines, setLines] = useState<LogLine[]>([]);
   const [job, setJob] = useState<Job | null>(null);
   const [seen, setSeen] = useState<Seen>(() => fresh());
+  const [progress, setProgress] = useState<Progress | null>(null);
   const timer = useRef<number | null>(null);
 
   const reload = useCallback(() => {
@@ -38,6 +39,7 @@ export function useRun(id: string, replay: number) {
     reload();
     setLines([]);
     setSeen(fresh());
+    setProgress(null);
     const es = new EventSource(`/api/runs/${id}/events${replay ? `?replay=${replay}` : ""}`);
     const later = () => { // a burst of file changes -> one reload
       if (timer.current) window.clearTimeout(timer.current);
@@ -57,11 +59,12 @@ export function useRun(id: string, replay: number) {
     });
     es.addEventListener("job", (ev) => { setJob(JSON.parse((ev as MessageEvent).data)); later(); });
     es.addEventListener("changed", later);
-    es.addEventListener("replay_end", () => setSeen((s) => ({ ...s, running: null, ended: true })));
+    es.addEventListener("progress", (ev) => setProgress({ ...JSON.parse((ev as MessageEvent).data), recv: performance.now() }));
+    es.addEventListener("replay_end", () => { setSeen((s) => ({ ...s, running: null, ended: true })); setProgress((p) => (p ? { ...p, active: false } : p)); });
     return () => { es.close(); if (timer.current) window.clearTimeout(timer.current); };
   }, [id, replay, reload]);
 
-  return { state, error, lines, job, seen, reload };
+  return { state, error, lines, job, seen, progress, reload };
 }
 
 function fresh(): Seen {

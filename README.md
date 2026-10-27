@@ -120,7 +120,12 @@ verdict there. The Ask Montivo box has the same planner choice as a new project.
 Loop button in the top bar or Versions) lays every version out left to right: the frame, the blind score and its
 change, the reviewer's worst notes (a tick where a later version fixed one), and between two versions what made the
 second one: the reviewer's fixes with the score each moved ("drop title · Hook in 1.5 s 2 → 10"), a human edit, a
-re-plan with its planner, cost and time against v1's, or a hook A/B with its verdict, and a Compare button for the pair. Keys: Space, J/K/L, arrow keys for
+re-plan with its planner, cost and time against v1's, or a hook A/B with its verdict, and a Compare button for the pair.
+A running job (a new run, Ask Montivo, an edit, a review, the hook A/B) shows where it is, in the top bar, the Assistant
+and its card on the project list: the step (plan, edges, render "segment 2 of 3", review, hook A/B), a clock against the
+step's expected time (this run's earlier calls in `ledger.json`, else the measured hints: plan 35 s on Spark 1.3, 7 s
+on Muse Spark Open, review 26 s) and a bar that moves by time but never past the last checkpoint `run.log` logged
+(Voice, SAM and Watch on a new run have no estimate, so their bar says so); replay drives the same view. Keys: Space, J/K/L, arrow keys for
 one frame, Backspace to delete a clip, Cmd+Z / Shift+Cmd+Z across versions. Spoken instructions through Voice: not
 yet. The server only reads the run folders and starts the engine as a subprocess; the React build is committed, so
 the editor needs Python only.

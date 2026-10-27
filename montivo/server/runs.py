@@ -91,11 +91,16 @@ def replay_script(lines: list[dict]) -> list[dict]:
     if first is None:
         return []
     picked = [first]
+    k = order.index(first)
+    while k + 1 < len(order) and sessions[order[k + 1]][0]["t"] >= sessions[order[k]][-1]["t"]:
+        k += 1  # the run's own review loop renders under `montivo render:` headers on the same clock: same process
+        picked.append(order[k])
+    first = order[k]
     edges = [s for s in order if s > first and any("edges moved" in l["msg"] and "dry run" not in l["msg"] for l in sessions[s])]
     if edges:
         picked.append(edges[-1])
     loops = [s for s in order if s > first and any(l["msg"].startswith("review loop:") for l in sessions[s])]
-    if loops and loops[-1] not in picked and not any(l["msg"].startswith("review loop:") for l in sessions[first]):
+    if loops and loops[-1] not in picked and not any(l["msg"].startswith("review loop:") for s in picked for l in sessions[s]):
         # the loop's own renders log a `montivo render:` header, which splits it into sessions: take the ones before
         # its end back to where it started (a render or a review that no earlier loop finished)
         k = order.index(loops[-1])
@@ -109,6 +114,230 @@ def replay_script(lines: list[dict]) -> list[dict]:
             start -= 1
         picked.extend(order[start:k + 1])
     return [ln for s in picked for ln in sessions[s]]
+
+
+# --------------------------------------------------------------------------- live progress
+
+# the render's share of its own time, measured on run 015 (cut_v1, 1161 frames, 20.3 s): prep (paths, captions, title
+# clip) 1.0 s, the segments 15.4 s, audio + mux 3.9 s
+RENDER_PREP, RENDER_SEGS = 0.05, 0.75
+COMMANDS = {"run": "Run", "render": "Render", "drop": "Delete clip", "trim": "Trim clip", "caption": "Edit captions",
+            "punch": "Punch-ins", "replan": "Ask Montivo", "edges": "Edges"}
+TO_VERSION = re.compile(r"-> \S*?(?:edl|cut)_v(\d+)\b")
+SEGMENTS = re.compile(r"^render: \d+ spans -> (\d+) segments(?: \((\d+) frames\))?")
+SEG_DONE = re.compile(r"^render: seg (\d+) .*?\((\d+) frames")
+CUT_READY = re.compile(r"^render: \S*cut_v(\d+)\.mp4 \(")
+REVIEW_PREP = re.compile(r"^review: review_v(\d+): facts")
+REVIEW_CALL = re.compile(r"^(?:review: review_v(\d+) facts:|spark: review_v(\d+) ->)")
+REVIEW_DONE = re.compile(r"^review: review_v(\d+) overall (\d+) pass (\w+)")
+HOOK_B = re.compile(r"^hook a/b: v\d+ opens on \S+ .*; v(\d+) opens on (\S+)")
+HOOK_DONE = re.compile(r"^hook a/b: .* vs .*: keep v(\d+)")
+
+
+def progress(lines: list[dict], label: str | None = None, ledger: dict | None = None,
+             costs: dict | None = None) -> dict | None:
+    """Where a job is, read from its run.log lines (one engine process: the lines after the last clock reset).
+
+    Returns the rail stage, a title ("Render v2") and detail ("segment 2 of 3"), the bar's bounds from the checkpoints
+    logged so far (`floor`, `ceil`) and the stage's expected seconds (this run's ledger, else the server's hints); the UI
+    moves the bar by time between the two bounds, so it never runs past a checkpoint the log has not reached. A stage
+    with no checkpoint and no expected time (Voice, SAM, Watch on a new run) has no estimate: the bar stays indeterminate."""
+    start = 0
+    for k in range(1, len(lines)):
+        if lines[k]["t"] < lines[k - 1]["t"]:
+            start = k
+    lines = lines[start:]
+    if not lines:
+        return None
+    costs = costs or {}
+    entries = (ledger or {}).get("entries") or []
+
+    def expect(stage: str, hint: str, model: str | None = None) -> tuple[float | None, str | None]:
+        """The mean of this run's earlier calls of the stage (of that model), else the server's hint."""
+        secs = [e["seconds"] for e in entries if e.get("stage") == stage and (model is None or e.get("model") == model)
+                and e.get("seconds")]
+        if secs:
+            return round(sum(secs) / len(secs), 1), "ledger"
+        return (costs[hint], "hint") if costs.get(hint) else (None, None)
+
+    first = lines[0]["msg"]
+    cmd = re.match(r"montivo (\w+)", first)
+    kind = cmd.group(1) if cmd else ("hook" if first.startswith("hook a/b") else "edges" if first.startswith("edges")
+                                     else "review" if first.startswith(("review", "spark: review")) else None)
+    label = label or COMMANDS.get(kind or "", {"hook": "Hook A/B", "review": "Review loop"}.get(kind or "", "Montivo"))
+    version = 1 if kind == "run" else None
+    cur: dict | None = None
+    steps: list[dict] = []
+    seg = {"n": 0, "frames": 0, "k": 0, "done_frames": 0}
+    analyse = {"voice": False, "watch": None, "sam": []}
+    reviews, finished, error = 0, False, False
+
+    def begin(stage: str, title: str, t: float, **kw) -> dict:
+        nonlocal cur
+        if cur and (cur["stage"], cur["title"]) == (stage, title):
+            cur.update(kw)
+            return cur
+        if cur:
+            steps.append({"stage": cur["stage"], "title": cur["title"], "seconds": round(cur.get("t1", t) - cur["t0"], 1)})
+        cur = {"stage": stage, "title": title, "t0": t, "detail": None, "floor": 0.0, "ceil": 0.95,
+               "expected_s": None, "expected_from": None, **kw}
+        return cur
+
+    def done(t: float, detail: str | None = None) -> None:
+        if cur:
+            cur.update(floor=1.0, ceil=1.0, t1=t, **({"detail": detail} if detail else {}))
+
+    for ln in lines:
+        msg, t = ln["msg"], ln["t"]
+        if msg.startswith(" "):
+            continue
+        if msg.startswith("montivo "):
+            m = TO_VERSION.search(msg)
+            if m:
+                version = int(m.group(1))
+            if msg.startswith("montivo run:"):
+                begin("ingest", "Ingest", t, detail="proxy, audio and upload")
+            continue
+        if msg.startswith(("ERROR", "error")):
+            error = True
+            begin(cur["stage"] if cur else "error", cur["title"] if cur else "Error", t, detail=msg.split("\n")[0][:120])
+            continue
+        if msg.startswith("ingest:"):
+            begin("ingest", "Ingest", t, detail="proxy, audio and upload")
+            if "uploaded proxy" in msg:
+                done(t)
+            continue
+        if msg.startswith(("voice:", "track:", "spark: watch", "watch")):
+            if msg.startswith("voice:") and re.match(r"voice: \d+ turns", msg):
+                analyse["voice"] = True
+            if msg.startswith("spark: watch"):
+                analyse["watch"] = "completed" in msg or "->" not in msg
+            m = re.match(r"track: ([^:]+): \d+ ids", msg)
+            if m:
+                analyse["sam"].append(m.group(1))
+            parts = ["Voice ✓" if analyse["voice"] else "Voice",
+                     f"SAM {', '.join(analyse['sam'])} ✓" if analyse["sam"] else "SAM",
+                     "Watch ✓" if analyse["watch"] else "Watch"]
+            n_done = sum(p.endswith("✓") for p in parts)
+            begin("voice", "Voice · SAM · Watch", t, detail=" · ".join(parts) if n_done else "running side by side",
+                  floor=n_done / 3, ceil=max(n_done / 3, 0.95))
+            continue
+        if msg.startswith("speakers:"):
+            begin("track", "Speaker map", t, detail=msg[len("speakers: "):][:80])
+            continue
+        if msg.startswith("plan: speech rate") or msg.startswith("spark: plan ->"):
+            model = msg.split("-> ", 1)[1].split(" ")[0] if "->" in msg else SPARK_MODEL
+            is_open = model.startswith("meta-models/")
+            exp, src = expect("spark.plan", "plan_open_s" if is_open else "plan_s", model)
+            begin("plan", "Plan", t, detail=planner_name(model), expected_s=exp, expected_from=src)
+            continue
+        if msg.startswith("spark: plan:"):
+            done(t, f"{(cur or {}).get('detail') or 'planned'}, {msg.rsplit(', ', 1)[-1]}")
+            continue
+        if msg.startswith("edges:"):
+            begin("edges", "Edges", t, detail=msg[len("edges: "):].split(" (")[0][:80], floor=1.0, ceil=1.0)
+            continue
+        if msg.startswith("patch v"):
+            m = re.match(r"patch v\d+ -> v(\d+): (\S+)", msg)
+            if m:
+                version = int(m.group(1))
+                c = cur if cur and cur["title"] == f"Patch v{version}" else None
+                n = (c or {}).get("fixes", 0) + 1
+                begin("edit", f"Patch v{version}", t, fixes=n, floor=1.0, ceil=1.0,
+                      detail=m.group(2) if n == 1 else f"{n} fixes")
+            continue
+        if msg.startswith("image: title card"):
+            if "saved" in msg:
+                done(t)
+            else:
+                exp, src = expect("image.title", "image_s")
+                begin("render", "Title card", t, detail="Muse Image", expected_s=exp, expected_from=src)
+            continue
+        if msg.startswith(("review: rendering", "hook a/b: rendering")):
+            m = TO_VERSION.search(msg)
+            if m:
+                version = int(m.group(1))
+            continue
+        m = SEGMENTS.match(msg)
+        if m:
+            seg = {"n": int(m.group(1)), "frames": int(m.group(2) or 0), "k": 0, "done_frames": 0}
+            exp, src = expect("render", "")
+            if exp is None and seg["frames"] and costs.get("render_s_per_frame"):
+                exp, src = round(seg["frames"] * costs["render_s_per_frame"], 1), "hint"
+            begin("render", f"Render v{version}" if version else "Render", t, expected_s=exp, expected_from=src,
+                  detail=f"segment 1 of {seg['n']}", floor=0.0,
+                  ceil=RENDER_PREP + RENDER_SEGS * (1 if seg["frames"] else 1 / seg["n"]))
+            continue
+        m = SEG_DONE.match(msg)
+        if m and cur and cur["stage"] == "render" and seg["n"]:
+            seg["k"], seg["done_frames"] = int(m.group(1)), seg["done_frames"] + int(m.group(2))
+            k, n = seg["k"], seg["n"]
+            share = seg["done_frames"] / seg["frames"] if seg["frames"] else k / n
+            nxt = 1.0 if seg["frames"] or k >= n else (k + 1) / n
+            cur.update(floor=RENDER_PREP + RENDER_SEGS * min(share, 1.0),
+                       ceil=0.98 if k >= n else RENDER_PREP + RENDER_SEGS * nxt,
+                       detail=f"segment {k + 1} of {n}" if k < n else "audio and mux")
+            continue
+        m = CUT_READY.match(msg)
+        if m:
+            version = int(m.group(1))
+            if cur and cur["stage"] == "render":
+                done(t, f"cut_v{version}.mp4 ready")
+            continue
+        m = REVIEW_PREP.match(msg)
+        if m:
+            version, reviews = int(m.group(1)), reviews + 1
+            prep, src = expect("review.prep", "review_prep_s")
+            call, src2 = expect("spark.review", "review_s")
+            exp = (prep or 0) + (call or 0) or None
+            share = round(prep / exp, 3) if prep and exp else 0.3
+            begin("review", f"Review v{version}", t, detail="facts, review copy and upload", expected_s=exp,
+                  expected_from=src2 or src, ceil=share, prep_share=share)
+            continue
+        m = REVIEW_CALL.match(msg)
+        if m:
+            version = int(m.group(1) or m.group(2))
+            if not (cur and cur["title"] == f"Review v{version}"):  # a log from before the prep line
+                reviews += 1
+                call, src = expect("spark.review", "review_s")
+                begin("review", f"Review v{version}", t, expected_s=call, expected_from=src, ceil=0.97)
+            else:
+                cur.update(floor=cur.get("prep_share", 0.0), ceil=0.97)
+            cur["detail"] = "Muse Spark 1.3, blind" + (f" · pass {reviews}" if reviews > 1 else "")
+            continue
+        m = REVIEW_DONE.match(msg)
+        if m:
+            done(t, f"scored {m.group(2)}{', pass' if m.group(3) == 'True' else ''}")
+            continue
+        m = HOOK_B.match(msg)
+        if m:
+            version = int(m.group(1))
+            begin("review", "Hook A/B", t, detail=f"v{version} opens on {m.group(2)}", floor=1.0, ceil=1.0)
+            continue
+        m = HOOK_DONE.match(msg)
+        if m:
+            begin("review", "Hook A/B", t, detail=f"keeps v{m.group(1)}", floor=1.0, ceil=1.0)
+            finished = True
+            continue
+        if msg.startswith("hook a/b:") and ("no challenger" in msg or "budget" in msg):
+            begin("review", "Hook A/B", t, detail=msg.split(": ", 2)[-1][:80], floor=1.0, ceil=1.0)
+            finished = True
+            continue
+        if msg.startswith(("review loop:", "done:", "human: v")):
+            finished = True
+            continue
+
+    t_last = lines[-1]["t"]
+    out = {"label": label, "kind": kind, "version": version, "finished": finished, "error": error,
+           "stage": None, "title": "Starting", "detail": None, "floor": 0.0, "ceil": 0.95, "expected_s": None,
+           "expected_from": None, "stage_elapsed": 0.0, "job_elapsed": round(t_last - lines[0]["t"], 1),
+           "t": t_last, "steps": steps[-12:]}
+    if cur:
+        out.update({k: cur[k] for k in ("stage", "title", "detail", "floor", "ceil", "expected_s", "expected_from")},
+                   stage_elapsed=round(t_last - cur["t0"], 1))
+    if finished:
+        out.update(floor=1.0, ceil=1.0)
+    return out
 
 
 # --------------------------------------------------------------------------- run state

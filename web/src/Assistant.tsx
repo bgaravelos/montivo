@@ -3,7 +3,8 @@ import { api, tc, usd, type Seen } from "./api";
 import { sevRank } from "./edit";
 import { Icon } from "./icons";
 import { PlannerPicker } from "./Panels";
-import type { Job, LogLine, PlanSide, Planner, RunState, Stage, Version } from "./types";
+import { ProgressCard } from "./Progress";
+import type { Job, LogLine, PlanSide, Planner, Progress, RunState, Stage, Version } from "./types";
 
 // ------------------------------------------------------------------- pipeline checklist
 
@@ -152,8 +153,8 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
 
 const WHO: Record<Msg["who"], string> = { you: "You", agent: "Montivo", tool: "Edit", reviewer: "Reviewer", pipeline: "Montivo" };
 
-export function Assistant({ state, versions, lines, job, seen, replay, v, clip, getTime, focusNonce, onSend, onStop }: {
-  state: RunState; versions: Version[]; lines: LogLine[]; job: Job | null; seen: Seen; replay: number; v: Version | null;
+export function Assistant({ state, versions, lines, job, seen, progress, replay, v, clip, getTime, focusNonce, onSend, onStop }: {
+  state: RunState; versions: Version[]; lines: LogLine[]; job: Job | null; seen: Seen; progress: Progress | null; replay: number; v: Version | null;
   clip: string | null; getTime: () => number; focusNonce: number;
   onSend: (text: string, chips: string[], review: number, planner: Planner) => void; onStop: () => void;
 }) {
@@ -165,7 +166,8 @@ export function Assistant({ state, versions, lines, job, seen, replay, v, clip, 
   const msgs = story(state, versions, lines, job, replay);
   const end = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [msgs.length, job?.running]);
+  const showProgress = !!progress?.active && (!!job?.running || !!replay);
+  useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [msgs.length, job?.running, showProgress, progress?.title]);
   useEffect(() => { if (focusNonce) { setUseClip(true); box.current?.focus(); } }, [focusNonce]);
   const chips = [...(clip && useClip ? [clip] : []), ...(time != null ? [`@${tc(time)}`] : [])];
   const cost = (planner === "open" ? state.costs.plan_open : state.costs.plan) + (review ? state.costs.review : 0);
@@ -185,7 +187,8 @@ export function Assistant({ state, versions, lines, job, seen, replay, v, clip, 
             {m.chips && <span className="chips">{m.chips.map((c) => <span key={c} className="chip">{c}</span>)}</span>}
           </div>
         ))}
-        {job?.running && <div className="msg agent"><span className="who">Montivo</span><span className="txt"><span className="pulse" /> {job.label}… <button className="link" onClick={onStop}>Stop</button></span></div>}
+        {showProgress ? <div className="msg agent"><span className="who">Montivo</span><ProgressCard p={progress!} onStop={job?.running ? onStop : undefined} /></div>
+          : job?.running && <div className="msg agent"><span className="who">Montivo</span><span className="txt"><span className="pulse" /> {job.label}… <button className="link" onClick={onStop}>Stop</button></span></div>}
         <div ref={end} />
       </div>
       <div className="composer">

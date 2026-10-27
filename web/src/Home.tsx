@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import { api, usd } from "./api";
 import { PlannerPicker } from "./Panels";
+import { ProgressMini } from "./Progress";
 import type { Costs, Planner, RunCard } from "./types";
 
 type Footage = { path: string; name: string; mb: number };
 const COSTS: Costs = { plan: 0.05, plan_open: 0.012, plan_s: 35, plan_open_s: 7, review: 0.035, run_per_s: 0.004 };
+const POLL_MS = 2000; // while a project has a job running, its card follows the job
+const IDLE_POLL_MS = 15000; // otherwise a slow look for a job started from another tab
 
 /** All run folders, and the new-run form (footage, brief, target, review loop). */
 export function Home({ go }: { go: (h: string) => void }) {
@@ -22,13 +25,21 @@ export function Home({ go }: { go: (h: string) => void }) {
   const [err, setErr] = useState<string | null>(null);
   const [upload, setUpload] = useState<string | null>(null);
 
+  const loadRuns = () => api<{ runs: RunCard[]; has_key: boolean; has_open_key: boolean; costs: Costs }>("/api/runs").then((r) => {
+    const recv = performance.now();
+    setRuns(r.runs.map((x) => (x.progress ? { ...x, progress: { ...x.progress, recv } } : x)));
+    setHasKey(r.has_key); setHasOpen(r.has_open_key); if (r.costs) setCosts(r.costs);
+  });
   const load = () => {
-    api<{ runs: RunCard[]; has_key: boolean; has_open_key: boolean; costs: Costs }>("/api/runs").then((r) => {
-      setRuns(r.runs); setHasKey(r.has_key); setHasOpen(r.has_open_key); if (r.costs) setCosts(r.costs);
-    });
+    loadRuns();
     api<{ files: Footage[] }>("/api/footage").then((r) => { setFootage(r.files); if (!f && r.files[0]) setF(r.files[0].path); });
   };
   useEffect(load, []); // eslint-disable-line
+  const anyRunning = !!runs?.some((r) => r.job?.running);
+  useEffect(() => {
+    const h = window.setInterval(loadRuns, anyRunning ? POLL_MS : IDLE_POLL_MS);
+    return () => window.clearInterval(h);
+  }, [anyRunning]); // eslint-disable-line
 
   const put = async (file: File) => {
     setUpload(`uploading ${file.name}…`);
@@ -44,7 +55,7 @@ export function Home({ go }: { go: (h: string) => void }) {
       go(`#/run/${r.id}`);
     } catch (e) { setErr((e as Error).message); }
   };
-  const shown = (runs ?? []).filter((r) => r.has_cut);
+  const shown = (runs ?? []).filter((r) => r.has_cut || r.job?.running); // a new project shows while it works on its first cut
 
   return (
     <div className="home">
@@ -66,7 +77,8 @@ export function Home({ go }: { go: (h: string) => void }) {
                   {r.scores.length ? r.scores.map((s, k) => <span key={k} className="rc-score">{k > 0 && <i>→</i>}{s}</span>) : <span className="mute">not reviewed</span>}
                   {r.stop && <span className="mute rc-stop">{r.stop.split(":")[0]}</span>}
                 </div>
-                <div className="rc-foot mute">v{r.versions.join(" v")} · {usd(r.cost_usd)}{r.job?.running ? " · running" : ""}</div>
+                {r.progress?.active && <ProgressMini p={r.progress} />}
+                <div className="rc-foot mute">{r.versions.length ? `v${r.versions.join(" v")} · ` : ""}{usd(r.cost_usd)}{r.job?.running && !r.progress ? " · running" : ""}</div>
               </a>
             ))}
           </div>

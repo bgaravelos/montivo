@@ -570,3 +570,27 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .lfl-line { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 .lfl-cmp { display: inline-flex; align-items: center; gap: 5px; align-self: flex-start; margin-top: 4px; font-size: 11.5px; color: var(--mute); border: 1px solid var(--line-2); border-radius: 99px; padding: 2px 8px; }
 .lfl-cmp:hover { color: var(--text); border-color: var(--dim); }
+
+/* live progress of a running job (Progress.tsx): top bar, Assistant card, Home card */
+.pbar { position: relative; display: block; height: 5px; border-radius: 99px; background: var(--panel-3); overflow: hidden; }
+.pbar.small { display: inline-block; width: 90px; height: 4px; vertical-align: 1px; }
+.pbar i { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: inherit; transition: width 0.25s linear; }
+.pbar.indet i { width: 32%; animation: pbar-slide 1.4s ease-in-out infinite; }
+@keyframes pbar-slide { 0% { left: -32%; } 100% { left: 100%; } }
+.prog-inline { display: inline-flex; align-items: center; gap: 6px; max-width: 520px; color: var(--text-2); }
+.prog-inline b { color: var(--text); font-weight: 650; }
+.prog-inline .mono { font-size: 11px; color: var(--mute); }
+.prog-step { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.prog-card { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 8px; background: var(--panel-2); }
+.pc-head { display: flex; align-items: center; gap: 7px; }
+.pc-head b { font-weight: 650; }
+.pc-done { display: grid; grid-template-columns: 14px 1fr auto; align-items: center; gap: 6px; font-size: 11.5px; color: var(--mute); }
+.pc-done svg { color: var(--pass); }
+.pc-now { display: flex; flex-direction: column; gap: 1px; margin-top: 2px; }
+.pc-title { font-weight: 600; }
+.pc-detail { font-size: 12px; color: var(--text-2); }
+.pc-time { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-2); }
+.prog-mini { display: flex; flex-direction: column; gap: 5px; }
+.prog-mini .pbar.small { width: 100%; }
+.pm-line { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-2); }
+.pm-line > span:nth-child(2) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

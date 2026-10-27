@@ -74,6 +74,17 @@ export type Job = { id: string; run: string; kind: string; label: string; starte
 
 export type LogLine = { i: number; t: number; msg: string; stage: string | null; session: number };
 
+/** Where a running job (or the replay) is, from its run.log lines (server runs.progress). The bar moves by time between
+ *  floor and ceil (the checkpoints the log reached) against expected_s; the clock advances at `rate` log seconds per
+ *  wall second, at most `cap` seconds past the last line (replay), until the next event. `recv`: when it arrived. */
+export type Progress = {
+  label: string; kind: string | null; version: number | null; stage: string | null; title: string; detail: string | null;
+  floor: number; ceil: number; expected_s: number | null; expected_from: "ledger" | "hint" | null;
+  stage_elapsed: number; job_elapsed: number; steps: { stage: string; title: string; seconds: number }[];
+  finished: boolean; error: boolean; failed?: boolean; active: boolean; rate: number; cap: number | null; replay?: boolean;
+  recv: number;
+};
+
 export type RunState = {
   id: string;
   run: { footage?: string; brief?: string; target_s?: number; hflip?: boolean; started?: string };
@@ -86,11 +97,12 @@ export type RunState = {
 };
 
 /** Rough prices and times for the button hints (server COST). */
-export type Costs = { plan: number; plan_open: number; plan_s: number; plan_open_s: number; review: number; run_per_s: number };
+export type Costs = { plan: number; plan_open: number; plan_s: number; plan_open_s: number; review: number; run_per_s: number;
+  review_s?: number; review_prep_s?: number; image_s?: number; render_s_per_frame?: number };
 
 export type Planner = "spark" | "open";
 
 export type RunCard = {
   id: string; footage: string; brief: string; started: string | null; versions: number[]; scores: number[];
-  stop: string | null; cost_usd: number | null; has_cut: boolean; job: Job | null;
+  stop: string | null; cost_usd: number | null; has_cut: boolean; job: Job | null; progress: Progress | null;
 };
