@@ -12,6 +12,8 @@ license = { text = "MIT" }
 dependencies = [
     "httpx>=0.28",
     "pillow>=10.1",
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
 ]
 
 [project.optional-dependencies]
@@ -19,9 +21,13 @@ dev = ["pytest>=8"]
 
 [project.scripts]
 montivo = "montivo.cli:main"
+montivo-ui = "montivo.server.app:main"
 
 [tool.setuptools.packages.find]
 include = ["montivo*"]
+
+[tool.setuptools.package-data]
+"montivo.server" = ["static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

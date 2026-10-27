@@ -58,7 +58,15 @@ in the reviewer's window at that end. Word-level edits land on a sentence end wh
 the quietest 40 ms of the source audio within 0.3 s (Voice words abut, so only the audio shows the gap) and are then
 tightened to the speech like v1; a clipped word is fixed by moving its edge to that quiet point, never by removing words.
 
-Not yet: UI. See the plan at the end.
+The UI (27/10, `montivo serve`, http://127.0.0.1:8765) is the review room on top of the run folders: the agent's stage
+rail live from `run.log` (model, first artefact, dollars per stage), a 9:16 player with one tab per version and the review's
+issue windows on the scrub bar, the blind reviewer's panel (score per version, the three facts, the rubric bars, each issue
+as saw -> op -> patch -> result with the frame the reviewer saw), the paper edit as blocks in cut time (words the version
+dropped struck through, dropped spans as ghosts, issue pins at cut time), Compare (two versions side by side, one
+transport, parked on a flagged moment), the ledger drawer, and a replay mode (`?replay=1` or `4`) that plays a finished
+run's story back for recording. The two human actions: select a block and "Drop", or type an instruction ("drop the
+agency line", "make it 30 seconds") to re-plan; each writes the next `edl_vN.json` with a `patches` entry marked
+`source: "human"` and renders `cut_vN.mp4`, optionally followed by the review loop. Spoken instructions through Voice: not yet.
 
 ## Setup
 
@@ -97,6 +105,27 @@ rewrites the EDL in place (the old one goes to `check/<name>_before_edges.json`)
 `render` or `review` renders it again, and logs every move; a second run moves nothing.
 Captions use the first font found of `MONTIVO_FONT`, `~/Library/Fonts/InterTight-800.ttf`, Arial Black, Arial Bold,
 DejaVu Sans Bold (recorded in the EDL's `caption_style.font_path`).
+
+The UI: `make ui` (or `.venv/bin/montivo serve [--port 8765] [--root .]`). It reads the run folders and starts the
+engine as a subprocess (`montivo run ... --review`, `montivo review`, `python -m montivo.human drop|replan`); it never
+imports the engine. The React build is committed in `montivo/server/static`, so it needs Python only; after editing
+`web/src`, `make web` rebuilds it (Node 18+). `python -m montivo.human drop runs/012 --span s3 [--from 2] [--review 1]`
+and `python -m montivo.human replan runs/012 --instruction "..." [--from 2] [--review 1]` are the same two actions
+from the shell: the next version number is one past the highest in the folder, so nothing is overwritten; drop goes
+through the reviewer's own `drop_span` patch and tightens the two edges that now meet ($0 without `--review`); replan is
+one Spark plan call (about $0.04) on the stored Voice words and shot log with the instruction added to the brief, the
+title card kept as it was, then the edge pass and the render.
+
+### For judges
+
+```bash
+make dev                                   # Python 3.12 + ffmpeg on the PATH
+.venv/bin/python -m montivo.server.sample fetch   # runs/012 (Billy's clip, loop 76 -> 100) from the GitHub release, ~210 MB
+make ui                                    # http://127.0.0.1:8765
+```
+
+No `MODEL_API_KEY` is needed to open the run, play every version, read the reviews, use Compare and replay, and drop a
+span (a re-render with ffmpeg only). Re-plan, a new run and the review loop call Meta models and need the key.
 
 `make test` runs the offline tests (recorded Voice and SAM streams are parsed without network access).
 
@@ -308,8 +337,8 @@ loudnorm figures and the ebur128 measurement of the finished file).
 | 28/10 | done early (26/10 night): reframe path, ffmpeg trim/concat, 9:16 crop following the track, `cut_v1.mp4`, `montivo render`; from here every run uses Billy's own 60 to 90 s English talking-head clip, the NASA clip is regression only |
 | 29/10 | done early (26/10 night): captions from word times, callouts on tracks, Muse Image title card, loudnorm; speaker-to-person mapping still open |
 | 30/10 | done early (26/10 night): blind review pass, fix ops, loop guards (3 passes, budget, repeated fixes, regression); kill test (b) 3 of 3 in 3 of 3 with the cut-edge fact (2 of 3 with the two original facts); v1 to v3 on three sources still open (one source so far); 27/10: edge pass, cut edges tightened to the speech in the source audio, loops 76 -> 100 and 65 -> 85 |
-| 31/10 | FastAPI + SSE, React shell: upload, brief, run, live log, preview, review panel |
-| 1/11 | the two human actions in the loop first: "drop this span" and "re-run with this instruction" (typed, or spoken through Voice); reorder, caption edit and reframe nudge only after those |
+| 31/10 | done early (27/10): FastAPI + SSE, React review room: new run (upload, brief), live stage rail, versions, review panel, paper edit, Compare, ledger, replay |
+| 1/11 | done early (27/10, typed): the two human actions in the loop first: "drop this span" and "re-run with this instruction"; still open: spoken through Voice; reorder, caption edit and reframe nudge only after those |
 | 2/11 to 4/11 | demo video, README for judges, buffer, submission |
 
 Design rules fixed on 26/10:

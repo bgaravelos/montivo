@@ -4,6 +4,7 @@
     montivo render runs/001
     montivo review runs/001
     montivo probe footage.mp4
+    montivo serve
 """
 from __future__ import annotations
 
@@ -76,7 +77,16 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("probe", help="ffprobe summary of a file")
     p.add_argument("footage", type=Path)
 
+    sv = sub.add_parser("serve", help="the UI: run folders, live log, review room, drop span / re-plan (http://127.0.0.1:8765)")
+    sv.add_argument("--root", type=Path, default=Path.cwd(), help="project folder with runs/ and footage/ (default: here)")
+    sv.add_argument("--host", default="127.0.0.1")
+    sv.add_argument("--port", type=int, default=8765)
+
     args = ap.parse_args(argv)
+    if args.cmd == "serve":
+        from .server.app import main as serve
+        return serve(["--root", str(args.root), "--host", args.host, "--port", str(args.port)])
+
     if args.cmd == "probe":
         from .engine.ingest import ffprobe
         print(json.dumps(ffprobe(args.footage).__dict__, indent=2))

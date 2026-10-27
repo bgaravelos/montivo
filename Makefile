@@ -1,7 +1,7 @@
 PY ?= python3.12
 VENV = .venv
 
-.PHONY: dev test clean
+.PHONY: dev test clean ui web
 
 dev: $(VENV)/bin/montivo
 
@@ -13,6 +13,13 @@ $(VENV)/bin/montivo: pyproject.toml
 
 test: dev
 	$(VENV)/bin/pytest -q
+
+ui: dev
+	$(VENV)/bin/montivo serve
+
+# rebuild the committed UI bundle (montivo/server/static) after editing web/src; needs Node 18+
+web:
+	cd web && npm ci && npm run build
 
 clean:
 	rm -rf $(VENV) build *.egg-info

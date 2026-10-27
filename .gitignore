@@ -26,5 +26,11 @@ research/.venv/
 
 .DS_Store
 
+# the UI's node modules (the build in montivo/server/static is committed)
+web/node_modules/
+
 # private session notes
 docs/notes/
+
+# sample zips for the GitHub release
+dist/

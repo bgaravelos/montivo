@@ -1,0 +1,89 @@
+// The paper edit as blocks in cut time, with what changed against the version it came from
+import type { Issue, Span, Version, Word } from "./types";
+
+export type Block = {
+  key: string;
+  kind: "title" | "span" | "ghost";
+  span?: Span;
+  t0: number; // cut time (ghosts: where they used to sit, zero length)
+  t1: number;
+  before: Word[]; // words the parent version kept and this one dropped, at the start of the span
+  kept: Word[];
+  after: Word[]; // ... and at its end
+  label: string;
+};
+
+const key = (turn: number, idx: number) => `${turn}:${idx}`;
+
+function keptSet(v: Version): Set<string> {
+  const s = new Set<string>();
+  for (const sp of v.spans) for (let i = sp.word_from; i <= sp.word_to; i++) s.add(key(sp.turn_id, i));
+  return s;
+}
+
+export function parentOf(v: Version, all: Version[]): Version | undefined {
+  const from = v.origin.from ?? (v.n > 1 ? v.n - 1 : undefined);
+  return from == null ? undefined : all.find((x) => x.n === from);
+}
+
+export function layout(v: Version, parent: Version | undefined, words: Record<string, Word[]>): Block[] {
+  const tw = (t: number) => words[String(t)] ?? [];
+  const cur = keptSet(v);
+  const blocks: Block[] = [];
+  let t = 0;
+  if (v.title_s > 0) {
+    blocks.push({ key: "title", kind: "title", t0: 0, t1: v.title_s, before: [], kept: [], after: [], label: v.title_card_text ?? "title card" });
+    t = v.title_s;
+  }
+  const pSpans = parent?.spans ?? [];
+  const overlap = (a: Span, b: Span) => a.turn_id === b.turn_id && a.word_from <= b.word_to && b.word_from <= a.word_to;
+  const spanBlocks: { b: Block; pOrder: number }[] = [];
+  for (const sp of v.spans) {
+    const all = tw(sp.turn_id);
+    const p = pSpans.find((x) => overlap(x, sp));
+    const before: Word[] = [];
+    const after: Word[] = [];
+    if (p) {
+      for (let i = p.word_from; i < sp.word_from; i++) if (!cur.has(key(sp.turn_id, i)) && all[i]) before.push(all[i]);
+      for (let i = sp.word_to + 1; i <= p.word_to; i++) if (!cur.has(key(sp.turn_id, i)) && all[i]) after.push(all[i]);
+    }
+    const kept = all.slice(sp.word_from, sp.word_to + 1);
+    const b: Block = { key: sp.id, kind: "span", span: sp, t0: t, t1: t + sp.duration, before, kept, after, label: sp.id };
+    t += sp.duration;
+    spanBlocks.push({ b, pOrder: p ? pSpans.indexOf(p) : Infinity });
+  }
+  // spans of the parent that this version dropped whole, at the place they had
+  const ghosts = pSpans
+    .map((p, order) => ({ p, order }))
+    .filter(({ p }) => !v.spans.some((sp) => overlap(p, sp)))
+    .map(({ p, order }) => ({ order, b: { key: `ghost-${p.id}`, kind: "ghost" as const, span: p, t0: 0, t1: 0, before: [], kept: tw(p.turn_id).slice(p.word_from, p.word_to + 1), after: [], label: p.id } }));
+  const out: Block[] = [...blocks];
+  for (const sb of spanBlocks) {
+    for (const g of ghosts.filter((g) => g.order < sb.pOrder && !out.includes(g.b))) {
+      g.b.t0 = g.b.t1 = sb.b.t0;
+      out.push(g.b);
+    }
+    out.push(sb.b);
+  }
+  for (const g of ghosts) if (!out.includes(g.b)) { g.b.t0 = g.b.t1 = t; out.push(g.b); }
+  return out;
+}
+
+/** What happened to issue k of version n's review: the fix the loop planned, the patch the next version carries,
+ *  the score that criterion got there, or why it was skipped. */
+export function chain(issue: Issue, v: Version, all: Version[]) {
+  const rv = v.review!;
+  const planned = rv.fixes.find((f) => f.issue === issue.k);
+  const skipped = rv.skipped.find((s) => s.issue === issue.k);
+  const next = all.find((x) => x.origin.source === "review" && x.origin.from === v.n && x.origin.review === rv.name);
+  const applied = next?.origin.fixes?.find((f) => f.issue === issue.k);
+  const before = rv.scores[issue.criterion];
+  const after = next?.review?.scores[issue.criterion];
+  return { planned, skipped, next, applied, before, after };
+}
+
+export function blockAt(blocks: Block[], t: number): Block | undefined {
+  return blocks.find((b) => b.kind !== "ghost" && t >= b.t0 && t < b.t1) ?? (t >= 0 ? [...blocks].reverse().find((b) => b.kind !== "ghost") : undefined);
+}
+
+export const sevRank = (s: string) => (s === "blocker" ? 0 : s === "major" ? 1 : 2);

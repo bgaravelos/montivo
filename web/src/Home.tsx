@@ -1,0 +1,97 @@
+import { useEffect, useState } from "react";
+import { api, usd } from "./api";
+import type { RunCard } from "./types";
+
+type Footage = { path: string; name: string; mb: number };
+
+/** All run folders, and the new-run form (footage, brief, target, review loop). */
+export function Home({ go }: { go: (h: string) => void }) {
+  const [runs, setRuns] = useState<RunCard[] | null>(null);
+  const [hasKey, setHasKey] = useState(false);
+  const [footage, setFootage] = useState<Footage[]>([]);
+  const [f, setF] = useState("");
+  const [brief, setBrief] = useState("");
+  const [target, setTarget] = useState(40);
+  const [hflip, setHflip] = useState(false);
+  const [review, setReview] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [upload, setUpload] = useState<string | null>(null);
+
+  const load = () => {
+    api<{ runs: RunCard[]; has_key: boolean }>("/api/runs").then((r) => { setRuns(r.runs); setHasKey(r.has_key); });
+    api<{ files: Footage[] }>("/api/footage").then((r) => { setFootage(r.files); if (!f && r.files[0]) setF(r.files[0].path); });
+  };
+  useEffect(load, []); // eslint-disable-line
+
+  const put = async (file: File) => {
+    setUpload(`uploading ${file.name}…`);
+    const name = file.name.replace(/[^A-Za-z0-9._-]/g, "_");
+    const res = await fetch(`/api/footage/${name}`, { method: "PUT", body: file });
+    setUpload(res.ok ? null : `upload failed (${res.status})`);
+    if (res.ok) { setF(`footage/${name}`); load(); }
+  };
+  const start = async () => {
+    setErr(null);
+    try {
+      const r = await api<{ id: string }>("/api/runs", { footage: f, brief, target, hflip, review });
+      go(`#/run/${r.id}`);
+    } catch (e) { setErr((e as Error).message); }
+  };
+  const shown = (runs ?? []).filter((r) => r.has_cut);
+
+  return (
+    <div className="home">
+      <header className="top">
+        <a className="mark" href="#/">montivo</a>
+        <span className="brief">An agent-first video editor on Meta models: Spark plans and reviews its own cut blind, Voice keeps time, SAM runs the camera.</span>
+      </header>
+      <div className="home-body">
+        <section className="runs">
+          <div className="h">Runs</div>
+          {!runs && <div className="mute">loading…</div>}
+          {runs && !shown.length && <div className="mute">No run folder with a cut in runs/ yet. Start one, or unpack the sample run (README, “For judges”).</div>}
+          <div className="run-grid">
+            {shown.map((r) => (
+              <a key={r.id} className="run-card" href={`#/run/${r.id}`}>
+                <div className="rc-top"><span className="rc-id">{r.id}</span><span className="mute">{r.footage}</span></div>
+                <div className="rc-brief">{r.brief}</div>
+                <div className="rc-scores">
+                  {r.scores.length ? r.scores.map((s, k) => <span key={k} className="rc-score">{k > 0 && <i>→</i>}{s}</span>) : <span className="mute">not reviewed</span>}
+                  {r.stop && <span className="mute rc-stop">{r.stop.split(":")[0]}</span>}
+                </div>
+                <div className="rc-foot mute">v{r.versions.join(" v")} · {usd(r.cost_usd)}{r.job?.running ? " · running" : ""}</div>
+              </a>
+            ))}
+          </div>
+        </section>
+        <section className="new-run">
+          <div className="h">New run</div>
+          {!hasKey && <div className="warn">MODEL_API_KEY is not set: finished runs open, and “drop span” renders without a model, but a new run needs the key.</div>}
+          <label>Footage
+            <select value={f} onChange={(e) => setF(e.target.value)}>
+              {footage.map((x) => <option key={x.path} value={x.path}>{x.name} · {x.mb} MB</option>)}
+            </select>
+          </label>
+          <label className="drop-zone" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const file = e.dataTransfer.files[0]; if (file) put(file); }}>
+            {upload ?? "or drop a clip here (it goes to footage/)"}
+            <input type="file" accept="video/*" onChange={(e) => { const file = e.target.files?.[0]; if (file) put(file); }} />
+          </label>
+          <label>Brief
+            <textarea rows={5} value={brief} onChange={(e) => setBrief(e.target.value)} placeholder="35 to 45 s vertical reel: what this is and why it matters. Keep the hook…" />
+          </label>
+          <div className="row">
+            <label>Target <input type="number" min={10} max={180} value={target} onChange={(e) => setTarget(Number(e.target.value))} /> s</label>
+            <label className="check"><input type="checkbox" checked={hflip} onChange={(e) => setHflip(e.target.checked)} /> mirror (selfie footage)</label>
+            <label className="check"><input type="checkbox" checked={review} onChange={(e) => setReview(e.target.checked)} /> blind review loop</label>
+          </div>
+          <div className="row">
+            <span className="mute">about $0.48 for a 150 s clip with the review loop (SAM is half of it)</span>
+            <span className="grow" />
+            <button className="btn" disabled={!hasKey || !f || !brief.trim()} onClick={start}>Start run</button>
+          </div>
+          {err && <div className="warn">{err}</div>}
+        </section>
+      </div>
+    </div>
+  );
+}
