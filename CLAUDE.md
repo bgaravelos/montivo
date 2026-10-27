@@ -59,8 +59,9 @@ linear; the mode goes in the EDL `render.loudnorm`) and caption lines up at leas
 phrase, else hold); `cut_v2_polish.mp4` in runs 012 / 012-ktb, -14.0 LUFS. Run 013 (27/10, commit `3737e32`): second
 source `footage/usgs_uranium_miners_daughter.mp4` (public domain; `footage/nasa_exp72_thanksgiving.mp4` not run yet);
 fixes: captions avoid only the followed head, a title-card issue drops the card, clipped edges widen to the gap; loop
-62 -> 68 -> 72, no pass, $0.78 (SAM $0.50 for 166 s, over the per-run rule). Next: SAM cost, the NASA clip (needs
-speaker -> person mapping), then the API + UI. The evening-by-evening table is in README.md.
+62 -> 68 -> 72, no pass, $0.78. SAM at 5 fps for every concept (commit `432c45a`): person and head share one upload,
+SAM $0.50 -> $0.33 on 166 s, a 150 s run about $0.48. API + UI (layout A, Review room) in progress in its own session.
+Next: the NASA clip (needs speaker -> person mapping), the Open Weight planner test. The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
