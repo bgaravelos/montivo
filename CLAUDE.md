@@ -22,7 +22,10 @@ Viral; Open Weight too: the Baseten and Meta credits arrived 26-27/10.
 - `MODEL_API_KEY` lives in `~/.zshenv`; never print it, never commit it. `.env`, `runs/`, `footage/`, media files and
   `experiments/results/` (the local kill-test results) are git-ignored and stay out of the repo.
 - The pre-kickoff API test scripts (`experiments/`, started 26/10 17:30, four calls before 18:00) were removed from the
-  repo on 27/10 and are disclosed in README "Before the kickoff"; never bring them or code from them back.
+  repo on 27/10 and are disclosed in README "Before the kickoff"; never bring them or code from them back. Organizers
+  (Cerebral Valley, Discord #questions, 27/10): that is fine, nothing else needed, but the 3-minute demo video must
+  OPEN with one line stating what was pre-existing (the name and idea, the pre-kickoff API tests) and what was built
+  this week.
 - Spend: keep each evening under $5 and a 150 s run under $0.50. Every call is logged in `runs/<id>/ledger.json`.
 - GitHub pushes to `main` are fine; creating repos, posting publicly or submitting needs Billy's explicit yes.
 - Commit on Billy's go unless he said otherwise in the session; `git` identity is set repo-locally.
