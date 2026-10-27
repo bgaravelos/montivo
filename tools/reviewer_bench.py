@@ -11,7 +11,7 @@ astronauts), plus the clean cut as a control, each reviewed N times by each revi
 
 Faults (the window is in cut seconds, computed after the render from the rendered EDL):
   weak_hook     the hook starts 2.5 s or more earlier, on the words (or silence) before it     hook_in_1_5s / swap_hook
-  mid_word      a body span ends 45 % into its longest last word                              no_cut_mid_word / move_cut
+  mid_word      a body span ends 45 % into the speech of its longest-sounding last word      no_cut_mid_word / move_cut
   dead_air      a body span runs on into the longest pause after it (up to 2.2 s)             pacing / move_cut, drop_span
   repeat        a body span plays twice in a row                                             pacing / drop_span
   ending        the payoff stops after 40 % of its words                                     ending / extend_span
@@ -48,6 +48,7 @@ from pathlib import Path
 from montivo.config import OPEN_MODEL, SPARK_MODEL
 from montivo.engine import review as R
 from montivo.engine.api import dump_json
+from montivo.engine.edges import Audio
 from montivo.engine.render import merge_segments
 from montivo.engine.spark import Spark
 from montivo.ledger import Ledger
@@ -120,14 +121,31 @@ def fault_weak_hook(edl: dict, words: R.Words, clean: dict) -> dict:
     return {"span": s["id"], "lead_s": round(orig - s["t_in"], 3), "words": s["words"]}
 
 
-def fault_mid_word(edl: dict, words: R.Words, clean: dict) -> dict:
+def fault_mid_word(edl: dict, words: R.Words, clean: dict, audio: Audio | None = None) -> dict:
+    """The cut lands 45 % into the source audio's speech run of a body span's last word: the longest run inside the
+    word's Voice window, on the span whose last word sounds longest. Voice can stretch a word over the pause after it
+    (012's "now", 0.96 s for 0.44 s of speech), and 45 % of that landed after the spoken word: an inaudible plant.
+    Without audio.wav, 45 % of the Voice word (the round-3 plant)."""
     def last(i: int) -> dict:
         s = edl["spans"][i]
         return words.turn(s["turn_id"])[s["word_to"]]
-    i = max(body_spans(edl), key=lambda i: last(i)["t_end"] - last(i)["t_start"])
-    s, w = edl["spans"][i], last(i)
-    s["t_out"] = round(w["t_start"] + MID_WORD_AT * (w["t_end"] - w["t_start"]), 3)
-    return {"span": s["id"], "word": w["w"], "src_t": s["t_out"]}
+
+    def run(i: int) -> tuple[float, float]:
+        w = last(i)
+        if audio is None:
+            return w["t_start"], w["t_end"]
+        runs = [(max(a, w["t_start"]), min(b, w["t_end"])) for a, b in audio.speech_runs(w["t_start"], w["t_end"])]
+        return max(runs, key=lambda r: r[1] - r[0], default=(w["t_start"], w["t_start"]))
+    i = max(body_spans(edl), key=lambda i: run(i)[1] - run(i)[0])
+    s, w, (a, b) = edl["spans"][i], last(i), run(i)
+    if b - a < 0.1:
+        raise RuntimeError(f"mid_word: no body span's last word has 0.1 s of speech over {audio.threshold_db()} dB")
+    s["t_out"] = round(a + MID_WORD_AT * (b - a), 3)
+    meta = {"span": s["id"], "word": w["w"], "src_t": s["t_out"], "speech": [a, b]}
+    if audio is not None:
+        meta.update(edge_db=round(audio.level(s["t_out"] - R.EDGE_HALF_S, s["t_out"] + R.EDGE_HALF_S), 1),
+                    threshold_db=audio.threshold_db())
+    return meta
 
 
 def fault_dead_air(edl: dict, words: R.Words, clean: dict) -> dict | None:
@@ -279,11 +297,12 @@ def build(base: str, root: Path, log) -> dict:
                              "window": None}
         dump_json(manifest_path, manifest)
     clean = json.loads(clean_path.read_text())
+    audio = Audio.load(out)
     for fault in FAULTS:
         if fault in manifest:
             continue
         edl = strip_render(clean)
-        meta = FAULT_FN[fault](edl, words, clean)
+        meta = FAULT_FN[fault](edl, words, clean, **({"audio": audio} if fault == "mid_word" else {}))
         if fault == "weak_hook" and meta["lead_s"] < 1.5:  # the hook would still start inside 1.5 s: not a fault
             meta = None
         if meta is None:
@@ -393,13 +412,15 @@ def archive(root: Path, bases: list[str], variants: list[str] | None, name: str,
 
 
 def compare_rows(root: Path, name: str, manifests: dict, rows: list[dict]) -> list[dict]:
-    """The archived reviews of the same (base, variant, reviewer, k) as this run's rows, scored the same way."""
+    """The archived reviews of the same (base, variant, reviewer, k) as this run's rows, scored the same way; a variant
+    rebuilt since (its old entry in <base>/<name>/manifest.json) is scored against its old cut's window."""
     old = []
     for r in rows:
         f = root / r["base"] / name / f"rv_{r['variant']}_{r['reviewer']}_{r['k']}.json"
         if f.is_file():
-            old.append(score_row(json.loads(f.read_text()), r["base"], r["variant"], manifests[r["base"]][r["variant"]],
-                           r["reviewer"], r["k"]))
+            mf = root / r["base"] / name / "manifest.json"
+            entry = {**manifests[r["base"]], **(json.loads(mf.read_text()) if mf.is_file() else {})}[r["variant"]]
+            old.append(score_row(json.loads(f.read_text()), r["base"], r["variant"], entry, r["reviewer"], r["k"]))
     return old
 
 
@@ -545,7 +566,7 @@ def main() -> None:
         old = compare_rows(args.root, args.compare, manifests, rows)
         result["compare"] = {"name": args.compare, "summary": summarize(old, args.reviewers), "rows": old}
         md += "\n" + markdown(result["compare"]["summary"], old,
-                               title=f"# Before: the same reviews in {args.compare} (no gate, no new facts)")
+                               title=f"# Before: the reviews archived in {args.compare}")
     dump_json(args.root / "results.json", result)
     (args.root / "results.md").write_text(md)
     log(md)

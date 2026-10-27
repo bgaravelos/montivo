@@ -275,7 +275,12 @@ Gate in the UI (27/10 night, $0): `runs._review` serves `reviewer_pass` and `gat
 open_majors, issues numbered after the reviewer's}, origin fixes keep `check`; `GateNote` (web/src/Inspector.tsx) shows
 "gate" with each reason tagged measured / reviewer and the reviewer's own verdict, in the review inspector and on the
 Loop film cards; "Measured checks" issue cards (tag "measured") under the notes; the Loop film's fix lines read
-"measured · ..." for a gate fix. Checked keyless on a throwaway copy of 015 with a written pass_gate (removed).
+"measured · ..." for a gate fix. Checked keyless on a throwaway copy of 015 with a written pass_gate (removed) (commit `6a5be1d`).
+Bench mid_word in the audio (27/10 night, $0.21): `tools/reviewer_bench.py` `fault_mid_word` cuts 45 % into the source
+audio's speech run of the last word (`Audio.speech_runs`), audible on every base (edges -23.7 / -30.0 / -22.8 dB); the
+old variant's files are in `runs/bench/<base>/round3/` with its manifest entry, so `--compare` scores old reviews on
+their own window. spark13 x2: mid_word caught as major 4/6 -> 6/6, none passes; whole set: caught as major 82 -> 91 %,
+faulty cuts passing 18 -> 9 %, clean pass 75 %.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
