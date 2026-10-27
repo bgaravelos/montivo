@@ -163,6 +163,25 @@ def test_caption_fix_removes_a_forced_position_then_moves_or_retexts():
     assert fix is None and "does not look like" in why
 
 
+def test_a_line_a_person_checked_is_left_out_of_the_diff_and_not_retexted():
+    # run 015 v5: "Four Meta models do all" (a human caption edit) is heard as "meta models do all"
+    edl, words = make_edl()
+    edl["captions"] = [caption(4.0, 4.6, ["s3"], [("w13", 4.0, 4.3), ("w14", 4.3, 4.6)], [400, 1300, 300, 100], None)]
+    assert R.checked_captions(edl) == set() and "checked" not in R.caption_timeline(edl)[0]
+    edl["caption_overrides"] = [{"span": "s3", "src_t": 31.01, "text": "w13 w14", "why": "review"}]
+    assert R.checked_captions(edl) == set()  # the reviewer's own retext is not a person's check
+    edl["caption_overrides"] = [{"span": "s3", "src_t": 31.01, "text": "w13 w14", "why": "human"}]
+    tl = R.caption_timeline(edl)
+    assert R.checked_captions(edl) == {"c1"} and tl[0]["checked"] is True
+    heard = [{"w": "w14", "t_start": 4.3, "t_end": 4.6}]  # "w13" not heard
+    assert R.caption_heard_diff(tl, heard) == []
+    assert R.caption_heard_diff([dict(tl[0], checked=False)], heard) == [{"t": 4.0, "caption": "w13", "heard": ""}]
+    text = R.facts_text([], R.caption_face_facts(edl), 6.3, [], tl, diff_heard=heard)
+    assert 'A person checked these lines against the recording' in text and '4.00 s "w13 w14"' in text
+    fix, why = R.resolve(issue(4.2, "caption_fix", text="w13 w15"), 0, edl, words, R.cut_map(edl))
+    assert fix is None and "a person checked" in why
+
+
 def test_plan_fixes_skips_minor_and_takes_one_fix_per_target():
     edl, words = make_edl()
     rv = {"issues": [issue(3.0, "drop_span", sev="minor"), issue(3.1, "drop_span"), issue(3.2, "extend_span"),

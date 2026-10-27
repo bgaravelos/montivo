@@ -153,9 +153,34 @@ def edge_loud_db(audio: "Audio") -> float:
     return max(EDGE_LOUD_DB, min(audio.threshold_db(), EDGE_LOUD_DB + 4.0))
 
 
+def checked_captions(edl: dict) -> set[str]:
+    """Ids of the caption lines a person retexted against the recording (a `caption_overrides` entry with why "human":
+    the editor's Captions panel or `montivo.human caption`). Their words outrank what a speech model hears in the cut:
+    run 015's "Four Meta models do all", which Voice hears as "meta models do all", held v5's pass as a reviewer major
+    built on the caption-vs-heard fact (28/10)."""
+    human = [o for o in edl.get("caption_overrides") or [] if o.get("why") == "human" and o.get("text")]
+    if not human or not edl.get("captions"):
+        return set()
+    cmap = {c.span: c for c in cut_map(edl)}
+    spans = {s["id"]: s for s in edl["spans"]}
+    out: set[str] = set()
+    for o in human:
+        c = cmap.get(o.get("span"))
+        if c is None:
+            continue
+        cap = _caption_at(edl, c.cut_in + float(o["src_t"]) - spans[c.span]["t_in"], within=0.0)
+        if cap is not None and o["span"] in cap["spans"]:
+            out.add(cap["id"])
+    return out
+
+
 def caption_timeline(edl: dict) -> list[dict]:
-    """Every caption line as it is on screen: text and cut seconds (from the EDL `captions` entries the render wrote)."""
-    return [{"t_in": c["t_in"], "t_out": c["t_out"], "text": c["text"]} for c in edl.get("captions") or []]
+    """Every caption line as it is on screen: text and cut seconds (from the EDL `captions` entries the render wrote);
+    `checked` on a line a person retexted (checked_captions)."""
+    checked = checked_captions(edl)
+    return [{"t_in": c["t_in"], "t_out": c["t_out"], "text": c["text"], **({"checked": True} if c.get("id") in checked
+                                                                          else {})}
+            for c in edl.get("captions") or []]
 
 
 def cut_edge_levels(edl: dict, audio: "Audio") -> list[dict]:
@@ -264,12 +289,16 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
     if diff_words is not None and timeline:
         diffs = caption_heard_diff(timeline, diff_words)
         heard_what = "the heard words" if heard is not None else "the words a speech model hears in the cut's own audio"
+        checked = [c for c in timeline if c.get("checked")]
         out.append(f"{len(out) + 1}. Where the caption words and {heard_what} differ (the two aligned word by word): "
                    + ("; ".join(f"{d['t']:.2f} s caption \"{d['caption']}\" / heard \"{d['heard'] or '(nothing)'}\""
                                 for d in diffs) or "nowhere")
                    + ". The captions were checked by hand where the speech model got a name wrong, so a pair that "
                      "sounds alike (\"Muse\" / \"news\") is the speech model's mistake, not the caption's: a caption "
-                     "is wrong only where its word sounds nothing like what was heard.")
+                     "is wrong only where its word sounds nothing like what was heard."
+                   + (" A person checked these lines against the recording, so they are right as written and are left "
+                      "out of the comparison: " + "; ".join(f"{c['t_in']:.2f} s \"{c['text']}\"" for c in checked) + "."
+                      if checked else ""))
     return "\n".join(out)
 
 
@@ -280,16 +309,21 @@ def _tok(w: str) -> str:
 def caption_heard_diff(timeline: list[dict], heard: list[dict]) -> list[dict]:
     """Caption words against the heard words, aligned as two word sequences (difflib), every replaced or unheard caption
     word with its cut time. No similarity threshold: whether a pair sounds alike is left to the reviewer, which knows
-    "Muse" / "news" rhyme and "Google" / "voice" do not (character ratios rank those two pairs the other way round)."""
-    cap = [(_tok(w), c["t_in"]) for c in timeline for w in c["text"].split() if _tok(w)]
+    "Muse" / "news" rhyme and "Google" / "voice" do not (character ratios rank those two pairs the other way round).
+    Lines a person checked (`checked`) take part in the alignment (so the heard words under them stay paired with
+    them) but their differences are not reported."""
+    cap = [(_tok(w), c["t_in"], bool(c.get("checked"))) for c in timeline for w in c["text"].split() if _tok(w)]
     hw = [_tok(w["w"]) for w in sorted(heard, key=lambda w: w["t_start"]) if _tok(w["w"])]
-    sm = difflib.SequenceMatcher(None, [t for t, _ in cap], hw, autojunk=False)
+    sm = difflib.SequenceMatcher(None, [c[0] for c in cap], hw, autojunk=False)
     out = []
     for op, a1, a2, b1, b2 in sm.get_opcodes():
         if op == "replace" and a2 - a1 == b2 - b1:  # as many words on both sides: pair them one to one
-            out += [{"t": cap[a][1], "caption": cap[a][0], "heard": hw[b]} for a, b in zip(range(a1, a2), range(b1, b2))]
+            out += [{"t": cap[a][1], "caption": cap[a][0], "heard": hw[b]} for a, b in zip(range(a1, a2), range(b1, b2))
+                    if not cap[a][2]]
         elif op in ("replace", "delete"):
-            out.append({"t": cap[a1][1], "caption": " ".join(t for t, _ in cap[a1:a2]), "heard": " ".join(hw[b1:b2])})
+            mine = [c for c in cap[a1:a2] if not c[2]]
+            if mine:
+                out.append({"t": mine[0][1], "caption": " ".join(c[0] for c in mine), "heard": " ".join(hw[b1:b2])})
     return out
 
 
@@ -583,13 +617,19 @@ def gate_check(caps: dict, edges: list[dict] | None, edge_words: dict | None, he
 
 def close_gate(review: dict, gate: dict) -> dict:
     """The gated pass: the reviewer's own pass, no measured fault (gate_check) and no blocker or major issue of the
-    reviewer still open (PASS_IGNORES aside). Sets review["pass"] (keeps review["reviewer_pass"]) and returns the gate
+    reviewer still open (PASS_IGNORES aside, and captions_match_speech on a line a person checked: the gate's
+    `checked_captions`, cut seconds). Sets review["pass"] (keeps review["reviewer_pass"]) and returns the gate
     with `checks` (the measured reasons), `open_majors` and `reasons` = both. Idempotent, so the bench re-scores stored
     reviews with it; a gate written before the rule has only measured reasons."""
     checks = list(gate.get("checks", gate.get("reasons") or []))
+    checked = gate.get("checked_captions") or []
+
+    def on_checked_line(i: dict) -> bool:  # a person's caption outranks the reviewer's ear (checked_captions)
+        return i["criterion"] == "captions_match_speech" and any(a - 0.3 <= i["t_s"] <= b + 0.3 for a, b in checked)
+
     majors = [{"t_s": i["t_s"], "criterion": i["criterion"], "severity": i["severity"]}
               for i in sorted(review["issues"], key=lambda i: i["t_s"])
-              if i["severity"] in APPLY_SEVERITY and i["criterion"] not in PASS_IGNORES]
+              if i["severity"] in APPLY_SEVERITY and i["criterion"] not in PASS_IGNORES and not on_checked_line(i)]
     reasons = checks + [f"reviewer's {m['severity']} still open: {m['criterion']} at {m['t_s']:.2f} s" for m in majors]
     review.setdefault("reviewer_pass", bool(review["pass"]))
     review["pass"] = bool(review["reviewer_pass"]) and not reasons
@@ -984,6 +1024,8 @@ def resolve(issue: dict, k: int, edl: dict, words: Words, cmap: list[CutSpan],
         text = (p.get("text") or "").strip()
         if forced:
             return mk("caption_unforce", key, span=sid, src_t=float(forced[0]["src_t"])), ""
+        if text and norm_tokens(text) != norm_tokens(cap["text"]) and cap.get("id") in checked_captions(edl):
+            return None, f"a person checked the line {cap['text']!r}: its words stay"
         if text and norm_tokens(text) != norm_tokens(cap["text"]):
             have, want = norm_tokens(cap["text"]), norm_tokens(text)
             ratio = difflib.SequenceMatcher(a=have, b=want).ratio()
@@ -1242,6 +1284,7 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
         facts = facts_text(sil, caps, duration, edges, timeline, words_heard if heard else None, edge_words=edge_words,
                            head=head, diff_heard=words_heard)
         gate = gate_check(caps, edges, edge_words, head)
+        gate["checked_captions"] = [[c["t_in"], c["t_out"]] for c in timeline if c.get("checked")]
         copy_path = review_copy(cut, rdir, clock=clock)
         up = {"id": None} if open_model else upload_file(copy_path, "video/mp4")
     ledger.add(Entry(stage="review.prep", model="ffmpeg" if open_model else "ffmpeg+files", seconds=t.seconds, cost_usd=0.0,

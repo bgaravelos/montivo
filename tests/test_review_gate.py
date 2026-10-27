@@ -168,6 +168,17 @@ def test_an_open_reviewer_major_holds_the_pass_but_brief_covered_does_not():
     assert not measured["pass"] and g["checks"] == g["reasons"] == ["head out of frame 1.00-2.00 s"]
 
 
+def test_a_caption_major_on_a_line_a_person_checked_does_not_hold_the_pass():
+    # run 015 v5 (28/10): 82, the reviewer's pass held by "Four" at 17.15 s, a word Billy confirmed
+    rv = {"pass": True, "overall": 82, "issues": [dict(issue(17.15, "caption_fix"), criterion="captions_match_speech"),
+                                                  dict(issue(33.0, "none"), criterion="brief_covered")]}
+    g = R.close_gate(rv, {"blocked": False, "reasons": [], "issues": [], "checked_captions": [[17.153, 18.833]]})
+    assert rv["pass"] and not g["blocked"] and g["open_majors"] == []
+    rv = {"pass": True, "overall": 82, "issues": [dict(issue(22.2, "caption_fix"), criterion="captions_match_speech")]}
+    g = R.close_gate(rv, {"blocked": False, "reasons": [], "issues": [], "checked_captions": [[17.153, 18.833]]})
+    assert not rv["pass"] and g["reasons"] == ["reviewer's major still open: captions_match_speech at 22.20 s"]
+
+
 def test_the_loop_ranks_by_measured_checks_not_by_open_reviewer_majors():
     a = {"overall": 90, "gate": ["reviewer's major still open: pacing at 3.00 s"], "checks": []}
     b = {"overall": 84, "gate": [], "checks": []}
