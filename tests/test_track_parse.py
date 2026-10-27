@@ -35,3 +35,12 @@ def test_parse_recorded_stream():
             frames += 1
             recs += len(p[1])
     assert frames == 40 and recs == 40
+
+
+def test_every_concept_is_tracked_at_the_head_tracks_rate():
+    # person and head share one 5 fps upload and one batch (person at 10 fps was half of run 013's SAM bill)
+    from montivo.config import REFRAME_TRACK_FPS, TRACK_RESAMPLE_FPS
+    from montivo.engine.track import track_fps
+    assert TRACK_RESAMPLE_FPS == REFRAME_TRACK_FPS == 5.0
+    assert track_fps(29.97) == 5.0 and track_fps(59.94) == 5.0  # short clips too: no more 30 fps SAM under 60 s
+    assert track_fps(29.97, 10.0) == 10.0 and track_fps(4.0) == 4.0  # --track-fps wins; never above the source

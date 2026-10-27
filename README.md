@@ -24,7 +24,7 @@ reviews its own cut blind and re-cuts:
 montivo run footage.mp4 --brief "..." --out runs/001
   ingest   ffprobe, 960 px proxy at source fps, 24 kHz mono wav, one Files API upload reused by every Spark call
   voice    streaming DIARIZATION -> turns[] + words[] (lag-corrected, snapped to speechStart/speechEnd)   \
-  track    SAM 3.1 "person" (10 fps) and "head" (5 fps) over httpx SSE, regex boxes -> track/<concept>/tracks.json | in parallel
+  track    SAM 3.1 "person" and "head" at 5 fps (one upload) over httpx SSE, regex boxes -> track/<concept>/tracks.json | in parallel
   watch    Spark 1.3 + proxy + transcript -> shot log, speaker map, concept suggestions, b-roll, movement moments /
   plan     Spark 1.3 + brief + shot log + movement moments + measured speech rate + transcript -> paper edit (turn id + verbatim words)
   edl      spans mapped to Voice word boundaries, then every cut edge tightened to the speech in the source audio
@@ -77,12 +77,12 @@ The demo brief for Billy's own clip (`footage/billy_demo.mp4`, DJI selfie mode, 
 ```
 
 Useful flags: `--target 40` (seconds of speech to keep), `--concept "mission patch"` (extra SAM concepts, repeatable;
-SAM is one request per concept, so each one costs about $0.25 per 125 s at 10 fps, and the concepts `watch` suggests are
+SAM is one request per concept, so each one costs about $0.125 per 125 s at 5 fps, and the concepts `watch` suggests are
 only logged as `watch suggests: ...` with that price, never tracked on their own), `--hflip` (mirror the footage once
 before everything else: selfie / mirror-mode clips where on-screen text reads backwards; writes `<run>/source_hflip.mp4`
 with libx264 crf 18 and the audio copied, and that file is the source for the proxy, the wav, SAM and the render, so no
 box or crop is ever flipped afterwards; recorded in `ingest.json` and in the EDL's `source`),
-`--track-fps 10` (default: 10 fps for sources over 60 s, source fps below that), `--reframe-concept head` and
+`--track-fps 10` (default 5 fps for every concept, the head track's rate, so person and head share one upload), `--reframe-concept head` and
 `--reframe-fps 5` (the track the crop follows; `none` falls back to the person track), `--no-track`, `--plan-with-video`,
 `--plan-effort low|medium|high`, `--review` (the review loop after cut_v1; `--review-passes 3`, `--review-budget 0.30`), `--resume` (reuse ingest, voice, watch and tracks already in the run folder while
 iterating on the plan), `--language none`, `--no-render` (stop at `edl_v1.json`), `--no-title` (no Muse Image title card,
@@ -292,6 +292,13 @@ loudnorm figures and the ebur128 measurement of the finished file).
   of the frame, so no caption spot clears it; the fallback now puts the line as low as the bottom UI allows (y 1483,
   under the chin) instead of on the mouth (y 1300), and the reviewer rates it minor. The source's own lower third is
   cropped to "EGOS" in 9:16 and the reviewer files it under callouts, where no fix applies. Run total $0.784.
+- SAM at 5 fps for every concept (27/10): run 013 paid $0.50 for SAM on 166 s, $0.33 of it the person track at 10 fps,
+  a box that only anchors callouts and backs up the reframe. Dropping every other record of the 10 fps person tracks of
+  runs 012 and 013 moves the largest person box by a median 0.1 px and 1.2 / 0.8 px at the 95th percentile (proxy 960 px,
+  2,647 frames over the kept spans), with no frame where one has a box and the other none. Person and head now share
+  one 5 fps upload and one batch: SAM $0.375 -> $0.25 on run 012 (125 s), $0.50 -> $0.33 on run 013, so a 150 s run
+  comes to about $0.48 with the review loop. Clips under 60 s, which SAM used to see at the source rate (30 fps, $0.36
+  per concept per minute), are resampled too.
 
 ## Plan
 

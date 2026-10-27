@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--out", type=Path, default=None, help="run folder (default runs/<timestamp>)")
     r.add_argument("--target", type=float, default=40.0, help="target runtime of the cut in seconds (default 40)")
     r.add_argument("--concept", action="append", default=None, help="SAM concept to track (repeatable, default: person)")
-    r.add_argument("--track-fps", type=float, default=None, help="resample the clip to this fps before SAM (default: 10 fps over 60 s)")
+    r.add_argument("--track-fps", type=float, default=None, help="resample the clip to this fps before SAM (default 5, the head track's rate, so both share one upload)")
     r.add_argument("--reframe-concept", default="head", help="SAM concept the 9:16 crop follows (default head; 'none' = person track)")
     r.add_argument("--reframe-fps", type=float, default=5.0, help="track fps for the reframe concept (default 5)")
     r.add_argument("--language", default="English", help="Voice languageBias (default English, 'none' to disable)")

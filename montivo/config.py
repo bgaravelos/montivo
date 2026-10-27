@@ -25,8 +25,10 @@ VOICE_LAG_MS = 500  # word deltas arrive about 0.5 s after the audio they descri
 VOICE_SNAP_MS = 400  # snap word edges to speechStart/speechEnd inside this window
 VOICE_CHUNK_TARGET_S = 480  # when a file must be split, aim for 8 min chunks
 PROXY_MAX_DIM = 960
-TRACK_RESAMPLE_FPS = 10.0
-TRACK_RESAMPLE_OVER_S = 60.0
+# Every SAM concept is tracked at 5 fps, the rate of the head track the crop follows, so person and head share one
+# resampled upload and one batch. SAM is billed per frame: person at 10 fps was $0.33 of run 013's $0.69 (166 s);
+# the person box only anchors callouts and is the reframe fallback, both smoothed over half a second or more.
+TRACK_RESAMPLE_FPS = 5.0
 # The 9:16 reframe follows the head, not the body: on a lean the head moves 3x more than the body box centre
 # (measured 26/10 on Billy's clip). 5 fps is enough for a smoothed path and costs $0.125 per 125 s.
 REFRAME_CONCEPT = "head"

@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, TRACK_RESAMPLE_FPS, TRACK_RESAMPLE_OVER_S, sam_cost
+from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, sam_cost
 from .engine import track as track_mod
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, tighten_edges
@@ -85,8 +85,7 @@ def run(opts: RunOptions) -> dict:
 
     def concept_price() -> float:
         """What one more SAM concept costs on this clip at the track fps (one request per concept)."""
-        fps = opts.track_fps or (TRACK_RESAMPLE_FPS if ing.proxy_probe.duration > TRACK_RESAMPLE_OVER_S else ing.proxy_probe.fps)
-        return sam_cost(int(round(ing.proxy_probe.duration * fps)))
+        return sam_cost(int(round(ing.proxy_probe.duration * track_mod.track_fps(ing.proxy_probe.fps, opts.track_fps))))
 
     # 2. voice and track in parallel; watch starts the moment the transcript exists (it needs it, see spark.py)
     def voice_then_watch():
@@ -104,8 +103,8 @@ def run(opts: RunOptions) -> dict:
         else:
             watch = spark.watch(ing.file_id, voice.transcript_text(), opts.brief, ing.probe.duration)
             dump_json(out / "watch.json", watch.parsed)
-        # Watch's trackable concepts are suggestions only. SAM is one request per concept (about $0.25 per 125 s at
-        # 10 fps), so the only concepts ever sent to SAM are the CLI --concept list plus the reframe head track.
+        # Watch's trackable concepts are suggestions only. SAM is one request per concept (about $0.125 per 125 s at
+        # 5 fps), so the only concepts ever sent to SAM are the CLI --concept list plus the reframe head track.
         suggested = [c for c in watch.parsed.get("trackable_concepts", []) if c.lower() not in {x.lower() for x in opts.concepts}]
         if suggested:
             log(f"watch suggests: {', '.join(suggested)} (not tracked; add --concept \"...\" to track one, "

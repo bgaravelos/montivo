@@ -2,8 +2,8 @@
 
 Measured on 26/10/2026: the OpenAI SDK stream dropped mid-way twice, curl and httpx did not; the official parser
 spent 5 min on 900 frames of masks, a regex over the text gets the boxes in 0.07 s. Ids stay stable while an object
-is in frame and do not reset on cuts. For sources over 60 s the proxy is resampled to 10 fps before upload
-(1,800 frames for 3 min), boxes are interpolated later by the reframe step.
+is in frame and do not reset on cuts. The proxy is resampled to 5 fps before upload (TRACK_RESAMPLE_FPS, 900 frames
+for 3 min, $0.18 per concept), boxes are interpolated later by the reframe step.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..config import SAM_MODEL, TRACK_RESAMPLE_FPS, TRACK_RESAMPLE_OVER_S, sam_cost
+from ..config import SAM_MODEL, TRACK_RESAMPLE_FPS, sam_cost
 from ..ledger import Entry, Ledger, Timer
 from .api import dump_json, stream_responses, upload_file
 from .ingest import Probe, ffprobe
@@ -70,13 +70,17 @@ def load_all(out_dir: Path) -> dict[str, ConceptTrack]:
     return {ct.concept: ct for ct in (load_concept(p) for p in sorted(out_dir.glob("*/tracks.json")))}
 
 
+def track_fps(source_fps: float, asked: float | None = None) -> float:
+    """The rate SAM sees: --track-fps when given, else TRACK_RESAMPLE_FPS, never above the source's own rate."""
+    return min(source_fps, asked or TRACK_RESAMPLE_FPS)
+
+
 def prepare_source(proxy: Path, proxy_probe: Probe, proxy_file_id: str, out_dir: Path, ledger: Ledger,
                    fps: float | None = None, log=print) -> TrackSource:
-    """Resample to `fps` (default 10 fps for sources over 60 s) and upload; otherwise reuse the proxy upload."""
+    """Resample to `fps` (default TRACK_RESAMPLE_FPS) and upload; a proxy already at that rate is reused."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    if fps is None and proxy_probe.duration > TRACK_RESAMPLE_OVER_S:
-        fps = TRACK_RESAMPLE_FPS
-    if fps is None or abs(fps - proxy_probe.fps) < 0.01:
+    fps = track_fps(proxy_probe.fps, fps)
+    if abs(fps - proxy_probe.fps) < 0.01:
         return TrackSource(path=proxy, probe=proxy_probe, file_id=proxy_file_id, fps=proxy_probe.fps, resampled=False, upload_seconds=0.0)
     dst = out_dir / f"track_source_{fps:g}fps.mp4"
     with Timer() as t:
