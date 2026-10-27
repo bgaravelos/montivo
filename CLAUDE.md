@@ -187,6 +187,20 @@ called yet). `.gitignore` lets brand PNG/MP4 and the UI icons in. GitHub social 
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
+## Montivo Board (live task board, every session)
+Notion database "Montivo Board" under the project page, data source `collection://ca1d961f-09be-4b9a-bb90-875fbe8afab3`
+(database `5cf24c9678414d9291a044acc150c283`). Billy tracks everything there until the submission, so every session,
+local or cloud, keeps it current:
+- First task of the session: query the board; take the matching card (or create one) and set Status `In progress`,
+  Owner (`Claude session` / `Cloud session`), Area, Priority, Due, and Session = `claude://claude.ai/epitaxy/<local_id>`
+  plus Session ID when the id is known (a session you start with start_session: create its card yourself with the id the
+  tool returns); otherwise put the session title in Notes.
+- New open items found while working (a follow-up, something that needs Billy's yes) get their own card: `Next` or
+  `Backlog`, or `Waiting on Billy` with Owner `Billy` and what he has to do in Notes.
+- At wrap-up: Status `Done` (with Commit and Cost) or `Waiting on Billy` / `Backlog` with one line in Notes on what is
+  left. Card text in Greek with the professional terms in English, no em dashes. Never delete cards.
+- Without the Notion connector (some cloud sessions): list the card changes in the final report instead.
+
 ## Where the rest of the context is
 - `docs/notes/` (copies of the session notes: kill tests and architecture, evening 1, fresh research and verdict).
 - Notion page `405a4ee32031814ba38cfb1efd670918` (Kill test results, Architecture, Plan).
