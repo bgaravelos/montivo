@@ -304,6 +304,22 @@ as checked against the recording, `close_gate` lets a reviewer captions_match_sp
 `checked_captions`, cut seconds, +-0.3 s) not hold the pass, and `resolve` refuses a caption_text on one. Re-review of
 015 v5 (`runs/015/review_v5.json`): 87, pass (reviewer's own pass too, captions_match_speech 10), gate clear; the only
 issue is brief_covered (commit bba47b9).
+Hosted demo (28/10, Billy: Modal, a $15 cap on the Meta credits): `montivo/server/hosted.py` switches on from the env only
+(`MONTIVO_PASSWORD` sign-in page + cookie, every route but /api/health and /login answers 401 or goes to /login;
+`MONTIVO_BUDGET_USD` = spend since the host saw each run, from the ledgers, baseline in `<root>/budget.json`, seeded runs
+adopted; a paid action needs its estimate left, the $0 edits never; `MONTIVO_ONE_JOB`, `MONTIVO_MAX_FOOTAGE_S` 95,
+`MONTIVO_MAX_UPLOAD_MB` 400; the samples cannot be archived); the state carries `budget` and `key_note` (shown instead of
+"set MODEL_API_KEY", Home shows what is left). `modal_app.py`: Debian image + ffmpeg, Volume `montivo-data`, secret
+`montivo-keys` (MODEL_API_KEY, BASETEN_API_KEY, MONTIVO_PASSWORD; the password is on the Board card), one container,
+4 CPUs, scale to zero, a thread commits the Volume every 30 s; `modal run modal_app.py::seed` unzips /data/seed/*.zip
+(`python -m montivo.server.sample pack runs/015 --footage`) and adopts them, `::budget` prints the cap, `::smoke` renders a
+$0 drop on a copy (this image: 015 v6 34.3 s, -14.0 LUFS, 22 s, same as the Mac). Live: https://bgaravelos--montivo-web.us-east.modal.run
+(012 v2, 015 v5, $15 left). A judge's own copy (Billy's go): sign-in sets a `montivo_judge` id cookie per browser; the
+first edit on a sample (adopted, no `ui/owner`) copies it to `runs/<id>-<judge>` (`app.own`, through `.copying/`, the
+copy adopted so its ledger is not host spend, a chat line says so), every mutating route goes there and the editor
+follows `job.run`; `/api/runs` shows each judge the samples (or their copy) and their own runs (`ui/owner`); a judge
+may archive their copy, never a sample. Not tried yet: an upload and a paid run through the live UI (needs Billy's
+sign-in, about $0.30) (commit e64c156).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
