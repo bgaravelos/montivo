@@ -19,9 +19,11 @@ from .api import dump_json
 
 TITLE_PROMPT = (
     "Vertical 9:16 title card for a short social video. The headline text, exactly as written and spelled: \"{text}\". "
-    "Set it large, bold, white, centred in the middle third, on one to three lines, with generous margins. "
-    "Background: deep near-black with a subtle film grain and one soft warm-yellow light streak. Clean, modern, "
-    "high contrast, legible on a phone. No other text, no logos, no people, no borders.")
+    "Set it large in a heavy geometric grotesk (like Inter Tight ExtraBold), tight letter spacing, off-white #F3F0E8, "
+    "centred in the middle third, on one to three lines, with generous margins; put the single most important word on "
+    "a flat marker-yellow #FFC629 highlight block with the word in near-black #141414. "
+    "Background: flat near-black #141414 with a subtle film grain and one soft marker-yellow light streak. Clean, "
+    "modern, high contrast, legible on a phone. No other text, no logos, no people, no borders.")
 
 
 def generate_title_card(text: str, out_dir: Path, ledger: Ledger, log=print, size: str = "1080x1920") -> Path:

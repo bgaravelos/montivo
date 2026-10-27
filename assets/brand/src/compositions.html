@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Montivo compositions</title>
+<!-- One page, one frame per #hash; build.py --png screenshots each at its size. Fonts are the files in ../fonts. -->
+<style>
+  @font-face { font-family: "Inter Tight"; font-weight: 700; src: url(../fonts/InterTight-700.ttf); }
+  @font-face { font-family: "Inter Tight"; font-weight: 800; src: url(../../../montivo/fonts/InterTight-800.ttf); }
+  @font-face { font-family: "JetBrains Mono"; font-weight: 500; src: url(../fonts/JetBrainsMono-500.ttf); }
+  @font-face { font-family: "JetBrains Mono"; font-weight: 700; src: url(../fonts/JetBrainsMono-700.ttf); }
+  :root {
+    --ink: #141414; --paper: #F3F0E8; --marker: #FFC629; --graphite: #1E1E20; --slate: #8E8B84; --cut: #FF5A4E; --pass: #5FD08E;
+    --line: #2A2A2C;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: var(--ink); color: var(--paper); font-family: "Inter Tight", sans-serif; }
+  .frame { display: none; position: relative; overflow: hidden; background: var(--ink); }
+  .frame:target { display: block; }
+  .mono { font-family: "JetBrains Mono", monospace; font-weight: 500; }
+
+  /* the highlighter: ink type on a marker block, the reviewer's mark */
+  .hl { background: var(--marker); color: var(--ink); padding: 0 .12em; margin: 0 -.04em; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+  .head { font-weight: 800; letter-spacing: -0.025em; line-height: 1; }
+  .kicker { color: var(--slate); letter-spacing: 0; }
+  .kicker b { color: var(--paper); font-weight: 500; }
+  .tag { display: inline-block; font: 700 1em "JetBrains Mono", monospace; background: var(--marker); color: var(--ink); padding: .08em .4em; border-radius: .22em; letter-spacing: 0; }
+
+  /* corner crop marks frame every composition like a viewer */
+  .crops::before, .crops::after { content: ""; position: absolute; width: var(--c, 28px); height: var(--c, 28px); border: 3px solid #3a3a3c; }
+  .crops::before { left: var(--m, 40px); top: var(--m, 40px); border-right: 0; border-bottom: 0; }
+  .crops::after { right: var(--m, 40px); bottom: var(--m, 40px); border-left: 0; border-top: 0; }
+
+  /* the review timeline: two versions of one cut, the reviewer's note on v1 */
+  .tl { position: absolute; font-family: "JetBrains Mono", monospace; font-weight: 500; color: var(--slate); }
+  .tl .ruler { display: flex; justify-content: space-between; border-bottom: 2px solid var(--line); padding-bottom: 8px; margin-left: 74px; }
+  .tl .row { display: flex; align-items: center; gap: 14px; margin-top: 14px; }
+  .tl .ver { width: 60px; color: var(--paper); font-weight: 700; }
+  .tl .track { position: relative; flex: 1; height: var(--th, 44px); display: flex; gap: 4px; }
+  .tl .clip { background: #2C2C2F; border-radius: 6px; }
+  .tl .clip.bad { background: #2C2C2F; outline: 3px solid var(--cut); outline-offset: -3px; }
+  .tl .score { width: 128px; text-align: right; color: var(--paper); font-weight: 700; }
+  .tl .score.pass { color: var(--pass); }
+  .tl .note { position: absolute; white-space: nowrap; color: var(--ink); background: var(--paper); border-radius: 8px; padding: 6px 12px; font-weight: 500; }
+  .tl .note::after { content: ""; position: absolute; left: 18px; bottom: -8px; border: 8px solid transparent; border-top-color: var(--paper); border-bottom: 0; }
+  .tl .ph { position: absolute; top: -4px; bottom: -4px; width: 3px; background: var(--marker); }
+  .tl .ph::before { content: ""; position: absolute; left: -7px; top: -10px; border: 8.5px solid transparent; border-top: 10px solid var(--marker); }
+</style>
+</head>
+<body>
+
+<!-- GitHub social preview, 1280x640 -->
+<section class="frame crops" id="social" style="width:1280px;height:640px;--m:28px;--c:22px">
+  <img src="../svg/montivo-lockup-dark.svg" style="position:absolute;left:72px;top:68px;height:46px">
+  <div class="mono kicker" style="position:absolute;right:72px;top:80px;font-size:18px">Meta Global AI Developer Hackathon</div>
+  <h1 class="head" style="position:absolute;left:72px;top:170px;font-size:84px">The video editor<br>that <span class="hl">watches</span> its own cut.</h1>
+  <p class="mono kicker" style="position:absolute;left:74px;top:372px;font-size:20px">plan <b>→</b> render <b>→</b> review <b>→</b> re-cut, on Muse Spark, Muse Voice and SAM 3.1</p>
+  <div class="tl" style="left:72px;right:72px;top:452px;font-size:17px;--th:36px">
+    <div class="row"><span class="ver">v1</span>
+      <div class="track"><div class="clip bad" style="flex:1.1"></div><div class="clip" style="flex:2"></div><div class="clip" style="flex:1.4"></div><div class="clip" style="flex:2.2"></div><div class="clip" style="flex:1.2"></div><div class="clip" style="flex:1.8"></div>
+        <span class="note" style="left:0;top:-46px">00:00 title card over 1.5 s of silence → drop</span></div>
+      <span class="score">68</span></div>
+    <div class="row"><span class="ver">v2</span>
+      <div class="track"><div class="clip" style="flex:2"></div><div class="clip" style="flex:1.4"></div><div class="clip" style="flex:2.2"></div><div class="clip" style="flex:1.2"></div><div class="clip" style="flex:1.8"></div>
+        <span class="ph" style="left:0"></span></div>
+      <span class="score pass">81 pass</span></div>
+  </div>
+</section>
+
+<!-- Cerebral Valley gallery thumbnail and demo video poster, 1920x1080 -->
+<section class="frame crops" id="thumb" style="width:1920px;height:1080px;--m:48px;--c:34px">
+  <img src="../svg/montivo-lockup-dark.svg" style="position:absolute;left:120px;top:120px;height:72px">
+  <h1 class="head" style="position:absolute;left:120px;top:300px;font-size:136px">The video editor<br>that <span class="hl">watches</span> its own cut.</h1>
+  <p class="mono kicker" style="position:absolute;left:124px;top:628px;font-size:30px">plan <b>→</b> render <b>→</b> review <b>→</b> re-cut, on Muse Spark, Muse Voice and SAM 3.1</p>
+  <div class="tl" style="left:120px;right:120px;top:780px;font-size:26px;--th:56px">
+    <div class="row"><span class="ver" style="width:84px">v1</span>
+      <div class="track"><div class="clip bad" style="flex:1.1"></div><div class="clip" style="flex:2"></div><div class="clip" style="flex:1.4"></div><div class="clip" style="flex:2.2"></div><div class="clip" style="flex:1.2"></div><div class="clip" style="flex:1.8"></div>
+        <span class="note" style="left:0;top:-62px">00:00 title card over 1.5 s of silence → drop</span></div>
+      <span class="score" style="width:190px">68</span></div>
+    <div class="row" style="margin-top:20px"><span class="ver" style="width:84px">v2</span>
+      <div class="track"><div class="clip" style="flex:2"></div><div class="clip" style="flex:1.4"></div><div class="clip" style="flex:2.2"></div><div class="clip" style="flex:1.2"></div><div class="clip" style="flex:1.8"></div>
+        <span class="ph" style="left:0"></span></div>
+      <span class="score pass" style="width:190px">81 pass</span></div>
+  </div>
+</section>
+
+<!-- demo video title card, 16:9 -->
+<section class="frame crops" id="title-16x9" style="width:1920px;height:1080px;--m:48px;--c:34px">
+  <div style="position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:56px">
+    <img src="../svg/montivo-lockup-dark.svg" style="height:150px">
+    <p class="mono kicker" style="font-size:32px">the video editor that <b style="color:var(--marker)">watches its own cut</b></p>
+  </div>
+  <div class="mono kicker" style="position:absolute;left:0;right:0;bottom:110px;text-align:center;font-size:24px">Meta Global AI Developer Hackathon · built 26/10 to 4/11/2026 by Nocta Digital</div>
+</section>
+
+<!-- demo video end card, 16:9 -->
+<section class="frame crops" id="end-16x9" style="width:1920px;height:1080px;--m:48px;--c:34px">
+  <div style="position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:44px">
+    <img src="../svg/montivo-stacked-dark.svg" style="height:250px">
+    <p class="mono" style="font-size:36px;color:var(--paper)">github.com/bgaravelos/montivo</p>
+    <p class="mono kicker" style="font-size:26px">Muse Spark 1.3 · Muse Voice Transcribe 1.0 · SAM 3.1 · Muse Image 1.0</p>
+  </div>
+  <div class="mono kicker" style="position:absolute;left:0;right:0;bottom:110px;text-align:center;font-size:24px">Nocta Digital · Athens</div>
+</section>
+
+<!-- title card, 9:16 (X clip, reels) -->
+<section class="frame crops" id="title-9x16" style="width:1080px;height:1920px;--m:48px;--c:34px">
+  <div style="position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:110px">
+    <img src="../svg/montivo-symbol-dark.svg" style="height:190px">
+    <h1 class="head" style="font-size:112px;text-align:center;line-height:1.04">The editor that<br><span class="hl">watches</span> its<br>own cut.</h1>
+  </div>
+</section>
+
+<!-- end card, 9:16 -->
+<section class="frame crops" id="end-9x16" style="width:1080px;height:1920px;--m:48px;--c:34px">
+  <div style="position:absolute;inset:0;display:grid;place-items:center;align-content:center;gap:60px">
+    <img src="../svg/montivo-app-icon-marker.svg" style="height:220px">
+    <img src="../svg/montivo-wordmark-dark.svg" style="height:110px">
+    <p class="mono kicker" style="font-size:36px;text-align:center">cut, reviewed and re-cut by agents</p>
+  </div>
+  <div class="mono kicker" style="position:absolute;left:0;right:0;bottom:150px;text-align:center;font-size:30px">github.com/bgaravelos/montivo</div>
+</section>
+
+<!-- brand sheet for assets/brand/README.md: colour, type, the devices -->
+<section class="frame" id="sheet" style="width:1600px;height:880px;padding:64px 72px">
+  <style>
+    #sheet h2 { font: 500 16px "JetBrains Mono", monospace; color: var(--slate); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 22px; }
+    #sheet .sw { display: grid; grid-template-columns: repeat(7, 1fr); gap: 14px; margin-bottom: 56px; }
+    #sheet .sw div { height: 150px; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; justify-content: flex-end; font: 500 15px "JetBrains Mono", monospace; border: 1px solid #ffffff14; }
+    #sheet .sw b { font: 700 20px "Inter Tight"; letter-spacing: -.01em; margin-bottom: 2px; }
+    #sheet .ty { display: grid; grid-template-columns: 1.25fr 1fr; gap: 48px; margin-bottom: 56px; align-items: end; }
+    #sheet .dev { display: flex; gap: 40px; align-items: center; font-size: 22px; }
+    #sheet .cap { font: 500 14px "JetBrains Mono", monospace; color: var(--slate); margin-top: 10px; }
+  </style>
+  <h2>Colour</h2>
+  <div class="sw">
+    <div style="background:#141414;color:#F3F0E8"><b>Ink</b>#141414</div>
+    <div style="background:#F3F0E8;color:#141414"><b>Paper</b>#F3F0E8</div>
+    <div style="background:#FFC629;color:#141414"><b>Marker</b>#FFC629</div>
+    <div style="background:#1E1E20;color:#F3F0E8"><b>Graphite</b>#1E1E20</div>
+    <div style="background:#8E8B84;color:#141414"><b>Slate</b>#8E8B84</div>
+    <div style="background:#FF5A4E;color:#141414"><b>Cut</b>#FF5A4E</div>
+    <div style="background:#5FD08E;color:#141414"><b>Pass</b>#5FD08E</div>
+  </div>
+  <h2>Type</h2>
+  <div class="ty">
+    <div><div class="head" style="font-size:96px">Cut. Review.<br>Re-cut.</div><div class="cap">Inter Tight 800 · headlines, title cards, captions · tracking -0.025em</div></div>
+    <div><div class="mono" style="font-size:44px;line-height:1.25">00:12.40<br>v2 · 81/100 · $0.30</div><div class="cap">JetBrains Mono 500/700 · timecode, versions, scores, costs</div></div>
+  </div>
+  <h2>Devices</h2>
+  <div class="dev">
+    <div><div class="head" style="font-size:52px">its <span class="hl">own</span> cut</div><div class="cap">the highlighter: one word, never two</div></div>
+    <div><span class="tag" style="font-size:30px">v2</span><div class="cap">the version tag</div></div>
+    <div class="tl" style="position:relative;width:520px;font-size:15px;--th:34px">
+      <div class="row" style="margin-top:44px"><span class="ver" style="width:28px">v1</span>
+        <div class="track"><div class="clip bad" style="flex:1"></div><div class="clip" style="flex:2"></div><div class="clip" style="flex:1.4"></div>
+          <span class="note" style="left:0;top:-42px">00:00 silence under the title → drop</span><span class="ph" style="left:48%"></span></div></div>
+      <div class="cap">the review note on a timeline, the playhead in marker</div>
+    </div>
+  </div>
+</section>
+
+<script>
+  // with no hash, show every frame scaled down, for review in a browser
+  if (!location.hash) document.querySelectorAll(".frame").forEach((f) => { f.style.display = "block"; f.style.zoom = .4; f.style.marginBottom = "16px"; });
+</script>
+</body>
+</html>

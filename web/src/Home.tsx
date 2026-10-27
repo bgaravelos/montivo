@@ -42,7 +42,7 @@ export function Home({ go }: { go: (h: string) => void }) {
   return (
     <div className="home">
       <header className="top">
-        <a className="mark" href="#/">montivo</a>
+        <a className="mark" href="#/"><img src="/montivo-lockup-dark.svg" alt="Montivo" /></a>
         <span className="brief">An agent-first video editor on Meta models: Spark plans and reviews its own cut blind, Voice keeps time, SAM runs the camera.</span>
       </header>
       <div className="home-body">

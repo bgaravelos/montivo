@@ -26,8 +26,8 @@ FONT_CANDIDATES = [
 
 WHITE = (255, 255, 255, 255)
 BLACK = (0, 0, 0, 255)
-ACCENT = (255, 212, 0, 255)  # active word pill and highlighted names
-CALLOUT_BG = (255, 212, 0, 240)
+ACCENT = (255, 198, 41, 255)  # the brand's marker yellow #FFC629 (assets/brand/tokens.json): active word pill, names
+CALLOUT_BG = (255, 198, 41, 240)
 
 
 def font_path() -> str | None:

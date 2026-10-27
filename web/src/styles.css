@@ -1,22 +1,23 @@
-/* Montivo UI. A neutral dark editor; the brand drops in later by changing the tokens, --accent first. */
+/* Montivo UI. The brand's dark editor: tokens from assets/brand/tokens.json ("ui" and "color"), marker yellow the one
+   accent (primary action, playhead, selection, version), ink and paper for everything else. */
 :root {
-  --bg: #0c0d0f;
-  --panel: #141518;
-  --panel-2: #1a1c20;
-  --panel-3: #22252a;
-  --line: #24272c;
-  --line-2: #30343a;
-  --text: #ecebe7;
-  --text-2: #b6b5af;
-  --mute: #80858d;
-  --dim: #555a62;
-  --accent: #8fd3ff;
-  --accent-ink: #06141d;
-  --accent-soft: #8fd3ff22;
-  --blocker: #ff5d52;
-  --major: #ffb13d;
-  --minor: #7d848f;
-  --pass: #63d68f;
+  --bg: #0e0e0f;
+  --panel: #151516;
+  --panel-2: #1b1b1d;
+  --panel-3: #232325;
+  --line: #262628;
+  --line-2: #343437;
+  --text: #f3f0e8;
+  --text-2: #b9b6ae;
+  --mute: #86847e;
+  --dim: #5a5955;
+  --accent: #ffc629;
+  --accent-ink: #141414;
+  --accent-soft: #ffc62922;
+  --blocker: #ff5a4e;
+  --major: #ff8a3d;  /* orange, kept apart from the marker accent */
+  --minor: #86847e;
+  --pass: #5fd08e;
   --clip: #2b5d79;
   --clip-hook: #3a6f92;
   --caption: #5b4a8a;
@@ -87,8 +88,8 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
   grid-template-areas: "top top top top" "rail panel viewer insp" "rail tl tl tl";
 }
 .top { grid-area: top; display: flex; align-items: center; gap: 10px; padding: 0 12px 0 8px; border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; }
-.mark { font-weight: 800; font-size: 17px; letter-spacing: -0.03em; color: var(--text); }
-.mark::after { content: ""; display: inline-block; width: 6px; height: 6px; background: var(--accent); margin-left: 2px; border-radius: 1px; }
+.mark { display: inline-flex; align-items: center; }
+.mark img { display: block; height: 19px; }
 .divider { width: 1px; height: 22px; background: var(--line-2); margin: 0 4px; }
 .title-block { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
 .proj { font-weight: 650; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 420px; }
@@ -379,7 +380,7 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .trim-h.out { right: -1px; border-radius: 0 5px 5px 0; }
 .trim-zone { position: absolute; top: 3px; bottom: 3px; z-index: 4; pointer-events: none; border-radius: 3px; }
 .trim-zone.cut { background: repeating-linear-gradient(135deg, #000b 0 5px, #ff5d5244 5px 10px); }
-.trim-zone.grow { background: #8fd3ff33; border: 1px dashed var(--accent); }
+.trim-zone.grow { background: #ffc62933; border: 1px dashed var(--accent); }
 .trim-tip {
   position: absolute; top: -22px; transform: translateX(-50%); z-index: 6; background: var(--text); color: var(--bg); font-size: 11px;
   font-weight: 600; padding: 2px 7px; border-radius: 4px; white-space: nowrap; pointer-events: none;

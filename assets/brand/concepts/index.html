@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Montivo logo concepts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@600;700;800&family=Familjen+Grotesk:wght@600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root { --paper:#F3F0E8; --ink:#141414; --marker:#FFC629; --red:#E8442A; --line:#d9d4c7; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#e7e3d8; color:var(--ink); font:15px/1.5 "Inter Tight", system-ui, sans-serif; }
+  header { padding:40px 40px 8px; }
+  header h1 { margin:0; font-size:28px; font-weight:800; letter-spacing:-.02em; }
+  header p { margin:6px 0 0; max-width:760px; }
+  .concept { margin:28px 40px; background:#fff; border-radius:14px; padding:24px; }
+  .concept h2 { margin:0 0 4px; font-size:20px; font-weight:800; letter-spacing:-.01em; }
+  .concept h2 span { font:500 13px "JetBrains Mono", monospace; color:#777; margin-right:8px; }
+  .concept p { margin:0 0 18px; max-width:820px; color:#333; }
+  .row { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) 200px; gap:14px; }
+  .card { border-radius:10px; min-height:220px; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .paper { background:var(--paper); }
+  .ink { background:var(--ink); }
+  .sizes { display:flex; flex-direction:column; gap:10px; }
+  .sizes .card { min-height:0; padding:14px; gap:14px; justify-content:flex-start; }
+  .sizes small { font:500 11px "JetBrains Mono", monospace; color:#888; }
+  .lockup { display:flex; align-items:center; gap:18px; }
+  .wm { font-size:clamp(30px,4.4vw,64px); line-height:1; letter-spacing:-.035em; white-space:nowrap; }
+  .lockup svg.big { width:clamp(44px,5.6vw,84px); height:auto; flex:none; }
+  .card { overflow:hidden; }
+  @media (max-width:900px) { .row { grid-template-columns:1fr; } .concept { margin:16px; } header { padding:24px 16px 0; } .wm { font-size:44px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Montivo: first logo concepts, direction A (the mark-up)</h1>
+  <p>Palette for all four: paper <code>#F3F0E8</code>, ink <code>#141414</code>, marker yellow <code>#FFC629</code>. Concept 2 also tries grease-pencil red <code>#E8442A</code>. Wordmarks use web fonts for now; the chosen one gets outlined and redrawn.</p>
+</header>
+<main id="concepts"></main>
+
+<script>
+// Each symbol is drawn on a 64x64 grid and takes the foreground and accent colours.
+const sym = {
+  inout: (fg, ac) => `
+    <path d="M23 10H11V54H23M41 10H53V54H41" fill="none" stroke="${fg}" stroke-width="8" stroke-linejoin="miter"/>
+    <path d="M11 14L32 40L53 14" fill="none" stroke="${ac}" stroke-width="8" stroke-linejoin="miter"/>`,
+  inoutB: (fg, ac) => `
+    <path d="M21 10H11V54H21M43 10H53V54H43" fill="none" stroke="${fg}" stroke-width="8" stroke-linejoin="miter"/>
+    <path d="M21 20L32 42L43 20" fill="none" stroke="${ac}" stroke-width="8" stroke-linejoin="miter"/>`,
+  circled: (fg, ac) => `
+    <rect x="20" y="24" width="24" height="18" rx="2" fill="${fg}"/>
+    <path d="M11 24C15 11 33 5 46 10C59 15 62 33 55 45C48 57 27 61 16 52C6 44 6 30 15 20" fill="none" stroke="${ac}" stroke-width="4.5" stroke-linecap="round"/>`,
+  playhead: (fg, ac) => `
+    <path d="M21 12H11V52H21M43 12H53V52H43" fill="none" stroke="${fg}" stroke-width="8" stroke-linejoin="miter"/>
+    <path d="M32 18V58" stroke="${ac}" stroke-width="6"/>
+    <path d="M23 6H41L32 18Z" fill="${ac}"/>`,
+  take: (fg, ac) => `
+    <rect x="6" y="14" width="52" height="36" rx="6" fill="${ac}"/>
+    <text x="32" y="41" text-anchor="middle" font-family="JetBrains Mono, monospace" font-weight="700" font-size="25" fill="${fg === '#F3F0E8' ? '#141414' : fg}">v2</text>`,
+};
+const svg = (name, size, fg, ac, cls = '') =>
+  `<svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 64 64" role="img" aria-label="${name}">${sym[name](fg, ac)}</svg>`;
+
+const C = { paper:'#F3F0E8', ink:'#141414', marker:'#FFC629', red:'#E8442A' };
+
+// Wordmark builders: (foreground, accent) -> html
+const concepts = [
+  {
+    id:'1', name:'In / Out', symbol:'inout',
+    text:'An in-point and an out-point bracket with a marker V between them: it reads as an M, and as [v] for version, so the loop (v1, v2, v3) lives inside the mark. Strongest at 16 px of the four.',
+    wm:(fg, ac) => `<span class="wm" style="font-family:'Inter Tight';font-weight:700;color:${fg}">montivo</span>`,
+  },
+  {
+    id:'1b', name:'In / Out, open', symbol:'inoutB',
+    text:'Same idea with the V standing free inside the brackets: reads first as [v] (a version between an in and an out), the M is only a hint. Calmer, more of a UI glyph.',
+    wm:(fg, ac) => `<span class="wm" style="font-family:'Inter Tight';font-weight:700;color:${fg}">montivo</span>`,
+  },
+  {
+    id:'2', name:'Circled', symbol:'circled', accent:'red',
+    text:'The reviewer circles the problem with a grease pencil. The open, overshooting stroke is the hand of the reviewer; the block inside is the frame it caught. In the wordmark the last o gets circled. Works best animated (the circle draws itself in the demo).',
+    wm:(fg, ac) => `<span class="wm" style="font-family:'Familjen Grotesk';font-weight:700;color:${fg};position:relative">montiv<span style="position:relative;display:inline-block">o<svg viewBox="0 0 64 64" style="position:absolute;left:-36%;top:-22%;width:184%;height:150%;overflow:visible"><path d="M11 24C15 11 33 5 46 10C59 15 62 33 55 45C48 57 27 61 16 52C6 44 6 30 15 20" fill="none" stroke="${ac}" stroke-width="3.2" stroke-linecap="round"/></svg></span></span>`,
+  },
+  {
+    id:'3', name:'Playhead', symbol:'playhead',
+    text:'In and out brackets with the playhead standing on the cut. Pure timeline language, mono wordmark like a timecode readout. Very "tool", less personality than 1 and 2.',
+    wm:(fg, ac) => `<span class="wm" style="font-family:'JetBrains Mono';font-weight:700;letter-spacing:-.06em;color:${fg}"><span style="color:${ac}">[</span>montivo<span style="color:${ac}">]</span></span>`,
+  },
+  {
+    id:'4', name:'Second take', symbol:'take',
+    text:'A version tag as the symbol: the first cut is never the one you see. The tag can count up per render (v1, v2, v3) in the UI and in reels. Most playful; weakest as a standalone symbol.',
+    wm:(fg, ac) => `<span class="wm" style="font-family:'Inter Tight';font-weight:800;color:${fg}">montivo<sup style="font:700 .3em 'JetBrains Mono';background:${ac};color:#141414;padding:.12em .35em;border-radius:.25em;margin-left:.15em;vertical-align:1.6em">v2</sup></span>`,
+  },
+];
+
+const main = document.getElementById('concepts');
+for (const c of concepts) {
+  const ac = C[c.accent || 'marker'];
+  const sizes = bg => {
+    const fg = bg === C.paper ? C.ink : C.paper;
+    return `<div class="card" style="background:${bg}">${[16, 32, 64].map(s => svg(c.symbol, s, fg, ac)).join('')}<small style="margin-left:auto">16 / 32 / 64</small></div>`;
+  };
+  main.insertAdjacentHTML('beforeend', `
+    <section class="concept">
+      <h2><span>${c.id.padStart(2,'0')}</span>${c.name}</h2>
+      <p>${c.text}</p>
+      <div class="row">
+        <div class="card paper"><div class="lockup">${svg(c.symbol, 84, C.ink, ac, 'big')}${c.wm(C.ink, ac)}</div></div>
+        <div class="card ink"><div class="lockup">${svg(c.symbol, 84, C.paper, ac, 'big')}${c.wm(C.paper, ac)}</div></div>
+        <div class="sizes">${sizes(C.paper)}${sizes(C.ink)}</div>
+      </div>
+    </section>`);
+}
+</script>
+</body>
+</html>

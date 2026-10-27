@@ -167,7 +167,7 @@ export function Editor({ id, replay, go }: Props) {
     <div className="editor">
       <header className="top">
         <button className="icon-btn" onClick={() => go("#/")} title="All projects"><Icon name="back" /></button>
-        <a className="mark" href="#/" title="All projects">montivo</a>
+        <a className="mark" href="#/" title="All projects"><img src="/montivo-lockup-dark.svg" alt="Montivo" /></a>
         <span className="divider" />
         <div className="title-block">
           <span className="proj" title={state.run.brief}>{name}</span>

@@ -174,6 +174,16 @@ callouts on "make it about 30 seconds"); a later review keeps the agent loop's `
 Ask Montivo on the sandbox `runs/015-ui` (v4 + two test caption edits) -> v5 7 spans 32.0 s, review 100 pass, captions
 carried, callouts lost -> after the fix v6 kept both. `.claude/launch.json` "montivo-ui-key" serves WITH the key on 8767
 (it spends: stop it after use). The evening-by-evening table is in README.md.
+Brand (27/10 evening, $0): Billy chose direction A, In/Out + v-tag, dark + marker yellow. `assets/brand/`
+(guide in its README.md): symbol = in/out brackets with a marker V between them (reads M and [v]), 64 grid, 8-unit
+brackets; wordmark lowercase Inter Tight 700 outlined with HarfBuzz kerning, -0.02 em; lockups dark/light/mono, stacked,
+app icons (ink tile, marker tile), favicon; tokens.json (ink #141414, paper #F3F0E8, marker #FFC629, graphite, slate,
+cut #FF5A4E, pass #5FD08E); compositions (GitHub social preview 1280x640, gallery thumbnail, title and end cards 16:9
+and 9:16, brand sheet) from `src/compositions.html`; logo sting 2.4 s (`src/sting.mjs`, Playwright core + ffmpeg). All
+generated: `python3 assets/brand/build.py --png` (fonttools, uharfbuzz, headless Chromium), which also copies favicon,
+touch icon and lockup into `web/public`. Applied: editor tokens and logo (`web/src/styles.css`, Home, Editor, major
+issues now orange #FF8A3D), render accent `graphics.ACCENT` = marker, Muse Image title prompt with the brand hexes (not
+called yet). `.gitignore` lets brand PNG/MP4 and the UI icons in. GitHub social preview upload is manual (needs Billy).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
