@@ -15,6 +15,11 @@ The zoom is about one anchor per segment, the median centre of the head the crop
 is on screen and grows. An event is skipped when the zoomed head would leave the top of the frame or touch a caption
 on screen at that moment; a base scale is skipped the same way. ffmpeg's crop cannot change size per frame (the graph
 stalls), so the zoom is a zoompan after the scale, before the caption overlays: captions and callouts never zoom.
+
+Every entry in the EDL's `punch_ins` carries a `key` that survives edits: `emphasis:<word>@<source onset>` and
+`jump_cut:<first span id of the segment>`. The editor removes one punch-in by adding its key to the EDL's
+`punch_skip` (montivo.human punch --skip). A skipped punch-in still holds its place (its slot in the budget and the
+spacing, its turn in the jump-cut alternation), so removing one never makes another appear somewhere else.
 """
 from __future__ import annotations
 
@@ -83,6 +88,37 @@ def fits(heads: list[tuple[float, list[float]]], anchor: tuple[float, float], z:
     return True
 
 
+SKIP_MATCH_S = 0.3  # a skipped emphasis matches the same word starting this close in the source (edges clip a span's words)
+
+
+def punch_key(kind: str, word: str | None = None, src_t: float | None = None, span: str | None = None) -> str:
+    return f"jump_cut:{span}" if kind == "jump_cut" else f"emphasis:{word}@{src_t:.3f}"
+
+
+def parse_key(key: str) -> dict:
+    """'emphasis:Montivo@12.340' -> {kind, word, src_t}; 'jump_cut:s4' -> {kind, span}. ValueError otherwise."""
+    kind, _, rest = key.partition(":")
+    if kind == "jump_cut" and rest:
+        return {"kind": kind, "span": rest}
+    if kind == "emphasis" and "@" in rest:
+        word, _, t = rest.rpartition("@")
+        if word:
+            return {"kind": kind, "word": word, "src_t": float(t)}
+    raise ValueError(f"not a punch-in key: {key!r} (emphasis:<word>@<seconds> or jump_cut:<span id>)")
+
+
+def skipped(skips: list[dict], kind: str, word: str | None = None, src_t: float | None = None,
+            span: str | None = None) -> bool:
+    for k in skips:
+        if k["kind"] != kind:
+            continue
+        if kind == "jump_cut" and k["span"] == span:
+            return True
+        if kind == "emphasis" and norm(k["word"]) == norm(word or "") and abs(k["src_t"] - (src_t or 0.0)) <= SKIP_MATCH_S:
+            return True
+    return False
+
+
 def word_level(audio, t0: float, t1: float) -> float:
     pad = (t1 - t0) * 0.2
     return audio.level(t0 + pad, t1 - pad)
@@ -91,7 +127,14 @@ def word_level(audio, t0: float, t1: float) -> float:
 def plan_punches(edl: dict, segments: list, paths: list, words: list[dict], audio, head_track: dict | None,
                  captions: list[dict], title_s: float = 0.0) -> tuple[dict[int, dict], list[dict]]:
     """Per segment index {"base": z, "anchor": (x, y), "events": [{"a", "b", "c", "d", "z"}]} in segment-local
-    seconds (ramp in a to b, hold to c, ramp out to d), and the EDL entries (cut times, the word, its excess)."""
+    seconds (ramp in a to b, hold to c, ramp out to d), and the EDL entries (cut times, the word, its excess, the key).
+    The keys in the EDL's `punch_skip` are left out, each one holding its place."""
+    skips = []
+    for k in edl.get("punch_skip") or []:
+        try:
+            skips.append(parse_key(k))
+        except ValueError:
+            continue
     head = source_px(head_track, float(edl["source"]["width"]), float(edl["source"]["height"]))
     if head is None:
         return {}, []
@@ -117,18 +160,23 @@ def plan_punches(edl: dict, segments: list, paths: list, words: list[dict], audi
         caps.setdefault(i, []).append((c["t_in"] - cut0[i], c["t_out"] - cut0[i], [x, y, x + w, y + h]))
 
     entries: list[dict] = []
+    alt: set[int] = set()  # segments on the zoomed side of the alternation (a skipped one too)
     # jump cuts: alternate the base scale while the head stays put across the cut
     for i in range(1, len(segments)):
-        if i not in plan or i - 1 not in plan or plan[i - 1]["base"] != 1.0:
+        if i not in plan or i - 1 not in plan or i - 1 in alt:
             continue
         (_, prev), (_, cur) = heads[i - 1][-1], heads[i][0]
         dx = abs((prev[0] + prev[2]) / 2 - (cur[0] + cur[2]) / 2)
         size = (cur[2] - cur[0]) / max(1.0, prev[2] - prev[0])
         if dx < JUMP_DX_PX and abs(size - 1) < JUMP_SIZE and \
                 fits(heads[i], plan[i]["anchor"], JUMP_Z, 0, segments[i].duration, caps.get(i, [])):
+            alt.add(i)
+            sid = segments[i].span_ids[0]
+            if skipped(skips, "jump_cut", span=sid):
+                continue
             plan[i]["base"] = JUMP_Z
-            entries.append({"kind": "jump_cut", "segment": i, "t_in": round(cut0[i], 3),
-                            "t_out": round(cut0[i] + segments[i].duration, 3), "zoom": JUMP_Z})
+            entries.append({"kind": "jump_cut", "segment": i, "span": sid, "key": punch_key("jump_cut", span=sid),
+                            "t_in": round(cut0[i], 3), "t_out": round(cut0[i] + segments[i].duration, 3), "zoom": JUMP_Z})
 
     # emphasis: the loudest content words over the cut's median level
     if audio is not None:
@@ -168,9 +216,12 @@ def plan_punches(edl: dict, segments: list, paths: list, words: list[dict], audi
             z = plan[i]["base"] * PUNCH_Z
             if not fits(heads[i], plan[i]["anchor"], z, a, d, caps.get(i, [])):
                 continue
-            plan[i]["events"].append({"a": a, "b": b, "c": c, "d": d, "z": PUNCH_Z})
             taken.append(at)
-            entries.append({"kind": "emphasis", "segment": i, "word": w.w, "excess_db": excess,
+            if skipped(skips, "emphasis", word=w.w, src_t=w.t_in):
+                continue
+            plan[i]["events"].append({"a": a, "b": b, "c": c, "d": d, "z": PUNCH_Z})
+            entries.append({"kind": "emphasis", "segment": i, "span": w.span, "word": w.w, "src_t": round(w.t_in, 3),
+                            "key": punch_key("emphasis", word=w.w, src_t=w.t_in), "excess_db": excess,
                             "t_in": round(cut0[i] + a, 3), "t_out": round(cut0[i] + d, 3), "zoom": PUNCH_Z})
     for p in plan.values():
         p["events"].sort(key=lambda e: e["a"])

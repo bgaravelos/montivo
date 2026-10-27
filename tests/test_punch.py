@@ -61,7 +61,8 @@ def test_loud_and_highlight_words_get_a_punch_and_the_jump_cut_a_scale():
     assert sorted(e["word"] for e in emph) == ["everything", "reviewed"]
     assert all(e["zoom"] == PUNCH_Z for e in emph)
     assert [e for e in entries if e["kind"] == "jump_cut"] == [
-        {"kind": "jump_cut", "segment": 1, "t_in": 6.0, "t_out": 12.0, "zoom": JUMP_Z, "anchor": [540, 667]}]
+        {"kind": "jump_cut", "segment": 1, "span": "s2", "key": "jump_cut:s2", "t_in": 6.0, "t_out": 12.0, "zoom": JUMP_Z,
+         "anchor": [540, 667]}]
     assert plan[1]["base"] == JUMP_Z and plan[0]["base"] == 1.0
     ev = next(e for e in emph if e["word"] == "everything")
     # the zoom peaks at the word's onset (3.0 s) and is back to 1 after the hold and ramp out

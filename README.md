@@ -97,7 +97,10 @@ ruler, zoom and a transcript view of the paper edit; an inspector for the select
 of the whole cut (score, the three facts, the rubric, and each issue as saw, op, patch, result with the frame the
 reviewer saw); the Assistant with the agent's stages live from `run.log` and a chat that re-plans from an instruction;
 the versions with Compare (two versions side by side on one transport); the ledger; Export; and a replay mode (1x or
-4x) that plays a finished run back with the dollars counting up, for recording. Keys: Space, J/K/L, arrow keys for
+4x) that plays a finished run back with the dollars counting up, for recording. Punch-ins have a switch in the
+inspector (on or off makes the next version) and pink markers on the video track, one per zoom (a dashed line for a
+jump cut's scale); select one to see the word, its level and the frame, and remove it (or press Backspace) for the next
+version without it. Keys: Space, J/K/L, arrow keys for
 one frame, Backspace to delete a clip, Cmd+Z / Shift+Cmd+Z across versions. Spoken instructions through Voice: not
 yet. The server only reads the run folders and starts the engine as a subprocess; the React build is committed, so
 the editor needs Python only.
@@ -227,18 +230,25 @@ of the same shot alternate. The zoom is about the median centre of the followed 
 an event is skipped when the zoomed head would leave the top of the frame or touch a caption on screen. ffmpeg's crop
 cannot change size per frame (the graph stalls), so the zoom is a `zoompan` after the scale and before the overlays:
 captions and callouts never zoom. The EDL records `punch` (kept by the review loop and the editor's edits) and
-`punch_ins` (kind, word, level over the median, cut times, zoom, anchor). Offline so far: synthetic frames and a smoke
-render; the first look on real footage is `montivo render runs/012 --punch --out cut_v2_punch.mp4`.
+`punch_ins` (kind, word, level over the median, cut times, zoom, anchor, and a `key` such as `emphasis:Montivo@47.120`
+or `jump_cut:s4` that names it across versions). `python -m montivo.human punch runs/012 --on|--off` makes the next
+version with the punch-ins on or off, `--skip KEY` the next version without that one: the key goes into the EDL's
+`punch_skip`, which the review loop, trims, drops and re-plans carry forward, and a skipped punch-in keeps its place
+(its slot in the one-per-6 s budget and the 4 s spacing, its turn in the jump-cut alternation), so removing one never
+makes another appear elsewhere. Offline so far: synthetic frames, a smoke render, and the editor driven in Chromium
+on a synthetic run folder (remove one, then off: v1 two punch-ins, v2 one, v3 none, $0); the first look on real
+footage is `montivo render runs/012 --punch --out cut_v2_punch.mp4`.
 Captions use `MONTIVO_FONT` when set, else the bundled `montivo/fonts/InterTight-800.ttf` (Inter Tight, SIL OFL 1.1, a
 static wght 800 instance of the Google Fonts variable font), so line breaks and pixels match on every machine; Arial
 Black, Arial Bold and DejaVu Sans Bold are fallbacks only (the path is recorded in the EDL's `caption_style.font_path`).
 
 The editor: `make ui` (or `.venv/bin/montivo serve [--port 8765] [--root .]`). It reads the run folders and starts the
-engine as a subprocess (`montivo run ... --review`, `montivo review`, `python -m montivo.human drop|replan`); it never
+engine as a subprocess (`montivo run ... --review`, `montivo review`, `python -m montivo.human drop|trim|replan|punch`); it never
 imports the engine. The React build is committed in `montivo/server/static`, so it needs Python only; after editing
 `web/src`, `make web` rebuilds it (Node 18+). `python -m montivo.human drop runs/012 --span s3 [--from 2] [--review 1]`
 and `python -m montivo.human replan runs/012 --instruction "..." [--from 2] [--review 1]` (and `python -m montivo.human
-trim runs/012 --span s3 --edge out --word 12`) are the editor's actions from the shell: the next version number is one past the highest in the folder, so nothing is overwritten; drop goes
+trim runs/012 --span s3 --edge out --word 12`, `python -m montivo.human punch runs/012 --on|--off|--skip KEY`) are the
+editor's actions from the shell: the next version number is one past the highest in the folder, so nothing is overwritten; drop goes
 through the reviewer's own `drop_span` patch and tightens the two edges that now meet ($0 without `--review`); replan is
 one Spark plan call (about $0.04) on the stored Voice words and shot log with the instruction added to the brief, the
 title card kept as it was, then the edge pass and the render.

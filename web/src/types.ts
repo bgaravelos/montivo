@@ -31,6 +31,13 @@ export type Version = {
   loudness: { integrated_lufs: number; true_peak_dbtp: number; lra_lu: number } | null; captions: number | null;
   callouts: { span: string; text: string; t_in: number; t_out: number }[]; review: Review | null;
   caption_lines: CaptionLine[]; caption_style: CaptionStyle | null; caption_style_note: string | null; bytes: number | null;
+  punch: boolean; punch_skip: string[]; punch_ins: PunchIn[];
+};
+
+/** A punch-in zoom of a rendered version (EDL `punch_ins`); `key` names it across versions (montivo.human punch --skip). */
+export type PunchIn = {
+  key: string; kind: "emphasis" | "jump_cut" | string; word: string | null; span: string | null; excess_db: number | null;
+  t_in: number; t_out: number; zoom: number;
 };
 
 export type CaptionLine = { id: string; text: string; t_in: number; t_out: number; spans: string[]; placement: string | null; over_face: boolean };
