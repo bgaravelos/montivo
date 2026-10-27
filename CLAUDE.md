@@ -151,7 +151,19 @@ next line of its span across end punctuation ("Hi. I'm Billy.", `runs/012-open/c
 README "Try it" needs the `sample-012` release (not created); with a locally packed zip, 012 opens on v2 and a keyless
 drop renders. `runs/012-demo` exists for live edits; replay 4x of 012: plan 20 s, cut_v1 32 s, review 76 at 41 s,
 review 100 at 51.9 s (end).
-Next: Billy's own clip when it lands in `~/Downloads` (a fresh run: worth its own session). The evening-by-evening table is in README.md.
+Billy's demo clip, run 015 (27/10, $0.30): `DJI_20261027_192304_908_video.MP4` (4K, 600/19 fps, rotation -180, not
+mirrored) re-encoded once to `footage/billy_demo_2710.mp4` (1920x1080, 30 fps, rotation baked, 69.0 s). He did not read
+the 26/10 demo script: his own lines ("Every AI editor we tried stops at the first cut ... raw footage in, a reviewed cut
+out") with one retake ("no wait sorry let me say that again"); the run's brief was the old one, so its "repeated take"
+and "this is the part that matters" lines do not exist (v1 flagged it). The planner still cut it right: 8 spans, hook
+"Hi. I'm Billy.", retake dropped, ends on the payoff; 38.7 s; the crop follows the lean at "like right now". Loop v1 68
+(title card over 1.5 s of silence, dropped) -> v2 81 pass. Hand caption edit (same evening, $0): `python -m
+montivo.human caption RUN --at CUT_S --text "..."` (repeatable) retexts the line on screen at that cut second with the
+reviewer's `caption_text` patch -> next edl_vN; `captions.override_for` now merges every override of a line in order
+(later text wins, a forced top stays) and its end is strict (an abutting next line's src_t used to match too). Billy
+confirmed four Voice mishearings -> run 015 v3 / `cut_v3.mp4`: "we edit short form", "Four Meta models do all",
+"watches its own render", "scores it against" (frames checked; "the Muse Spark" left as Voice heard it). v3 not
+reviewed. Not in the editor UI yet. The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

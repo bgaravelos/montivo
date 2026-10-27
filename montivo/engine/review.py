@@ -769,7 +769,8 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
             overrides.append({"span": f.args["span"], "src_t": f.args["src_t"], "top": f.args["top"], "why": "review"})
             note = f"caption moved to y {f.args['top']}"
         elif f.op == "caption_text":
-            overrides.append({"span": f.args["span"], "src_t": f.args["src_t"], "text": f.args["text"], "why": "review"})
+            overrides.append({"span": f.args["span"], "src_t": f.args["src_t"], "text": f.args["text"],
+                              "why": "human" if f.severity == "human" else "review"})
             note = f"caption text -> {f.args['text']!r}"
         elif f.op == "retime_callout":
             if f.args["seconds"]:

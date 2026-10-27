@@ -303,7 +303,9 @@ trim runs/012 --span s3 --edge out --word 12`, `python -m montivo.human punch ru
 editor's actions from the shell: the next version number is one past the highest in the folder, so nothing is overwritten; drop goes
 through the reviewer's own `drop_span` patch and tightens the two edges that now meet ($0 without `--review`); replan is
 one Spark plan call (about $0.04) on the stored Voice words and shot log with the instruction added to the brief, the
-title card kept as it was, then the edge pass and the render.
+title card kept as it was, then the edge pass and the render. For a word Voice misheard, `python -m montivo.human caption
+runs/015 --at 18.5 --text "Four Meta models do all" [--at ... --text ...]` gives the caption line on screen at that cut
+second the words actually spoken (the reviewer's `caption_text` patch, timing kept, $0); shell only, not in the editor yet.
 
 ## Run folder
 

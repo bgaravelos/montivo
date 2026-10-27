@@ -5,12 +5,15 @@
     python -m montivo.human replan runs/012 --instruction "drop the agency line" [--from 2] [--review 2]
     python -m montivo.human punch runs/012 --on|--off [--from 2] [--review 2]
     python -m montivo.human punch runs/012 --skip "emphasis:Montivo@47.120" [--from 2] [--review 2]
+    python -m montivo.human caption runs/015 --at 18.5 --text "Four Meta models do all" [--at ... --text ...]
 
 Each writes the next edl_vN.json (N = one past the highest version in the run folder, so no version is ever
 overwritten) with a `patches` entry marked `source: "human"`, renders cut_vN.mp4 and, with --review, runs the blind
 review loop from it. `drop` and `trim` go through the reviewer's own patch path (`apply_fixes`) and call no model
 unless --review is given; `replan` is one Spark plan call (about $0.05) with the instruction added to the brief.
 `punch` turns the punch-in zooms (engine/punch.py) on or off, or removes one of them by its key; $0, ffmpeg only.
+`caption` gives the caption line on screen at a cut second the words actually spoken (the reviewer's caption_text
+patch); $0, ffmpeg only.
 """
 from __future__ import annotations
 
@@ -27,7 +30,8 @@ from .engine.api import dump_json
 from .engine.edges import Audio, Words, tighten_edges
 from .engine.edl import build_edl, edl_summary
 from .engine.punch import parse_key
-from .engine.review import REACH_S, Fix, apply_fixes, kept_elsewhere, refresh_span, review_loop
+from .engine.review import (REACH_S, Fix, _caption_at, _src_time, apply_fixes, cut_map, kept_elsewhere, refresh_span,
+                            review_loop)
 from .engine.voice import VoiceResult
 from .ledger import Ledger
 from .run import RunLog, render_run
@@ -139,6 +143,53 @@ def trim(run_dir: Path, span_id: str, edge: str, word: int, from_v: int | None =
     new.setdefault("patches", []).append({"from": from_v, "review": None, "source": "human", "action": "trim",
                                           "fixes": plog})
     log(f"patch v{from_v} -> v{n}: {fix.op} {span_id} {edge}: {plog[0]['note']} (human)")
+    edl_path = run_dir / f"edl_v{n}.json"
+    dump_json(edl_path, new)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
+def caption_fixes(edl: dict, edits: list[tuple[float, str]]) -> list[Fix]:
+    """One caption_text Fix per (cut second, text): the caption line on screen at that second (edl_vN's rendered
+    `captions`) gets the words actually spoken, the reviewer's own caption_text patch. The timing of the line stays."""
+    if not edl.get("captions"):
+        raise SystemExit("this EDL has no rendered captions (render it first)")
+    cmap = cut_map(edl)
+    fixes, seen = [], set()
+    for t, text in edits:
+        text = " ".join(text.split())
+        if not text:
+            raise SystemExit("the caption text is empty")
+        cap = _caption_at(edl, t, within=0.0)
+        if cap is None:
+            raise SystemExit(f"no caption line on screen at {t:.2f} s")
+        if cap["id"] in seen:
+            raise SystemExit(f"two edits for the line at {t:.2f} s ({cap['text']!r})")
+        seen.add(cap["id"])
+        if text == cap["text"]:
+            raise SystemExit(f"the line at {t:.2f} s already reads {text!r}")
+        sid = cap["spans"][0]
+        src_t = round(_src_time(edl, cmap, sid, cap["words"][0]["t_in"]) + 0.01, 3)
+        fixes.append(Fix(op="caption_text", target=f"{sid}@{src_t:.2f}", issue=-1, severity="human", t_s=t,
+                         args={"span": sid, "src_t": src_t, "text": text, "was": cap["text"]}))
+    return fixes
+
+
+def caption(run_dir: Path, edits: list[tuple[float, str]], from_v: int | None = None, passes: int = 0,
+            budget: float = 0.15) -> dict:
+    """Retext caption lines of edl_v{from} -> edl_vN, rendered: for the words Voice misheard (run 015: "meta meta
+    models" for "Four Meta models"). $0 without --review."""
+    log = RunLog(run_dir / "run.log")
+    from_v = from_v or latest_edl(run_dir)
+    edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
+    fixes = caption_fixes(edl, edits)
+    n = next_version(run_dir)
+    log(f"montivo caption: {len(fixes)} line(s) in edl_v{from_v} -> edl_v{n}")
+    new, plog = apply_fixes(edl, fixes, _words(run_dir))
+    new["version"] = n
+    new.setdefault("patches", []).append({"from": from_v, "review": None, "source": "human", "action": "caption",
+                                          "fixes": plog})
+    for f in fixes:
+        log(f"patch v{from_v} -> v{n}: caption_text at {f.t_s:.2f} s: {f.args['was']!r} -> {f.args['text']!r} (human)")
     edl_path = run_dir / f"edl_v{n}.json"
     dump_json(edl_path, new)
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
@@ -314,7 +365,12 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--on", dest="on", action="store_const", const=True, default=None)
     g.add_argument("--off", dest="on", action="store_const", const=False)
     g.add_argument("--skip", default=None, metavar="KEY", help="a punch_ins key of the EDL: emphasis:<word>@<s> or jump_cut:<span>")
-    for p in (d, t, r, pu):
+    c = sub.add_parser("caption", help="retext caption lines -> edl_vN -> cut_vN ($0 without --review)")
+    c.add_argument("run_dir", type=Path)
+    c.add_argument("--at", type=float, action="append", required=True,
+                   help="a cut second inside the line to retext (repeat with --text for more lines)")
+    c.add_argument("--text", action="append", required=True, help="the words actually spoken on that line")
+    for p in (d, t, r, pu, c):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
         p.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
@@ -327,6 +383,10 @@ def main(argv: list[str] | None = None) -> int:
         out = trim(a.run_dir, a.span, a.edge, a.word, a.from_v, a.review, a.budget)
     elif a.cmd == "punch":
         out = punch(a.run_dir, a.on, a.skip, a.from_v, a.review, a.budget)
+    elif a.cmd == "caption":
+        if len(a.at) != len(a.text):
+            ap.error("give one --text for every --at")
+        out = caption(a.run_dir, list(zip(a.at, a.text)), a.from_v, a.review, a.budget)
     else:
         out = replan(a.run_dir, a.instruction, a.from_v, a.target, a.review, a.budget, model=a.model)
     print(json.dumps(out, indent=2))
