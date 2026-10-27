@@ -81,6 +81,11 @@ one was measured is under "Measured behaviour" below.
 
 ## Try it
 
+**Judges:** Montivo runs hosted for you, with our Meta key on the server. The link and the password are in our
+submission. Two finished projects open there, and you can upload your own clip (up to 90 s) and let the agent plan,
+cut, review and re-cut it; your edits go to your own copy, so every judge starts from the same samples. A shared
+budget caps the Meta model calls; past it, the finished projects and the $0 edits still work.
+
 Without an API key, on a finished run (Billy's clip, every version, every review):
 
 ```bash
