@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { api, usd } from "./api";
+import { api, frameUrl, tc, usd } from "./api";
+import { nameOf } from "./edit";
+import { Icon } from "./icons";
 import { PlannerPicker } from "./Panels";
 import { ProgressMini } from "./Progress";
-import type { Costs, Planner, RunCard } from "./types";
+import type { CardScore, Costs, Planner, RunCard } from "./types";
 
 type Footage = { path: string; name: string; mb: number };
 const COSTS: Costs = { plan: 0.05, plan_open: 0.012, plan_s: 35, plan_open_s: 7, review: 0.035, run_per_s: 0.004 };
@@ -71,14 +73,25 @@ export function Home({ go }: { go: (h: string) => void }) {
           <div className="run-grid">
             {shown.map((r) => (
               <a key={r.id} className="run-card" href={`#/run/${r.id}`}>
-                <div className="rc-top"><span className="rc-id">{r.id}</span><span className="mute">{r.footage}</span></div>
-                <div className="rc-brief">{r.brief}</div>
-                <div className="rc-scores">
-                  {r.scores.length ? r.scores.map((s, k) => <span key={k} className="rc-score">{k > 0 && <i>→</i>}{s}</span>) : <span className="mute">not reviewed</span>}
-                  {r.stop && <span className="mute rc-stop">{r.stop.split(":")[0]}</span>}
+                <div className="rc-poster">
+                  {r.card && <img src={frameUrl(r.id, r.card.shown, r.card.poster_t, true)} alt="" loading="lazy" />}
+                  {r.card?.duration_s != null && <span className="rc-dur mono">{tc(r.card.duration_s, 0)}</span>}
                 </div>
-                {r.progress?.active && <ProgressMini p={r.progress} />}
-                <div className="rc-foot mute">{r.versions.length ? `v${r.versions.join(" v")} · ` : ""}{usd(r.cost_usd)}{r.job?.running && !r.progress ? " · running" : ""}</div>
+                <div className="rc-body">
+                  <div className="rc-name" title={r.brief}>{nameOf(r.card?.title_card_text, r.brief)}</div>
+                  <div className="rc-meta mute"><span className="rc-id">{r.id}</span> · {r.footage}</div>
+                  <div className="rc-brief">{r.brief}</div>
+                  <div className="rc-scores">
+                    {r.card?.score ? <Badge s={r.card.score} shown={r.card.score_is_shown} /> : <span className="mute">not reviewed</span>}
+                    {r.card && r.card.scores.length > 1 && <Sparkline scores={r.card.scores} />}
+                    {r.stop && <span className="mute rc-stop">{r.stop.split(":")[0]}</span>}
+                  </div>
+                  {r.progress?.active && <ProgressMini p={r.progress} />}
+                  <div className="rc-foot mute">
+                    {r.card ? `Version ${r.card.shown} of ${r.versions.length} · ` : r.versions.length ? `${r.versions.length} versions · ` : ""}
+                    {usd(r.cost_usd)}{r.job?.running && !r.progress ? " · running" : ""}
+                  </div>
+                </div>
               </a>
             ))}
           </div>
@@ -115,5 +128,29 @@ export function Home({ go }: { go: (h: string) => void }) {
         </section>
       </div>
     </div>
+  );
+}
+
+/** The blind score of the version the card shows, or the project's best (named) when that version has none. */
+function Badge({ s, shown }: { s: CardScore; shown: boolean }) {
+  return (
+    <span className={`rc-badge ${s.pass ? "pass" : ""}`}
+      title={`${shown ? "Blind review of the version the editor opens on" : `Best blind review, Version ${s.v}`}: ${s.overall}/100${s.pass ? ", passes" : ""}`}>
+      {s.pass && <Icon name="check" size={12} />}<b>{s.overall}</b>{!shown && <span>v{s.v}</span>}
+    </span>
+  );
+}
+
+/** Every reviewed version's blind score in version order, 0 to 100 bottom to top; a passing review is a green dot. */
+function Sparkline({ scores }: { scores: CardScore[] }) {
+  const w = 76, h = 24, pad = 3;
+  const x = (k: number) => pad + (k * (w - 2 * pad)) / Math.max(scores.length - 1, 1);
+  const y = (o: number) => pad + (1 - o / 100) * (h - 2 * pad);
+  return (
+    <svg className="rc-spark" width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-label="Blind scores by version">
+      <title>{scores.map((s) => `v${s.v} ${s.overall}`).join(" → ")}</title>
+      <polyline points={scores.map((s, k) => `${x(k)},${y(s.overall)}`).join(" ")} />
+      {scores.map((s, k) => <circle key={s.v} cx={x(k)} cy={y(s.overall)} r={k === scores.length - 1 ? 2.6 : 1.8} className={s.pass ? "pass" : ""} />)}
+    </svg>
   );
 }

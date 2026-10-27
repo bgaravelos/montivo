@@ -244,3 +244,38 @@ def test_job_progress_reads_only_the_jobs_lines(tmp_path):
     assert p["job_elapsed"] == pytest.approx(3, abs=0.5)
     job.ended, job.rc = time.time(), 0
     assert not job_progress(State(tmp_path), job)["active"]
+
+
+# ------------------------------------------------------------------- Home cards (runs.project_card)
+
+def test_project_card_shows_the_version_the_editor_opens(tmp_path):
+    import json
+
+    from montivo.server.runs import list_runs
+    d = _run_folder(tmp_path)  # v1 plan, v2 a human re-plan, v3 a hook A/B
+    for n in (1, 2, 3):
+        (d / f"cut_v{n}.mp4").write_bytes(b"")
+    v1 = json.loads((d / "edl_v1.json").read_text())
+    v1.update(title_card_text="Raw In, Reviewed Out", render={"duration_s": 41.5, "title": {"seconds": 1.5}})
+    (d / "edl_v1.json").write_text(json.dumps(v1))
+    for n, overall, ok in ((1, 76, False), (2, 88, True)):
+        (d / f"review_v{n}.json").write_text(json.dumps({"cut": f"runs/r1/cut_v{n}.mp4", "review": {"overall": overall, "pass": ok}}))
+    (d / "review_v3.json").write_text(json.dumps({"cut": "runs/r1/cut_v3_polish.mp4", "review": {"overall": 99, "pass": True}}))
+
+    card = list_runs(tmp_path / "runs")[0]["card"]
+    assert card["shown"] == 2  # the human re-plan; v3's hook A/B has no verdict yet
+    assert [x["overall"] for x in card["scores"]] == [76, 88]  # review_v3 reviewed another file
+    assert card["score"] == {"v": 2, "overall": 88, "pass": True} and card["score_is_shown"]
+
+    v3 = json.loads((d / "edl_v3.json").read_text())
+    v3["patches"][-1]["result"] = {"kept": 1}
+    (d / "edl_v3.json").write_text(json.dumps(v3))
+    card = list_runs(tmp_path / "runs")[0]["card"]
+    assert card["shown"] == 2  # the A/B kept v1, older than the human edit: the newest of the two wins
+    v2 = json.loads((d / "edl_v2.json").read_text())
+    v2["patches"][-1]["source"] = "review"
+    (d / "edl_v2.json").write_text(json.dumps(v2))
+    card = list_runs(tmp_path / "runs")[0]["card"]
+    assert card["shown"] == 1 and card["title_card_text"] == "Raw In, Reviewed Out"
+    assert card["poster_t"] == pytest.approx(1.5 + 40 / 3, abs=0.05) and card["duration_s"] == 41.5
+    assert card["score"]["v"] == 1 and not card["score"]["pass"]

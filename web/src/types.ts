@@ -105,4 +105,13 @@ export type Planner = "spark" | "open";
 export type RunCard = {
   id: string; footage: string; brief: string; started: string | null; versions: number[]; scores: number[];
   stop: string | null; cost_usd: number | null; has_cut: boolean; job: Job | null; progress: Progress | null;
+  card: ProjectCard | null;
 };
+
+/** A project's card on Home (runs.project_card): the version the editor opens on, its poster time, its blind score
+ *  (or the best one when it has none) and every reviewed version's score in order. */
+export type ProjectCard = {
+  shown: number; title_card_text: string | null; duration_s: number | null; poster_t: number;
+  score: CardScore | null; score_is_shown: boolean; scores: CardScore[];
+};
+export type CardScore = { v: number; overall: number; pass: boolean };

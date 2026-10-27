@@ -126,7 +126,12 @@ export function punchLabel(p: { kind: string; word: string | null; span: string 
 
 /** A human name for the project: the title card text, else the brief's first phrase. */
 export function projectName(v: Version | null, brief: string | undefined): string {
-  if (v?.title_card_text) return v.title_card_text;
+  return nameOf(v?.title_card_text, brief);
+}
+
+/** A project's name: its title card's text, else the brief's first clause. */
+export function nameOf(titleCardText: string | null | undefined, brief: string | undefined): string {
+  if (titleCardText) return titleCardText;
   const b = (brief ?? "").split(/[.:\n]/)[0].trim();
   return b.length > 52 ? `${b.slice(0, 50).trim()}…` : b || "Untitled";
 }

@@ -342,6 +342,66 @@ def progress(lines: list[dict], label: str | None = None, ledger: dict | None = 
 
 # --------------------------------------------------------------------------- run state
 
+_CACHE: dict[str, tuple[tuple[int, int], dict | None]] = {}
+
+
+def _cached(p: Path, pick) -> dict | None:
+    """pick(json) of a file, kept until the file changes: Home re-reads the list every 2 s while a job runs."""
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _CACHE.get(str(p))
+    if hit and hit[0] == key:
+        return hit[1]
+    data = read_json(p)
+    val = pick(data) if data is not None else None
+    _CACHE[str(p)] = (key, val)
+    return val
+
+
+def _edl_card(edl: dict) -> dict:
+    render = edl.get("render") or {}
+    last = (edl.get("patches") or [{}])[-1]
+    title = render.get("title") or {}
+    return {"title_card_text": edl.get("title_card_text"), "source": last.get("source") or ("review" if edl.get("patches") else "plan"),
+            "kept": (last.get("result") or {}).get("kept"), "duration_s": render.get("duration_s") or edl.get("runtime_s"),
+            "title_s": float(title.get("seconds") or 0), "output": Path(render.get("output") or "").name}
+
+
+def _review_card(rv: dict) -> dict:
+    r = rv.get("review") or {}
+    return {"cut": Path(rv.get("cut") or "").name, "overall": r.get("overall"), "pass": bool(r.get("pass"))}
+
+
+def project_card(d: Path, versions_n: list[int], loop: dict) -> dict | None:
+    """What a project's card on Home shows: the version the editor opens on (the newest a human edit made or the hook
+    A/B kept, else the loop's best, else the newest; Editor.tsx `opening`), its name, a poster time a third into the
+    cut after the title card, its blind score and every reviewed version's score in order (the sparkline)."""
+    heads = {n: h for n in versions_n if (h := _cached(d / f"edl_v{n}.json", _edl_card))}
+    cuts = [n for n in sorted(heads) if (d / f"cut_v{n}.mp4").is_file()]
+    if not cuts:
+        return None
+    kept = [n if heads[n]["source"] == "human" else heads[n]["kept"] for n in cuts if n > 1
+            and (heads[n]["source"] == "human" or (heads[n]["source"] == "hook_ab" and heads[n]["kept"]))]
+    kept = [k for k in kept if k in cuts]
+    best = (loop.get("best") or {}).get("version")
+    shown = max(kept) if kept else best if best in cuts else cuts[-1]
+    scores = []
+    for n in cuts:
+        rv = _cached(d / f"review_v{n}.json", _review_card)
+        if rv and rv["overall"] is not None and rv["cut"] in ("", f"cut_v{n}.mp4"):
+            scores.append({"v": n, "overall": rv["overall"], "pass": rv["pass"]})
+    h = heads[shown]
+    dur = float(h["duration_s"] or 0)
+    mine = next((x for x in scores if x["v"] == shown), None)
+    top = max(scores, key=lambda x: (x["overall"], x["v"])) if scores else None
+    return {"shown": shown, "title_card_text": h["title_card_text"], "duration_s": round(dur, 1) if dur else None,
+            "poster_t": round(h["title_s"] + max(dur - h["title_s"], 0) / 3, 1), "score": mine or top,
+            "score_is_shown": mine is not None, "scores": scores}
+
+
 def list_runs(runs_dir: Path) -> list[dict]:
     out = []
     for d in sorted(runs_dir.iterdir() if runs_dir.is_dir() else [], key=lambda p: p.name):
@@ -354,7 +414,8 @@ def list_runs(runs_dir: Path) -> list[dict]:
         out.append({"id": d.name, "footage": Path(run.get("footage", "")).name, "brief": run.get("brief", ""),
                     "started": run.get("started"), "versions": versions,
                     "scores": [p["overall"] for p in loop.get("passes", [])], "stop": loop.get("stop"),
-                    "cost_usd": ledger.get("total_cost_usd"), "has_cut": any(d.glob("cut_v*.mp4"))})
+                    "cost_usd": ledger.get("total_cost_usd"), "has_cut": any(d.glob("cut_v*.mp4")),
+                    "card": project_card(d, versions, loop)})
     return out
 
 
