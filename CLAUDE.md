@@ -4,7 +4,7 @@ This folder (`~/Documents/montivo`, public repo https://github.com/bgaravelos/mo
 hackathon project lives. Work here, not in `~/Documents/nocta-digital` (Nocta's agency work, off limits for this project).
 
 ## What this is
-Montivo is Nocta Digital's entry for the Meta Global AI Developer Hackathon (build window 27/10 to 4/11/2026,
+Montivo is Nocta Digital's entry for the Meta Global AI Developer Hackathon (build window 26/10 to 4/11/2026, kickoff 26/10 18:00 Athens,
 submission on cerebralvalley.ai by Wed 4/11 evening, deadline Thu 5/11 04:00 Athens). An agent-first video editor:
 Muse Spark 1.3 watches the footage and plans a paper edit, Muse Voice gives turns and word timings, SAM 3.1 tracks
 the speaker for the 9:16 reframe and callouts, ffmpeg renders, then Spark reviews its own render against a rubric and

@@ -15,7 +15,104 @@ cut against a rubric and re-cut until it passes.
 Every runtime model is a Meta model. Every call's request and response JSON lands in the run folder next to a
 ledger of tokens, dollars and seconds per stage.
 
-## Status (evening 4 of 8)
+## Why it is different
+
+AI editors stop at the first cut. Montivo watches its own render the way a viewer would, finds what is wrong, fixes the
+edit and renders again:
+
+- **A blind reviewer.** Spark 1.3 gets the rendered vertical cut (with a clock burned in, because it sees about one
+  frame per second and no timestamps), the brief, a rubric and three measured facts: the silences in the cut, where
+  every caption sits against the speaker's head box, and the source audio level at both edges of every cut (a model
+  does not hear a clipped syllable; the waveform does). It never sees the plan or the edit list.
+- **Fix operations, not prose.** Every issue comes back with a time in the cut and one of nine fix ops (`move_cut`,
+  `drop_span`, `extend_span`, `swap_hook`, `reorder`, `caption_fix`, `retime_callout`, `reframe_bias`, `none`). The
+  patcher maps the time to a span, a cut, a caption line or a callout and writes the next `edl_vN.json` with a
+  `patches` record of what changed and why. Then it renders and reviews again.
+- **Guards, so the loop cannot wreck the cut:** at most 3 reviews, a dollar budget checked before each one, the same
+  fix twice stops the loop, a version that scores below the best stops it and the best is kept, the hook is never
+  dropped whole, and a clipped word is fixed by moving its edge to the quiet point, never by deleting the word.
+- **Time comes from Voice, never from Spark.** Every cut lands on a word boundary from Muse Voice's word timings and
+  is then tightened to the actual speech onset and offset in the source audio. SAM 3.1 runs the camera: the 9:16 crop
+  follows the speaker's head with a smoothed path, and with two or more people on screen it follows whoever is talking.
+- **A human stays in the loop.** In the editor you trim a clip by dragging its edge (it snaps to words), delete a clip,
+  or type an instruction to re-plan. Each edit is the next version through the same patch path as the reviewer, so undo
+  and redo walk the versions and nothing is overwritten.
+
+```mermaid
+flowchart LR
+  F["Raw footage + brief"] --> I["ingest: proxy, wav"]
+  I --> V["Muse Voice: turns, word times"]
+  I --> S["SAM 3.1: head and person tracks"]
+  V --> W["Spark 1.3 watch: shot log, speaker map"]
+  W --> P["Spark 1.3 plan: paper edit, verbatim words"]
+  P --> E["EDL on word boundaries, edges tightened to speech"]
+  E --> R["ffmpeg render: 9:16 crop, captions, Muse Image title card, loudness"]
+  S --> R
+  R --> Q{"Spark 1.3 blind review"}
+  Q -- "issues + fix ops" --> X["patch: edl_vN+1"]
+  X --> R
+  H["You: trim, delete, re-plan"] --> X
+  Q -- "pass or a guard" --> O["cut_vN.mp4"]
+```
+
+## Measured results
+
+| Footage | What happened | Cost |
+|---|---|---|
+| Billy's own talking head, 125 s, a lean on camera, ums, a repeated take (run 012) | the full run in 242 s wall; the review loop took v1 from 76 to 100 and passed | $0.50 for the run, $0.06 for the loop |
+| The same clip with a deliberately broken v1: a cut inside a word, a caption over the face, a weak hook | the blind reviewer caught all three faults with a timestamp in 3 runs out of 3; the loop took it from 65 to 85 and passed | $0.08 for the test, $0.06 for the loop |
+| A public-domain USGS interview, 166 s, a noisy atrium, a second speaker, passers-by (run 013) | 62 to 68 to 72, no pass; it exposed three bugs the first clip never hit, all fixed (captions avoided every passer-by's head, a flagged title card stayed, a fast speaker's clipped words) | $0.78 |
+
+A 150 s source comes to about $0.48 with the review loop. Every number above is in the run's `ledger.json`; how each
+one was measured is under "Measured behaviour" below.
+
+## Try it
+
+Without an API key, on a finished run (Billy's clip, every version, every review):
+
+```bash
+make dev                                          # Python 3.12 venv, needs ffmpeg and ffprobe on the PATH
+.venv/bin/python -m montivo.server.sample fetch   # runs/012 from the sample-012 GitHub release, about 210 MB
+make ui                                           # the editor at http://127.0.0.1:8765
+```
+
+Opening the run, playing every version, reading the reviews, Compare, replay, trimming and deleting a clip (an ffmpeg
+re-render) need no key. Re-plan, a new run and the review loop call Meta models and need `MODEL_API_KEY`
+(dev.meta.ai). `make test` runs the offline tests (recorded Voice and SAM streams, no network).
+
+With a key, on your own footage:
+
+```bash
+export MODEL_API_KEY=...
+.venv/bin/montivo run footage.mp4 --brief "A 40 second vertical reel: ..." --target 40 --review --out runs/001
+make ui
+```
+
+## The editor
+
+`montivo serve` (or `make ui`) serves the editor at http://127.0.0.1:8765 over the run folders. The project list
+starts a new run (upload, brief, target length, review loop). The editor has a 9:16 viewer; a multi-track timeline
+(the title card, captions, video with a filmstrip, audio with a waveform) with the reviewer's issues as markers on the
+ruler, zoom and a transcript view of the paper edit; an inspector for the selected clip, the title card or the review
+of the whole cut (score, the three facts, the rubric, and each issue as saw, op, patch, result with the frame the
+reviewer saw); the Assistant with the agent's stages live from `run.log` and a chat that re-plans from an instruction;
+the versions with Compare (two versions side by side on one transport); the ledger; Export; and a replay mode (1x or
+4x) that plays a finished run back with the dollars counting up, for recording. Keys: Space, J/K/L, arrow keys for
+one frame, Backspace to delete a clip, Cmd+Z / Shift+Cmd+Z across versions. Spoken instructions through Voice: not
+yet. The server only reads the run folders and starts the engine as a subprocess; the React build is committed, so
+the editor needs Python only.
+
+## Built during the hackathon
+
+Everything in this repository was written from scratch for the Meta Global AI Developer Hackathon, from the kickoff
+(26/10/2026, 12:00 PM ET) on; the first commit (`9d9f0ec`) is from 26/10 at 19:10 Athens time. That covers the engine
+(`montivo/engine/`: the API clients, ingest, Voice, SAM tracking, the Spark calls and schemas, the EDL, the edge pass,
+reframe, render, captions and graphics, the title card, the review loop, the speaker mapping), the run, ledger and CLI,
+the human edits (`montivo/human.py`), the API server and the React editor (`montivo/server/`, `web/`) and the tests.
+Used as they are: ffmpeg, Pillow, httpx, FastAPI, React and Vite, and the Inter Tight font (SIL OFL 1.1). The concept
+and the name come from an earlier personal project of Billy Gkaravelos; none of its code is used here.
+
+## Pipeline in detail
 
 Works end to end from raw footage to a finished 9:16 cut with captions, callouts, a title card and loudnorm, then
 reviews its own cut blind and re-cuts:
@@ -64,15 +161,7 @@ in the reviewer's window at that end. Word-level edits land on a sentence end wh
 the quietest 40 ms of the source audio within 0.3 s (Voice words abut, so only the audio shows the gap) and are then
 tightened to the speech like v1; a clipped word is fixed by moving its edge to that quiet point, never by removing words.
 
-The UI (27/10, `montivo serve`, http://127.0.0.1:8765) is the review room on top of the run folders: the agent's stage
-rail live from `run.log` (model, first artefact, dollars per stage), a 9:16 player with one tab per version and the review's
-issue windows on the scrub bar, the blind reviewer's panel (score per version, the three facts, the rubric bars, each issue
-as saw -> op -> patch -> result with the frame the reviewer saw), the paper edit as blocks in cut time (words the version
-dropped struck through, dropped spans as ghosts, issue pins at cut time), Compare (two versions side by side, one
-transport, parked on a flagged moment), the ledger drawer, and a replay mode (`?replay=1` or `4`) that plays a finished
-run's story back for recording. The two human actions: select a block and "Drop", or type an instruction ("drop the
-agency line", "make it 30 seconds") to re-plan; each writes the next `edl_vN.json` with a `patches` entry marked
-`source: "human"` and renders `cut_vN.mp4`, optionally followed by the review loop. Spoken instructions through Voice: not yet.
+The editor on top of this is described under "The editor" above.
 
 ## Setup
 
@@ -132,28 +221,15 @@ Captions use `MONTIVO_FONT` when set, else the bundled `montivo/fonts/InterTight
 static wght 800 instance of the Google Fonts variable font), so line breaks and pixels match on every machine; Arial
 Black, Arial Bold and DejaVu Sans Bold are fallbacks only (the path is recorded in the EDL's `caption_style.font_path`).
 
-The UI: `make ui` (or `.venv/bin/montivo serve [--port 8765] [--root .]`). It reads the run folders and starts the
+The editor: `make ui` (or `.venv/bin/montivo serve [--port 8765] [--root .]`). It reads the run folders and starts the
 engine as a subprocess (`montivo run ... --review`, `montivo review`, `python -m montivo.human drop|replan`); it never
 imports the engine. The React build is committed in `montivo/server/static`, so it needs Python only; after editing
 `web/src`, `make web` rebuilds it (Node 18+). `python -m montivo.human drop runs/012 --span s3 [--from 2] [--review 1]`
-and `python -m montivo.human replan runs/012 --instruction "..." [--from 2] [--review 1]` are the same two actions
-from the shell: the next version number is one past the highest in the folder, so nothing is overwritten; drop goes
+and `python -m montivo.human replan runs/012 --instruction "..." [--from 2] [--review 1]` (and `python -m montivo.human
+trim runs/012 --span s3 --edge out --word 12`) are the editor's actions from the shell: the next version number is one past the highest in the folder, so nothing is overwritten; drop goes
 through the reviewer's own `drop_span` patch and tightens the two edges that now meet ($0 without `--review`); replan is
 one Spark plan call (about $0.04) on the stored Voice words and shot log with the instruction added to the brief, the
 title card kept as it was, then the edge pass and the render.
-
-### For judges
-
-```bash
-make dev                                   # Python 3.12 + ffmpeg on the PATH
-.venv/bin/python -m montivo.server.sample fetch   # runs/012 (Billy's clip, loop 76 -> 100) from the GitHub release, ~210 MB
-make ui                                    # http://127.0.0.1:8765
-```
-
-No `MODEL_API_KEY` is needed to open the run, play every version, read the reviews, use Compare and replay, and drop a
-span (a re-render with ffmpeg only). Re-plan, a new run and the review loop call Meta models and need the key.
-
-`make test` runs the offline tests (recorded Voice and SAM streams are parsed without network access).
 
 ## Run folder
 
@@ -355,17 +431,13 @@ loudnorm figures and the ebur128 measurement of the finished file).
   comes to about $0.48 with the review loop. Clips under 60 s, which SAM used to see at the source rate (30 fps, $0.36
   per concept per minute), are resampled too.
 
-## Plan
+## Build log
 
-| Evening | Deliverable |
+| Date | Built |
 |---|---|
-| 27/10 | engine clients, run folder, ledger, CLI (this); then two kill tests on the render path, see below |
-| 28/10 | done early (26/10 night): reframe path, ffmpeg trim/concat, 9:16 crop following the track, `cut_v1.mp4`, `montivo render`; from here every run uses Billy's own 60 to 90 s English talking-head clip, the NASA clip is regression only |
-| 29/10 | done early (26/10 night): captions from word times, callouts on tracks, Muse Image title card, loudnorm; speaker-to-person mapping still open |
-| 30/10 | done early (26/10 night): blind review pass, fix ops, loop guards (3 passes, budget, repeated fixes, regression); kill test (b) 3 of 3 in 3 of 3 with the cut-edge fact (2 of 3 with the two original facts); v1 to v3 on three sources still open (one source so far); 27/10: edge pass, cut edges tightened to the speech in the source audio, loops 76 -> 100 and 65 -> 85 |
-| 31/10 | done early (27/10): FastAPI + SSE, React review room: new run (upload, brief), live stage rail, versions, review panel, paper edit, Compare, ledger, replay |
-| 1/11 | done early (27/10, typed): the two human actions in the loop first: "drop this span" and "re-run with this instruction"; still open: spoken through Voice; reorder, caption edit and reframe nudge only after those |
-| 2/11 to 4/11 | demo video, README for judges, buffer, submission |
+| 26/10 evening (kickoff day) | engine skeleton, run to `edl_v1.json` with a ledger; reframe and render to `cut_v1.mp4`; kill test (a) on the NASA clip; captions, callouts, the Muse Image title card, loudness; the blind review loop; kill test (b) 3 of 3 in 3 of 3 |
+| 27/10 | the edge pass (loops 76 to 100 and 65 to 85); two-pass loudness and a minimum caption duration; a second source (run 013) and its three fixes; SAM at 5 fps for every concept; the API and the review room, then the NLE editor with trim by drag; the bundled caption font and CI; speaker to head mapping; the Open Weight planner |
+| 28/10 to 4/11 | runs on more footage, the planner A/B, polish, the demo video, the submission |
 
 Design rules fixed on 26/10:
 
@@ -381,11 +453,7 @@ Design rules fixed on 26/10:
 - Track: Indie. Bonus targets: Best Agentic, Best Creative, Most Viral. Open Weight (Muse Spark Open on Baseten): the
   credits ($100, 2M TPM, `meta-models/muse-spark-open-1026`) arrived on 26/10.
 
-## Where it comes from
-
-The concept comes from Montivo, an earlier personal project of Billy Gkaravelos (a chat-driven video editor). All the
-code in this repository was written during the Meta Global AI Developer Hackathon (27/10 to 4/11/2026) from scratch:
-nothing is shared with that earlier editor, and at run time the application calls Meta models only.
+## Experiments
 
 `experiments/` holds the kill-test scripts from 26/10 (kickoff day) that measured the API behaviour listed above; they
 are research, not part of the product, and nothing in `montivo/` imports them. Their raw results stay out of the repo.
