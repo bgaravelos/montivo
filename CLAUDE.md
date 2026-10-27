@@ -218,7 +218,7 @@ filter all / reviewed / passed (kept in localStorage), search over name, run, fo
 `/api/runs/{id}/archive` moves the folder and its side logs (`runs/<id>.*log`) to `runs/_archive/` (409 while a job
 runs or on a name clash), GET `/api/archive`, POST `/api/archive/{id}/restore`; Undo in the toast, Restore under
 "Archived". Never deletes. None of Billy's runs archived: checked keyless on a throwaway copy (removed).
-UI batch A (backlog 6, 8, 12; 27/10 evening, $0, not committed yet): New project shows the clip (GET
+UI batch A (backlog 6, 8, 12; 27/10 evening, $0, commit `6a985a9`): New project shows the clip (GET
 `/api/footage/{name}`, `duration_s` from ffprobe cached on mtime + size), prices and times the run from its length
 (`COST` run_fixed / run_per_s / run_wall_* / review_loop / hook_ab from runs 014 and 015), four brief presets,
 punch-ins and hook A/B switches (`montivo run --hook-ab`, needs `--review`: `hook_ab` on the loop's best after the
