@@ -11,7 +11,7 @@ Faults planted on a finished run's EDL (default runs/012), rendered without a ti
 Pass: the review catches at least 2 of 3 with a timestamp within 1 s of the fault, in every one of N runs. A fault is
 caught when an issue of a matching criterion (or fix op) has its [t_s, t_end_s] within 1 s of the fault's window.
 
-    .venv/bin/python experiments/kt_f_review_killtest.py --runs 3 [--no-clock 1] [--tag f3_ --summary killtest_b_f3.json]
+    .venv/bin/python tools/kt_f_review_killtest.py --runs 3 [--no-clock 1] [--tag f3_ --summary killtest_b_f3.json]
 
 Batches on 26/10 night: the first with the two facts of the design (silences, captions vs head), tag "" -> killtest_b.json;
 the second with the third fact (audio level before every cut), tag f3_ -> killtest_b_f3.json.

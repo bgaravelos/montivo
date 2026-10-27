@@ -113,7 +113,9 @@ the editor needs Python only.
 ## Built during the hackathon
 
 Everything in this repository was written from scratch for the Meta Global AI Developer Hackathon, from the kickoff
-(26/10/2026, 12:00 PM ET) on; the first commit (`9d9f0ec`) is from 26/10 at 19:10 Athens time. That covers the engine
+(26/10/2026, 12:00 PM ET, 18:00 Athens time) on; the first commit (`9d9f0ec`) is from 26/10 at 19:10 Athens time. One
+exception, removed since: a set of throwaway API test scripts started before the kickoff (see Before the kickoff,
+below). What was built during the event covers the engine
 (`montivo/engine/`: the API clients, ingest, Voice, SAM tracking, the Spark calls and schemas, the EDL, the edge pass,
 reframe, render, captions and graphics, the title card, the review loop, the speaker mapping), the run, ledger and CLI,
 the human edits (`montivo/human.py`), the API server and the React editor (`montivo/server/`, `web/`) and the tests.
@@ -521,10 +523,20 @@ Design rules fixed on 26/10:
 - Track: Indie. Bonus targets: Best Agentic, Best Creative, Most Viral. Open Weight (Muse Spark Open on Baseten): the
   credits ($100, 2M TPM, `meta-models/muse-spark-open-1026`) arrived on 26/10.
 
-## Experiments
+## Before the kickoff
 
-`experiments/` holds the kill-test scripts from 26/10 (kickoff day) that measured the API behaviour listed above; they
-are research, not part of the product, and nothing in `montivo/` imports them. Their raw results stay out of the repo.
+On 26/10, from about 17:30 Athens time, half an hour before the 18:00 kickoff, we started throwaway scripts that call
+the Meta APIs, to learn how they behave before designing anything. Four calls ran before 18:00: one Muse Image title
+card (17:46), a Muse Spark 1.2 shot log of two public-domain clips (17:49 and 17:51), a Muse Voice diarization of the
+NASA clip (17:51), and a 30 s clip was prepared for SAM (17:57); the rest of those kill tests ran between 18:03 and
+18:31. The scripts went into `experiments/` with the first commit (19:10) and were removed from the repository on
+27/10, because some of them predate the kickoff and their file dates cannot show which; they stay in the git history
+for anyone who wants to check. Nothing in `montivo/`, `web/` or `tests/` ever imported them. What they measured, such
+as Spark 1.2 degenerating under a strict schema or the OpenAI SDK stream dropping on SAM, is written up in Measured
+behaviour above and shaped the design; no code from them is used.
+
+The one script kept, `tools/kt_f_review_killtest.py`, is kill test (b) of the review loop: written on 26/10 at 23:55,
+during the event, on top of `montivo` (it plants three faults in a run's EDL and reviews the render blind N times).
 
 ## Licence
 

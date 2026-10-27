@@ -20,7 +20,9 @@ Viral; Open Weight too: the Baseten and Meta credits arrived 26-27/10.
 - Code, comments, README and commit messages in English. Replies to Billy in Greek with the professional terms in
   English, no em dashes. Billy dictates with Wispr Flow mixing Greek and English.
 - `MODEL_API_KEY` lives in `~/.zshenv`; never print it, never commit it. `.env`, `runs/`, `footage/`, media files and
-  `experiments/results/` are git-ignored and stay out of the repo.
+  `experiments/results/` (the local kill-test results) are git-ignored and stay out of the repo.
+- The pre-kickoff API test scripts (`experiments/`, started 26/10 17:30, four calls before 18:00) were removed from the
+  repo on 27/10 and are disclosed in README "Before the kickoff"; never bring them or code from them back.
 - Spend: keep each evening under $5 and a 150 s run under $0.50. Every call is logged in `runs/<id>/ledger.json`.
 - GitHub pushes to `main` are fine; creating repos, posting publicly or submitting needs Billy's explicit yes.
 - Commit on Billy's go unless he said otherwise in the session; `git` identity is set repo-locally.
@@ -30,7 +32,7 @@ Viral; Open Weight too: the Baseten and Meta credits arrived 26-27/10.
 montivo/           the engine package (config, ledger, run, cli, human; server/ = the UI API + static build; engine/{api,ingest,voice,track,spark,schemas,edl,reframe,
                    render,captions,graphics,image,review}.py)
 tests/             offline tests on recorded Voice and SAM streams (make test)
-experiments/       the 26/10 kill-test scripts (research, not product; results/ ignored)
+tools/             kt_f_review_killtest.py, kill test (b) of the review loop (26/10 23:55, uses montivo)
 docs/notes/        hand-over notes copied from the Claude Code sessions (git-ignored, read them first)
 runs/              run folders (ignored); footage/ local clips (ignored)
 ```
@@ -51,7 +53,7 @@ Run 012 (`--target 45`, fresh API run) verified evening 3 on new Voice output (c
 Evening 4 (26/10 night) done, commit `3bfd99b`: `engine/review.py` (blind Spark review of the cut with a burned-in clock,
 silencedetect and caption-vs-head facts, fix ops -> EDL patches, loop with guards), `montivo review runs/012`,
 `montivo run --review`; a third fact (source audio level at both edges of every cut) on Billy's go: kill test (b) 3 of 3
-in 3 of 3 (`experiments/kt_f_review_killtest.py`, `runs/012-ktb`). Edge pass (27/10, commit `a843346`):
+in 3 of 3 (`tools/kt_f_review_killtest.py`, `runs/012-ktb`). Edge pass (27/10, commit `a843346`):
 `engine/edges.py` tightens every cut edge to the speech in `audio.wav` (in `build_edl`, after word-level review patches,
 `montivo edges RUN` for old folders); loops 76 -> 100 (run 012) and 65 -> 85 (012-ktb). Render polish (27/10, commit
 `1f530a9`): two-pass loudness in `render_audio` (measure, fixed gain + 192 kHz limiter when the peaks need it, loudnorm
