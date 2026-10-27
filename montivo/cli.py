@@ -85,6 +85,8 @@ def main(argv: list[str] | None = None) -> int:
     pl.add_argument("--planner", choices=("spark", "open"), default="open",
                     help="open = Muse Spark Open on Baseten (default, needs BASETEN_API_KEY), spark = muse-spark-1.3")
     pl.add_argument("--target", type=float, default=None, help="runtime target in seconds (default: run.json)")
+    pl.add_argument("--plan-effort", default=None, choices=["low", "medium", "high"],
+                    help="reasoning effort for the plan call (default: low on the open model, the model's own on Spark)")
     pl.add_argument("--review", type=int, default=0, help="review passes after the render (default 0; reviews run on Spark 1.3)")
     pl.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
 
@@ -126,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
             ap.error(f"{args.run_dir} is not a run folder")
         model = OPEN_MODEL if args.planner == "open" else SPARK_MODEL
         print(json.dumps(replan(args.run_dir, "", target_s=args.target, passes=args.review, budget=args.budget,
-                                model=model), indent=2))
+                                model=model, reasoning_effort=args.plan_effort), indent=2))
         return 0
 
     if args.cmd == "speakers":

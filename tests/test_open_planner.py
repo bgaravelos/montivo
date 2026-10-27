@@ -43,6 +43,7 @@ def test_plan_call_goes_to_baseten_as_chat(tmp_path, monkeypatch):
     call = sp.plan("a 40 s cut", "[turn 1 | 0.00-3.00s | speaker A] hello", {"speaker_map": []}, 40.0, words_per_s=2.4)
     assert call.parsed == PLAN and call.status == "completed"
     assert sent["model"] == OPEN_MODEL and sent["max_tokens"] == 16000 and "input" not in sent
+    assert sent["reasoning_effort"] == "low"  # the default effort spends the whole budget on reasoning
     assert sent["messages"][0]["role"] == "user" and "TRANSCRIPT (authoritative)" in sent["messages"][0]["content"]
     fmt = sent["response_format"]
     assert fmt["type"] == "json_schema" and fmt["json_schema"]["strict"] is True and fmt["json_schema"]["name"] == "plan"

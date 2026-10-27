@@ -146,7 +146,7 @@ def target_from(instruction: str) -> float | None:
 
 
 def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s: float | None = None,
-           passes: int = 0, budget: float = 0.15, model: str | None = None) -> dict:
+           passes: int = 0, budget: float = 0.15, model: str | None = None, reasoning_effort: str | None = None) -> dict:
     """Plan again with the instruction added to the brief and the current paper edit for reference, reusing voice,
     watch and the tracks (no ingest, Voice or SAM spend), -> edl_vN on word boundaries with the edge pass, render.
     With no instruction it is a fresh plan from the run's own brief, blind to the current cut (`montivo plan`, the
@@ -180,7 +180,8 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
             shutil.copy2(p, v1)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # the UI's stop button: run the finally below
     try:
-        planned = spark.plan(plan_brief, voice.transcript_text(), watch, target, words_per_s=voice.speech_rate())
+        planned = spark.plan(plan_brief, voice.transcript_text(), watch, target, words_per_s=voice.speech_rate(),
+                             reasoning_effort=reasoning_effort)
     finally:
         for part in ("request", "response"):
             p, v1 = sdir / f"plan_{part}.json", sdir / f"plan_v1_{part}.json"

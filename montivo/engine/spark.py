@@ -53,8 +53,9 @@ class Spark:
                           "messages": [{"role": "user", "content": prompt}],
                           "response_format": {"type": "json_schema", "json_schema": {
                               "name": schema_name or name, "strict": True, "schema": schema}}}
-            if reasoning_effort:
-                body["reasoning_effort"] = reasoning_effort
+            # a reasoning model: at the default effort a 200-token probe spent every token on reasoning and returned
+            # no content (27/10); effort low answered in 0.8 s
+            body["reasoning_effort"] = reasoning_effort or "low"
         else:
             content: list[dict] = [{"type": "input_text", "text": prompt}]
             if file_id:

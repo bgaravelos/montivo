@@ -111,7 +111,8 @@ rewrites the EDL in place (the old one goes to `check/<name>_before_edges.json`)
 `render` or `review` renders it again, and logs every move; a second run moves nothing.
 Open Weight planner: `montivo run ... --planner open` writes the paper edit with Muse Spark Open on Baseten Model APIs
 (`config.OPEN_MODEL`, default `meta-models/muse-spark-open-1026`, `MONTIVO_OPEN_MODEL` / `MONTIVO_OPEN_BASE_URL` override;
-`BASETEN_API_KEY` in the environment, checked before any spend). The plan is the one call that needs no video, so the
+`BASETEN_API_KEY` in the environment, checked before any spend; a reasoning model, so the call asks for effort low
+unless `--plan-effort` says otherwise: at the default effort a short probe spent every token on reasoning). The plan is the one call that needs no video, so the
 same prompt and strict JSON schema go out as an OpenAI-compatible chat completion (`response_format` json_schema),
 the answer is read back in the Responses shape and logged in the ledger like any Spark call; watch and review stay on
 Spark 1.3. `montivo plan runs/001 --planner open` does it on a finished run folder: a fresh plan from the run's own
