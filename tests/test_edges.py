@@ -173,3 +173,33 @@ def test_a_trim_at_one_end_keeps_the_other_end_tight():
     fix = R.Fix(op="trim_span", target="s1", issue=0, severity="major", t_s=0.5, args={"edge": "in", "src_t": 11.0})
     new, log = R.apply_fixes(edl, [fix], WORDS, audio)
     assert new["spans"][0]["word_from"] == 2 and new["spans"][0]["t_out"] == tight_out
+
+
+def test_a_clipped_edge_moves_outward_to_the_next_gap():
+    # speech runs through the out edge (12.0) to 12.25, then 0.15 s of room tone, then the next word
+    audio = SynthAudio([(10.6, 12.25), (12.4, 13.4)])
+    edl = edl_of(span("s1", 0, 0, 3), span("s2", 1, 2, 5))
+    E.tighten_edges(edl, WORDS, audio)
+    s = edl["spans"][0]
+    assert 12.25 < s["t_out"] < 12.4 and s["edges"]["out"]["widened"] is True
+    assert s["edges"]["out"]["db_after"] < -50 and edl["edge_pass"]["widened"] == 1
+    assert E.tighten_edges(edl, WORDS, audio)["moved"] == 0  # the widened edge stays
+    # a clipped start moves earlier the same way
+    audio = SynthAudio([(9.4, 9.6), (9.75, 11.5)])
+    edl = edl_of(span("s1", 0, 0, 3), span("s2", 1, 2, 5))
+    E.tighten_edges(edl, WORDS, audio)
+    assert 9.6 < edl["spans"][0]["t_in"] < 9.75 and edl["spans"][0]["edges"]["in"]["widened"] is True
+
+
+def test_a_clipped_edge_never_widens_into_a_word_another_span_keeps():
+    # s2 keeps w04 (12.0-12.5) and starts after a cut elsewhere in the cut: s1's clipped end may not reach into it
+    audio = SynthAudio([(10.6, 12.25), (12.4, 13.4)])
+    s1, s2 = span("s1", 0, 0, 3), span("s2", 0, 4, 6)
+    edl = edl_of(s2, s1)  # reordered, so the two are not joined
+    E.tighten_edges(edl, WORDS, audio)
+    assert s1["t_out"] == 12.0 and "out" not in s1.get("edges", {})
+    # no quiet stretch within reach: the edge stays
+    audio = SynthAudio([(10.6, 13.0)])
+    edl = edl_of(span("s1", 0, 0, 3), span("s2", 1, 2, 5))
+    E.tighten_edges(edl, WORDS, audio)
+    assert edl["spans"][0]["t_out"] == 12.0

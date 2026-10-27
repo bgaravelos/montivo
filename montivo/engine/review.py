@@ -128,6 +128,12 @@ def caption_face_facts(edl: dict) -> dict:
             "min_clearance_px": least[0] if least else None, "min_clearance_at": least[1] if least else None}
 
 
+def edge_loud_db(audio: "Audio") -> float:
+    """The level over which a cut edge counts as inside speech: EDGE_LOUD_DB, or the clip's own speech threshold (floor
+    + 6 dB) when its room is louder, never above EDGE_LOUD_DB + 4 (a clip with no quiet frames has no usable floor)."""
+    return max(EDGE_LOUD_DB, min(audio.threshold_db(), EDGE_LOUD_DB + 4.0))
+
+
 def cut_edge_levels(edl: dict, audio: "Audio") -> list[dict]:
     """Speech level of the SOURCE audio centred on both edges of every cut (where a kept passage ends, where the next
     begins, and the very end), reported at the cut's time. Between two words the level drops (clean edges on runs 012
@@ -136,6 +142,8 @@ def cut_edge_levels(edl: dict, audio: "Audio") -> list[dict]:
     because a word that ends right at a tight cut is loud just before it without being clipped. Spark does not hear a
     clipped word (kill test b: 0 of 3), so the levels are handed to it as a fact."""
     out = []
+    # a noisy room (run 013: floor -39.6 dB) puts room tone near -34 dB: loud means over its own speech threshold there
+    loud_db = edge_loud_db(audio)
     for t, before, after in cuts(cut_map(edl)):
         if before is None:
             continue  # the start of the first span is not a join
@@ -145,8 +153,9 @@ def cut_edge_levels(edl: dict, audio: "Audio") -> list[dict]:
         if after is not None:
             i = edl["spans"][after.index]["t_in"]
             start_db = audio.level(i - EDGE_HALF_S, i + EDGE_HALF_S)
-        loud = max(end_db, start_db if start_db is not None else -120.0) > EDGE_LOUD_DB
-        out.append({"t": round(t, 2), "end_db": end_db, "start_db": start_db, "end": after is None, "loud": loud})
+        loud = max(end_db, start_db if start_db is not None else -120.0) > loud_db
+        out.append({"t": round(t, 2), "end_db": end_db, "start_db": start_db, "end": after is None, "loud": loud,
+                    "loud_db": loud_db})
     return out
 
 
@@ -179,7 +188,8 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
             loud = [e for e in edges if e["loud"]]
             line = ("3. Speech level of the original recording exactly at each cut, on both sides of the join: "
                     + "; ".join(edge(e) for e in edges)
-                    + f". Between two words the level drops below {EDGE_LOUD_DB:.0f} dB; ")
+                    + f". Between two words the level drops below {edges[0].get('loud_db', EDGE_LOUD_DB):.1f} dB "
+                      "in this recording; ")
             if loud:
                 line += ("above it speech is still going at the cut, so a word is cut off there: "
                          + ", ".join(f"{e['t']:.2f} s" for e in loud) + ".")
@@ -472,7 +482,10 @@ def resolve(issue: dict, k: int, edl: dict, words: Words, cmap: list[CutSpan],
 
     if op == "none":
         return None, "fix_op none"
-    if op in ("drop_span", "swap_hook") and title_s and t < title_s - 0.05 and (op == "drop_span" or p.get("target_t_s", -1) < 0):
+    if op in ("drop_span", "swap_hook") and title_s and t < title_s - 0.05:
+        # an issue inside the card is about the card, whatever line the reviewer wants first (run 013: "first 1.5 s is
+        # silence with a title card", target 27 s, swapped the opener twice and kept the card); a hook still wrong
+        # without the card is asked for again in the next pass
         return mk("drop_title", "title"), ""
     cs = span_at(cmap, t)
     if cs is None:

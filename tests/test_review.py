@@ -116,6 +116,8 @@ def test_title_issue_drops_the_card_and_render_fields_are_cleared():
     assert fix.op == "drop_title"
     fix2, _ = R.resolve(issue(0.0, "swap_hook", target_t_s=2.0), 0, edl, words, R.cut_map(edl))
     assert fix2.op == "drop_title"  # the hook already opens: the card in front is what delays it
+    fix3, _ = R.resolve(issue(0.0, "swap_hook", target_t_s=4.0), 0, edl, words, R.cut_map(edl))
+    assert fix3.op == "drop_title"  # another line wanted first: the card still goes first (run 013 kept it twice)
     new, _ = R.apply_fixes(edl, [fix], words)
     assert new["title_card"] is False and "render" not in new and new["captions"] == []
 

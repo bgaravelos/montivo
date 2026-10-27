@@ -273,6 +273,25 @@ loudnorm figures and the ebur128 measurement of the finished file).
   sentence, "then the four" + "Meta models" is 5 words and "four Meta models" too wide), so both are held 0.4 s and the
   next line starts later ("I'm Billy." 0.18 -> 0.43 s, "do the work" 9.99 -> 10.15 s, still 0.71 and 0.64 s up); the EDL
   word times are clamped inside their line and the held lines carry `held_s`. No line under 0.4 s on either run now.
+- Run 013, a second source (27/10): USGS "Chapter 2: Uranium Miner's Daughter" (public domain, 166 s, 1280x720
+  29.97 fps, a close-up interview in a noisy atrium, a second speaker in the cold open, chapter and end cards, the
+  speaker's name burned in as a lower third). `--target 40 --review`: Voice 3 speakers, 431 words, 3.08 words/s; the plan
+  kept only her, 8 spans, 100% verbatim, 42.3 s, the cards and the other speaker left out. $0.69 for the run, over the
+  $0.50 rule: SAM $0.50 (person 10 fps $0.33, head 5 fps $0.17) for 166 s. First loop 56 -> 54, stop on regression, and
+  it showed three faults Billy's clip never hit: (1) every caption "over the head" (41 of 41): captions and callouts
+  kept clear of the union of every head object, and SAM's head concept also tracked passers-by, so the union covered the
+  frame; now only the head the crop follows counts (the largest head when the crop follows the person). (2) The title
+  card stayed through two reviews that flagged it as a blocker, because the reviewer named a target line and the patcher
+  swapped that line to the front; an issue inside the card now drops the card. (3) Four cuts clipped words (-21.5 to
+  -33.8 dB at the edge): a fast speaker, and Voice ends words early. The edge pass now also widens a clipped edge (40 ms
+  around it over the speech threshold) outward to the first quiet stretch within 0.4 s, never into a word another span
+  keeps: 4 edges, -21.5 -> -40.9, -27.8 -> -37.9, -26.3 -> -40.1, -33.2 -> -36.0 dB. With a -39.6 dB room the absolute
+  -34 dB of the third fact sat inside room tone; an edge is now loud over max(-34, the clip's speech threshold, at most
+  -30). Second loop on the fixed v1: 62 -> drop the card -> 68 -> s6 opens -> 72, max passes, no pass ($0.094); no
+  clipped-word issue in any of the three reviews. Still open: the head box of a speaker with long hair reaches the bottom
+  of the frame, so no caption spot clears it; the fallback now puts the line as low as the bottom UI allows (y 1483,
+  under the chin) instead of on the mouth (y 1300), and the reviewer rates it minor. The source's own lower third is
+  cropped to "EGOS" in 9:16 and the reviewer files it under callouts, where no fix applies. Run total $0.784.
 
 ## Plan
 

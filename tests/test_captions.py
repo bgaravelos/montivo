@@ -186,3 +186,28 @@ def test_overlay_graph_and_loudness_parsers():
     summ = ("Summary:\n\n  Integrated loudness:\n    I:         -14.3 LUFS\n    Threshold: -25.2 LUFS\n\n  Loudness range:\n"
             "    LRA:         3.9 LU\n\n  True peak:\n    Peak:       -1.3 dBFS\n")
     assert _EBU.search(summ).groups() == ("-14.3", "3.9", "-1.3")
+
+
+def test_captions_keep_clear_of_the_head_the_crop_follows(tmp_path):
+    # run 013: SAM's head concept also tracked passers-by; a union of every head object covered the frame and put
+    # every caption over the head. Only the followed head counts (the largest one when the crop follows no head).
+    from montivo.engine.captions import SAFE_BOTTOM
+    words = [{"w": w, "t_start": a, "t_end": b, "turn_id": 2, "i": 71 + k} for k, (w, a, b) in enumerate(BILLY)]
+    edl = {"source": {"width": 1920, "height": 1080, "fps": 30.0},
+           "spans": [{"id": "s6", "turn_id": 2, "word_from": 71, "word_to": 82, "t_in": 117.9, "t_out": 124.06,
+                      "duration": 6.16, "callout": ""}]}
+    seg = SimpleNamespace(t_in=117.9, t_out=124.067, duration=6.1667, fps=30.0, span_ids=["s6"], frames=185)
+    path = SimpleNamespace(xs=[640] * 185, crop_w=608, crop_h=1080, track_id="0")
+    ts = [117.0 + 0.5 * k for k in range(17)]  # interp_box needs records closer than 1.2 s
+    keep = [{"t": t, "box": [400, 40, 540, 250]} for t in ts]
+    stray = [{"t": t, "box": [0, 0, 960, 540]} for t in ts]  # bigger than the speaker
+    head = {"source": {"width": 960, "height": 540}, "objects": {"0": keep, "1": stray}}
+    fields, _ = build_overlays(edl, words, [seg], [path], head, None, tmp_path / "a", callouts=False,
+                               reframe_concept="head")
+    assert fields["captions"] and all(c["head_box"] and not c["over_face"] for c in fields["captions"])
+    # following the person concept, the largest head counts: here the stray box, so no clear spot is left and the
+    # line goes as low as the bottom UI allows instead of onto the mouth at the default height
+    fields, _ = build_overlays(edl, words, [seg], [path], head, None, tmp_path / "b", callouts=False,
+                               reframe_concept="person")
+    c = fields["captions"][0]
+    assert c["placement"] == "over_head" and c["box"][1] == SAFE_BOTTOM - c["box"][3] > CAPTION_TOP

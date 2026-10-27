@@ -295,9 +295,10 @@ def edges_run(run_dir: Path, edl_path: Path | None = None, dry_run: bool = False
     before = edl["runtime_s"]
     summary = tighten_edges(edl, words, audio)
     for m in summary["moves"]:
-        log(f"edges: {m['span']} {m['edge']:3s} {m['from']:8.3f} -> {m['to']:8.3f} (speech {m['speech']:.3f}"
+        why = "clipped, widened to the gap" if m["widened"] else f"speech {m['speech']:.3f}"
+        log(f"edges: {m['span']} {m['edge']:3s} {m['from']:8.3f} -> {m['to']:8.3f} ({why}"
             f"{', fragment skipped' if m['fragment'] else ''}; {m['db_before']:.1f} -> {m['db_after']:.1f} dB)")
-    log(f"edges: {summary['moved']} edges moved, {summary['removed_s']} s removed, runtime {before} -> {edl['runtime_s']} s"
+    log(f"edges: {summary['moved']} edges moved ({summary['widened']} widened), runtime {before} -> {edl['runtime_s']} s"
         + (" (dry run, nothing written)" if dry_run else f" -> {edl_path}"))
     if not dry_run and summary["moved"]:
         backup = run_dir / "check" / f"{edl_path.stem}_before_edges.json"

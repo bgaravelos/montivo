@@ -10,6 +10,10 @@ noise floor). It is deterministic, costs nothing and only ever tightens: an edge
 its first or last word by more than Voice's slop, never past the middle of the span, so it cannot reach a word another
 span keeps. Spans the render joins into one continuous segment are never split.
 
+The other direction: an edge with speech still going at it (Voice ended the last word early or began the first one
+late, a fast speaker in run 013 at 3.08 words/s: four cuts clipped at -21 to -34 dB) moves OUTWARD to the first quiet
+stretch within WIDEN_S, never into a word another span keeps.
+
 One case moves an edge past sound: a short fragment of the neighbouring word that is still going at the edge and is
 followed (in edge) or preceded (out edge) by a real pause. Run 012's second take opened on the end of "again" (93.98 to
 94.25 s), then 1.05 s of silence before "this is the part that matters"; the fragment goes with the pause.
@@ -35,6 +39,7 @@ SLOP_S = 0.6  # Voice word edges were measured up to 0.4 s off on run 012 ("this
 FRAGMENT_MAX_S = 0.35  # a neighbour's sound still going at the edge, at most this long inside the span ...
 FRAGMENT_GAP_S = 0.30  # ... and separated from the span's own speech by a pause at least this long
 MIN_MOVE_S = 0.03  # smaller moves are left alone (a frame at 30 fps)
+WIDEN_S = 0.4  # a clipped edge looks this far outward for the gap after (before) the word it cuts
 JOIN_GAP_S = 0.05  # render.CONTIGUOUS_GAP_S: spans of one turn closer than this render as one segment
 
 
@@ -170,12 +175,43 @@ def offset(span: dict, words: Words, audio: Audio, bound: float | None = None) -
     return runs[-1][1], skipped
 
 
+def widen(span: dict, words: Words, edge: str, audio: Audio, blocked: set[int]) -> float | None:
+    """A clipped edge (the 40 ms around it over the speech threshold): the quietest point of the first quiet stretch
+    (two or more 40 ms windows under the threshold, 10 ms apart) within WIDEN_S outward, stopping at the first word
+    another span keeps. None when the edge is not clipped or no quiet stretch is in reach."""
+    tw = words.turn(span["turn_id"])
+    thr = audio.threshold_db()
+    t = span["t_out"] if edge == "out" else span["t_in"]
+    if audio.level(t - 0.02, t + 0.02) <= thr:
+        return None
+    if edge == "out":
+        stop = min([w["t_start"] for w in tw[span["word_to"] + 1:] if w["i"] in blocked], default=math.inf)
+        xs = [round(t + k * FRAME_S, 3) for k in range(1, int(round(WIDEN_S / FRAME_S)) + 1)]
+        xs = [x for x in xs if x <= stop - 0.02]
+    else:
+        stop = max([w["t_end"] for w in tw[:span["word_from"]] if w["i"] in blocked], default=-math.inf)
+        xs = [round(t - k * FRAME_S, 3) for k in range(1, int(round(WIDEN_S / FRAME_S)) + 1)]
+        xs = [x for x in xs if x >= stop + 0.02]
+    quiet: list[tuple[float, float]] = []
+    for x in xs:  # walking outward from the edge
+        db = audio.level(x - 0.02, x + 0.02)
+        if db <= thr:
+            quiet.append((db, x))
+        elif len(quiet) >= 2:
+            break
+        else:
+            quiet = []
+    return min(quiet)[1] if len(quiet) >= 2 else None
+
+
 def tighten_edge(span: dict, words: Words, edge: str, audio: Audio, tail: float = TAIL_S,
-                 bound: float | None = None) -> dict | None:
-    """Move one edge of the span to the speech onset - LEAD_S (in) or the speech offset + tail (out), only inward and
-    never past `bound` (the middle of the segment the span opens or closes). Returns the record, None when it stays."""
+                 bound: float | None = None, blocked: set[int] | None = None) -> dict | None:
+    """Move one edge of the span to the speech onset - LEAD_S (in) or the speech offset + tail (out), inward and never
+    past `bound` (the middle of the segment the span opens or closes); a clipped edge instead moves outward to the
+    first quiet stretch (widen). Returns the record, None when the edge stays."""
     key = "t_in" if edge == "in" else "t_out"
     before = span[key]
+    widened = False
     if edge == "in":
         at, frag = onset(span, words, audio, bound)
         new = None if at is None else round(max(before, at - LEAD_S), 3)
@@ -184,12 +220,16 @@ def tighten_edge(span: dict, words: Words, edge: str, audio: Audio, tail: float 
         at, frag = offset(span, words, audio, bound)
         new = None if at is None else round(min(before, at + tail), 3)
         moved = new is not None and before - new >= MIN_MOVE_S
+    if not moved and at is None and not frag:
+        x = widen(span, words, edge, audio, blocked or set())
+        new, widened = x, x is not None
+        moved = widened and abs(x - before) >= MIN_MOVE_S
     if not moved:
         return None
     span[key] = new
     span["duration"] = round(span["t_out"] - span["t_in"], 3)
     span.setdefault("edge_tuned", {})[edge] = new
-    rec = {"from": round(before, 3), "to": new, "speech": at, "fragment": frag,
+    rec = {"from": round(before, 3), "to": new, "speech": at, "fragment": frag, "widened": widened,
            "db_before": audio.level(before - 0.02, before + 0.02), "db_after": audio.level(new - 0.02, new + 0.02)}
     span.setdefault("edges", {})[edge] = rec
     return rec
@@ -212,8 +252,8 @@ def cut_edges(spans: list[dict]) -> list[tuple[int, str, float]]:
 
 
 def tighten_edges(edl: dict, words: Words, audio: Audio, only: set[tuple[str, str]] | None = None) -> dict:
-    """Tighten every cut edge of the EDL in place (or only the (span id, edge) pairs in `only`); updates runtime_s and
-    writes the summary to edl["edge_pass"]. Running it again moves nothing."""
+    """Tighten every cut edge of the EDL in place (or only the (span id, edge) pairs in `only`), widen the clipped
+    ones; updates runtime_s and writes the summary to edl["edge_pass"]. Running it again moves nothing."""
     spans = edl["spans"]
     moves: list[dict] = []
     for k, edge, bound in cut_edges(spans):
@@ -221,13 +261,16 @@ def tighten_edges(edl: dict, words: Words, audio: Audio, only: set[tuple[str, st
         if only is not None and (s["id"], edge) not in only:
             continue
         tail = END_TAIL_S if edge == "out" and k == len(spans) - 1 else TAIL_S
-        rec = tighten_edge(s, words, edge, audio, tail=tail, bound=bound)
+        blocked = {i for o in spans if o is not s and o["turn_id"] == s["turn_id"]
+                   for i in range(o["word_from"], o["word_to"] + 1)}
+        rec = tighten_edge(s, words, edge, audio, tail=tail, bound=bound, blocked=blocked)
         if rec:
             moves.append({"span": s["id"], "edge": edge, **rec})
     edl["runtime_s"] = round(sum(s["t_out"] - s["t_in"] for s in spans), 2)
     removed = round(sum(abs(m["to"] - m["from"]) for m in moves), 2)
     summary = {"floor_db": audio.floor_db(), "threshold_db": audio.threshold_db(), "lead_s": LEAD_S, "tail_s": TAIL_S,
-               "end_tail_s": END_TAIL_S, "moved": len(moves), "removed_s": removed, "moves": moves}
+               "end_tail_s": END_TAIL_S, "moved": len(moves), "widened": sum(m["widened"] for m in moves),
+               "removed_s": removed, "moves": moves}
     if only is None:
         edl["edge_pass"] = summary
     return summary

@@ -305,7 +305,8 @@ def overlaps(a: list[float], b: list[float] | None, margin: float = 0.0) -> bool
 
 def place_caption(w: int, h: int, head: list[float] | None, top: int = CAPTION_TOP) -> tuple[int, str]:
     """Top y of a centred caption box: the lower-third default unless it touches the head (plus margin); then just
-    below the head when that still clears the bottom UI, else just above it, else the default flagged as overlap."""
+    below the head when that still clears the bottom UI, else just above it, else as low as the bottom UI allows,
+    flagged as overlap (a face that fills the frame, run 013: the mouth sits above the default, the chin at it)."""
     x0 = (OUT_W - w) / 2
 
     def clear(y: float) -> bool:
@@ -319,7 +320,7 @@ def place_caption(w: int, h: int, head: list[float] | None, top: int = CAPTION_T
     above = int(head[1] - HEAD_MARGIN - h - 1)
     if above >= SAFE_TOP and clear(above):
         return above, "above_head"
-    return top, "over_head"
+    return max(top, SAFE_BOTTOM - h), "over_head"
 
 
 def place_callout(w: int, h: int, person: list[float] | None, head: list[float] | None,
@@ -388,10 +389,13 @@ class Overlay:
 def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, head_track: dict | None,
                    person_track: dict | None, out_dir: Path, title_s: float = 0.0, captions: bool = True,
                    callouts: bool = True, glossary: dict[str, str] | None = None,
-                   style: CaptionStyle | None = None) -> tuple[dict, dict[int, list[Overlay]]]:
+                   style: CaptionStyle | None = None, reframe_concept: str | None = None) -> tuple[dict, dict[int, list[Overlay]]]:
     """Caption lines and callouts for the rendered segments.
 
     `segments` are render.Segment (frame-aligned), `paths` the reframe SegmentPath of each (crop x per source frame).
+    Captions and callouts keep clear of one head per segment: the head the crop follows (`reframe_concept` "head" and
+    the path's track_id), else the largest head. A union of every head object put all 41 lines of run 013 "over the
+    head": SAM also tracked the passers-by in the background, and their union covered the whole frame.
     Returns the EDL fields ({"captions": [...], "callouts": [...], "caption_corrections": [...], ...}) and the PNG
     overlays per segment index in segment-local time.
     """
@@ -424,6 +428,18 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
         for k in range(k0, k1 + 1, 3):
             out += [to_output(bx, path.xs[k], path.crop_w, path.crop_h) for bx in pick(track, seg.t_in + k / seg.fps)]
         return union(out)
+
+    def subject_head(i: int):
+        """Box picker for the head segment i keeps clear of (see the docstring), in the union_out `pick` form."""
+        tid = getattr(paths[i], "track_id", None)
+        if reframe_concept == "head" and head_src and tid in head_src["objects"]:
+            recs = head_src["objects"][tid]
+
+            def followed(track, t):
+                b = interp_box(recs, t)
+                return [b] if b is not None else largest_at(track, t)
+            return followed
+        return largest_at
 
     def cut_t(i: int, src: float) -> float:
         seg = segments[i]
@@ -472,7 +488,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                 la, lb = ln.t_in - seg_cut[i], ln.t_out - seg_cut[i]
                 if lb - la <= 0:
                     continue
-                head = union_out(head_src, i, la, lb)
+                head = union_out(head_src, i, la, lb, subject_head(i))
                 texts = [w.w for w in ln.words]
                 hl = [norm(w).replace("'s", "") in HIGHLIGHT for w in texts]
                 w_px, h_px = line_width(texts, style), style.height()
@@ -515,7 +531,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
             if b - a < 0.5:
                 continue
             person = clamp_frame(union_out(person_src, i, a, b, largest_at))
-            head = union_out(head_src, i, a, b)
+            head = union_out(head_src, i, a, b, subject_head(i))
             avoid = [r for (ra, rb, r) in caption_rects[i] if ra < b and rb > a]
             w_px, h_px = callout_size(text)
             x, y, where = place_callout(w_px, h_px, person, head, avoid)
