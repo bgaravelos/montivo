@@ -105,9 +105,16 @@ The open planner labels every body span `payoff` (the hook A/B would take s2 as 
 Fourth review fact (27/10, $0.031): the caption timeline (`review.caption_timeline`, every line's text and cut times,
 `facts.caption_timeline` in review_vN.json), because Spark samples about 1 fps and flagged cut_v3's 0.4 s "Hi." as
 missing. Re-review of cut_v3 (`runs/012-open/review_v3.json`, the old one in `review_v3_no_timeline.json`): 88, pass,
-no "Hi" issue; two new minor captions_match_speech: Voice wrote "cuts lands" and "vertical crops" (said singular?).
-Next: the NASA clip (first real check of the speaker mapping), `montivo render runs/012 --punch --out cut_v2_punch.mp4` (first look at the punch-ins, then the switch and Remove in
-`make ui` on a copy of 012), `montivo hook runs/012` (the first real hook A/B, about $0.03 with v2's review reused). The evening-by-evening table is in README.md.
+no "Hi" issue; two new minor captions_match_speech ("cuts lands", "vertical crops") are reviewer false positives:
+Billy confirmed he said the plurals and Voice heard them right, so the captions stay verbatim.
+Punch-ins and hook A/B, first real runs (27/10, `runs/012-open`, $0.066): `python -m montivo.human punch --on --from 3`
+-> v4 with 9 punch-ins (7 emphasis x1.12 incl. "Billy.", "four", "render", 2 jump cuts x1.06); frames checked: head
+stays in frame, captions and callouts do not zoom; review v4 88, pass, same as v3 (subject_framed 10). `montivo hook`
+(A = v4): challenger s2 "for the Meta Hackathon we are building Montivo" as the planner's payoff cold open -> v5 81
+(hook 3, major swap_hook back to "Hi") vs v4 88 (hook 10): v4 kept, margin 7, not decisive. With the timeline fact the
+reviewer now calls the 0.4 s "Hi." and "Meta models" lines too short to read (minor) instead of missing.
+Next: the NASA clip (first real check of the speaker mapping); the punch-in switch and Remove in `make ui` on
+`runs/012-open`. The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
