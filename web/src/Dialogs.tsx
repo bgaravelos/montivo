@@ -61,6 +61,7 @@ const mb = (b: number | null | undefined) => (b == null ? "–" : `${(b / 1e6).t
 export function ExportDialog({ id, versions, initial, onClose }: { id: string; versions: Version[]; initial: number | null; onClose: () => void }) {
   const cuts = versions.filter((x) => x.cut);
   const [n, setN] = useState(initial ?? cuts.at(-1)?.n ?? 1);
+  const [preset, setPreset] = useState<"full" | "720">("full");
   const v = cuts.find((x) => x.n === n);
   return (
     <Modal title="Export" onClose={onClose}>
@@ -72,12 +73,19 @@ export function ExportDialog({ id, versions, initial, onClose }: { id: string; v
             ))}
           </select>
         </label>
+        <label className="field">Preset
+          <select value={preset} onChange={(e) => setPreset(e.target.value as "full" | "720")}>
+            <option value="full">Reels · TikTok · Shorts: 1080 × 1920, as rendered</option>
+            <option value="720">Smaller: 720 × 1280 for messaging and review links</option>
+          </select>
+        </label>
         {v && (
           <dl className="props export-props">
-            <dt>Format</dt><dd>MP4 · H.264 + AAC · 1080 × 1920 (9:16)</dd>
+            <dt>Format</dt><dd>{preset === "full" ? "MP4 · H.264 + AAC · 1080 × 1920 (9:16)" : "MP4 · H.264 CRF 26 + AAC 128k · 720 × 1280 (9:16), made on download"}</dd>
             <dt>Duration</dt><dd className="mono">{tc(v.duration_s ?? v.runtime_s, 2)}</dd>
             <dt>Loudness</dt><dd>{v.loudness ? <>{v.loudness.integrated_lufs} LUFS · peak {v.loudness.true_peak_dbtp} dBTP</> : "–"}</dd>
-            <dt>Size</dt><dd>{mb(v.bytes)}</dd>
+            {/* the 720p copy of run 015's v4: 2.9 MB from 26.7 MB */}
+            <dt>Size</dt><dd>{preset === "full" ? mb(v.bytes) : `about ${mb(v.bytes && v.bytes * 0.11)}`}</dd>
             <dt>Review</dt><dd>{v.review ? `${v.review.overall}/100${v.review.pass ? ", passes" : ""}` : "not reviewed"}</dd>
           </dl>
         )}
@@ -85,7 +93,7 @@ export function ExportDialog({ id, versions, initial, onClose }: { id: string; v
       <div className="modal-foot">
         <span className="grow" />
         <button className="btn quiet" onClick={onClose}>Cancel</button>
-        {v && <a className="btn" href={`/api/runs/${id}/export?v=${v.n}`} download onClick={() => window.setTimeout(onClose, 300)}><Icon name="export" /> Download</a>}
+        {v && <a className="btn" href={`/api/runs/${id}/export?v=${v.n}${preset === "720" ? "&preset=720" : ""}`} download onClick={() => window.setTimeout(onClose, 300)}><Icon name="export" /> Download</a>}
       </div>
     </Modal>
   );
@@ -117,6 +125,7 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
     ["Space", "Play / pause"], ["J · K · L", "Shuttle back · stop · forward (press again for 2×, 4×)"],
     ["← →", "One frame back / forward"], ["⇧ ← →", "One second back / forward"], ["⌫ / Delete", "Delete the selected clip"],
     ["⌘Z · ⇧⌘Z", "Previous version · next version"], ["⌘+ · ⌘−", "Zoom the timeline"], ["Esc", "Clear the selection"],
+    ["N · ⇧N", "Next · previous reviewer issue"], ["G", "Safe-area guides: Reels, TikTok, Shorts, off"],
   ];
   return (
     <Modal title="Keyboard shortcuts" onClose={onClose}>

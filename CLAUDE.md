@@ -27,6 +27,8 @@ Viral; Open Weight too: the Baseten and Meta credits arrived 26-27/10.
   OPEN with one line stating what was pre-existing (the name and idea, the pre-kickoff API tests) and what was built
   this week.
 - Spend: keep each evening under $5 and a 150 s run under $0.50. Every call is logged in `runs/<id>/ledger.json`.
+  Experiment evenings (reviewer benchmark, Open Weight tests; Billy's go 27/10, paid from the free credits: Meta about
+  $146, Baseten $100) may go up to $15; keep about $80 of the Meta credits for the hosted demo.
 - GitHub pushes to `main` are fine; creating repos, posting publicly or submitting needs Billy's explicit yes.
 - Commit on Billy's go unless he said otherwise in the session; `git` identity is set repo-locally.
 
@@ -216,6 +218,13 @@ filter all / reviewed / passed (kept in localStorage), search over name, run, fo
 `/api/runs/{id}/archive` moves the folder and its side logs (`runs/<id>.*log`) to `runs/_archive/` (409 while a job
 runs or on a name clash), GET `/api/archive`, POST `/api/archive/{id}/restore`; Undo in the toast, Restore under
 "Archived". Never deletes. None of Billy's runs archived: checked keyless on a throwaway copy (removed).
+UI batch A (backlog 6, 8, 12; 27/10 evening, $0, not committed yet): New project shows the clip (GET
+`/api/footage/{name}`, `duration_s` from ffprobe cached on mtime + size), prices and times the run from its length
+(`COST` run_fixed / run_per_s / run_wall_* / review_loop / hook_ab from runs 014 and 015), four brief presets,
+punch-ins and hook A/B switches (`montivo run --hook-ab`, needs `--review`: `hook_ab` on the loop's best after the
+loop, in run.py); safe-area guides on the viewer (`web/src/SafeArea.tsx`, Reels 14 / 35 / 6 %, TikTok and Shorts in px,
+approximate, G); N / Shift+N to the next / previous reviewer issue; "opens here" vs "loop best" in Versions; Export
+preset 720 (`media.small_copy`, 015 v4 2.9 MB from 26.7 MB). The score chip already opened the best review.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

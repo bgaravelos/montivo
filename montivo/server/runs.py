@@ -173,10 +173,11 @@ def progress(lines: list[dict], label: str | None = None, ledger: dict | None = 
     reviews, finished, error = 0, False, False
 
     def begin(stage: str, title: str, t: float, **kw) -> dict:
-        nonlocal cur
+        nonlocal cur, finished
         if cur and (cur["stage"], cur["title"]) == (stage, title):
             cur.update(kw)
             return cur
+        finished = False  # a step after the review loop (the run's hook A/B): the job goes on
         if cur:
             steps.append({"stage": cur["stage"], "title": cur["title"], "seconds": round(cur.get("t1", t) - cur["t0"], 1)})
         cur = {"stage": stage, "title": title, "t0": t, "detail": None, "floor": 0.0, "ceil": 0.95,

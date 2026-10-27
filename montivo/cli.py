@@ -56,6 +56,8 @@ def main(argv: list[str] | None = None) -> int:
                                                         "across jump cuts (kept by the review loop and later edits)")
     r.add_argument("--review", action="store_true",
                    help="after cut_v1: blind Spark review -> fix ops -> edl_v2 -> cut_v2 ..., up to --review-passes reviews")
+    r.add_argument("--hook-ab", action="store_true",
+                   help="with --review: after the loop, a hook A/B on its best version (one or two more reviews, $0.10 cap)")
     r.add_argument("--review-passes", type=int, default=3, help="max reviews in the loop (default 3)")
     r.add_argument("--review-budget", type=float, default=0.30, help="max dollars for the loop's review calls (default 0.30)")
 
@@ -202,6 +204,8 @@ def main(argv: list[str] | None = None) -> int:
         from .run import RunOptions, run
         if not args.footage.is_file():
             ap.error(f"{args.footage} is not a file")
+        if args.hook_ab and not args.review:
+            ap.error("--hook-ab compares two reviewed cuts: add --review")
         if args.replan and not args.resume:
             ap.error("--replan goes with --resume (a run without --resume always plans)")
         if args.planner == "open" and args.plan_with_video:
@@ -215,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
                           skip_track=args.no_track, resume=args.resume, replan=args.replan, render=not args.no_render, hflip=args.hflip,
                           title=not args.no_title, captions=not args.no_captions, review=args.review,
                           review_passes=args.review_passes, review_budget=args.review_budget, punch=args.punch,
+                          hook_ab=args.hook_ab,
                           model=args.model or RunOptions.__dataclass_fields__["model"].default,
                           planner_model=OPEN_MODEL if args.planner == "open" else None)
         summary = run(opts)

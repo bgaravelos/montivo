@@ -42,6 +42,20 @@ def filmstrip(src: Path, out: Path) -> Path:
         return out
 
 
+def small_copy(src: Path, out: Path) -> Path:
+    """A 720x1280 copy of a cut (H.264 CRF 26, AAC 128k, faststart), redone only when the cut is newer."""
+    with _lock(out):
+        if fresh(out, src):
+            return out
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_suffix(".tmp.mp4")
+        subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(src), "-vf", "scale=720:1280",
+                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-c:a", "aac", "-b:a", "128k",
+                        "-movflags", "+faststart", str(tmp)], capture_output=True, check=True)
+        tmp.replace(out)
+        return out
+
+
 def probe_duration(src: Path) -> float:
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(src)],
                        capture_output=True, text=True)

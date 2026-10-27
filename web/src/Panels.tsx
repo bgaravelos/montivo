@@ -187,8 +187,9 @@ export function TextPanel({ state, v, t, onSeek }: { state: RunState; v: Version
   );
 }
 
-export function VersionsPanel({ id, state, versions, sel, onPick, go, replay }: {
+export function VersionsPanel({ id, state, versions, sel, onPick, go, replay, opening }: {
   id: string; state: RunState; versions: Version[]; sel: number | null; onPick: (n: number) => void; go: (h: string) => void; replay: number;
+  opening: number | null; // the version the editor opens on (a human edit or the hook A/B's pick, else the loop's best)
 }) {
   const v = versions.find((x) => x.n === sel);
   const parent = v ? parentOf(v, state.versions) : undefined;
@@ -205,7 +206,8 @@ export function VersionsPanel({ id, state, versions, sel, onPick, go, replay }: 
               <button key={x.n} className={`ver ${x.n === sel ? "on" : ""} ${originKind(x)}`} onClick={() => onPick(x.n)}>
                 <span className="ver-top">
                   <span className="ver-name">Version {x.n}</span>
-                  {x.n === best && <span className="ver-best">best</span>}
+                  {x.n === opening && <span className="ver-kept" title="The project opens here: the newest version a human edit made or the hook A/B kept, else the review loop's best">opens here</span>}
+                  {x.n === best && <span className="ver-best" title="The review loop's highest blind score">loop best</span>}
                   <span className="grow" />
                   {x.review ? <span className={`ver-score ${x.review.pass ? "pass" : ""}`}>{x.review.pass && <Icon name="check" size={12} />}{x.review.overall}</span>
                     : <span className="ver-score none" title="not reviewed">–</span>}

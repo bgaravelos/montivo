@@ -51,6 +51,7 @@ class RunOptions:
     review_passes: int = 3
     review_budget: float = 0.30
     punch: bool = False  # punch-in zooms on stressed words and jump cuts (engine/punch.py)
+    hook_ab: bool = False  # after the review loop, a hook A/B on its best version (engine/hook.py, one or two reviews)
 
 
 class RunLog:
@@ -329,6 +330,16 @@ def run(opts: RunOptions) -> dict:
         except Exception:
             errors.append(("review", traceback.format_exc()))
             log(f"ERROR in review loop:\n{errors[-1][1]}")
+        if opts.hook_ab and loop and loop.get("best"):
+            from .engine.hook import hook_ab
+            try:
+                loop["hook_ab"] = hook_ab(out, out / f"edl_v{loop['best']['version']}.json", ledger=ledger, log=log,
+                                          spark=spark, render_fn=lambda ep, name: render_run(
+                                              out, edl_path=ep, out_name=name, title=opts.title, captions=opts.captions,
+                                              ledger=ledger, log=log))
+            except Exception:
+                errors.append(("hook a/b", traceback.format_exc()))
+                log(f"ERROR in hook A/B:\n{errors[-1][1]}")
 
     summary = {
         "out": str(out), "runtime_s": edl["runtime_s"], "spans": len(edl["spans"]), "verbatim_rate": edl["verbatim_rate"],

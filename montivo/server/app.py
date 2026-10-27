@@ -39,7 +39,12 @@ PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 # Spark 1.3 $0.050 in 35 s, Muse Spark Open $0.012 in 6.8 s). The *_s times are the progress bar's expectation when the
 # run's own ledger has no earlier call of that stage (run 015: review prep 8.3 s, Spark review 26 s, title card 10.3 s,
 # render 20.3 s for 1161 frames)
-COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_per_s": 0.004,
+# A new run's cost and wall time from the footage length (5 fps SAM, before any review): run 014, 120 s, $0.36 in
+# 169 s; run 015, 69 s, $0.23 in about 130 s, so about $0.045 + $0.0026 per footage second and 60 s + 0.9 s per second;
+# the review loop adds about two reviews and a render (run 015: $0.07, 85 s)
+COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_fixed": 0.045,
+        "run_per_s": 0.0026, "run_wall_fixed_s": 60, "run_wall_per_s": 0.9, "review_loop": 0.07, "review_loop_s": 85,
+        "hook_ab": 0.04,
         "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175}
 
 
@@ -290,10 +295,19 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(500, "no audio stream in this cut")
 
     @app.get("/api/runs/{run_id}/export")
-    def export(run_id: str, v: int):
-        """cut_vN.mp4 as a download named after the run and version."""
-        _, src = cut_of(run_id, v)
-        return FileResponse(src, media_type="video/mp4", filename=f"montivo-{run_id}-v{v}.mp4")
+    def export(run_id: str, v: int, preset: str = "full"):
+        """cut_vN.mp4 as a download named after the run and version; preset=720 a 720x1280 copy for messaging and
+        review links (H.264 CRF 26, AAC 128k, made once into ui/cache/)."""
+        d, src = cut_of(run_id, v)
+        if preset == "full":
+            return FileResponse(src, media_type="video/mp4", filename=f"montivo-{run_id}-v{v}.mp4")
+        if preset != "720":
+            raise HTTPException(400, "preset: full or 720")
+        try:
+            out = media.small_copy(src, d / "ui" / "cache" / f"export_v{v}_720.mp4")
+        except subprocess.CalledProcessError:
+            raise HTTPException(500, "the 720p copy failed")
+        return FileResponse(out, media_type="video/mp4", filename=f"montivo-{run_id}-v{v}-720p.mp4")
 
     @app.get("/api/runs/{run_id}/log")
     def log(run_id: str, replay: bool = False):
@@ -412,12 +426,32 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(409, "Muse Spark Open plans on Baseten: set BASETEN_API_KEY and restart montivo serve")
         return OPEN_MODEL
 
+    durations: dict[str, tuple[tuple[int, int], float]] = {}
+
+    def footage_duration(p: Path) -> float | None:
+        """ffprobe's duration, kept until the file changes (the New project form shows it and prices the run by it)."""
+        stt = p.stat()
+        key = (stt.st_mtime_ns, stt.st_size)
+        hit = durations.get(p.name)
+        if not hit or hit[0] != key:
+            hit = durations[p.name] = (key, media.probe_duration(p))
+        return round(hit[1], 1) or None
+
     @app.get("/api/footage")
     def footage():
         st.footage.mkdir(exist_ok=True)
-        files = [{"path": f"footage/{p.name}", "name": p.name, "mb": round(p.stat().st_size / 1e6, 1)}
+        files = [{"path": f"footage/{p.name}", "name": p.name, "mb": round(p.stat().st_size / 1e6, 1),
+                  "duration_s": footage_duration(p)}
                  for p in sorted(st.footage.iterdir()) if p.suffix.lower() in VIDEO_EXT]
         return {"files": files}
+
+    @app.get("/api/footage/{name}")
+    def footage_file(name: str):
+        """A clip in footage/ for the New project preview (FileResponse answers Range requests)."""
+        p = st.footage / name
+        if not SAFE_NAME.match(name) or p.suffix.lower() not in VIDEO_EXT or not p.is_file():
+            raise HTTPException(404, "no such clip in footage/")
+        return FileResponse(p)
 
     @app.put("/api/footage/{name}")
     async def upload(name: str, request: Request):
@@ -451,6 +485,10 @@ def create_app(root: Path) -> FastAPI:
             args.append("--hflip")
         if b.get("review", True):
             args.append("--review")
+            if b.get("hook_ab"):
+                args.append("--hook-ab")
+        if b.get("punch"):
+            args.append("--punch")
         if open_planner:
             args += ["--planner", "open"]
         (st.runs / rid).mkdir(parents=True, exist_ok=True)

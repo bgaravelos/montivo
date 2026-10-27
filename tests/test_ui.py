@@ -304,3 +304,63 @@ def test_archive_moves_and_restores(tmp_path):
     assert (d / "edl_v2.json").is_file() and (tmp_path / "runs" / "r1.stdout.log").is_file()
     assert c.get("/api/archive").json()["runs"] == []
     assert c.post("/api/archive/.r1/restore").status_code == 404  # not a run folder name
+
+
+# ------------------------------------------------------------------- New project form, export presets
+
+def _clip(path, size="1080x1920", seconds=1.0):
+    import subprocess
+    subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc=size={size}:rate=30:duration={seconds}",
+                    "-f", "lavfi", "-i", f"sine=frequency=440:duration={seconds}", "-shortest", "-c:v", "libx264",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", str(path)], check=True)
+
+
+def test_new_project_form_reads_the_clip_and_passes_the_toggles(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import montivo.server.app as A
+    (tmp_path / "footage").mkdir()
+    _clip(tmp_path / "footage" / "c.mp4", size="320x240", seconds=2.0)
+    c = TestClient(A.create_app(tmp_path))
+    f = c.get("/api/footage").json()["files"][0]
+    assert f["name"] == "c.mp4" and f["duration_s"] == pytest.approx(2.0, abs=0.1)
+    assert c.get("/api/footage/c.mp4").status_code == 200 and c.get("/api/footage/x.mp4").status_code == 404
+    assert c.get("/api/footage/..%2Frun.json").status_code == 404
+    seen = {}
+    monkeypatch.setattr(A, "start_job", lambda st, rid, kind, label, args, chat=None: seen.setdefault("args", args) and
+                        A.Job(id="j", run=rid, kind=kind, label=label, cmd=args))
+    monkeypatch.setenv("MODEL_API_KEY", "test")
+    body = {"footage": "footage/c.mp4", "brief": "b", "id": "n1", "punch": True, "hook_ab": True}
+    assert c.post("/api/runs", json=body).status_code == 200
+    assert "--punch" in seen["args"] and "--review" in seen["args"] and "--hook-ab" in seen["args"]
+    seen.clear()
+    assert c.post("/api/runs", json={**body, "id": "n2", "review": False}).status_code == 200
+    assert "--hook-ab" not in seen["args"] and "--review" not in seen["args"]  # the A/B needs reviewed cuts
+
+
+def test_export_preset_720(tmp_path):
+    import subprocess
+
+    from fastapi.testclient import TestClient
+
+    from montivo.server.app import create_app
+    d = _run_folder(tmp_path)
+    _clip(d / "cut_v1.mp4")
+    c = TestClient(create_app(tmp_path))
+    r = c.get("/api/runs/r1/export?v=1&preset=720")
+    assert r.status_code == 200 and "720p" in r.headers["content-disposition"]
+    out = d / "ui" / "cache" / "export_v1_720.mp4"
+    dims = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+                           "-of", "csv=p=0", str(out)], capture_output=True, text=True).stdout.strip()
+    assert dims == "720,1280"
+    assert c.get("/api/runs/r1/export?v=1&preset=4k").status_code == 400
+    assert c.get("/api/runs/r1/export?v=1").headers["content-disposition"].endswith('-v1.mp4"')
+
+
+def test_run_hook_ab_needs_review(tmp_path, capsys):
+    from montivo.cli import main
+    clip = tmp_path / "x.mp4"
+    clip.write_bytes(b"")
+    with pytest.raises(SystemExit):
+        main(["run", str(clip), "--brief", "b", "--hook-ab"])
+    assert "--hook-ab compares two reviewed cuts" in capsys.readouterr().err

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, dur, fileUrl, usd, useRun } from "./api";
+import { api, dur, fileUrl, tc, usd, useRun } from "./api";
 import { Assistant } from "./Assistant";
 import { EditDialog, ExportDialog, LedgerDialog, ShortcutsDialog } from "./Dialogs";
 import { childOf, layout, parentOf, projectName } from "./edit";
 import { Icon } from "./icons";
 import { Inspector, type PunchAsk } from "./Inspector";
 import { ProgressInline } from "./Progress";
+import { GUIDE_NAME, GUIDES, SafeArea, type Guide } from "./SafeArea";
 import { CaptionsPanel, MediaPanel, TextPanel, VersionsPanel } from "./Panels";
 import { FPS, Player, type PlayerHandle } from "./Player";
 import { Timeline, ZOOM_MAX, ZOOM_MIN, type ClipMenu, type TrimAsk } from "./Timeline";
@@ -46,6 +47,11 @@ export function Editor({ id, replay, go }: Props) {
   const [ctx, setCtx] = useState<ClipMenu | null>(null);
   const [askNonce, setAskNonce] = useState(0);
   const [toast, setToast] = useState<{ text: string; tone?: string } | null>(null);
+  const [guide, setGuideState] = useState<Guide>(() => {
+    try { const g = localStorage.getItem("montivo.viewer.guide") as Guide | null; return g && GUIDES.includes(g) ? g : "off"; } catch { return "off"; }
+  });
+  const setGuide = (g: Guide) => { setGuideState(g); try { localStorage.setItem("montivo.viewer.guide", g); } catch { /* this tab only */ } };
+  const nextGuide = () => setGuide(GUIDES[(GUIDES.indexOf(guide) + 1) % GUIDES.length]);
   const player = useRef<PlayerHandle>(null);
 
   // in replay, a version exists once the log rendered it; live, once it is on disk
@@ -146,6 +152,17 @@ export function Editor({ id, replay, go }: Props) {
         }
         break;
       case "Escape": if (ctx) setCtx(null); else if (menu) setMenu(false); else setSelKey(null); break;
+      case "g": case "G": nextGuide(); break;
+      case "n": case "N": { // the next (Shift: previous) reviewer issue of this version
+        const iss = [...(v?.review?.issues ?? [])].sort((a, b) => a.t_s - b.t_s);
+        if (!iss.length) { flash(v?.review ? "The reviewer raised no issue on this version." : "This version has not been reviewed."); break; }
+        const now = tRef.current;
+        const to = e.shiftKey ? [...iss].reverse().find((i) => i.t_s < now - 0.25) : iss.find((i) => i.t_s > now + 0.05);
+        if (!to) { flash(e.shiftKey ? "No issue before the playhead." : "No issue after the playhead."); break; }
+        p?.pause(); p?.seek(to.t_s); setSelKey(null);
+        flash(`Issue ${iss.indexOf(to) + 1} of ${iss.length} at ${tc(to.t_s)} · ${to.severity}: ${to.what}`);
+        break;
+      }
       case "?": setDialog({ kind: "keys" }); break;
     }
   };
@@ -244,14 +261,20 @@ export function Editor({ id, replay, go }: Props) {
             onApply={(edits) => { setPanel("assistant"); act("caption", { edits, from: v?.n }); }} />
         )}
         {panel === "text" && <TextPanel state={state} v={v} t={t} onSeek={seek} />}
-        {panel === "versions" && <VersionsPanel id={id} state={state} versions={visible} sel={sel} onPick={pick} go={go} replay={replay} />}
+        {panel === "versions" && <VersionsPanel id={id} state={state} versions={visible} sel={sel} onPick={pick} go={go} replay={replay} opening={opening} />}
       </aside>
 
       <main className="viewer">
+        {v?.cut && (
+          <button className={`guide-btn ${guide !== "off" ? "on" : ""}`} onClick={nextGuide}
+            title="Safe-area guides: the margins Reels, TikTok and Shorts cover with their own UI (G cycles)">
+            Safe area: {GUIDE_NAME[guide]}
+          </button>
+        )}
         {v?.cut ? (
           <Player ref={player} key={`${v.n}`} src={fileUrl(id, v.cut)} onTime={onTime} onPlaying={setPlaying}
             marks={blocks.filter((b) => b.kind !== "ghost").map((b) => b.t0)}
-            label={`v${v.n}`} />
+            label={`v${v.n}`} overlay={<SafeArea kind={guide} />} />
         ) : (
           <div className="player-wait">{busy || replay ? <span><span className="pulse" /> Waiting for the first render…</span> : "No cut rendered yet."}</div>
         )}

@@ -107,7 +107,10 @@ make ui
 shows the version the editor opens on (a poster frame from that cut, its name and length), its blind score, and a
 sparkline of every reviewed version's score. The list sorts (newest, best score, name), filters (all, reviewed,
 passed) and searches the name, run, footage and brief; the archive button on a card moves the run folder to
-`runs/_archive/` (Undo in the toast, Restore under "Archived"), never deletes it. The project list
+`runs/_archive/` (Undo in the toast, Restore under "Archived"), never deletes it. New project shows the clip with
+its length, prices the run from that length (about $0.045 + $0.0026 per footage second, plus about $0.07 for the
+review loop and $0.04 for the hook A/B, measured on runs 014 and 015), offers brief presets (talking head, interview,
+product demo, event recap) and switches for punch-ins and the hook A/B (`montivo run --hook-ab`). The project list
 starts a new run (upload, brief, target length, review loop, and the planner: Muse Spark 1.3 or Muse Spark Open, the
 open-weights model on Baseten, which needs `BASETEN_API_KEY`; the reviews stay on Spark 1.3). The editor has a 9:16 viewer; a multi-track timeline
 (the title card, captions, video with a filmstrip, audio with a waveform) with the reviewer's issues as markers on the
@@ -129,7 +132,9 @@ A running job (a new run, Ask Montivo, an edit, a review, the hook A/B) shows wh
 and its card on the project list: the step (plan, edges, render "segment 2 of 3", review, hook A/B), a clock against the
 step's expected time (this run's earlier calls in `ledger.json`, else the measured hints: plan 35 s on Spark 1.3, 7 s
 on Muse Spark Open, review 26 s) and a bar that moves by time but never past the last checkpoint `run.log` logged
-(Voice, SAM and Watch on a new run have no estimate, so their bar says so); replay drives the same view. Keys: Space, J/K/L, arrow keys for
+(Voice, SAM and Watch on a new run have no estimate, so their bar says so); replay drives the same view. The viewer has safe-area guides (Reels, TikTok, Shorts, approximate; G cycles them), N and Shift+N jump to the next
+and previous reviewer issue, Versions marks the version the project opens on apart from the loop's best, and Export
+has a 720 x 1280 preset for messaging and review links. Keys: Space, J/K/L, arrow keys for
 one frame, Backspace to delete a clip, Cmd+Z / Shift+Cmd+Z across versions. Spoken instructions through Voice: not
 yet. The server only reads the run folders and starts the engine as a subprocess; the React build is committed, so
 the editor needs Python only.
