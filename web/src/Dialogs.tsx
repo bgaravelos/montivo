@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from "react";
 import { dur, tc, usd } from "./api";
 import { Icon } from "./icons";
+import type { CutAsk } from "./edit";
 import type { MoveAsk, TrimAsk } from "./Timeline";
 import type { RunState, Version } from "./types";
 
@@ -20,15 +21,16 @@ function Modal({ title, onClose, children, wide }: { title: string; onClose: () 
   );
 }
 
-/** Delete clip and trim share one confirm: what changes, the version it makes, and what it costs before you commit. */
-export function EditDialog({ kind, state, v, span, trim, move, next, onCancel, onConfirm }: {
-  kind: "delete" | "trim" | "move"; state: RunState; v: Version; span: string; trim?: TrimAsk; move?: MoveAsk; next: number;
+/** Delete clip, trim, move and delete words share one confirm: what changes, the version it makes, and what it costs
+ *  before you commit. */
+export function EditDialog({ kind, state, v, span, trim, move, cut, next, onCancel, onConfirm }: {
+  kind: "delete" | "trim" | "move" | "words"; state: RunState; v: Version; span: string; trim?: TrimAsk; move?: MoveAsk; cut?: CutAsk; next: number;
   onCancel: () => void; onConfirm: (review: boolean) => void;
 }) {
   const [review, setReview] = useState(false);
   const sp = v.spans.find((s) => s.id === span);
   const canReview = state.has_key;
-  const title = kind === "delete" ? `Delete clip ${span}?` : kind === "move" ? `Move clip ${span} ${move!.label}?`
+  const title = kind === "words" ? `Delete ${cut!.n} word${cut!.n === 1 ? "" : "s"}?` : kind === "delete" ? `Delete clip ${span}?` : kind === "move" ? `Move clip ${span} ${move!.label}?`
     : `${trim!.words > 0 ? "Extend" : "Trim"} clip ${span}?`;
   const roleNote = kind === "move" && move ? (() => { // the clip that ends up first is the hook, the last the payoff
     const ids = v.spans.map((s) => s.id).filter((x) => x !== span);
@@ -41,7 +43,11 @@ export function EditDialog({ kind, state, v, span, trim, move, next, onCancel, o
   return (
     <Modal title={title} onClose={onCancel}>
       <div className="modal-body">
-        {kind === "move" ? (
+        {kind === "words" ? (<>
+          <p>Removes <b>{cut!.n} word{cut!.n === 1 ? "" : "s"}</b> (−{cut!.seconds.toFixed(2)} s): <s className="w cut">“{cut!.text.slice(0, 160)}{cut!.text.length > 160 ? "…" : ""}”</s></p>
+          <ul className="cut-lines">{cut!.lines.map((l) => <li key={l}>{l}</li>)}</ul>
+          {cut!.error && <p className="err">{cut!.error}</p>}
+        </>) : kind === "move" ? (
           <p>Plays “{sp?.words.slice(0, 120)}{(sp?.words.length ?? 0) > 120 ? "…" : ""}” {move!.label === "to the end" ? "at the end" : move!.label}. The cuts that now meet are tightened to the speech again.{roleNote}</p>
         ) : kind === "delete" ? (
           <p>Removes <b>{sp?.duration.toFixed(1)} s</b>: “{sp?.words.slice(0, 140)}{(sp?.words.length ?? 0) > 140 ? "…" : ""}”. The cuts on either side are tightened to the speech again.</p>
@@ -59,8 +65,8 @@ export function EditDialog({ kind, state, v, span, trim, move, next, onCancel, o
         <span className="cost">{review && canReview ? `~${usd(state.costs.review)}` : "render only · $0"}</span>
         <span className="grow" />
         <button className="btn quiet" onClick={onCancel}>Cancel</button>
-        <button className={`btn ${kind === "delete" ? "danger" : ""}`} autoFocus onClick={() => onConfirm(review && canReview)}>
-          {kind === "delete" ? "Delete clip" : kind === "move" ? "Move clip" : trim!.words > 0 ? "Extend clip" : "Trim clip"}
+        <button className={`btn ${kind === "delete" || kind === "words" ? "danger" : ""}`} autoFocus disabled={!!cut?.error} onClick={() => onConfirm(review && canReview)}>
+          {kind === "words" ? "Delete words" : kind === "delete" ? "Delete clip" : kind === "move" ? "Move clip" : trim!.words > 0 ? "Extend clip" : "Trim clip"}
         </button>
       </div>
     </Modal>
@@ -134,7 +140,7 @@ export function LedgerDialog({ state, onClose }: { state: RunState; onClose: () 
 export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
   const keys: [string, string][] = [
     ["Space", "Play / pause"], ["J · K · L", "Shuttle back · stop · forward (press again for 2×, 4×)"],
-    ["← →", "One frame back / forward"], ["⇧ ← →", "One second back / forward"], ["⌫ / Delete", "Delete the selected clip"],
+    ["← →", "One frame back / forward"], ["⇧ ← →", "One second back / forward"], ["⌫ / Delete", "Delete the selected clip, or the selected transcript words"],
     ["⌘Z · ⇧⌘Z", "Previous version · next version"], ["⌘+ · ⌘−", "Zoom the timeline"], ["Esc", "Clear the selection"],
     ["N · ⇧N", "Next · previous reviewer issue"], ["G", "Safe-area guides: Reels, TikTok, Shorts, off"],
   ];

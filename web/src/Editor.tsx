@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, dur, fileUrl, tc, usd, useRun } from "./api";
 import { Assistant } from "./Assistant";
 import { EditDialog, ExportDialog, LedgerDialog, ShortcutsDialog } from "./Dialogs";
-import { childOf, layout, parentOf, projectName } from "./edit";
+import { childOf, cutAsk, flatWords, layout, parentOf, projectName, type CutAsk, type WordSel } from "./edit";
 import { Icon } from "./icons";
 import { Inspector, type PunchAsk } from "./Inspector";
 import { ProgressInline } from "./Progress";
@@ -14,7 +14,7 @@ import type { LogLine, RunState } from "./types";
 
 type Props = { id: string; replay: number; go: (hash: string) => void };
 type PanelId = "assistant" | "media" | "captions" | "text" | "speakers" | "versions";
-type Dialog = { kind: "delete"; span: string } | { kind: "trim"; ask: TrimAsk } | { kind: "move"; ask: MoveAsk } | { kind: "export" } | { kind: "ledger" } | { kind: "keys" };
+type Dialog = { kind: "delete"; span: string } | { kind: "words"; ask: CutAsk } | { kind: "trim"; ask: TrimAsk } | { kind: "move"; ask: MoveAsk } | { kind: "export" } | { kind: "ledger" } | { kind: "keys" };
 
 const PANELS: { id: PanelId; label: string; icon: string }[] = [
   { id: "assistant", label: "Assistant", icon: "assistant" },
@@ -37,6 +37,7 @@ export function Editor({ id, replay, go }: Props) {
   const { state, error, lines, job, seen, progress } = useRun(id, replay);
   const [sel, setSel] = useState<number | null>(null);
   const [selKey, setSelKey] = useState<string | null>(null); // a span id or "title"
+  const [wordSel, setWordSel] = useState<WordSel | null>(null); // words selected in the transcript view
   const [t, setT] = useState(0);
   const tRef = useRef(0);
   const [playing, setPlaying] = useState(false);
@@ -96,6 +97,7 @@ export function Editor({ id, replay, go }: Props) {
   const block = blocks.find((b) => b.key === selKey && b.kind !== "ghost") ?? null;
   const punch = v && selKey?.startsWith("punch:") ? v.punch_ins.find((x) => `punch:${x.key}` === selKey) ?? null : null;
   useEffect(() => { if (selKey && v && !blocks.some((b) => b.key === selKey && b.kind !== "ghost")) setSelKey(null); }, [v?.n]); // eslint-disable-line
+  useEffect(() => setWordSel(null), [v?.n, tlMode]);
 
   const undoTo = v && state ? visible.find((x) => x.n === parent?.n) : undefined;
   const redoTo = v ? childOf(v, visible) : undefined;
@@ -110,7 +112,14 @@ export function Editor({ id, replay, go }: Props) {
   const scrub = useCallback((x: number) => { player.current?.pause(); player.current?.seek(x); }, []);
   const onTime = useCallback((x: number) => { tRef.current = x; setT(x); }, []);
   const getTime = useCallback(() => tRef.current, []);
-  const select = useCallback((k: string | null) => { setSelKey(k); setCtx(null); }, []);
+  const select = useCallback((k: string | null) => { setSelKey(k); setCtx(null); setWordSel(null); }, []);
+  const pickWords = useCallback((w: WordSel | null) => { setWordSel(w); if (w) { setSelKey(null); setCtx(null); } }, []);
+  const askCut = () => { // the transcript selection -> the confirm: drop, trim or cut, whichever the words need
+    if (!v || !state || !wordSel) return;
+    if (canEdit) return flash(`Cannot delete now: ${canEdit.toLowerCase()}.`);
+    const a = cutAsk(v, flatWords(blocks), wordSel, state.words);
+    if (a) setDialog({ kind: "words", ask: a });
+  };
   const ask = useCallback((span: string) => { setSelKey(span); setPanel("assistant"); setAskNonce((n) => n + 1); setCtx(null); }, []);
   const askDelete = useCallback((span: string) => { setCtx(null); setDialog({ kind: "delete", span }); }, []);
   const askTrim = useCallback((a: TrimAsk) => setDialog({ kind: "trim", ask: a }), []);
@@ -142,7 +151,10 @@ export function Editor({ id, replay, go }: Props) {
       case "ArrowLeft": e.preventDefault(); p?.step(e.shiftKey ? -1 : -1 / FPS); break;
       case "ArrowRight": e.preventDefault(); p?.step(e.shiftKey ? 1 : 1 / FPS); break;
       case "Delete": case "Backspace":
-        if (punch) {
+        if (wordSel) {
+          e.preventDefault();
+          askCut();
+        } else if (punch) {
           e.preventDefault();
           if (canEdit) flash(`Cannot remove it now: ${canEdit.toLowerCase()}.`);
           else onPunch({ skip: punch.key });
@@ -153,7 +165,7 @@ export function Editor({ id, replay, go }: Props) {
           else askDelete(block.span!.id);
         }
         break;
-      case "Escape": if (ctx) setCtx(null); else if (menu) setMenu(false); else setSelKey(null); break;
+      case "Escape": if (ctx) setCtx(null); else if (menu) setMenu(false); else if (wordSel) setWordSel(null); else setSelKey(null); break;
       case "g": case "G": nextGuide(); break;
       case "n": case "N": { // the next (Shift: previous) reviewer issue of this version
         const iss = [...(v?.review?.issues ?? [])].sort((a, b) => a.t_s - b.t_s);
@@ -299,7 +311,8 @@ export function Editor({ id, replay, go }: Props) {
       <footer className="tl-wrap">
         <Timeline id={id} v={v} blocks={blocks} words={state.words} t={t} playing={playing} selected={selKey}
           zoom={zoom} setZoom={setZoom} mode={tlMode} setMode={setTlMode} canTrim={!canEdit}
-          onSelect={select} onSeek={seek} onScrub={scrub} onMenu={setCtx} onTrim={askTrim} onMove={askMove} />
+          onSelect={select} onSeek={seek} onScrub={scrub} onMenu={setCtx} onTrim={askTrim} onMove={askMove}
+          wordSel={wordSel} onWordSel={pickWords} onCutWords={askCut} />
       </footer>
 
       {ctx && (
@@ -314,6 +327,10 @@ export function Editor({ id, replay, go }: Props) {
       {dialog?.kind === "delete" && v && (
         <EditDialog kind="delete" state={state} v={v} span={dialog.span} next={next} onCancel={() => setDialog(null)}
           onConfirm={(review) => { setDialog(null); setPanel("assistant"); act("drop", { span: dialog.span, from: v.n, review: review ? 1 : 0 }); }} />
+      )}
+      {dialog?.kind === "words" && v && (
+        <EditDialog kind="words" state={state} v={v} span={dialog.ask.ranges[0].span} cut={dialog.ask} next={next} onCancel={() => setDialog(null)}
+          onConfirm={(review) => { setDialog(null); setWordSel(null); setPanel("assistant"); act(dialog.ask.path, { ...dialog.ask.body, from: v.n, review: review ? 1 : 0 }); }} />
       )}
       {dialog?.kind === "trim" && v && (
         <EditDialog kind="trim" state={state} v={v} span={dialog.ask.span} trim={dialog.ask} next={next} onCancel={() => setDialog(null)}

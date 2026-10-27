@@ -641,6 +641,37 @@ def create_app(root: Path) -> FastAPI:
                               "text": f"Move clip {span} {'before ' + str(before) if before else 'to the end'} in v{frm}."})
         return {"job": job.public()}
 
+    @app.post("/api/runs/{run_id}/cut")
+    async def cut(run_id: str, request: Request):
+        """Delete the words of a transcript selection ({"words": [{"span": "s2", "from": 16, "to": 18}, ...]}, turn
+        word indices) in one version: whole clips dropped, clip edges trimmed, the middle of a clip split."""
+        d = st.run_dir(run_id)
+        b = await request.json()
+        frm = int(b.get("from") or latest_version(d))
+        passes = int(b.get("review") or 0)
+        if passes:
+            need_key("Reviewing the new cut")
+        ranges = b.get("words")
+        if not isinstance(ranges, list) or not ranges:
+            raise HTTPException(400, "words: a list of {span, from, to}")
+        flags, spans = [], []
+        for r in ranges:
+            try:
+                span, a, z = str(r["span"]), int(r["from"]), int(r["to"])
+            except (KeyError, TypeError, ValueError):
+                raise HTTPException(400, "words: a list of {span, from, to}")
+            if not re.fullmatch(r"s\d+", span) or not 0 <= a <= z:
+                raise HTTPException(400, "span ids like s3 and word indices from <= to")
+            flags += ["--words", f"{span}:{a}-{z}"]
+            spans.append(span)
+        n = sum(int(r["to"]) - int(r["from"]) + 1 for r in ranges)
+        args = ["-m", "montivo.human", "cut", f"runs/{run_id}", *flags, "--from", str(frm), "--review", str(passes)]
+        quote = str(b.get("text") or "").strip()[:120]
+        job = start_job(st, run_id, "cut", "Delete words", args,
+                        chat={"role": "user", "chips": [*dict.fromkeys(spans), f"v{frm}"], "kind": "cut",
+                              "text": f"Delete {n} word{'s' if n != 1 else ''} from v{frm}" + (f": “{quote}”." if quote else ".")})
+        return {"job": job.public()}
+
     @app.get("/api/runs/{run_id}/heads")
     def run_heads(run_id: str):
         return heads(st.run_dir(run_id))

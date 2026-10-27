@@ -139,7 +139,13 @@ the title card off or on ($0) or gives it new words (one Muse Image call, $0.01)
 captions; dragging a clip's body on the video track moves it (the reviewer's reorder op, the cuts that now meet
 tightened again, roles by position); the Speakers panel shows every Voice speaker with the head the speaker map
 gave it and every SAM head as a thumbnail, and pins another head for a speaker (EDL `reframe_speaker_ids`). All three
-are `python -m montivo.human text | reorder | pin` and render the next version. Keys: Space, J/K/L, arrow keys for
+are `python -m montivo.human text | reorder | pin` and render the next version. The Transcript view edits like a
+document: click or drag over words (Shift-click extends) and press Backspace; the confirm shows the words, the seconds
+and what happens to each clip, and the selection becomes one version through the engine's own ops: a whole clip is
+dropped, words at a clip's start or end are trimmed like a timeline drag (reviewer rules), and words inside a clip
+split it in two (`python -m montivo.human cut RUN --words s2:19-19`). No edge settles or widens back over the deleted
+words, which matters because Voice's word edges abut and can sit a few hundred ms off (run 015: "checks its | own
+work" is one run of speech). Keys: Space, J/K/L, arrow keys for
 one frame, Backspace to delete a clip, Cmd+Z / Shift+Cmd+Z across versions. Spoken instructions through Voice: not
 yet. The server only reads the run folders and starts the engine as a subprocess; the React build is committed, so
 the editor needs Python only.

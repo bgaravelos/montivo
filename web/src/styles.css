@@ -441,8 +441,14 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .b-role { font-size: 11px; color: var(--mute); }
 .block.hook .b-role { color: var(--accent); }
 .b-t { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--dim); }
-.b-words { font-size: 12px; line-height: 1.35; color: var(--text); overflow: hidden; flex: 1; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; }
+.b-words { font-size: 12px; line-height: 1.35; color: var(--text); overflow-y: auto; flex: 1; min-height: 0; scrollbar-width: thin; }
 .w { white-space: pre-wrap; }
+.w.pick { cursor: text; user-select: none; border-radius: 2px; }
+.w.pick:hover { background: var(--panel-3); }
+.w.wsel, .w.wsel:hover { background: var(--accent-soft); color: var(--accent); box-shadow: inset 0 -1.5px 0 var(--accent); }
+.sel-note { display: flex; align-items: center; gap: 10px; }
+.cut-lines { margin: 0 0 10px; padding-left: 18px; font-size: 12.5px; color: var(--text-2); display: grid; gap: 4px; }
+.modal-body .err { color: var(--blocker); }
 .w.cut { color: var(--blocker); opacity: 0.75; text-decoration-thickness: 1.5px; }
 .title-w { color: var(--mute); font-style: italic; }
 .b-callout { font-size: 11px; color: var(--major); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

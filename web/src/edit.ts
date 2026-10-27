@@ -43,14 +43,17 @@ export function layout(v: Version, parent: Version | undefined, words: Record<st
   const pSpans = parent?.spans ?? [];
   const overlap = (a: Span, b: Span) => a.turn_id === b.turn_id && a.word_from <= b.word_to && b.word_from <= a.word_to;
   const spanBlocks: { b: Block; pOrder: number }[] = [];
+  const struck = new Set<string>(); // a word cut from the middle of a clip (a split) shows once, at the end of the first piece
   for (const sp of v.spans) {
     const all = tw(sp.turn_id);
     const p = pSpans.find((x) => overlap(x, sp));
     const before: Word[] = [];
     const after: Word[] = [];
     if (p) {
-      for (let i = p.word_from; i < sp.word_from; i++) if (!cur.has(key(sp.turn_id, i)) && all[i]) before.push(all[i]);
-      for (let i = sp.word_to + 1; i <= p.word_to; i++) if (!cur.has(key(sp.turn_id, i)) && all[i]) after.push(all[i]);
+      const cut = (i: number) => !cur.has(key(sp.turn_id, i)) && !struck.has(key(sp.turn_id, i)) && !!all[i];
+      for (let i = p.word_from; i < sp.word_from; i++) if (cut(i)) before.push(all[i]);
+      for (let i = sp.word_to + 1; i <= p.word_to; i++) if (cut(i)) after.push(all[i]);
+      for (const w of [...before, ...after]) struck.add(key(sp.turn_id, w.i));
     }
     const kept = all.slice(sp.word_from, sp.word_to + 1);
     const b: Block = { key: sp.id, kind: "span", span: sp, t0: t, t1: t + sp.duration * f, before, kept, after, label: sp.id };
@@ -114,6 +117,7 @@ export function originLabel(v: Version): string {
       ? `your edit · ${f.length === 1 ? "a callout" : `${f.length} callouts`}` : "your edit · title and callouts";
   }
   if (o.action === "reorder") return `your edit · moved clip ${o.fixes?.[0]?.target ?? ""}`;
+  if (o.action === "cut") return "your edit · deleted words";
   if (o.action === "pin") return `your edit · pinned speaker ${o.fixes?.[0]?.target ?? ""}`;
   if (o.action === "punch") {
     const op = o.fixes?.[0]?.op;
@@ -168,4 +172,76 @@ export function edgeSnaps(b: Block, edge: "in" | "out", v: Version, words: Recor
     }
   }
   return out;
+}
+
+/** A word selection in the transcript: anchor and focus, each `${span id}:${turn word index}`. */
+export type WordSel = { a: string; b: string };
+export type FlatWord = { k: string; span: Span; w: Word; t: number; e: number }; // t, e: cut time
+
+/** The kept words of every clip in cut order, with their cut time. */
+export function flatWords(blocks: Block[]): FlatWord[] {
+  const out: FlatWord[] = [];
+  for (const b of blocks) {
+    if (b.kind !== "span" || !b.span) continue;
+    const sp = b.span;
+    const f = sp.duration > 0 ? (b.t1 - b.t0) / sp.duration : 1;
+    const at = (src: number) => Math.min(b.t1, b.t0 + Math.max(0, src - sp.t_in) * f);
+    for (const w of b.kept) out.push({ k: `${sp.id}:${w.i}`, span: sp, w, t: at(w.t), e: at(w.e) });
+  }
+  return out;
+}
+
+export function selRange(flat: FlatWord[], sel: WordSel | null): [number, number] | null {
+  if (!sel) return null;
+  const a = flat.findIndex((x) => x.k === sel.a);
+  const b = flat.findIndex((x) => x.k === sel.b);
+  return a < 0 || b < 0 ? null : [Math.min(a, b), Math.max(a, b)];
+}
+
+export type CutRange = { span: string; from: number; to: number };
+/** What deleting the selected words does: the engine op it goes through (a whole clip: drop; a clip's start or end:
+ *  trim, reviewer rules; anything else, or several clips: cut, one version), the words, the seconds, a line per clip. */
+export type CutAsk = {
+  n: number; seconds: number; text: string; ranges: CutRange[]; lines: string[]; error: string | null;
+  path: "drop" | "trim" | "cut"; body: Record<string, unknown>;
+};
+
+export function cutAsk(v: Version, flat: FlatWord[], sel: WordSel, words: Record<string, Word[]>): CutAsk | null {
+  const r = selRange(flat, sel);
+  if (!r) return null;
+  const picked = flat.slice(r[0], r[1] + 1);
+  const ranges: CutRange[] = [];
+  for (const x of picked) {
+    const last = ranges.at(-1);
+    if (last && last.span === x.span.id) last.to = x.w.i;
+    else ranges.push({ span: x.span.id, from: x.w.i, to: x.w.i });
+  }
+  let seconds = 0;
+  let error: string | null = null;
+  const lines: string[] = [];
+  const kinds: ("whole" | "in" | "out" | "middle")[] = [];
+  for (const g of ranges) {
+    const sp = v.spans.find((s) => s.id === g.span)!;
+    const tw = words[String(sp.turn_id)] ?? [];
+    const head = g.from === sp.word_from;
+    const tail = g.to === sp.word_to;
+    const kind = head && tail ? "whole" : head ? "in" : tail ? "out" : "middle";
+    kinds.push(kind);
+    const kept = sp.word_to - sp.word_from + 1 - (g.to - g.from + 1);
+    seconds += kind === "whole" ? sp.duration : kind === "in" ? tw[g.to + 1].t - sp.t_in
+      : kind === "out" ? sp.t_out - tw[g.from - 1].e : tw[g.to + 1].t - tw[g.from - 1].e;
+    if ((kind === "in" || kind === "out") && kept < 2) error ??= `Clip ${sp.id} would keep one word: a clip keeps at least two. Select the whole clip to delete it.`;
+    lines.push(kind === "whole" ? `${sp.id}: the whole clip is deleted, the cuts on either side tightened to the speech.`
+      : kind === "middle" ? `${sp.id}: splits in two around the deleted words, both new cuts tightened to the speech.`
+      : `${sp.id}: trimmed at the ${kind === "in" ? "start" : "end"}; like the reviewer's own trims, the edge may settle on a sentence end one or two words away, never back into the deleted words.`);
+  }
+  if (kinds.every((k) => k === "whole") && ranges.length >= v.spans.length) error ??= "That deletes every clip.";
+  const one = ranges.length === 1 ? ranges[0] : null;
+  const route: Pick<CutAsk, "path" | "body"> = one && kinds[0] === "whole" ? { path: "drop", body: { span: one.span } }
+    : one && kinds[0] === "in" ? { path: "trim", body: { span: one.span, edge: "in", word: one.to + 1 } }
+    : one && kinds[0] === "out" ? { path: "trim", body: { span: one.span, edge: "out", word: one.from - 1 } }
+    : { path: "cut", body: { words: ranges } };
+  const text = picked.map((x) => x.w.w).join(" ");
+  if (route.path === "cut") route.body.text = text.slice(0, 120);
+  return { n: picked.length, seconds, text, ranges, lines, error, ...route };
 }

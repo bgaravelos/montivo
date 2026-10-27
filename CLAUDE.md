@@ -234,6 +234,18 @@ end, the cuts that now meet tightened, `roles_by_position` = edl.normalize_roles
 (`media.head_thumb`). UI: Text panel staged edits, drag a clip body on the video track (MoveAsk -> EditDialog "move"),
 Speakers panel (rail). Watch's "who" is shown as "watch's guess": on 014 it names the wrong astronauts. Checked keyless
 with real renders on a throwaway copy of 014 (pin A -> head 0, s8 moved before s2, callouts + title off; removed).
+UI batch C (backlog 7, transcript editing; 27/10 evening, $0, commit pending): in the Transcript view click / drag /
+Shift-click words, Backspace -> EditDialog "words" (words, seconds, a line per clip) -> one version: a whole clip ->
+POST `/drop`, one clip edge -> `/trim`, anything else -> POST `/api/runs/{id}/cut` -> `python -m montivo.human cut RUN
+--words s2:19-19 [...]` (`cut_plan`: drop_span / `trim_fix` / split into the kept word runs, new ids past every id in
+the EDL and its punch_skip; callout stays on the first piece, caption overrides follow their source time). Found on
+run 015: Voice's abutting word edges sit up to 0.3 s off, so the reviewer's settle (0.3 s) and the edge pass's widen
+(0.4 s) brought deleted words back ("checks its | own work" one run of speech; the second "and" heard 0.25 s late) and
+a trim re-opened the clip's other edge over an earlier delete. Fixed in human.py only (review.py was another session's):
+`tighten_edges(keep_out=)` blocks the deleted words, `settle_split` puts a split edge left in speech on the dip within
+0.1 s, `hold_trimmed_edges` (cut and trim, so timeline drags too) pulls a trimmed edge back when there is speech more
+than 0.1 s past the boundary and keeps the other edge where it was. Checked keyless on a throwaway copy of 015 (split
+"and and", 11 words over s3-s5, "every single day.", a whole clip; removed).
 Reviewer benchmark + Spark Open reviewer (27/10 night, $5.02, commit `ff77959`, `docs/notes/montivo-reviewer-bench_2026-10-27.md`):
 Muse Spark Open on Baseten sees `video_url` frames (~1 fps) but hears nothing; `Spark.call(video=)` sends the cut
 inline, `review_render` gives an Open reviewer the heard-words facts (Voice on the cut, `dedupe_heard`,

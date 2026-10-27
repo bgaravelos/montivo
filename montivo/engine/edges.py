@@ -251,9 +251,11 @@ def cut_edges(spans: list[dict]) -> list[tuple[int, str, float]]:
     return out
 
 
-def tighten_edges(edl: dict, words: Words, audio: Audio, only: set[tuple[str, str]] | None = None) -> dict:
+def tighten_edges(edl: dict, words: Words, audio: Audio, only: set[tuple[str, str]] | None = None,
+                  keep_out: dict[int, set[int]] | None = None) -> dict:
     """Tighten every cut edge of the EDL in place (or only the (span id, edge) pairs in `only`), widen the clipped
-    ones; updates runtime_s and writes the summary to edl["edge_pass"]. Running it again moves nothing."""
+    ones, never into the words of `keep_out` ({turn id: word indices}, the words a transcript delete removed);
+    updates runtime_s and writes the summary to edl["edge_pass"]. Running it again moves nothing."""
     spans = edl["spans"]
     moves: list[dict] = []
     for k, edge, bound in cut_edges(spans):
@@ -262,7 +264,7 @@ def tighten_edges(edl: dict, words: Words, audio: Audio, only: set[tuple[str, st
             continue
         tail = END_TAIL_S if edge == "out" and k == len(spans) - 1 else TAIL_S
         blocked = {i for o in spans if o is not s and o["turn_id"] == s["turn_id"]
-                   for i in range(o["word_from"], o["word_to"] + 1)}
+                   for i in range(o["word_from"], o["word_to"] + 1)} | (keep_out or {}).get(s["turn_id"], set())
         rec = tighten_edge(s, words, edge, audio, tail=tail, bound=bound, blocked=blocked)
         if rec:
             moves.append({"span": s["id"], "edge": edge, **rec})

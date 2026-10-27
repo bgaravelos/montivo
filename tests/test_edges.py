@@ -198,6 +198,11 @@ def test_a_clipped_edge_never_widens_into_a_word_another_span_keeps():
     edl = edl_of(s2, s1)  # reordered, so the two are not joined
     E.tighten_edges(edl, WORDS, audio)
     assert s1["t_out"] == 12.0 and "out" not in s1.get("edges", {})
+    # nor into the words a transcript delete removed (keep_out): w04 is gone, not kept by another clip
+    audio = SynthAudio([(10.6, 12.25), (12.4, 13.4)])
+    edl = edl_of(span("s1", 0, 0, 3), span("s2", 1, 2, 5))
+    E.tighten_edges(edl, WORDS, audio, keep_out={0: {4}})
+    assert edl["spans"][0]["t_out"] == 12.0
     # no quiet stretch within reach: the edge stays
     audio = SynthAudio([(10.6, 13.0)])
     edl = edl_of(span("s1", 0, 0, 3), span("s2", 1, 2, 5))

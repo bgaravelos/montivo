@@ -123,7 +123,7 @@ def replay_script(lines: list[dict]) -> list[dict]:
 RENDER_PREP, RENDER_SEGS = 0.05, 0.75
 COMMANDS = {"run": "Run", "render": "Render", "drop": "Delete clip", "trim": "Trim clip", "caption": "Edit captions",
             "punch": "Punch-ins", "replan": "Ask Montivo", "edges": "Edges", "text": "Edit text", "reorder": "Move clip",
-            "pin": "Pin speaker"}
+            "pin": "Pin speaker", "cut": "Delete words"}
 TO_VERSION = re.compile(r"-> \S*?(?:edl|cut)_v(\d+)\b")
 SEGMENTS = re.compile(r"^render: \d+ spans -> (\d+) segments(?: \((\d+) frames\))?")
 SEG_DONE = re.compile(r"^render: seg (\d+) .*?\((\d+) frames")

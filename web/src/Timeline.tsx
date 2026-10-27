@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { crit, tc } from "./api";
-import { blockAt, edgeSnaps, punchLabel, sevRank, type Block, type Snap } from "./edit";
+import { blockAt, edgeSnaps, flatWords, punchLabel, selRange, sevRank, type Block, type Snap, type WordSel } from "./edit";
 import { Icon } from "./icons";
 import type { Issue, Version, Word } from "./types";
 
@@ -21,11 +21,12 @@ type Props = {
   mode: "timeline" | "transcript"; setMode: (m: "timeline" | "transcript") => void; canTrim: boolean;
   onSelect: (key: string | null) => void; onSeek: (a: number, b?: number) => void; onScrub: (t: number) => void;
   onMenu: (m: ClipMenu) => void; onTrim: (t: TrimAsk) => void; onMove: (m: MoveAsk) => void;
+  wordSel: WordSel | null; onWordSel: (s: WordSel | null) => void; onCutWords: () => void;
 };
 
 /** The bottom of the editor: a read-mostly multi-track timeline of the selected version (select, seek, delete from the
  *  menu, trim by dragging a clip edge to a word, move a clip by dragging its body), or the transcript view of the
- *  same edit. */
+ *  same edit (select words by clicking or dragging over them, Shift-click extends, ⌫ deletes them). */
 export function Timeline(p: Props) {
   const { v, mode, setMode, zoom, setZoom } = p;
   const scroller = useRef<HTMLDivElement>(null);
@@ -410,7 +411,7 @@ function Wave({ peaks, pps, height, width }: { peaks: { rate: number; peaks: num
 
 // ------------------------------------------------------------------- transcript (the paper edit)
 
-function Transcript({ v, blocks, t, selected, onSelect, onSeek, onMenu }: Props & { v: Version }) {
+function Transcript({ v, blocks, t, selected, onSelect, onSeek, onMenu, wordSel, onWordSel, onCutWords }: Props & { v: Version }) {
   const scroller = useRef<HTMLDivElement>(null);
   const issues = v.review?.issues ?? [];
   const playing = useMemo(() => blockAt(blocks, t), [blocks, t]);
@@ -419,9 +420,38 @@ function Transcript({ v, blocks, t, selected, onSelect, onSeek, onMenu }: Props 
     el?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
   }, [playing?.key]);
   const lastLive = blocks.filter((x) => x.kind !== "ghost").at(-1);
+  const flat = useMemo(() => flatWords(blocks), [blocks]);
+  const byKey = useMemo(() => new Map(flat.map((x) => [x.k, x])), [flat]);
+  const range = selRange(flat, wordSel);
+  const picked = range ? flat.slice(range[0], range[1] + 1) : [];
+  const inSel = useMemo(() => new Set(picked.map((x) => x.k)), [range?.[0], range?.[1], flat]); // eslint-disable-line
+  const drag = useRef<string | null>(null); // the anchor while the mouse is down on a word
+  useEffect(() => {
+    const up = () => { drag.current = null; };
+    window.addEventListener("pointerup", up);
+    return () => window.removeEventListener("pointerup", up);
+  }, []);
+  const down = (e: React.PointerEvent, k: string, at: number) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); // no native text selection: the words are the selection
+    e.stopPropagation();
+    if (e.shiftKey && wordSel) onWordSel({ a: wordSel.a, b: k });
+    else { onWordSel({ a: k, b: k }); onSeek(at); }
+    drag.current = e.shiftKey && wordSel ? wordSel.a : k;
+  };
+  const enter = (k: string) => { if (drag.current) onWordSel({ a: drag.current, b: k }); };
+  const secs = picked.length ? picked.reduce((a, x, j) => a + (x.e - x.t) + (j && picked[j - 1].span.id === x.span.id ? x.t - picked[j - 1].e : 0), 0) : 0;
   return (
     <div className="strip">
-      <div className="strip-note mute">Struck words were cut from Version {v.origin.from ?? v.n - 1} · flags are the reviewer's notes at cut time</div>
+      {picked.length ? (
+        <div className="strip-note sel-note">
+          <b>{picked.length} word{picked.length === 1 ? "" : "s"}</b> selected · about {secs.toFixed(1)} s
+          <button className="btn small danger" onClick={onCutWords}><Icon name="trash" size={12} /> Delete</button>
+          <span className="mute">⌫ · Shift-click extends · Esc clears</span>
+        </div>
+      ) : (
+        <div className="strip-note mute">Click or drag over words to select them, ⌫ deletes them · struck words were cut from Version {v.origin.from ?? v.n - 1} · flags are the reviewer's notes at cut time</div>
+      )}
       <div className="blocks" ref={scroller}>
         {blocks.map((b) => {
           const len = Math.max(b.t1 - b.t0, 0.001);
@@ -450,7 +480,12 @@ function Transcript({ v, blocks, t, selected, onSelect, onSeek, onMenu }: Props 
               <div className="b-words">
                 {b.kind === "title" ? <span className="w title-w">{b.label}</span> : <>
                   {b.before.map((w) => <s key={`b${w.i}`} className="w cut">{w.w + " "}</s>)}
-                  {b.kind === "ghost" ? b.kept.map((w) => <s key={w.i} className="w cut">{w.w + " "}</s>) : b.kept.map((w) => <span key={w.i} className="w">{w.w + " "}</span>)}
+                  {b.kind === "ghost" ? b.kept.map((w) => <s key={w.i} className="w cut">{w.w + " "}</s>) : b.kept.map((w) => {
+                    const k = `${b.span!.id}:${w.i}`;
+                    const fw = byKey.get(k);
+                    return <span key={w.i} className={`w pick ${inSel.has(k) ? "wsel" : ""}`} data-k={k}
+                      onPointerDown={(e) => down(e, k, (fw?.t ?? b.t0) + 0.01)} onPointerEnter={() => enter(k)} onClick={(e) => e.stopPropagation()}>{w.w + " "}</span>;
+                  })}
                   {b.after.map((w) => <s key={`a${w.i}`} className="w cut">{w.w + " "}</s>)}
                 </>}
               </div>

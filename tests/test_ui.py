@@ -423,6 +423,111 @@ def test_human_reorder_moves_a_clip_and_keeps_roles_by_position(tmp_path, monkey
         H.reorder(d, "s1", "s2", from_v=3)  # already there
 
 
+def test_human_cut_splits_a_clip_around_deleted_words(tmp_path, monkeypatch):
+    import json
+
+    import montivo.human as H
+    d = _human_run(tmp_path, monkeypatch)
+    edl = json.loads((d / "edl_v1.json").read_text())
+    edl["spans"][2]["callout"] = "Raw in"
+    edl["caption_overrides"] = [{"span": "s3", "src_t": 31.81, "text": "W16 w17", "why": "human"},  # word 6
+                                {"span": "s3", "src_t": 31.21, "text": "gone", "why": "human"}]  # word 4, deleted
+    (d / "edl_v1.json").write_text(json.dumps(edl))
+    out = H.cut(d, [("s3", 4, 4)])
+    v2 = json.loads((d / "edl_v2.json").read_text())
+    assert out["version"] == 2 and v2["version"] == 2 and v2["patches"][-1]["action"] == "cut"
+    sp = v2["spans"]
+    assert [(s["id"], s["word_from"], s["word_to"]) for s in sp] == [("s1", 0, 3), ("s2", 6, 8), ("s3", 2, 3), ("s4", 5, 6)]
+    assert [s["role"] for s in sp] == ["hook", "body", "body", "payoff"] and [s["order"] for s in sp] == [0, 1, 2, 3]
+    assert sp[2]["t_out"] == 31.2 and sp[3]["t_in"] == 31.5 and sp[3]["words"] == "w15 w16"
+    assert sp[2]["callout"] == "Raw in" and sp[3]["callout"] == "" and not sp[3]["contiguous_with_previous"]
+    assert v2["caption_overrides"] == [{"span": "s4", "src_t": 31.81, "text": "W16 w17", "why": "human"}]
+    fix = v2["patches"][-1]["fixes"][0]
+    assert fix["op"] == "split_span" and fix["args"]["ids"] == ["s3", "s4"] and "'w14'" in fix["note"]
+    assert abs(v2["runtime_s"] - round(1.2 + 0.9 + 0.6 + 0.6, 2)) < 1e-6
+
+
+def test_human_cut_settles_a_split_edge_on_the_dip_not_back_in_the_deleted_word(tmp_path, monkeypatch):
+    import json
+
+    import montivo.human as H
+    from tests.test_edges import SynthAudio
+    d = _human_run(tmp_path, monkeypatch)
+    # s3 = turn 1 words 2-6 (30.6-32.1); w14 (31.2-31.5) is deleted. Its sound really runs 31.3-31.44 (Voice late, as
+    # on run 015), a 30 ms dip, then w15; the pause before it (31.18-31.3) would let the edge pass widen back over it
+    audio = SynthAudio([(30.6, 31.18), (31.3, 31.44), (31.47, 32.1)])
+    monkeypatch.setattr(H.Audio, "load", staticmethod(lambda run_dir: audio))
+    H.cut(d, [("s3", 4, 4)])
+    s4 = json.loads((d / "edl_v2.json").read_text())["spans"][3]
+    assert s4["id"] == "s4" and 31.43 < s4["t_in"] < 31.49
+    assert "dip between the words" in json.loads((d / "edl_v2.json").read_text())["patches"][-1]["fixes"][-1]["note"]
+
+
+def test_human_trim_holds_the_edge_out_of_the_words_it_removed(tmp_path, monkeypatch):
+    import json
+
+    import montivo.human as H
+    from tests.test_edges import SynthAudio
+    d = _human_run(tmp_path, monkeypatch)
+    # s1 = turn 0 words 0-3 (10.0-11.2), trimmed to end on w01 (10.6): one run of speech into w02 w03 (a 30 ms dip
+    # at 10.6), then a pause at 10.95. The edge pass would widen the clipped edge to that pause, keeping w02 w03
+    audio = SynthAudio([(10.1, 10.59), (10.62, 10.95), (11.3, 12.0)])
+    monkeypatch.setattr(H.Audio, "load", staticmethod(lambda run_dir: audio))
+    H.trim(d, "s1", "out", 1)
+    v2 = json.loads((d / "edl_v2.json").read_text())
+    s1 = v2["spans"][0]
+    assert s1["word_to"] == 1 and 10.55 < s1["t_out"] < 10.66
+    assert "held out of the removed words" in v2["patches"][-1]["fixes"][0]["note"]
+    # the other edge keeps the place an earlier edit gave it (trim_at puts it back on the Voice boundary, 10.0)
+    assert s1["t_in"] == 10.0 and "stays where it was" not in v2["patches"][-1]["fixes"][0]["note"]
+    v2["spans"][2]["t_in"] = 30.65  # s3 = turn 1 words 2-6, its start tuned off the Voice boundary (30.6)
+    (d / "edl_v2.json").write_text(json.dumps(v2))
+    H.trim(d, "s3", "out", 4, from_v=2)
+    v3 = json.loads((d / "edl_v3.json").read_text())
+    assert v3["spans"][2]["t_in"] == 30.65 and "the in edge stays where it was" in v3["patches"][-1]["fixes"][0]["note"]
+
+
+def test_human_cut_drops_and_trims_in_one_version(tmp_path, monkeypatch):
+    import json
+
+    import montivo.human as H
+    d = _human_run(tmp_path, monkeypatch)
+    H.cut(d, [("s1", 3, 3), ("s2", 6, 8), ("s3", 2, 3)])  # the end of s1, all of s2, the start of s3
+    v2 = json.loads((d / "edl_v2.json").read_text())
+    assert [(s["id"], s["word_from"], s["word_to"]) for s in v2["spans"]] == [("s1", 0, 2), ("s3", 4, 6)]
+    assert sorted(f["op"] for f in v2["patches"][-1]["fixes"]) == ["drop_span", "trim_span", "trim_span"]
+    assert [s["role"] for s in v2["spans"]] == ["hook", "payoff"]
+    for bad in ([("s1", 1, 3)],  # keeps one word
+                [("s1", 0, 3), ("s2", 6, 8), ("s3", 2, 6)],  # every clip
+                [("s1", 3, 5)], [("s9", 0, 1)]):  # words outside the clip, no such clip
+        with pytest.raises(SystemExit):
+            H.cut(d, bad)
+    assert not (d / "edl_v3.json").exists()
+
+
+def test_cut_endpoint_builds_its_command(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import montivo.server.app as A
+    _run_folder(tmp_path)
+    seen = []
+    monkeypatch.setattr(A, "start_job", lambda st, rid, kind, label, args, chat=None: seen.append((kind, label, args, chat)) or
+                        A.Job(id="j", run=rid, kind=kind, label=label, cmd=args))
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    c = TestClient(A.create_app(tmp_path))
+    r = c.post("/api/runs/r1/cut", json={"words": [{"span": "s2", "from": 16, "to": 16}, {"span": "s3", "from": 0, "to": 2}],
+                                         "from": 2, "text": "and"})
+    assert r.status_code == 200
+    kind, label, args, chat = seen[-1]
+    assert kind == "cut" and label == "Delete words"
+    assert args[2:4] == ["cut", "runs/r1"] and args[4:8] == ["--words", "s2:16-16", "--words", "s3:0-2"]
+    assert args[-4:] == ["--from", "2", "--review", "0"] and chat["text"] == "Delete 4 words from v2: “and”."
+    for body in ({}, {"words": []}, {"words": [{"span": "s2; rm", "from": 1, "to": 2}]}, {"words": [{"span": "s2", "from": 3, "to": 1}]},
+                 {"words": [{"span": "s2"}]}):
+        assert c.post("/api/runs/r1/cut", json=body).status_code == 400
+    assert c.post("/api/runs/r1/cut", json={"words": [{"span": "s2", "from": 1, "to": 2}], "review": 1}).status_code == 409
+
+
 def test_human_pin_sets_and_drops_a_speaker_head(tmp_path, monkeypatch):
     import json
 
