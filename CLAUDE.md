@@ -281,6 +281,22 @@ audio's speech run of the last word (`Audio.speech_runs`), audible on every base
 old variant's files are in `runs/bench/<base>/round3/` with its manifest entry, so `--compare` scores old reviews on
 their own window. spark13 x2: mid_word caught as major 4/6 -> 6/6, none passes; whole set: caught as major 82 -> 91 %,
 faulty cuts passing 18 -> 9 %, clean pass 75 %.
+Dropped-word edges (28/10, $0.0003): 015's cuts v1-v4 opened "Okay, hi." (Voice on the cut heard it): Voice put the
+dropped "Okay." 0.8 s early (18.54-18.78, audio 18.76-19.14, "Hi" 19.58), its 0.36 s of sound was over FRAGMENT_MAX_S, so
+the clipped in edge widened to 18.71 in front of it. `edges.onset/offset(dropped=)`: when the word past the edge is not
+in the cut the sound at the edge may be that word, up to DROPPED_WORD_MAX_S 0.6 s, and runs FAINT_DB (3 dB) or less over
+the threshold (breaths) do not break the pause after it; only 015 s1 moves on every run folder. `edges.reset_edges` puts
+every edge the pass moved (and nothing since) back on its Voice boundary; `python -m montivo.human edges RUN` = reset +
+the pass again -> next edl_vN ($0). 015 v5 (from v4): opens "Hi." at 0.15 s, 37.9 s. `runs/015-demo` = a clone of 015
+at v5 for live clicks with the key (commit 19f4a59).
+First clicks with the key (28/10, `runs/015-demo`, $0.09, montivo-ui-key stopped after): "Try another hook" on v5 ->
+challenger s8 (payoff cold open) v6 69 / hook 2 vs v5 82 / hook 9, v5 kept, $0.068; Ask Montivo "make it about 30
+seconds" with Spark Open, no review -> v7 8 clips 34.5 s, $0.011, plan 14 s, callouts kept; Text panel new title words
++ card on -> v8 with a Muse Image card in the brand colours (ink, paper, marker yellow, words exact), $0.01. No console
+errors. Found: (1) v5's pass held by a reviewer major captions_match_speech on "Four" (Voice on the cut does not hear
+it, the heard-diff fact says so; Billy confirmed the word: a false positive) -> 015 v5 has no pass; (2) Voice heard
+"Four Meta" as "meta meta": the Open re-plan started s5 on the second "meta" and the hand caption "Four Meta models do
+all" did not carry (the line breaks differently), v7 shows "meta models do all" while the audio keeps "Four".
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
