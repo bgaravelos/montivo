@@ -218,7 +218,11 @@ Spark 1.3. `montivo plan runs/001 --planner open` does it on a finished run fold
 brief (blind to the current cut), the next `edl_vN` with a `replan` patch that names the model, rendered, so the UI's
 Compare shows the two planners side by side; `--review 3` runs the loop on it. The A/B numbers (spans, runtime,
 verbatim rate, unplaced passages, the hook, what each plan call cost and took) go to `plan_compare_v1_vN.json`, the
-run log and the command's output.
+run log and the command's output. Measured on a copy of run 012 (27/10): Muse Spark Open placed 9 spans, 45.3 s, every
+one verbatim, nothing unplaced, the same hook and ending as Spark 1.3 and 8 of its 9 passages (it opened the body on
+"for the Meta Hackathon we are building Montivo" instead of the stumbling "the editor it's an agent agent"), for $0.012
+in 6.8 s against Spark 1.3's $0.050 in 35 s; the blind reviewer gave that first cut 92 and a pass (Spark 1.3's v1 had
+76 before the loop, its reviewed v2 100). It marks every body span `payoff`, which the hook A/B reads as a cold open.
 
 Hook A/B (`engine/hook.py`, `montivo hook runs/001 [--edl edl_vN.json] [--budget 0.10]`, or `montivo review runs/001
 --hook-ab [--hook-budget 0.10]` after the loop): version A is the EDL as it is, version B the next free version with one

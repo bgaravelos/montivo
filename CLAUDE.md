@@ -97,8 +97,12 @@ Merge (27/10): the branch above is in `main`; a second cloud session had built t
 (commits `065420a`, `391a297`), the branch's versions were kept and only two pieces carried over: the EDL pin
 `reframe_speaker_ids` {"A": "3"} in `render.load_speaker_ids` (replaces the mapped heads of that speaker, kept by
 replan) and the v1-vs-new comparison of `montivo plan` (`plan_compare_v1_vN.json`, in the output and run log).
-Next: the NASA clip (first real check of the speaker mapping), `montivo plan runs/012 --planner open` (the A/B),
-`montivo render runs/012 --punch --out cut_v2_punch.mp4` (first look at the punch-ins, then the switch and Remove in
+Open Weight A/B (27/10, `runs/012-open`, a clone of 012 so 012 stays clean for the sample release, $0.042): the first
+real Baseten call worked (`edl_v3.json`, `cut_v3.mp4`, `plan_compare_v1_v3.json`): 9 spans, 45.3 s, verbatim 100 %,
+same hook and ending, s2 "for the Meta Hackathon we are building Montivo" instead of "the editor it's an agent agent";
+$0.012 / 6.8 s vs Spark 1.3 $0.050 / 35 s; blind review 92, pass (minor: the first caption drops "Hi,", 0.4 s over 45).
+The open planner labels every body span `payoff` (the hook A/B would take s2 as a cold-open challenger).
+Next: the NASA clip (first real check of the speaker mapping), `montivo render runs/012 --punch --out cut_v2_punch.mp4` (first look at the punch-ins, then the switch and Remove in
 `make ui` on a copy of 012), `montivo hook runs/012` (the first real hook A/B, about $0.03 with v2's review reused). The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
