@@ -225,7 +225,7 @@ punch-ins and hook A/B switches (`montivo run --hook-ab`, needs `--review`: `hoo
 loop, in run.py); safe-area guides on the viewer (`web/src/SafeArea.tsx`, Reels 14 / 35 / 6 %, TikTok and Shorts in px,
 approximate, G); N / Shift+N to the next / previous reviewer issue; "opens here" vs "loop best" in Versions; Export
 preset 720 (`media.small_copy`, 015 v4 2.9 MB from 26.7 MB). The score chip already opened the best review.
-UI batch B (backlog 9, 10, 11; 27/10 evening, $0, not committed yet): three human ops in `montivo/human.py`, each
+UI batch B (backlog 9, 10, 11; 27/10 evening, $0, commit `412e9ff`): three human ops in `montivo/human.py`, each
 the next edl_vN rendered: `text` (callout_text per span, "" removes; title_off / title_on; title_text = new words, one
 Muse Image call $0.01, so the server needs the key for it), `reorder` (the reviewer's reorder op, `before` None = to the
 end, the cuts that now meet tightened, `roles_by_position` = edl.normalize_roles on dicts), `pin` (EDL
