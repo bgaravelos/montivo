@@ -30,6 +30,8 @@ const P: Record<string, string> = {
   spark: "M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z",
   dot: "M12 9a3 3 0 110 6 3 3 0 010-6z",
   loop: "M4.5 12a7.5 7.5 0 0113-5.1M19.5 12a7.5 7.5 0 01-13 5.1M17.5 3.5v3.4h-3.4M6.5 20.5v-3.4h3.4",
+  archive: "M3.5 4.5h17v4h-17zM5 8.5v11h14v-11M10 12.5h4",
+  search: "M10.5 4a6.5 6.5 0 110 13 6.5 6.5 0 010-13zM15.5 15.5L20 20",
 };
 const FILLED = new Set(["play", "pause", "skipBack", "skipFwd", "dot", "more"]);
 

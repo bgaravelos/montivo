@@ -279,3 +279,28 @@ def test_project_card_shows_the_version_the_editor_opens(tmp_path):
     assert card["shown"] == 1 and card["title_card_text"] == "Raw In, Reviewed Out"
     assert card["poster_t"] == pytest.approx(1.5 + 40 / 3, abs=0.05) and card["duration_s"] == 41.5
     assert card["score"]["v"] == 1 and not card["score"]["pass"]
+
+
+def test_archive_moves_and_restores(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from montivo.server.app import create_app
+    d = _run_folder(tmp_path)
+    (tmp_path / "runs" / "r1.stdout.log").write_text("x")
+    (tmp_path / "runs" / "r10.stdout.log").write_text("y")  # another run's log stays put
+    c = TestClient(create_app(tmp_path))
+    assert c.post("/api/runs/r1/archive").json() == {"archived": "r1"}
+    assert not d.exists() and (tmp_path / "runs" / "_archive" / "r1" / "edl_v2.json").is_file()
+    assert (tmp_path / "runs" / "_archive" / "r1.stdout.log").is_file() and (tmp_path / "runs" / "r10.stdout.log").is_file()
+    assert c.get("/api/runs").json()["runs"] == []  # _archive has no run.json: not a project
+    assert [r["id"] for r in c.get("/api/archive").json()["runs"]] == ["r1"]
+    assert c.get("/api/runs/r1").status_code == 404
+    _run_folder(tmp_path)  # a new r1 in the way
+    assert c.post("/api/archive/r1/restore").status_code == 409
+    assert c.post("/api/runs/r1/archive").status_code == 409  # and archiving it would collide
+    import shutil
+    shutil.rmtree(d)
+    assert c.post("/api/archive/r1/restore").json() == {"restored": "r1"}
+    assert (d / "edl_v2.json").is_file() and (tmp_path / "runs" / "r1.stdout.log").is_file()
+    assert c.get("/api/archive").json()["runs"] == []
+    assert c.post("/api/archive/.r1/restore").status_code == 404  # not a run folder name

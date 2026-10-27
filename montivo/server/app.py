@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -31,6 +32,7 @@ from .runs import fingerprint, list_runs, parse_log, progress, read_json, replay
 STATIC = Path(__file__).parent / "static"
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
+ARCHIVE = "_archive"  # runs/_archive/<id>: archived run folders (list_runs skips it: it has no run.json)
 PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 
 # rough prices and times for the hint on each button (README "Measured behaviour"; the planner A/B on runs/012-open:
@@ -595,6 +597,46 @@ def create_app(root: Path) -> FastAPI:
                         chat={"role": "user", "text": f"Try another opening line on v{frm}; the blind reviewer judges both.",
                               "chips": [f"v{frm}"], "kind": "hook"})
         return {"job": job.public()}
+
+    # ------------------------------------------------------------------- archive (a move, never a delete)
+
+    def side_logs(folder: Path, run_id: str) -> list[Path]:
+        """The logs a run left next to its folder (runs/014.stdout.log, runs/002_300s.log): they move with it."""
+        return [p for p in folder.glob(f"{run_id}.*log") if p.is_file() and p.name.split(".")[0] == run_id]
+
+    @app.get("/api/archive")
+    def archived():
+        return {"runs": list_runs(st.runs / ARCHIVE)}
+
+    @app.post("/api/runs/{run_id}/archive")
+    def archive(run_id: str):
+        """Move runs/<id> (and its side logs) to runs/_archive/<id>: off the project list, restorable, nothing deleted."""
+        d = st.run_dir(run_id)
+        if st.busy(run_id):
+            raise HTTPException(409, f"{st.jobs[run_id].label} is still running on this run")
+        dest = st.runs / ARCHIVE / run_id
+        if dest.exists():
+            raise HTTPException(409, f"runs/{ARCHIVE}/{run_id} already exists: restore or rename that one first")
+        dest.parent.mkdir(exist_ok=True)
+        shutil.move(str(d), str(dest))
+        for p in side_logs(st.runs, run_id):
+            shutil.move(str(p), str(dest.parent / p.name))
+        st.jobs.pop(run_id, None)
+        return {"archived": run_id}
+
+    @app.post("/api/archive/{run_id}/restore")
+    def restore(run_id: str):
+        if not SAFE_NAME.match(run_id):
+            raise HTTPException(404, "no such run")
+        src = st.runs / ARCHIVE / run_id
+        if not (src / "run.json").is_file():
+            raise HTTPException(404, f"no archived run {run_id}")
+        if (st.runs / run_id).exists():
+            raise HTTPException(409, f"runs/{run_id} exists again: rename one of the two first")
+        shutil.move(str(src), str(st.runs / run_id))
+        for p in side_logs(st.runs / ARCHIVE, run_id):
+            shutil.move(str(p), str(st.runs / p.name))
+        return {"restored": run_id}
 
     @app.post("/api/runs/{run_id}/stop")
     def stop(run_id: str):

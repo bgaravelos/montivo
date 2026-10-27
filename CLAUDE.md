@@ -211,6 +211,11 @@ the version the editor opens on (same rule as Editor.tsx `opening`), its title c
 third into the cut after the title card (`/frame?clean=1`), its blind score (else the best, named) and every reviewed
 version's score in order for the sparkline; EDL and review fields cached on mtime + size (list 28 ms cold, 3 ms warm).
 Checked keyless: 13 cards, every poster 200.
+Home sort, filter, archive (UI backlog 5, 27/10 evening, $0, not committed yet): sort newest / best score / name and
+filter all / reviewed / passed (kept in localStorage), search over name, run, footage, brief; POST
+`/api/runs/{id}/archive` moves the folder and its side logs (`runs/<id>.*log`) to `runs/_archive/` (409 while a job
+runs or on a name clash), GET `/api/archive`, POST `/api/archive/{id}/restore`; Undo in the toast, Restore under
+"Archived". Never deletes. None of Billy's runs archived: checked keyless on a throwaway copy (removed).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

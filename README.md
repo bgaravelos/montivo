@@ -105,7 +105,9 @@ make ui
 
 `montivo serve` (or `make ui`) serves the editor at http://127.0.0.1:8765 over the run folders. Each project's card
 shows the version the editor opens on (a poster frame from that cut, its name and length), its blind score, and a
-sparkline of every reviewed version's score. The project list
+sparkline of every reviewed version's score. The list sorts (newest, best score, name), filters (all, reviewed,
+passed) and searches the name, run, footage and brief; the archive button on a card moves the run folder to
+`runs/_archive/` (Undo in the toast, Restore under "Archived"), never deletes it. The project list
 starts a new run (upload, brief, target length, review loop, and the planner: Muse Spark 1.3 or Muse Spark Open, the
 open-weights model on Baseten, which needs `BASETEN_API_KEY`; the reviews stay on Spark 1.3). The editor has a 9:16 viewer; a multi-track timeline
 (the title card, captions, video with a filmstrip, audio with a waveform) with the reviewer's issues as markers on the
