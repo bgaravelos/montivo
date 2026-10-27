@@ -18,6 +18,9 @@ path re-planned as the render plans it); Spark 1.3 also gets the caption-vs-hear
 A pass gate (`gate_check`) then overrides the reviewer: a cut does not pass while a loud cut edge, an unheard edge word,
 a forced caption over the head or the head out of frame for 0.5 s is measured, and each of those becomes a major issue
 that `plan_fixes` patches even when the reviewer missed it (`review.pass` is the gated pass, `reviewer_pass` its own).
+The gate also holds the pass while the reviewer itself reports a blocker or major issue (`close_gate`, Billy's rule of
+27/10): its prompt passes a cut at 80 with no blocker, and 36 % of the bench's faulty cuts passed with a major open.
+brief_covered does not count, because a brief can ask for a line nobody said (run 015).
 
 The reviewer names times in the cut, not spans. `cut_map` maps every span (and the title card) to cut seconds with the
 same merge and frame alignment the render uses, so `plan_fixes` can turn an issue at t_s into a concrete patch:
@@ -348,6 +351,7 @@ HEARD_SIMILAR = 0.75  # a heard word this close (difflib ratio) to the kept one 
 HEAD_OUT_FRAC = 0.4  # a head with more than this share of its width outside the crop is out of frame (run 013's
                      # lean reached 31 % for 0.6 s on its kept cut; the planted framing faults 100 %)
 HEAD_OUT_MIN_S = 0.5  # the gate blocks an out-of-frame stretch at least this long
+PASS_IGNORES = ("brief_covered",)  # reviewer majors that do not hold the pass: 015's brief asks for a line never said
 HEAD_SAMPLE_FRAMES = 3  # the head is checked every 3rd frame (10 per second at 30 fps)
 
 
@@ -575,6 +579,21 @@ def gate_check(caps: dict, edges: list[dict] | None, edge_words: dict | None, he
         issue((r["t_in"] + r["t_out"]) / 2, r["t_out"], "subject_framed", "reframe_bias",
               f"head leaves the crop on the {r['side']}", "head_frame", direction=r["side"], px=abs(r["shift_px"]))
     return {"blocked": bool(reasons), "reasons": reasons, "issues": issues}
+
+
+def close_gate(review: dict, gate: dict) -> dict:
+    """The gated pass: the reviewer's own pass, no measured fault (gate_check) and no blocker or major issue of the
+    reviewer still open (PASS_IGNORES aside). Sets review["pass"] (keeps review["reviewer_pass"]) and returns the gate
+    with `checks` (the measured reasons), `open_majors` and `reasons` = both. Idempotent, so the bench re-scores stored
+    reviews with it; a gate written before the rule has only measured reasons."""
+    checks = list(gate.get("checks", gate.get("reasons") or []))
+    majors = [{"t_s": i["t_s"], "criterion": i["criterion"], "severity": i["severity"]}
+              for i in sorted(review["issues"], key=lambda i: i["t_s"])
+              if i["severity"] in APPLY_SEVERITY and i["criterion"] not in PASS_IGNORES]
+    reasons = checks + [f"reviewer's {m['severity']} still open: {m['criterion']} at {m['t_s']:.2f} s" for m in majors]
+    review.setdefault("reviewer_pass", bool(review["pass"]))
+    review["pass"] = bool(review["reviewer_pass"]) and not reasons
+    return {**gate, "blocked": bool(reasons), "reasons": reasons, "checks": checks, "open_majors": majors}
 
 
 # --------------------------------------------------------------------------- the copy Spark watches
@@ -1237,7 +1256,7 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
                         video=copy_path if open_model else None, hears=not open_model)
     rv = call.parsed
     rv["reviewer_pass"] = bool(rv["pass"])
-    rv["pass"] = rv["reviewer_pass"] and not gate["blocked"]
+    gate = close_gate(rv, gate)
     log(f"review: {name} overall {rv['overall']} pass {rv['pass']} ({len(rv['issues'])} issues), ${call.cost_usd:.4f}"
         + (f"; gate blocks the reviewer's pass: {'; '.join(gate['reasons'])}" if gate["blocked"] and rv["reviewer_pass"]
            else f"; gate: {'; '.join(gate['reasons'])}" if gate["blocked"] else ""))
@@ -1257,8 +1276,9 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
 # --------------------------------------------------------------------------- the loop
 
 def rank(h: dict) -> tuple[bool, float]:
-    """How the loop compares versions: one the gate lets through beats one it blocks, then the reviewer's score."""
-    return (not h.get("gate"), h["overall"])
+    """How the loop compares versions: one no measured check blocks beats one a check blocks, then the reviewer's
+    score (an open reviewer major already costs score, so it does not rank twice; old loop.json has no `checks`)."""
+    return (not h.get("checks", h.get("gate")), h["overall"])
 
 
 def edl_version(path: Path, edl: dict) -> int:
@@ -1304,7 +1324,7 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
         fixes, skipped = plan_fixes(rv["review"], edl, words, audio, gate)
         entry = {"version": n, "edl": edl_path.name, "cut": cut.name, "overall": rv["review"]["overall"],
                  "pass": rv["review"]["pass"], "reviewer_pass": rv["review"].get("reviewer_pass", rv["review"]["pass"]),
-                 "gate": (gate or {}).get("reasons") or [],
+                 "gate": (gate or {}).get("reasons") or [], "checks": (gate or {}).get("checks", (gate or {}).get("reasons")) or [],
                  "scores": rv["review"]["scores"], "issues": len(rv["review"]["issues"]),
                  "cost_usd": rv["cost_usd"], "fixes": [{**asdict(f), "fingerprint": f.fingerprint} for f in fixes],
                  "skipped": skipped}

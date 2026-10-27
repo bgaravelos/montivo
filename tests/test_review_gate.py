@@ -148,3 +148,28 @@ def test_the_loop_does_not_stop_on_a_gated_pass_and_prefers_a_version_the_gate_l
     assert p1["fixes"][0]["check"] == "head_frame" and p1["fixes"][0]["args"]["px"] == 200
     v2 = json.loads((tmp_path / "edl_v2.json").read_text())
     assert v2["spans"][2]["reframe_bias_px"] == -200
+
+
+def test_an_open_reviewer_major_holds_the_pass_but_brief_covered_does_not():
+    rv = {"pass": True, "reviewer_pass": True, "overall": 88,
+          "issues": [dict(issue(3.6, "none"), criterion="brief_covered"),
+                     dict(issue(22.1, "caption_fix"), criterion="captions_match_speech"),
+                     dict(issue(9.0, "move_cut", sev="minor"), criterion="no_cut_mid_word")]}
+    g = R.close_gate(rv, {"blocked": False, "reasons": [], "issues": []})
+    assert not rv["pass"] and rv["reviewer_pass"] and g["blocked"] and g["checks"] == []
+    assert g["reasons"] == ["reviewer's major still open: captions_match_speech at 22.10 s"]
+    assert g["open_majors"] == [{"t_s": 22.1, "criterion": "captions_match_speech", "severity": "major"}]
+    assert R.close_gate(rv, g) == g  # idempotent: the bench re-scores stored reviews with it
+    only_brief = {"pass": True, "overall": 96, "issues": [dict(issue(33.8, "none"), criterion="brief_covered")]}
+    g = R.close_gate(only_brief, {"blocked": False, "reasons": [], "issues": []})
+    assert only_brief["pass"] and only_brief["reviewer_pass"] and not g["blocked"]
+    measured = {"pass": True, "overall": 90, "issues": []}  # a gate written before the rule: its reasons are checks
+    g = R.close_gate(measured, {"blocked": True, "reasons": ["head out of frame 1.00-2.00 s"], "issues": []})
+    assert not measured["pass"] and g["checks"] == g["reasons"] == ["head out of frame 1.00-2.00 s"]
+
+
+def test_the_loop_ranks_by_measured_checks_not_by_open_reviewer_majors():
+    a = {"overall": 90, "gate": ["reviewer's major still open: pacing at 3.00 s"], "checks": []}
+    b = {"overall": 84, "gate": [], "checks": []}
+    c = {"overall": 95, "gate": ["head out of frame"]}  # old loop.json: gate reasons were all checks
+    assert max([a, b, c], key=R.rank) is a and R.rank(c) < R.rank(b)

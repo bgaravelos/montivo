@@ -23,7 +23,9 @@ A fault is caught when an issue of a matching criterion or fix op lies within TO
 issue is a blocker or major (only those become patches in the loop). On the clean control every blocker or major issue
 is a false alarm. Since the pass gate (review.gate_check, 27/10) the deterministic checks' issues count too, apart:
 "caught with the gate" is the reviewer or a gate issue in the window, "pass" is the gated pass, "reviewer pass" the
-reviewer's own, and every gate reason on a clean cut is a gate false alarm.
+reviewer's own, and every measured gate reason on a clean cut is a gate false alarm. Stored reviews with a gate are
+scored with the current pass rule (review.close_gate: no open reviewer blocker/major either), so re-running the bench
+on finished reviews re-scores them at $0.
 Results: runs/bench/results.json and results.md; every review in runs/bench/<base>/rv_*.json. `--archive round2` first
 moves the selected variants' old rv_* files (every reviewer) to runs/bench/<base>/round2/ and the old results to
 runs/bench/round2/, then `--compare round2` scores those old reviews beside the new ones (before / after).
@@ -316,7 +318,7 @@ def score(review: dict, fault: str, win: list[float] | None, gate: dict | None =
     if fault == "clean":
         major = [i for i in review["issues"] if i["severity"] in R.APPLY_SEVERITY]
         return {"false_alarms": len(major), "false_alarm_criteria": sorted({i["criterion"] for i in major}),
-                "gate_false_alarms": len((gate or {}).get("reasons") or [])}
+                "gate_false_alarms": len((gate or {}).get("checks", (gate or {}).get("reasons")) or [])}
     out = match(review["issues"], fault, win)
     out["caught_gate"] = out["caught_major"] or match(gate_issues, fault, win)["caught_major"]
     return out
@@ -362,9 +364,12 @@ def review_job(root: Path, base: str, variant: str, entry: dict, reviewer: str, 
 def score_row(rv: dict, base: str, variant: str, entry: dict, reviewer: str, k: int) -> dict:
     win = None if variant == "clean" else window(variant, entry["meta"], json.loads(Path(entry["edl"]).read_text()))
     gate = rv.get("pass_gate")
-    sc = score(rv["review"], variant, win, gate)
-    return {"base": base, "variant": variant, "reviewer": reviewer, "k": k, "overall": rv["review"]["overall"],
-            "pass": rv["review"]["pass"], "reviewer_pass": rv["review"].get("reviewer_pass", rv["review"]["pass"]),
+    review = copy.deepcopy(rv["review"])
+    if gate is not None:  # stored reviews are scored with today's pass rule (close_gate: open reviewer majors too)
+        gate = R.close_gate(review, gate)
+    sc = score(review, variant, win, gate)
+    return {"base": base, "variant": variant, "reviewer": reviewer, "k": k, "overall": review["overall"],
+            "pass": review["pass"], "reviewer_pass": review.get("reviewer_pass", review["pass"]),
             "gate": (gate or {}).get("reasons") or [], "cost_usd": rv["cost_usd"], "seconds": rv["seconds"],
             "window": win, **sc}
 
