@@ -24,6 +24,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from ..config import OPEN_MODEL
 from . import media
 from .runs import fingerprint, list_runs, parse_log, read_json, replay_script, run_state
 
@@ -32,8 +33,9 @@ VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 
-# rough prices for the cost hint on each button (README "Measured behaviour")
-COST = {"plan": 0.05, "review": 0.035, "run_per_s": 0.004}
+# rough prices and times for the hint on each button (README "Measured behaviour"; the planner A/B on runs/012-open:
+# Spark 1.3 $0.050 in 35 s, Muse Spark Open $0.012 in 6.8 s)
+COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_per_s": 0.004}
 
 
 @dataclass
@@ -90,6 +92,21 @@ def has_key() -> bool:
     return bool(os.environ.get("MODEL_API_KEY"))
 
 
+def has_open_key() -> bool:
+    """Muse Spark Open plans on Baseten with its own key; the reviews still run on Spark 1.3 (MODEL_API_KEY)."""
+    return bool(os.environ.get("BASETEN_API_KEY"))
+
+
+def job_json(job: Job) -> dict | None:
+    """The JSON a CLI command printed last (`montivo hook` prints its record), from the job's output file."""
+    text = _tail(job.out, 20000)
+    at = text.rfind("\n{")
+    try:
+        return json.loads(text[at + 1:] if at >= 0 else text)
+    except ValueError:
+        return None
+
+
 def chat_append(run_dir: Path, entry: dict) -> None:
     p = run_dir / "ui" / "chat.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -112,6 +129,17 @@ def result_message(st: State, job: Job) -> dict:
     rv = read_json(d / f"review_v{n}.json") if n else None
     loop = read_json(d / "review" / "loop.json") or {}
     text = f"{job.label}: done."
+    if job.kind == "hook":
+        rec = job_json(job) or {}
+        if rec.get("stop"):
+            return {"role": "agent", "text": f"Hook A/B did not run: {rec['stop']}.", "kind": "result"}
+        if rec.get("kept"):
+            a, b = rec["a"], rec["b"]
+            noise = "" if rec.get("decisive") else ", within the reviewer's 10-point noise"
+            return {"role": "agent", "kind": "result", "version": rec["kept"],
+                    "text": f"Hook A/B: v{a['version']} opens on {a['opener']} ({a['overall']}, hook {a['hook']}), "
+                            f"v{b['version']} on {b['opener']} ({b['overall']}, hook {b['hook']}). Keeping "
+                            f"v{rec['kept']}, {rec['reason']}{noise}."}
     if n:
         edl = read_json(d / f"edl_v{n}.json") or {}
         dur = (edl.get("render") or {}).get("duration_s") or edl.get("runtime_s")
@@ -163,7 +191,7 @@ def create_app(root: Path) -> FastAPI:
         for r in out:
             j = st.job(r["id"])
             r["job"] = j.public() if j else None
-        return {"runs": out, "has_key": has_key()}
+        return {"runs": out, "has_key": has_key(), "has_open_key": has_open_key(), "costs": COST}
 
     @app.get("/api/runs/{run_id}")
     def run(run_id: str):
@@ -172,6 +200,7 @@ def create_app(root: Path) -> FastAPI:
         j = st.job(run_id)
         s["job"] = j.public() if j else None
         s["has_key"] = has_key()
+        s["has_open_key"] = has_open_key()
         s["costs"] = COST
         return s
 
@@ -184,15 +213,16 @@ def create_app(root: Path) -> FastAPI:
         return FileResponse(p)  # answers Range requests, so the player can seek
 
     @app.get("/api/runs/{run_id}/frame")
-    def frame(run_id: str, v: int, t: float):
-        """The frame the reviewer saw at cut time t: from the review copy (720x1280 with the clock) when it exists."""
+    def frame(run_id: str, v: int, t: float, clean: bool = False):
+        """The frame the reviewer saw at cut time t: from the review copy (720x1280 with the clock) when it exists;
+        clean=1 takes it from cut_vN.mp4 itself (the loop film's posters)."""
         d = st.run_dir(run_id)
         src = d / "review" / f"review_v{v}" / f"cut_v{v}_review.mp4"
-        if not src.is_file():
+        if clean or not src.is_file():
             src = d / f"cut_v{v}.mp4"
         if not src.is_file():
             raise HTTPException(404, "no cut for this version")
-        out = d / "ui" / "frames" / f"v{v}_{round(max(t, 0) * 10):05d}.jpg"
+        out = d / "ui" / "frames" / f"v{v}_{round(max(t, 0) * 10):05d}{'_clean' if clean else ''}.jpg"
         if not out.is_file() or out.stat().st_mtime < src.stat().st_mtime:
             out.parent.mkdir(parents=True, exist_ok=True)
             subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{max(t, 0):.2f}", "-i", str(src),
@@ -319,6 +349,17 @@ def create_app(root: Path) -> FastAPI:
         if not has_key():
             raise HTTPException(409, f"{what} calls Meta models: set MODEL_API_KEY and restart montivo serve")
 
+    def planner_of(b: dict) -> str | None:
+        """{"planner": "spark" | "open"} -> None (Spark 1.3, the default) or the Muse Spark Open model id."""
+        p = b.get("planner") or "spark"
+        if p not in ("spark", "open"):
+            raise HTTPException(400, "planner: spark or open")
+        if p == "spark":
+            return None
+        if not has_open_key():
+            raise HTTPException(409, "Muse Spark Open plans on Baseten: set BASETEN_API_KEY and restart montivo serve")
+        return OPEN_MODEL
+
     @app.get("/api/footage")
     def footage():
         st.footage.mkdir(exist_ok=True)
@@ -351,12 +392,15 @@ def create_app(root: Path) -> FastAPI:
         if not SAFE_NAME.match(rid) or (st.runs / rid / "run.json").exists():
             raise HTTPException(400, f"run id {rid!r} is taken or not a folder name")
         target = float(b.get("target") or 40)
+        open_planner = planner_of(b)
         args = ["-m", "montivo.cli", "run", str(src.relative_to(st.root)), "--brief", brief, "--out", f"runs/{rid}",
                 "--target", f"{target:g}"]
         if b.get("hflip"):
             args.append("--hflip")
         if b.get("review", True):
             args.append("--review")
+        if open_planner:
+            args += ["--planner", "open"]
         (st.runs / rid).mkdir(parents=True, exist_ok=True)
         job = start_job(st, rid, "run", "Run", args, chat={"role": "user", "text": brief, "kind": "brief"})
         return {"id": rid, "job": job.public()}
@@ -459,6 +503,7 @@ def create_app(root: Path) -> FastAPI:
         d = st.run_dir(run_id)
         b = await request.json()
         need_key("Re-planning")
+        model = planner_of(b)
         text = (b.get("instruction") or "").strip()
         if not text:
             raise HTTPException(400, "the instruction is empty")
@@ -467,8 +512,8 @@ def create_app(root: Path) -> FastAPI:
         chips = [str(c) for c in b.get("chips") or []]
         instr = text + (f" (about {', '.join(chips)})" if chips else "")
         args = ["-m", "montivo.human", "replan", f"runs/{run_id}", "--instruction", instr, "--from", str(frm),
-                "--review", str(passes)]
-        job = start_job(st, run_id, "replan", "Ask Montivo", args,
+                "--review", str(passes), *(["--model", model] if model else [])]
+        job = start_job(st, run_id, "replan", "Ask Montivo" + (" (Muse Spark Open)" if model else ""), args,
                         chat={"role": "user", "text": text, "chips": chips + [f"v{frm}"], "kind": "instruction"})
         return {"job": job.public()}
 
@@ -483,6 +528,22 @@ def create_app(root: Path) -> FastAPI:
         job = start_job(st, run_id, "review", "Review loop" if passes > 1 else "Blind review", args,
                         chat={"role": "user", "kind": "review",
                               "text": f"Review v{frm} blind, up to {passes} passes." if passes > 1 else f"Review v{frm} blind."})
+        return {"job": job.public()}
+
+    @app.post("/api/runs/{run_id}/hook")
+    async def hook(run_id: str, request: Request):
+        """The hook A/B on one version: the next version opens on another line, both are reviewed blind, the higher
+        (pass, overall) is kept (`montivo hook`, one or two reviews, $0.10 budget)."""
+        d = st.run_dir(run_id)
+        b = await request.json()
+        need_key("The hook A/B")
+        frm = int(b.get("from") or latest_version(d))
+        if not (d / f"edl_v{frm}.json").is_file():
+            raise HTTPException(400, f"no edl_v{frm}.json in this run")
+        args = ["-m", "montivo.cli", "hook", f"runs/{run_id}", "--edl", f"edl_v{frm}.json", "--budget", "0.10"]
+        job = start_job(st, run_id, "hook", "Hook A/B", args,
+                        chat={"role": "user", "text": f"Try another opening line on v{frm}; the blind reviewer judges both.",
+                              "chips": [f"v{frm}"], "kind": "hook"})
         return {"job": job.public()}
 
     @app.post("/api/runs/{run_id}/stop")

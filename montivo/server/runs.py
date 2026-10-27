@@ -9,6 +9,8 @@ import json
 import re
 from pathlib import Path
 
+from ..config import SPARK_MODEL
+
 LINE = re.compile(r"^\[\s*([\d.]+)s\] ?(.*)$")
 EDL = re.compile(r"edl_v(\d+)\.json")
 
@@ -149,8 +151,15 @@ def _review(rv: dict, run_dir: Path) -> dict:
             "clock": rv.get("clock"), "has_copy": bool(copy) and (run_dir / "review" / rv["name"] / Path(copy).name).is_file()}
 
 
+def planner_name(model: str | None) -> str:
+    """The planner as the UI names it: Muse Spark 1.3, or Muse Spark Open for a Baseten meta-models/ id."""
+    return "Muse Spark Open" if model and model.startswith("meta-models/") else "Muse Spark 1.3"
+
+
 def versions(run_dir: Path) -> list[dict]:
     out = []
+    run = read_json(run_dir / "run.json") or {}
+    first_planner = run.get("planner_model") or run.get("model") or SPARK_MODEL
     for p in sorted(run_dir.glob("edl_v*.json"), key=lambda p: int(EDL.fullmatch(p.name).group(1)) if EDL.fullmatch(p.name) else 0):
         m = EDL.fullmatch(p.name)
         edl = read_json(p) if m else None
@@ -170,8 +179,13 @@ def versions(run_dir: Path) -> list[dict]:
             last = patches[-1]
             origin = {"source": last.get("source") or "review", "from": last.get("from"), "review": last.get("review"),
                       "action": last.get("action") or "review", "instruction": last.get("instruction"),
-                      "result": last.get("result"),
+                      "result": last.get("result"), "challenger": last.get("challenger"), "why": last.get("why"),
                       "fixes": [{k: f.get(k) for k in ("op", "target", "issue", "severity", "t_s", "note", "args")} for f in last.get("fixes") or []]}
+        # the planner that made this paper edit: v1's for the plan, a re-plan's own model; patches keep their parent's
+        planner = first_planner if origin["source"] == "plan" else last.get("model") if origin.get("action") == "replan" else None
+        if origin.get("action") == "replan" and not planner:
+            planner = SPARK_MODEL  # re-plans before the model was recorded ran on Spark 1.3
+        cmp = read_json(run_dir / f"plan_compare_v1_v{n}.json")
         rv = read_json(run_dir / f"review_v{n}.json")
         if rv and cut and Path(rv.get("cut", "")).name != cut:
             rv = None  # a review of another file of the same name pattern
@@ -192,6 +206,8 @@ def versions(run_dir: Path) -> list[dict]:
                     "punch_ins": [{k: e.get(k) for k in ("key", "kind", "word", "span", "excess_db", "t_in", "t_out", "zoom")}
                                   for e in edl.get("punch_ins") or [] if e.get("key")],
                     "bytes": (run_dir / cut).stat().st_size if cut else None,
+                    "planner": {"model": planner, "name": planner_name(planner)} if planner else None,
+                    "plan_compare": cmp,
                     "review": _review(rv, run_dir) if rv else None})
     return out
 
@@ -240,8 +256,12 @@ def stage_summaries(run_dir: Path, vs: list[dict]) -> list[dict]:
         art["render"] = f"cut_v1 {v1r['duration_s'] or v1r['runtime_s']:.1f} s · {v1r['captions'] or 0} captions"
     if loop and loop.get("passes"):
         art["review"] = " → ".join(f"v{p['version']} {p['overall']}" for p in loop["passes"]) + f" · {loop.get('stop', '')}"
+    run = read_json(run_dir / "run.json") or {}
+    planner = planner_name(run.get("planner_model") or run.get("model"))
     out = []
     for sid, label, model, prefixes in STAGES:
+        if sid == "plan":
+            model = planner
         cost = sum(v.get("cost_usd", 0) for k, v in ls.items() if k.split(".")[0] in prefixes or k in prefixes)
         secs = sum(v.get("seconds", 0) for k, v in ls.items() if k.split(".")[0] in prefixes or k in prefixes)
         out.append({"id": sid, "label": label, "model": model, "artefact": art.get(sid), "cost_usd": round(cost, 4),

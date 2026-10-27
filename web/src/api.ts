@@ -13,7 +13,7 @@ export async function api<T = unknown>(path: string, body?: unknown, method?: st
 }
 
 export const fileUrl = (run: string, path: string) => `/api/runs/${run}/file/${path}`;
-export const frameUrl = (run: string, v: number, t: number) => `/api/runs/${run}/frame?v=${v}&t=${t.toFixed(1)}`;
+export const frameUrl = (run: string, v: number, t: number, clean = false) => `/api/runs/${run}/frame?v=${v}&t=${t.toFixed(1)}${clean ? "&clean=1" : ""}`;
 
 /** In replay, what the log has shown so far: the stages it reached, the cuts rendered and the reviews returned. */
 export type Seen = { stages: Set<string>; running: string | null; cuts: Set<number>; reviews: Set<number>; ended: boolean };

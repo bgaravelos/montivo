@@ -1,10 +1,37 @@
 import { useEffect, useState } from "react";
-import { fileUrl, tc } from "./api";
+import { fileUrl, tc, usd } from "./api";
 import { originKind, originLabel, parentOf } from "./edit";
 import { Icon } from "./icons";
-import type { RunState, Version } from "./types";
+import type { Costs, Planner, RunState, Version } from "./types";
 
 const mb = (b: number | null | undefined) => (b == null ? "–" : b > 1e9 ? `${(b / 1e9).toFixed(2)} GB` : `${(b / 1e6).toFixed(1)} MB`);
+
+/** Which model writes the paper edit: Muse Spark 1.3, or Muse Spark Open (open weights, served by Baseten). The reviews
+ *  always run on Spark 1.3, since they watch the video. */
+export function PlannerPicker({ value, onChange, hasOpen, costs, hint }: {
+  value: Planner; onChange: (p: Planner) => void; hasOpen: boolean; costs: Costs; hint?: boolean;
+}) {
+  const open = value === "open";
+  return (
+    <div className="planner-pick">
+      <div className="seg-group" role="radiogroup" aria-label="Planner">
+        <button className={`seg ${!open ? "on" : ""}`} role="radio" aria-checked={!open} onClick={() => onChange("spark")}
+          title={`Muse Spark 1.3 plans the edit: about ${usd(costs.plan, 3)} and ${costs.plan_s} s`}>Spark 1.3</button>
+        <button className={`seg ${open ? "on" : ""}`} role="radio" aria-checked={open} disabled={!hasOpen} onClick={() => onChange("open")}
+          title={hasOpen ? `Muse Spark Open (open weights, Baseten) plans the edit: about ${usd(costs.plan_open, 3)} and ${costs.plan_open_s} s`
+            : "Muse Spark Open plans on Baseten: set BASETEN_API_KEY and restart montivo serve"}>
+          Spark Open <span className="open-tag">open weights</span>
+        </button>
+      </div>
+      {hint && (
+        <span className="mute small">
+          {open ? `Muse Spark Open on Baseten: about ${usd(costs.plan_open, 3)} and ${costs.plan_open_s} s for the plan`
+            : `Muse Spark 1.3: about ${usd(costs.plan, 3)} and ${costs.plan_s} s for the plan`}; the blind review stays on Spark 1.3
+        </span>
+      )}
+    </div>
+  );
+}
 
 export function MediaPanel({ state }: { state: RunState }) {
   const m = state.media;
@@ -187,11 +214,16 @@ export function VersionsPanel({ id, state, versions, sel, onPick, go, replay }: 
                   <span className={`origin ${originKind(x)}`}>{originLabel(x)}</span>
                   {p && <span className="mute">from Version {p.n}</span>}
                 </span>
-                <span className="ver-meta mute">{x.spans.length} clips · {tc(x.duration_s ?? x.runtime_s)}</span>
+                <span className="ver-meta mute">{x.spans.length} clips · {tc(x.duration_s ?? x.runtime_s)}{x.planner ? ` · ${x.planner.name}` : ""}</span>
               </button>
             );
           })}
         </div>
+        {versions.length > 1 && (
+          <button className="btn quiet wide" onClick={() => go(`#/run/${id}/loop${replay ? `?replay=${replay}` : ""}`)}>
+            <Icon name="loop" /> Watch the agent loop
+          </button>
+        )}
         {pair && (
           <button className="btn quiet wide" onClick={() => go(`#/run/${id}/compare?a=${pair[0]}&b=${pair[1]}${replay ? `&replay=${replay}` : ""}`)}>
             <Icon name="compare" /> Compare Version {pair[0]} and {pair[1]}

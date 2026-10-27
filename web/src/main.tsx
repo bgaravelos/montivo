@@ -3,9 +3,10 @@ import { createRoot } from "react-dom/client";
 import { Compare } from "./Compare";
 import { Home } from "./Home";
 import { Editor } from "./Editor";
+import { LoopFilm } from "./Loop";
 import "./styles.css";
 
-// hash routes: #/  ·  #/run/012[?replay=4]  ·  #/run/012/compare?a=1&b=2
+// hash routes: #/  ·  #/run/012[?replay=4]  ·  #/run/012/compare?a=1&b=2  ·  #/run/012/loop
 function useHash() {
   const [hash, setHash] = useState(window.location.hash || "#/");
   useEffect(() => {
@@ -22,7 +23,8 @@ function App() {
   const [path, query] = hash.slice(1).split("?");
   const q = new URLSearchParams(query ?? "");
   const replay = Number(q.get("replay") || 0);
-  const m = path.match(/^\/run\/([^/]+)(\/compare)?$/);
+  const m = path.match(/^\/run\/([^/]+)(\/compare|\/loop)?$/);
+  if (m && m[2] === "/loop") return <LoopFilm id={m[1]} replay={replay} go={go} />;
   if (m && m[2]) return <Compare id={m[1]} a={Number(q.get("a") || 1)} b={Number(q.get("b") || 2)} replay={replay} go={go} />;
   if (m) return <Editor key={`${m[1]}-${replay}`} id={m[1]} replay={replay} go={go} />;
   return <Home go={go} />;

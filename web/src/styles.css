@@ -77,7 +77,7 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 @keyframes pulse { 0%, 100% { opacity: 0.25; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.1); } }
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .seg-group { display: inline-flex; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: 2px; gap: 2px; }
-.seg { padding: 3px 10px; border-radius: 4px; color: var(--mute); font-size: 12px; font-weight: 550; }
+.seg { padding: 3px 10px; border-radius: 4px; color: var(--mute); font-size: 12px; font-weight: 550; white-space: nowrap; }
 .seg.on { background: var(--panel-3); color: var(--text); }
 
 /* ------------------------------------------------------------- the editor grid */
@@ -517,3 +517,56 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
   .editor { grid-template-columns: 64px 300px minmax(280px, 1fr) 330px; }
   .proj { max-width: 260px; }
 }
+
+/* planner choice (Home, Assistant): Muse Spark 1.3 or Muse Spark Open */
+.planner-pick { display: flex; flex-direction: column; gap: 5px; align-items: flex-start; }
+.planner-pick .seg:disabled { opacity: 0.4; }
+.open-tag { font-size: 10px; font-weight: 600; color: var(--pass); border: 1px solid #2f6b47; border-radius: 99px; padding: 0 5px; margin-left: 4px; }
+.new-run .field { display: flex; flex-direction: column; gap: 5px; color: var(--text-2); }
+
+/* hook A/B in the cut inspector */
+.hook-try { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin-top: 8px; border: 1px solid var(--line-2); border-radius: var(--r); background: var(--panel-2); }
+.ht-text { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 2px; }
+.ht-opener { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ht-tried { text-align: left; font-size: 11.5px; color: var(--mute); }
+.ht-tried:hover { color: var(--text); }
+.ht-tried b { color: var(--accent); font-weight: 650; }
+.loop-btn { padding: 4px 10px; font-size: 12px; }
+
+/* the agent loop film */
+.loop-film { display: grid; grid-template-rows: 52px auto 1fr; height: 100vh; }
+.loop-film > .top { grid-area: auto; padding: 0 16px; gap: 12px; }
+.lf-sum { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 12px 24px; border-bottom: 1px solid var(--line); color: var(--text-2); }
+.lf-sum b { color: var(--text); font-weight: 700; }
+.lf-sum b.pass { color: var(--pass); }
+.lf-strip { display: flex; align-items: flex-start; gap: 0; overflow-x: auto; padding: 22px 24px 28px; min-height: 0; }
+.lf-step { display: flex; align-items: flex-start; flex: none; animation: lf-in 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes lf-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .lf-step { animation: none; } }
+.lf-card { width: 212px; display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--panel); }
+.lf-card.review { border-top: 3px solid var(--major); }
+.lf-card.plan { border-top: 3px solid var(--accent); }
+.lf-card.human { border-top: 3px solid #d7a6ff; }
+.lfc-head { display: flex; align-items: center; gap: 8px; }
+.lfc-v { font-family: var(--mono); font-weight: 700; color: var(--accent); font-size: 15px; }
+.lfc-planner { margin-top: -4px; }
+.lfc-video { width: 100%; aspect-ratio: 9 / 16; background: #000; border-radius: 6px; object-fit: cover; }
+.lfc-score { display: flex; align-items: baseline; gap: 6px; }
+.lfc-n { font-size: 30px; font-weight: 800; line-height: 1; letter-spacing: -0.02em; }
+.lfc-n.pass { color: var(--pass); }
+.lfc-of { color: var(--mute); font-size: 12px; display: inline-flex; align-items: center; gap: 3px; }
+.lfc-d { margin-left: auto; font-weight: 700; font-size: 13px; }
+.lfc-d.up { color: var(--pass); } .lfc-d.down { color: var(--blocker); }
+.lfc-issues { list-style: none; margin: 2px 0 0; padding: 6px 0 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 3px; }
+.lfc-issues button { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; font-size: 12px; padding: 2px 0; }
+.lfc-issues button:hover .lfi-crit { color: var(--text); }
+.lfi-crit { flex: 1; min-width: 0; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lfc-issues .resolved { color: var(--pass); font-size: 11px; display: inline-flex; align-items: center; gap: 2px; }
+.lf-link { width: 150px; display: flex; flex-direction: column; gap: 4px; padding: 150px 12px 0; font-size: 12px; color: var(--text-2); }
+.lfl-arrow { color: var(--dim); }
+.lf-link.review .lfl-arrow { color: var(--major); }
+.lf-link.human .lfl-arrow { color: #d7a6ff; }
+.lfl-who { font-weight: 650; color: var(--text); }
+.lfl-line { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.lfl-cmp { display: inline-flex; align-items: center; gap: 5px; align-self: flex-start; margin-top: 4px; font-size: 11.5px; color: var(--mute); border: 1px solid var(--line-2); border-radius: 99px; padding: 2px 8px; }
+.lfl-cmp:hover { color: var(--text); border-color: var(--dim); }

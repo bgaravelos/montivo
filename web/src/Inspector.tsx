@@ -10,18 +10,18 @@ type Seek = (a: number, b?: number) => void;
 
 /** The right column: what is selected (a clip, the title card, a punch-in), or with nothing selected the whole cut's
  *  review. */
-export function Inspector({ id, state, versions, v, block, punch, next, words, busy, canEdit, onSeek, onPick, onDelete, onAsk, onReview, onPunch, onClear }: {
+export function Inspector({ id, state, versions, v, block, punch, next, words, busy, canEdit, onSeek, onPick, onDelete, onAsk, onReview, onPunch, onHook, onClear }: {
   id: string; state: RunState; versions: Version[]; v: Version | null; block: Block | null; punch: PunchIn | null; next: number;
   words: Record<string, Word[]>; busy: boolean; canEdit: string | null; onSeek: Seek; onPick: (n: number) => void;
   onDelete: (span: string) => void; onAsk: (span: string) => void; onReview: () => void; onPunch: (a: PunchAsk) => void;
-  onClear: () => void;
+  onHook: () => void; onClear: () => void;
 }) {
   if (!v) return <section className="inspector"><div className="insp-empty">Nothing rendered yet.</div></section>;
   if (punch) return <PunchInspector id={id} v={v} p={punch} next={next} canEdit={canEdit} onSeek={onSeek} onPunch={onPunch} onClear={onClear} />;
   if (block?.kind === "span") return <ClipInspector id={id} state={state} v={v} b={block} words={words} busy={busy} canEdit={canEdit} onSeek={onSeek} onDelete={onDelete} onAsk={onAsk} onClear={onClear} />;
   if (block?.kind === "title") return <TitleInspector state={state} v={v} onClear={onClear} />;
   return <CutReview id={id} state={state} versions={versions} v={v} next={next} canEdit={canEdit} onSeek={onSeek} onPick={onPick}
-    onReview={onReview} onPunch={onPunch} />;
+    onReview={onReview} onPunch={onPunch} onHook={onHook} />;
 }
 
 function Head({ title, sub, onClear }: { title: string; sub?: string; onClear?: () => void }) {
@@ -157,9 +157,44 @@ function PunchToggle({ v, next, canEdit, onPunch }: { v: Version; next: number; 
   );
 }
 
-function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onReview, onPunch }: {
+/** The hook A/B from the inspector: the next version opens on another line (the reviewer's pick, another hook, the
+ *  payoff as a cold open), both are reviewed blind and the higher one is kept. Earlier A/Bs from this version show
+ *  their verdict, so the same challenger is not tried twice. */
+function HookTry({ state, versions, v, next, canEdit, onPick, onHook }: {
+  state: RunState; versions: Version[]; v: Version; next: number; canEdit: string | null; onPick: (n: number) => void; onHook: () => void;
+}) {
+  const tried = versions.filter((x) => x.origin.source === "hook_ab" && x.origin.from === v.n);
+  const reviews = v.review ? 1 : 2;
+  const cost = state.costs.review * reviews;
+  const opener = v.spans[0]?.words ?? "";
+  const why = !state.has_key ? "The hook A/B reviews both versions on Muse Spark: set MODEL_API_KEY and restart montivo serve."
+    : canEdit ? `${canEdit}.` : v.spans.length < 2 ? "One clip only: nothing else to open on." : null;
+  return (
+    <div className="hook-try">
+      <div className="ht-text">
+        <span className="pr-title">Opening line</span>
+        <span className="ht-opener" title={opener}>“{opener.length > 70 ? `${opener.slice(0, 68).trim()}…` : opener}”</span>
+        {tried.map((x) => {
+          const r = x.origin.result;
+          return (
+            <button key={x.n} className="ht-tried" onClick={() => onPick(r?.kept ?? x.n)}>
+              {r ? <>Version {x.n} opened on {r.b.opener}: {r.b.overall} vs {r.a.overall}, kept <b>Version {r.kept}</b>{r.decisive ? "" : " (within the noise)"}</>
+                : <>Version {x.n} opens on {x.origin.challenger ?? "another clip"}, being reviewed…</>}
+            </button>
+          );
+        })}
+      </div>
+      <button className="btn quiet" disabled={!!why} onClick={onHook}
+        title={why ?? `Version ${next} opens on another line, then the blind reviewer scores ${reviews === 2 ? "both" : `it against Version ${v.n}'s review`} and the higher one is kept`}>
+        Try another hook <span className="btn-cost">~{usd(cost)}</span>
+      </button>
+    </div>
+  );
+}
+
+function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onReview, onPunch, onHook }: {
   id: string; state: RunState; versions: Version[]; v: Version; next: number; canEdit: string | null; onSeek: Seek;
-  onPick: (n: number) => void; onReview: () => void; onPunch: (a: PunchAsk) => void;
+  onPick: (n: number) => void; onReview: () => void; onPunch: (a: PunchAsk) => void; onHook: () => void;
 }) {
   const reviewed = versions.filter((x) => x.review);
   const r = v.review;
@@ -180,6 +215,7 @@ function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onRe
           {v.loudness && <span title={`true peak ${v.loudness.true_peak_dbtp} dBTP`}>{v.loudness.integrated_lufs} LUFS</span>}
         </div>
         {v.cut && <PunchToggle v={v} next={next} canEdit={canEdit} onPunch={onPunch} />}
+        {v.cut && <HookTry state={state} versions={versions} v={v} next={next} canEdit={canEdit} onPick={onPick} onHook={onHook} />}
         {reviewed.length > 0 && (
           <div className="history" title="The same cut reviewed twice can differ by about 10 points.">
             {reviewed.map((x, k) => (

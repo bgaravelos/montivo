@@ -23,7 +23,13 @@ export type Review = {
 export type Origin = {
   source: "plan" | "review" | "human" | string; from?: number; review?: string | null; action?: string;
   instruction?: string | null; fixes?: PlannedFix[]; result?: HookResult | null;
+  challenger?: string | null; why?: string | null; // hook A/B: the span B opens on, and why it was picked
 };
+
+/** The planner A/B of a fresh re-plan against v1 (plan_compare_v1_vN.json): one side per planner. */
+export type PlanSide = { planner: string; spans: number; runtime_s: number; verbatim_rate: number; unplaced: number; hook: string;
+  plan_cost_usd: number | null; plan_seconds: number | null };
+export type PlanCompare = { target_s: number; v1: PlanSide } & Record<string, PlanSide | number>;
 
 /** The hook A/B's verdict on the version it made (engine/hook.py): which opener the blind reviewer preferred. */
 export type HookResult = {
@@ -39,6 +45,8 @@ export type Version = {
   callouts: { span: string; text: string; t_in: number; t_out: number }[]; review: Review | null;
   caption_lines: CaptionLine[]; caption_style: CaptionStyle | null; caption_style_note: string | null; bytes: number | null;
   punch: boolean; punch_skip: string[]; punch_ins: PunchIn[];
+  planner: { model: string; name: string } | null; // the paper edit's planner: v1 and every re-plan
+  plan_compare: PlanCompare | null;
 };
 
 /** A punch-in zoom of a rendered version (EDL `punch_ins`); `key` names it across versions (montivo.human punch --skip). */
@@ -73,9 +81,14 @@ export type RunState = {
   summary: Record<string, unknown> | null;
   ledger: { total_cost_usd: number; wall_seconds: number; stages: Record<string, { seconds: number; cost_usd: number; calls: number; tokens_in: number; tokens_out: number }> };
   loop: { stop: string; passes: { version: number; overall: number; pass: boolean }[]; best: { version: number; overall: number } | null } | null;
-  versions: Version[]; words: Record<string, Word[]>; stages: Stage[]; job: Job | null; has_key: boolean;
-  costs: { plan: number; review: number; run_per_s: number };
+  versions: Version[]; words: Record<string, Word[]>; stages: Stage[]; job: Job | null; has_key: boolean; has_open_key: boolean;
+  costs: Costs;
 };
+
+/** Rough prices and times for the button hints (server COST). */
+export type Costs = { plan: number; plan_open: number; plan_s: number; plan_open_s: number; review: number; run_per_s: number };
+
+export type Planner = "spark" | "open";
 
 export type RunCard = {
   id: string; footage: string; brief: string; started: string | null; versions: number[]; scores: number[];

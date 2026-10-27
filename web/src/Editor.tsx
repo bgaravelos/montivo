@@ -65,6 +65,14 @@ export function Editor({ id, replay, go }: Props) {
   }, [visible]);
   const best = state?.loop?.best?.version;
   const opening = kept ?? (best && visible.some((v) => v.n === best) ? best : newest);
+  // when a hook A/B finishes, show the version it kept (B renders first, the verdict lands on it later)
+  const last = visible.at(-1);
+  const hookKept = last?.origin.source === "hook_ab" ? last.origin.result?.kept ?? null : null;
+  const seenHook = useRef<number | null>(null);
+  useEffect(() => {
+    if (hookKept != null && seenHook.current == null && !replay && visible.some((x) => x.n === hookKept)) setSel(hookKept);
+    seenHook.current = hookKept;
+  }, [hookKept]); // eslint-disable-line
   const seenNewest = useRef<number | null>(null);
   useEffect(() => { // open on `opening`; follow every version that appears after that (a job, the replay)
     if (!visible.length) return setSel(null);
@@ -183,6 +191,10 @@ export function Editor({ id, replay, go }: Props) {
           onClick={() => { if (top) { setSel(top.n); setSelKey(null); } }}>
           {top ? <>{top.review!.pass && <Icon name="check" size={13} />}<b>{top.review!.overall}</b><span>review</span></> : <span>not reviewed</span>}
         </button>
+        <button className="btn quiet loop-btn" onClick={() => go(`${base}/loop${replay ? `?replay=${replay}` : ""}`)}
+          title="Every version side by side: the blind scores, the reviewer's notes and the fixes between them">
+          <Icon name="loop" /> Loop
+        </button>
         <div className="menu-wrap" onPointerDown={(e) => e.stopPropagation()}>
           <button className={`icon-btn ${menu ? "on" : ""}`} onClick={() => setMenu(!menu)} title="More"><Icon name="more" /></button>
           {menu && (
@@ -221,7 +233,7 @@ export function Editor({ id, replay, go }: Props) {
         {panel === "assistant" && (
           <Assistant state={state} versions={visible} lines={lines} job={job} seen={seen} replay={replay} v={v}
             clip={block?.kind === "span" ? block.span!.id : null} getTime={getTime} focusNonce={askNonce}
-            onSend={(text, chips, review) => act("replan", { instruction: text, chips, from: v?.n, review })}
+            onSend={(text, chips, review, planner) => act("replan", { instruction: text, chips, from: v?.n, review, planner })}
             onStop={() => act("stop", {})} />
         )}
         {panel === "media" && <MediaPanel state={state} />}
@@ -246,7 +258,8 @@ export function Editor({ id, replay, go }: Props) {
       <aside className="insp">
         <Inspector id={id} state={state} versions={visible} v={v} block={block} punch={punch} next={next} words={state.words} busy={busy}
           canEdit={canEdit} onSeek={seek} onPick={pick} onDelete={askDelete} onAsk={ask} onPunch={onPunch} onClear={() => setSelKey(null)}
-          onReview={() => v && act("review", { from: v.n, passes: 1 })} />
+          onReview={() => v && act("review", { from: v.n, passes: 1 })}
+          onHook={() => { if (v) { setPanel("assistant"); act("hook", { from: v.n }); } }} />
       </aside>
 
       <footer className="tl-wrap">

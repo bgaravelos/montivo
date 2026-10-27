@@ -184,6 +184,19 @@ generated: `python3 assets/brand/build.py --png` (fonttools, uharfbuzz, headless
 touch icon and lockup into `web/public`. Applied: editor tokens and logo (`web/src/styles.css`, Home, Editor, major
 issues now orange #FF8A3D), render accent `graphics.ACCENT` = marker, Muse Image title prompt with the brand hexes (not
 called yet). `.gitignore` lets brand PNG/MP4 and the UI icons in. GitHub social preview upload is manual (needs Billy).
+UI backlog 1 + 2 (27/10 evening, $0; the 12-item list is in Claude Code memory `project-montivo-ui-backlog`): Loop film
+(`web/src/Loop.tsx`, `#/run/<id>/loop`, Loop button in the top bar and Versions): every version left to right with a clean
+poster (`/frame?clean=1`, from cut_vN not the review copy), blind score and delta, worst 3 notes (tick where fixed), and
+between two versions the patch that made the second (reviewer fixes with the criterion score moved, human edit, re-plan
+with planner / cost / time vs v1 from `plan_compare_v1_vN.json`, hook A/B verdict, a Compare button), "Every version / Agent only".
+Hook A/B in the UI: POST `/api/runs/{id}/hook` (`montivo hook --edl edl_vN.json --budget 0.10`), "Try another hook" in
+the review inspector (~$0.04 with A's review, ~$0.07 without), the job's chat line reads the CLI's JSON record, the
+editor opens the kept version when the verdict lands. Planner choice: `PlannerPicker` (Spark 1.3 / Spark Open) on New
+project (`--planner open`) and Ask Montivo (`human replan --model OPEN_MODEL`), `planner: open` needs
+`BASETEN_API_KEY` (409 otherwise), `has_open_key` and `costs.plan_open` in the state; every version carries `planner`
+(v1 from run.json, a re-plan from its patch's `model`) and `plan_compare`; the rail's plan stage names the run's planner.
+Checked keyless in the browser on 012-open and 015; offline tests only for the actions, the hook button and an Open
+re-plan never clicked with the keys yet.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

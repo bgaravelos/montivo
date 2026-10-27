@@ -104,7 +104,8 @@ make ui
 ## The editor
 
 `montivo serve` (or `make ui`) serves the editor at http://127.0.0.1:8765 over the run folders. The project list
-starts a new run (upload, brief, target length, review loop). The editor has a 9:16 viewer; a multi-track timeline
+starts a new run (upload, brief, target length, review loop, and the planner: Muse Spark 1.3 or Muse Spark Open, the
+open-weights model on Baseten, which needs `BASETEN_API_KEY`; the reviews stay on Spark 1.3). The editor has a 9:16 viewer; a multi-track timeline
 (the title card, captions, video with a filmstrip, audio with a waveform) with the reviewer's issues as markers on the
 ruler, zoom and a transcript view of the paper edit; an inspector for the selected clip, the title card or the review
 of the whole cut (score, the facts, the rubric, and each issue as saw, op, patch, result with the frame the
@@ -113,7 +114,13 @@ the versions with Compare (two versions side by side on one transport); the ledg
 4x) that plays a finished run back with the dollars counting up, for recording. Punch-ins have a switch in the
 inspector (on or off makes the next version) and pink markers on the video track, one per zoom (a dashed line for a
 jump cut's scale); select one to see the word, its level and the frame, and remove it (or press Backspace) for the next
-version without it. Keys: Space, J/K/L, arrow keys for
+version without it. "Try another hook" in the review inspector runs the hook A/B on the version you are on (one or
+two blind reviews, about $0.04 to $0.07) and opens the version it kept; earlier A/Bs from that version show their
+verdict there. The Ask Montivo box has the same planner choice as a new project. The Loop film (`#/run/<id>/loop`, the
+Loop button in the top bar or Versions) lays every version out left to right: the frame, the blind score and its
+change, the reviewer's worst notes (a tick where a later version fixed one), and between two versions what made the
+second one: the reviewer's fixes with the score each moved ("drop title · Hook in 1.5 s 2 → 10"), a human edit, a
+re-plan with its planner, cost and time against v1's, or a hook A/B with its verdict, and a Compare button for the pair. Keys: Space, J/K/L, arrow keys for
 one frame, Backspace to delete a clip, Cmd+Z / Shift+Cmd+Z across versions. Spoken instructions through Voice: not
 yet. The server only reads the run folders and starts the engine as a subprocess; the React build is committed, so
 the editor needs Python only.

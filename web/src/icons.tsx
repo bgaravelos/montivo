@@ -29,6 +29,7 @@ const P: Record<string, string> = {
   scissors: "M6 9a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM6 20a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM8 8l12 10M8 16L20 6",
   spark: "M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z",
   dot: "M12 9a3 3 0 110 6 3 3 0 010-6z",
+  loop: "M4.5 12a7.5 7.5 0 0113-5.1M19.5 12a7.5 7.5 0 01-13 5.1M17.5 3.5v3.4h-3.4M6.5 20.5v-3.4h3.4",
 };
 const FILLED = new Set(["play", "pause", "skipBack", "skipFwd", "dot", "more"]);
 

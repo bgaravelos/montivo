@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { api, tc, usd, type Seen } from "./api";
 import { sevRank } from "./edit";
 import { Icon } from "./icons";
-import type { Job, LogLine, RunState, Stage, Version } from "./types";
+import { PlannerPicker } from "./Panels";
+import type { Job, LogLine, PlanSide, Planner, RunState, Stage, Version } from "./types";
 
 // ------------------------------------------------------------------- pipeline checklist
 
@@ -122,7 +123,10 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
     } else if (o.source === "hook_ab") {
       out.push({ who: "tool", text: `Hook A/B: ${fixes}`, v: v.n });
     }
-    out.push({ who: "agent", text: `${vName(v.n)} is ready: ${v.spans.length} clips, ${tc(v.duration_s ?? v.runtime_s)}.`, v: v.n });
+    const side = v.plan_compare?.[`v${v.n}`] as PlanSide | undefined;
+    const by = v.planner && (o.source === "plan" || o.action === "replan")
+      ? ` Planned by ${v.planner.name}${side?.plan_cost_usd != null ? ` in ${side.plan_seconds?.toFixed(1)} s for ${usd(side.plan_cost_usd, 3)}` : ""}.` : "";
+    out.push({ who: "agent", text: `${vName(v.n)} is ready: ${v.spans.length} clips, ${tc(v.duration_s ?? v.runtime_s)}.${by}`, v: v.n });
     if (v.review) {
       const r = v.review;
       const top = [...r.issues].sort((a, b) => sevRank(a.severity) - sevRank(b.severity))[0];
@@ -151,25 +155,26 @@ const WHO: Record<Msg["who"], string> = { you: "You", agent: "Montivo", tool: "E
 export function Assistant({ state, versions, lines, job, seen, replay, v, clip, getTime, focusNonce, onSend, onStop }: {
   state: RunState; versions: Version[]; lines: LogLine[]; job: Job | null; seen: Seen; replay: number; v: Version | null;
   clip: string | null; getTime: () => number; focusNonce: number;
-  onSend: (text: string, chips: string[], review: number) => void; onStop: () => void;
+  onSend: (text: string, chips: string[], review: number, planner: Planner) => void; onStop: () => void;
 }) {
   const [text, setText] = useState("");
   const [useClip, setUseClip] = useState(true);
   const [time, setTime] = useState<number | null>(null);
   const [review, setReview] = useState(true);
+  const [planner, setPlanner] = useState<Planner>("spark");
   const msgs = story(state, versions, lines, job, replay);
   const end = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [msgs.length, job?.running]);
   useEffect(() => { if (focusNonce) { setUseClip(true); box.current?.focus(); } }, [focusNonce]);
   const chips = [...(clip && useClip ? [clip] : []), ...(time != null ? [`@${tc(time)}`] : [])];
-  const cost = state.costs.plan + (review ? state.costs.review : 0);
+  const cost = (planner === "open" ? state.costs.plan_open : state.costs.plan) + (review ? state.costs.review : 0);
   const blocked = !state.has_key ? "Asking Montivo calls Muse Spark: set MODEL_API_KEY and restart montivo serve."
     : job?.running ? `${job.label} is running…` : replay ? "Replay is on: turn it off in the menu to edit." : null;
-  const send = () => { if (!text.trim() || blocked) return; onSend(text.trim(), chips, review ? 1 : 0); setText(""); setTime(null); };
+  const send = () => { if (!text.trim() || blocked) return; onSend(text.trim(), chips, review ? 1 : 0, planner); setText(""); setTime(null); };
   return (
     <section className="assistant">
-      <div className="panel-head"><span className="ph-title">Assistant</span><span className="ph-sub">Muse Spark 1.3</span></div>
+      <div className="panel-head"><span className="ph-title">Assistant</span><span className="ph-sub">{planner === "open" ? "Muse Spark Open" : "Muse Spark 1.3"}</span></div>
       <div className="msgs">
         {msgs.map((m, k) => m.who === "pipeline" ? (
           <div key={k} className="msg agent"><span className="who">Montivo</span><Pipeline state={state} lines={lines} job={job} seen={seen} replay={replay} /></div>
@@ -193,10 +198,11 @@ export function Assistant({ state, versions, lines, job, seen, replay, v, clip, 
         </div>
         <textarea ref={box} value={text} onChange={(e) => setText(e.target.value)} placeholder={blocked ?? "Ask Montivo… “drop the agency line”, “make it 30 seconds”"}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} disabled={!!blocked} rows={3} />
+        <PlannerPicker value={planner} onChange={setPlanner} hasOpen={state.has_open_key} costs={state.costs} />
         <div className="send-row">
           <label className="check small"><input type="checkbox" checked={review} onChange={(e) => setReview(e.target.checked)} /> review the result</label>
           <span className="grow" />
-          <span className="cost" title="Plan call plus one blind review, roughly">~{usd(cost)}</span>
+          <span className="cost" title={`${planner === "open" ? "Muse Spark Open" : "Muse Spark 1.3"} plan call${review ? " plus one blind review on Spark 1.3" : ""}, roughly`}>~{usd(cost)}</span>
           <button className="btn" disabled={!!blocked || !text.trim()} onClick={send}>Send</button>
         </div>
       </div>

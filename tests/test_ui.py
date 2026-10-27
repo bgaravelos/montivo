@@ -59,3 +59,67 @@ def test_replay_keeps_a_loop_split_by_its_renders():
     assert any(m.startswith("review: review_v1 overall") for m in msgs)
     assert msgs[-1].startswith("review loop:")
     assert not any("polish" in m for m in msgs)
+
+
+def _run_folder(tmp_path, planner=None):
+    """A run folder with v1 (the plan) and v2 (a re-plan on Muse Spark Open) and v2's planner A/B record."""
+    import json
+    d = tmp_path / "runs" / "r1"
+    d.mkdir(parents=True)
+    (d / "run.json").write_text(json.dumps({"footage": "footage/x.mp4", "brief": "b", "model": "muse-spark-1.3",
+                                            **({"planner_model": planner} if planner else {})}))
+    (d / "edl_v1.json").write_text(json.dumps({"spans": [], "runtime_s": 40}))
+    (d / "edl_v2.json").write_text(json.dumps({"spans": [], "runtime_s": 41, "patches": [
+        {"from": 1, "source": "human", "action": "replan", "instruction": "x", "model": "meta-models/muse-spark-open-1026",
+         "fixes": [{"op": "replan", "target": "plan", "issue": -1}]}]}))
+    (d / "edl_v3.json").write_text(json.dumps({"spans": [], "runtime_s": 41, "patches": [
+        {"from": 2, "source": "hook_ab", "action": "hook_ab", "challenger": "s4", "why": "the planner's payoff, as a cold open",
+         "fixes": [{"op": "swap_hook", "target": "s4", "issue": -1}]}]}))
+    (d / "plan_compare_v1_v2.json").write_text(json.dumps({"v1": {"planner": "muse-spark-1.3"}, "v2": {"planner": "o"}}))
+    return d
+
+
+def test_versions_name_their_planner(tmp_path):
+    from montivo.server.runs import stage_summaries, versions
+    d = _run_folder(tmp_path)
+    v1, v2, v3 = versions(d)
+    assert v1["planner"] == {"model": "muse-spark-1.3", "name": "Muse Spark 1.3"}
+    assert v2["planner"]["name"] == "Muse Spark Open" and v2["plan_compare"]["v2"]["planner"] == "o"
+    assert v3["planner"] is None and v3["origin"]["challenger"] == "s4"
+    d2 = _run_folder(tmp_path / "open", planner="meta-models/muse-spark-open-1026")
+    assert versions(d2)[0]["planner"]["name"] == "Muse Spark Open"
+    assert next(s for s in stage_summaries(d2, []) if s["id"] == "plan")["model"] == "Muse Spark Open"
+
+
+def test_hook_and_planner_actions_need_their_keys(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from montivo.server.app import create_app
+    _run_folder(tmp_path)
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
+    c = TestClient(create_app(tmp_path))
+    assert c.get("/api/runs").json()["has_open_key"] is False
+    r = c.post("/api/runs/r1/hook", json={"from": 2})
+    assert r.status_code == 409 and "MODEL_API_KEY" in r.json()["error"]
+    monkeypatch.setenv("MODEL_API_KEY", "test")
+    assert c.post("/api/runs/r1/hook", json={"from": 9}).status_code == 400  # no edl_v9.json
+    r = c.post("/api/runs/r1/replan", json={"instruction": "shorter", "planner": "open"})
+    assert r.status_code == 409 and "BASETEN_API_KEY" in r.json()["error"]
+    assert c.post("/api/runs/r1/replan", json={"instruction": "shorter", "planner": "gpt"}).status_code == 400
+
+
+def test_hook_job_result_reads_the_record(tmp_path):
+    import json
+
+    from montivo.server.app import Job, State, result_message
+    d = _run_folder(tmp_path)
+    out = d / "job.out"
+    rec = {"kept": 2, "reason": "higher overall", "decisive": False,
+           "a": {"version": 2, "opener": "s1", "overall": 88, "hook": 10}, "b": {"version": 3, "opener": "s4", "overall": 81, "hook": 3}}
+    out.write_text("[ 0.1s] hook a/b: rendering\n" + json.dumps(rec, indent=2) + "\n")
+    job = Job(id="j", run="r1", kind="hook", label="Hook A/B", cmd=[], out=str(out), rc=0)
+    msg = result_message(State(tmp_path), job)
+    assert msg["version"] == 2 and "Keeping v2" in msg["text"] and "noise" in msg["text"]
+    out.write_text(json.dumps({"stop": "no challenger: one span only"}, indent=2))
+    assert "did not run: no challenger" in result_message(State(tmp_path), job)["text"]

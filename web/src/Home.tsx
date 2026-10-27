@@ -1,13 +1,18 @@
 import { useEffect, useState } from "react";
 import { api, usd } from "./api";
-import type { RunCard } from "./types";
+import { PlannerPicker } from "./Panels";
+import type { Costs, Planner, RunCard } from "./types";
 
 type Footage = { path: string; name: string; mb: number };
+const COSTS: Costs = { plan: 0.05, plan_open: 0.012, plan_s: 35, plan_open_s: 7, review: 0.035, run_per_s: 0.004 };
 
 /** All run folders, and the new-run form (footage, brief, target, review loop). */
 export function Home({ go }: { go: (h: string) => void }) {
   const [runs, setRuns] = useState<RunCard[] | null>(null);
   const [hasKey, setHasKey] = useState(false);
+  const [hasOpen, setHasOpen] = useState(false);
+  const [costs, setCosts] = useState<Costs>(COSTS);
+  const [planner, setPlanner] = useState<Planner>("spark");
   const [footage, setFootage] = useState<Footage[]>([]);
   const [f, setF] = useState("");
   const [brief, setBrief] = useState("");
@@ -18,7 +23,9 @@ export function Home({ go }: { go: (h: string) => void }) {
   const [upload, setUpload] = useState<string | null>(null);
 
   const load = () => {
-    api<{ runs: RunCard[]; has_key: boolean }>("/api/runs").then((r) => { setRuns(r.runs); setHasKey(r.has_key); });
+    api<{ runs: RunCard[]; has_key: boolean; has_open_key: boolean; costs: Costs }>("/api/runs").then((r) => {
+      setRuns(r.runs); setHasKey(r.has_key); setHasOpen(r.has_open_key); if (r.costs) setCosts(r.costs);
+    });
     api<{ files: Footage[] }>("/api/footage").then((r) => { setFootage(r.files); if (!f && r.files[0]) setF(r.files[0].path); });
   };
   useEffect(load, []); // eslint-disable-line
@@ -33,7 +40,7 @@ export function Home({ go }: { go: (h: string) => void }) {
   const start = async () => {
     setErr(null);
     try {
-      const r = await api<{ id: string }>("/api/runs", { footage: f, brief, target, hflip, review });
+      const r = await api<{ id: string }>("/api/runs", { footage: f, brief, target, hflip, review, planner });
       go(`#/run/${r.id}`);
     } catch (e) { setErr((e as Error).message); }
   };
@@ -84,8 +91,11 @@ export function Home({ go }: { go: (h: string) => void }) {
             <label className="check"><input type="checkbox" checked={hflip} onChange={(e) => setHflip(e.target.checked)} /> mirror (selfie footage)</label>
             <label className="check"><input type="checkbox" checked={review} onChange={(e) => setReview(e.target.checked)} /> blind review loop</label>
           </div>
+          <div className="field">Planner
+            <PlannerPicker value={planner} onChange={setPlanner} hasOpen={hasOpen} costs={costs} hint />
+          </div>
           <div className="row">
-            <span className="mute">about $0.48 for a 150 s clip with the review loop (SAM is half of it)</span>
+            <span className="mute">about {usd(0.48 - (planner === "open" ? costs.plan - costs.plan_open : 0))} for a 150 s clip with the review loop (SAM is half of it)</span>
             <span className="grow" />
             <button className="btn" disabled={!hasKey || !f || !brief.trim()} onClick={start}>Create project</button>
           </div>
