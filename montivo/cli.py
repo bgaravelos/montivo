@@ -4,6 +4,7 @@
     montivo render runs/001
     montivo review runs/001
     montivo speakers runs/001
+    montivo plan runs/001 --planner open
     montivo probe footage.mp4
     montivo serve
 """
@@ -38,6 +39,9 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--plan-effort", default=None, choices=["low", "medium", "high"], help="reasoning effort for the plan call")
     r.add_argument("--resume", action="store_true", help="reuse ingest, voice, watch and tracks already in --out")
     r.add_argument("--model", default=None, help="Spark model id (default muse-spark-1.3)")
+    r.add_argument("--planner", choices=("spark", "open"), default="spark",
+                   help="who writes the paper edit: spark = the --model above, open = Muse Spark Open on Baseten "
+                        "(text only, needs BASETEN_API_KEY); watch and review stay on Spark 1.3")
     r.add_argument("--no-render", action="store_true", help="stop after edl_v1.json, do not render cut_v1.mp4")
     r.add_argument("--hflip", action="store_true",
                    help="mirror the footage once before everything else (selfie / mirror-mode clips with reversed text); "
@@ -75,6 +79,15 @@ def main(argv: list[str] | None = None) -> int:
     ed.add_argument("--edl", type=Path, default=None, help="EDL to tighten in place (default <run_dir>/edl_v1.json)")
     ed.add_argument("--dry-run", action="store_true", help="print the moves, write nothing")
 
+    pl = sub.add_parser("plan", help="a fresh paper edit for an existing run folder from its own brief, voice and watch "
+                                     "(one plan call, no Voice / SAM) -> the next edl_vN and cut_vN; the planner A/B")
+    pl.add_argument("run_dir", type=Path)
+    pl.add_argument("--planner", choices=("spark", "open"), default="open",
+                    help="open = Muse Spark Open on Baseten (default, needs BASETEN_API_KEY), spark = muse-spark-1.3")
+    pl.add_argument("--target", type=float, default=None, help="runtime target in seconds (default: run.json)")
+    pl.add_argument("--review", type=int, default=0, help="review passes after the render (default 0; reviews run on Spark 1.3)")
+    pl.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
+
     sp = sub.add_parser("speakers", help="map Voice speakers to SAM head ids from mouth motion ($0, ffmpeg) -> "
                                          "speakers.json; the next render follows whoever talks")
     sp.add_argument("run_dir", type=Path)
@@ -104,6 +117,16 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(render_run(args.run_dir, edl_path=args.edl, source=args.source, out_name=args.out,
                                     title=not args.no_title, captions=not args.no_captions,
                                     callouts=not args.no_callouts, loudnorm=not args.no_loudnorm), indent=2))
+        return 0
+
+    if args.cmd == "plan":
+        from .config import OPEN_MODEL, SPARK_MODEL
+        from .human import replan
+        if not args.run_dir.is_dir():
+            ap.error(f"{args.run_dir} is not a run folder")
+        model = OPEN_MODEL if args.planner == "open" else SPARK_MODEL
+        print(json.dumps(replan(args.run_dir, "", target_s=args.target, passes=args.review, budget=args.budget,
+                                model=model), indent=2))
         return 0
 
     if args.cmd == "speakers":
@@ -138,9 +161,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "run":
+        from .config import OPEN_MODEL
         from .run import RunOptions, run
         if not args.footage.is_file():
             ap.error(f"{args.footage} is not a file")
+        if args.planner == "open" and args.plan_with_video:
+            ap.error("--planner open plans from text only; drop --plan-with-video")
         out = args.out or Path("runs") / time.strftime("%Y%m%d-%H%M%S")
         opts = RunOptions(footage=args.footage, brief=args.brief, out=out, concepts=args.concept or ["person"],
                           track_fps=args.track_fps,
@@ -150,7 +176,8 @@ def main(argv: list[str] | None = None) -> int:
                           skip_track=args.no_track, resume=args.resume, render=not args.no_render, hflip=args.hflip,
                           title=not args.no_title, captions=not args.no_captions, review=args.review,
                           review_passes=args.review_passes, review_budget=args.review_budget,
-                          model=args.model or RunOptions.__dataclass_fields__["model"].default)
+                          model=args.model or RunOptions.__dataclass_fields__["model"].default,
+                          planner_model=OPEN_MODEL if args.planner == "open" else None)
         summary = run(opts)
         print(json.dumps(summary, indent=2))
         return 0

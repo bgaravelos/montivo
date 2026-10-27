@@ -146,23 +146,31 @@ def target_from(instruction: str) -> float | None:
 
 
 def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s: float | None = None,
-           passes: int = 0, budget: float = 0.15) -> dict:
+           passes: int = 0, budget: float = 0.15, model: str | None = None) -> dict:
     """Plan again with the instruction added to the brief and the current paper edit for reference, reusing voice,
-    watch and the tracks (no ingest, Voice or SAM spend), -> edl_vN on word boundaries with the edge pass, render."""
+    watch and the tracks (no ingest, Voice or SAM spend), -> edl_vN on word boundaries with the edge pass, render.
+    With no instruction it is a fresh plan from the run's own brief, blind to the current cut (`montivo plan`, the
+    planner A/B); `model` picks the planner (default muse-spark-1.3, config.OPEN_MODEL for Muse Spark Open)."""
+    from .config import SPARK_MODEL
     from .engine.spark import Spark
     log = RunLog(run_dir / "run.log")
+    model = model or SPARK_MODEL
     from_v = from_v or latest_edl(run_dir)
     prev = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
     run = json.loads((run_dir / "run.json").read_text())
     n = next_version(run_dir)
-    target = target_s or target_from(instruction) or float(run.get("target_s") or 40.0)
-    log(f"montivo replan: edl_v{from_v} + \"{instruction}\" -> edl_v{n} (target {target:.0f} s)")
+    target = target_s or (target_from(instruction) if instruction else None) or float(run.get("target_s") or 40.0)
+    log(f"montivo replan: edl_v{from_v} + \"{instruction or 'fresh plan'}\" -> edl_v{n} (target {target:.0f} s, {model})")
     voice = VoiceResult.from_json(json.loads((run_dir / "voice" / "voice.json").read_text()))
     watch = json.loads((run_dir / "watch.json").read_text())
-    brief = f"{run['brief']}\n\nEditor's note for this version (it overrides the brief where they conflict): {instruction}"
-    plan_brief = f"{brief}\n\nThe current cut (v{from_v}), for reference:\n{edl_summary(prev)}"
+    if instruction:
+        brief = f"{run['brief']}\n\nEditor's note for this version (it overrides the brief where they conflict): {instruction}"
+        plan_brief = f"{brief}\n\nThe current cut (v{from_v}), for reference:\n{edl_summary(prev)}"
+    else:
+        brief = plan_brief = run["brief"]
+        instruction = f"plan again from scratch with {model}"
     ledger = Ledger.resume(run_dir / "ledger.json")
-    spark = Spark(run_dir, ledger, log=log)
+    spark = Spark(run_dir, ledger, model=model, log=log)
     sdir = run_dir / "spark"
     # Spark names its files after the call ("plan"): v1's request and response are copied to plan_v1_* on disk
     # first (they survive a kill), the new ones become plan_vN_* and v1's go back in place
@@ -192,7 +200,7 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
     note = f"replanned: {len(new['spans'])} spans, {new['runtime_s']} s (was {len(prev['spans'])} spans, {prev['runtime_s']} s)"
     new["patches"] = list(prev.get("patches") or []) + [
         {"from": from_v, "review": None, "source": "human", "action": "replan", "instruction": instruction,
-         "fixes": [{"op": "replan", "target": "plan", "issue": -1, "severity": "human", "note": note}]}]
+         "model": model, "fixes": [{"op": "replan", "target": "plan", "issue": -1, "severity": "human", "note": note}]}]
     log(f"patch v{from_v} -> v{n}: replan: {note} (human)")
     for s in new["spans"]:
         log(f"  {s['id']} {s['role']:6s} {s['t_in']:7.2f}-{s['t_out']:7.2f}s {s['words'][:80]}")
@@ -216,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("run_dir", type=Path)
     r.add_argument("--instruction", required=True)
     r.add_argument("--target", type=float, default=None, help="runtime target in seconds (default: from the instruction or run.json)")
+    r.add_argument("--model", default=None, help="planner model id (default muse-spark-1.3)")
     for p in (d, t, r):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
@@ -228,7 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "trim":
         out = trim(a.run_dir, a.span, a.edge, a.word, a.from_v, a.review, a.budget)
     else:
-        out = replan(a.run_dir, a.instruction, a.from_v, a.target, a.review, a.budget)
+        out = replan(a.run_dir, a.instruction, a.from_v, a.target, a.review, a.budget, model=a.model)
     print(json.dumps(out, indent=2))
     return 0
 

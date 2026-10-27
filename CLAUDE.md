@@ -72,7 +72,11 @@ Cloud session (27/10 morning, branch `claude/nice-albattani-wsocse`): bundled In
 captions and tests match on every machine, pytest `pythonpath`, GitHub Actions `make test`; speaker -> head mapping
 (`engine/speakers.py`, mouth-minus-eyes motion vs Voice word times, watch position as fallback, `speakers.json`,
 `montivo speakers RUN`, $0): the render follows the talking speaker's head per span run; synthetic tests only so far.
-Next: the NASA clip (first real check of the speaker mapping), the Open Weight planner test. The evening-by-evening table is in README.md.
+Open Weight planner (same session): `--planner open` on `montivo run`, `montivo plan RUN --planner open` -> next edl_vN;
+Muse Spark Open on Baseten as an OpenAI-compatible chat completion with the plan's strict schema, `BASETEN_API_KEY`
+(add it to `~/.zshenv`), model id `meta-models/muse-spark-open-1026` (`MONTIVO_OPEN_MODEL` overrides; Baseten's own
+example says `meta-models/muse-spark-open`); offline tests only, never called with a real key yet.
+Next: the NASA clip (first real check of the speaker mapping), `montivo plan runs/012 --planner open` (the A/B). The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

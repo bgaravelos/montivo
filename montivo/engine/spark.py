@@ -3,6 +3,8 @@
 Rules measured on 26/10/2026: always 1.3 (1.2 degenerates with a strict schema and video), always hand it the Voice
 transcript as text (1.3 fabricates quotes when asked to transcribe), one uploaded proxy reused by every call.
 Every call writes <name>_request.json and <name>_response.json and a ledger entry with tokens and dollars.
+A Muse Spark Open model id (config.OPEN_MODEL, Baseten) sends the same prompt and schema as an OpenAI-compatible chat
+completion instead (text only, no file input); the response is read back in the Responses shape.
 """
 from __future__ import annotations
 
@@ -12,10 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..config import SPARK_MODEL, spark_cost
+from ..config import SPARK_MODEL, is_open_model, spark_cost
 from ..ledger import Entry, Ledger, Timer
 from . import schemas
-from .api import dump_json, output_text, responses_create
+from .api import chat_as_response, chat_create, dump_json, output_text, responses_create
 
 
 @dataclass
@@ -42,19 +44,35 @@ class Spark:
     def call(self, name: str, prompt: str, schema: dict, file_id: str | None = None, max_output_tokens: int = 12000,
              reasoning_effort: str | None = None, stage: str | None = None, schema_name: str | None = None) -> SparkCall:
         """`name` names the request/response files; `stage` the ledger entry (default spark.<name>)."""
-        content: list[dict] = [{"type": "input_text", "text": prompt}]
-        if file_id:
-            content.append({"type": "input_file", "file_id": file_id})
-        body: dict = {"model": self.model, "max_output_tokens": max_output_tokens,
-                      "input": [{"type": "message", "role": "user", "content": content}],
-                      "text": {"format": {"type": "json_schema", "name": schema_name or name, "strict": True, "schema": schema}}}
-        if reasoning_effort:
-            body["reasoning"] = {"effort": reasoning_effort}
+        open_model = is_open_model(self.model)
+        if open_model:
+            if file_id:
+                raise SystemExit(f"spark {name}: {self.model} is used text only here (no Files API input); "
+                                 "drop --plan-with-video or plan with muse-spark-1.3")
+            body: dict = {"model": self.model, "max_tokens": max_output_tokens,
+                          "messages": [{"role": "user", "content": prompt}],
+                          "response_format": {"type": "json_schema", "json_schema": {
+                              "name": schema_name or name, "strict": True, "schema": schema}}}
+            if reasoning_effort:
+                body["reasoning_effort"] = reasoning_effort
+        else:
+            content: list[dict] = [{"type": "input_text", "text": prompt}]
+            if file_id:
+                content.append({"type": "input_file", "file_id": file_id})
+            body = {"model": self.model, "max_output_tokens": max_output_tokens,
+                    "input": [{"type": "message", "role": "user", "content": content}],
+                    "text": {"format": {"type": "json_schema", "name": schema_name or name, "strict": True, "schema": schema}}}
+            if reasoning_effort:
+                body["reasoning"] = {"effort": reasoning_effort}
         dump_json(self.dir / f"{name}_request.json", body)
         self.log(f"spark: {name} -> {self.model}{' + video' if file_id else ''} ...")
         with Timer() as t:
-            resp = responses_create(body)
-        dump_json(self.dir / f"{name}_response.json", resp)
+            if open_model:
+                raw = chat_create(body)
+                resp = chat_as_response(raw)
+            else:
+                resp = responses_create(body)
+        dump_json(self.dir / f"{name}_response.json", raw if open_model else resp)
         usage = resp.get("usage") or {}
         cost = spark_cost(usage, self.model)
         status = resp.get("status", "?")

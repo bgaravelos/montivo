@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, sam_cost
+from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, open_api_key, sam_cost
 from .engine import track as track_mod
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, tighten_edges
@@ -39,6 +39,7 @@ class RunOptions:
     skip_track: bool = False
     resume: bool = False
     model: str = SPARK_MODEL
+    planner_model: str | None = None  # None = model; config.OPEN_MODEL plans on Muse Spark Open (Baseten, text only)
     render: bool = True
     hflip: bool = False  # mirror the footage once in ingest (selfie / mirror-mode clips)
     title: bool = True  # Muse Image title card in front of the cut ($0.01)
@@ -63,11 +64,13 @@ class RunLog:
 
 def run(opts: RunOptions) -> dict:
     out = opts.out
+    if opts.planner_model:
+        open_api_key()  # fail before any spend, not at the plan call after Voice, SAM and watch
     out.mkdir(parents=True, exist_ok=True)
     log = RunLog(out / "run.log")
     ledger = Ledger.resume(out / "ledger.json") if opts.resume else Ledger(out / "ledger.json")
     dump_json(out / "run.json", {"footage": str(opts.footage), "brief": opts.brief, "concepts": opts.concepts, "reframe_concept": opts.reframe_concept, "reframe_fps": opts.reframe_fps,
-                                 "target_s": opts.target_s, "model": opts.model, "hflip": opts.hflip, "started": time.strftime("%Y-%m-%dT%H:%M:%S")})
+                                 "target_s": opts.target_s, "model": opts.model, "planner_model": opts.planner_model or opts.model, "hflip": opts.hflip, "started": time.strftime("%Y-%m-%dT%H:%M:%S")})
     log(f"montivo run: {opts.footage.name} -> {out}")
 
     def have(*parts: str) -> bool:
@@ -176,7 +179,8 @@ def run(opts: RunOptions) -> dict:
     wps = voice.speech_rate()
     log(f"plan: speech rate {wps:.2f} words/s ({len(voice.words)} words over the spoken seconds of {len(voice.turns)} turns), "
         f"target {opts.target_s:.0f} s = about {opts.target_s * wps:.0f} to {opts.target_s * 1.2 * wps:.0f} words")
-    planned = spark.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
+    planner = Spark(out, ledger, model=opts.planner_model, log=log) if opts.planner_model else spark
+    planned = planner.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
                          file_id=ing.file_id if opts.plan_with_video else None, reasoning_effort=opts.plan_effort,
                          words_per_s=wps)
     dump_json(out / "plan.json", planned.parsed)

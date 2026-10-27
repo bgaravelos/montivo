@@ -10,12 +10,19 @@ VOICE_MODEL = "muse-voice-transcribe-1.0"
 SAM_MODEL = "sam-3.1"
 IMAGE_MODEL = "muse-image-1.0"
 
+# Open Weight track: Muse Spark Open served by Baseten Model APIs (OpenAI-compatible chat completions, text only here).
+# The planner is the one call that needs no video, so it is the one that can run on the open model (--planner open).
+OPEN_BASE_URL = os.environ.get("MONTIVO_OPEN_BASE_URL", "https://inference.baseten.co/v1")
+OPEN_MODEL = os.environ.get("MONTIVO_OPEN_MODEL", "meta-models/muse-spark-open-1026")
+
 # USD, from dev.meta.ai/docs/pricing-rate-limits (read 26/10/2026)
 PRICE = {
     "muse-spark-1.3": {"in": 1.25, "out": 4.25, "cached": 0.15},  # per 1M tokens
     "sam-video-frame": 0.20 / 1000,  # per processed frame, minimum 50 frames per request
     "voice-hour": 0.18,  # per hour of audio
     "image": 0.01,  # per generated image
+    # Baseten list price for Muse Spark Open as third-party trackers quote it (27/10); check the Baseten dashboard
+    OPEN_MODEL: {"in": 1.25, "out": 4.25, "cached": 0.15},
 }
 
 # Measured limits that shape the pipeline (see docs/measurements.md)
@@ -42,8 +49,19 @@ def api_key() -> str:
     return key
 
 
+def open_api_key() -> str:
+    key = os.environ.get("BASETEN_API_KEY")
+    if not key:
+        raise SystemExit("BASETEN_API_KEY is not set. Export it (Baseten > API keys) to plan with Muse Spark Open.")
+    return key
+
+
+def is_open_model(model: str) -> bool:
+    return model == OPEN_MODEL or model.startswith("meta-models/")
+
+
 def spark_cost(usage: dict, model: str = SPARK_MODEL) -> float:
-    p = PRICE[model]
+    p = PRICE.get(model) or PRICE[OPEN_MODEL if is_open_model(model) else SPARK_MODEL]
     cached = (usage.get("input_tokens_details") or {}).get("cached_tokens") or 0
     inp = (usage.get("input_tokens") or 0) - cached
     out = usage.get("output_tokens") or 0

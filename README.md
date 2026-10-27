@@ -47,6 +47,8 @@ montivo render runs/001 --out cut_v3.mp4   re-render from edl_v1.json + voice.js
 montivo review runs/001                    the review loop on a finished run folder: review cut_v1, patch, render cut_v2, review ...
 montivo edges runs/001                     the edge pass on an EDL built before it existed ($0; the old EDL kept under check/)
 montivo speakers runs/001                  which SAM head is which Voice speaker ($0) -> speakers.json; the next render follows it
+montivo plan runs/001 --planner open       a fresh paper edit from the run's brief, voice and watch on Muse Spark Open (Baseten)
+                                           -> the next edl_vN / cut_vN beside Spark 1.3's v1 (the Open Weight A/B, one call)
 ```
 
 The review loop: the reviewer gets the cut (scaled to 720x1280 with a cut-time clock burned in at the top left), the brief,
@@ -107,6 +109,15 @@ tokens come from the cache); `--passes 1` or `--no-apply` reviews once and write
 `montivo edges runs/001 [--edl edl_v1.json] [--dry-run]` tightens an EDL that was built before the edge pass existed: it
 rewrites the EDL in place (the old one goes to `check/<name>_before_edges.json`), clears the render fields so the next
 `render` or `review` renders it again, and logs every move; a second run moves nothing.
+Open Weight planner: `montivo run ... --planner open` writes the paper edit with Muse Spark Open on Baseten Model APIs
+(`config.OPEN_MODEL`, default `meta-models/muse-spark-open-1026`, `MONTIVO_OPEN_MODEL` / `MONTIVO_OPEN_BASE_URL` override;
+`BASETEN_API_KEY` in the environment, checked before any spend). The plan is the one call that needs no video, so the
+same prompt and strict JSON schema go out as an OpenAI-compatible chat completion (`response_format` json_schema),
+the answer is read back in the Responses shape and logged in the ledger like any Spark call; watch and review stay on
+Spark 1.3. `montivo plan runs/001 --planner open` does it on a finished run folder: a fresh plan from the run's own
+brief (blind to the current cut), the next `edl_vN` with a `replan` patch that names the model, rendered, so the UI's
+Compare shows the two planners side by side; `--review 3` runs the loop on it.
+
 Speaker to head mapping (`engine/speakers.py`, run step and `montivo speakers runs/001`): with two or more voices and two
 or more heads, every head box gets a mouth-minus-eyes motion series on the 5 fps grid SAM saw (mean absolute frame
 difference in the lower 40 % of the box minus the 10 to 45 % band, so a nod or a camera move cancels out), compared per
