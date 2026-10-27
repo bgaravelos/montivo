@@ -113,6 +113,7 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
       const what = o.action === "drop" ? `Delete clip ${f?.target ?? ""}.`
         : o.action === "trim" ? `Trim the ${(f?.args as { edge?: string } | null)?.edge === "in" ? "start" : "end"} of clip ${f?.target ?? ""}.`
         : o.action === "punch" ? (f?.op === "punch_skip" ? "Remove one punch-in." : `Turn the punch-ins ${f?.op === "punch_off" ? "off" : "on"}.`)
+        : o.action === "caption" ? `Fix ${o.fixes?.length === 1 ? "a caption line" : `${o.fixes?.length} caption lines`}.`
         : (o.instruction ?? "Ask Montivo.");
       out.push({ who: "you", text: what, chips: [`v${o.from}`], v: v.n });
       if (fixes) out.push({ who: "tool", text: fixes, v: v.n });

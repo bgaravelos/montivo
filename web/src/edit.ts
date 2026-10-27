@@ -107,6 +107,7 @@ export function originLabel(v: Version): string {
   if (o.action === "drop") return "your edit · deleted a clip";
   if (o.action === "trim") return "your edit · trimmed a clip";
   if (o.action === "replan") return "your edit · asked Montivo";
+  if (o.action === "caption") return `your edit · ${o.fixes?.length === 1 ? "a caption line" : `${o.fixes?.length ?? ""} caption lines`}`;
   if (o.action === "punch") {
     const op = o.fixes?.[0]?.op;
     return op === "punch_skip" ? "your edit · removed a punch-in" : `your edit · punch-ins ${op === "punch_off" ? "off" : "on"}`;

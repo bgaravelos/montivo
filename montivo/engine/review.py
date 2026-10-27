@@ -36,7 +36,9 @@ import difflib
 import json
 import math
 import re
+import shutil
 import subprocess
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -934,7 +936,10 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
     summary = {"stop": stop, "passes": history, "reviews": len(history), "review_cost_usd": round(spent, 4),
                "best": {"version": best["version"], "cut": best["cut"], "overall": best["overall"]} if best else None,
                "last_edl": edl_path.name, "budget_usd": budget_usd}
-    dump_json(run_dir / "review" / "loop.json", summary)
+    prior = run_dir / "review" / "loop.json"
+    if prior.is_file():  # a later review (the editor's "Review this version") keeps the agent loop's history
+        shutil.copy2(prior, prior.with_name(f"loop_{time.strftime('%Y%m%d-%H%M%S', time.localtime(prior.stat().st_mtime))}.json"))
+    dump_json(prior, summary)
     log(f"review loop: {len(history)} reviews, stop: {stop}; scores "
         + " -> ".join(f"v{h['version']} {h['overall']}" for h in history) + f"; ${spent:.4f}")
     return summary

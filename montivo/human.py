@@ -174,6 +174,24 @@ def caption_fixes(edl: dict, edits: list[tuple[float, str]]) -> list[Fix]:
     return fixes
 
 
+def carry_caption_text(prev: dict, new: dict) -> list[dict]:
+    """The retexted caption lines of a rendered EDL (a human's or the reviewer's caption_text) as overrides for a
+    re-plan: the text goes to the new span over the same source time, with the words Voice heard on that line
+    (`voice`), so the renderer applies it only where the new plan breaks a line the same way (captions.override_for)."""
+    texts = [o for o in prev.get("caption_overrides") or [] if o.get("text")]
+    out = []
+    for c in prev.get("captions") or []:
+        heard = next((w["voice"] for w in c.get("words") or [] if w.get("voice")), None)
+        ov = next((o for o in reversed(texts) if o["span"] in c["spans"] and o["text"] == c["text"]), None)
+        if not heard or ov is None:
+            continue
+        src_t = float(ov["src_t"])
+        s = next((s for s in new["spans"] if s["t_in"] <= src_t < s["t_out"]), None)
+        if s is not None:
+            out.append({"span": s["id"], "src_t": src_t, "text": c["text"], "voice": heard, "why": ov.get("why")})
+    return out
+
+
 def caption(run_dir: Path, edits: list[tuple[float, str]], from_v: int | None = None, passes: int = 0,
             budget: float = 0.15) -> dict:
     """Retext caption lines of edl_v{from} -> edl_vN, rendered: for the words Voice misheard (run 015: "meta meta
@@ -309,7 +327,12 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
         new["punch_skip"] = list(prev["punch_skip"])
     if prev.get("reframe_speaker_ids"):
         new["reframe_speaker_ids"] = dict(prev["reframe_speaker_ids"])
-    note = f"replanned: {len(new['spans'])} spans, {new['runtime_s']} s (was {len(prev['spans'])} spans, {prev['runtime_s']} s)"
+    carried = carry_caption_text(prev, new)
+    if carried:
+        new.setdefault("caption_overrides", []).extend(carried)
+        log(f"caption texts carried from v{from_v} (where a line reads the same): "
+            + ", ".join(repr(o["text"]) for o in carried))
+    note =f"replanned: {len(new['spans'])} spans, {new['runtime_s']} s (was {len(prev['spans'])} spans, {prev['runtime_s']} s)"
     new["patches"] = list(prev.get("patches") or []) + [
         {"from": from_v, "review": None, "source": "human", "action": "replan", "instruction": instruction,
          "model": model, "fixes": [{"op": "replan", "target": "plan", "issue": -1, "severity": "human", "note": note}]}]

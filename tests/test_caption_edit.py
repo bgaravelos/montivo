@@ -94,3 +94,63 @@ def test_cli_pairs_at_and_text(tmp_path, monkeypatch):
     assert got == [(d, [(6.5, "we edit short form"), (18.0, "Four Meta")], None, 0, 0.15)]
     with pytest.raises(SystemExit):
         human.main(["caption", str(d), "--at", "6.5"])
+
+
+def test_a_replan_carries_the_texts_to_lines_that_read_the_same():
+    prev = {"spans": [{"id": "s2", "t_in": 20.0, "t_out": 27.0}],
+            "caption_overrides": [{"span": "s2", "src_t": 24.95, "text": "we edit short form", "why": "human"},
+                                  {"span": "s2", "src_t": 21.01, "top": 500, "why": "review"}],
+            "captions": [{"spans": ["s2"], "text": "we edit short form",
+                          "words": [{"w": "we", "voice": "we added short form"}, {"w": "edit", "voice": "we added short form"}]},
+                         {"spans": ["s2"], "text": "videos every", "words": [{"w": "videos"}, {"w": "every"}]}]}
+    new = {"spans": [{"id": "s1", "t_in": 18.7, "t_out": 20.8}, {"id": "s3", "t_in": 22.0, "t_out": 26.0}]}
+    got = human.carry_caption_text(prev, new)
+    assert got == [{"span": "s3", "src_t": 24.95, "text": "we edit short form", "voice": "we added short form", "why": "human"}]
+    assert human.carry_caption_text(prev, {"spans": [{"id": "s1", "t_in": 18.7, "t_out": 20.8}]}) == []  # source time cut
+    # the renderer applies a carried text only to a line that still reads the words Voice heard
+    line = [CWord(w=w, t_in=24.94 + k * 0.1, t_out=25.04 + k * 0.1, span="s3") for k, w in enumerate("we added short form".split())]
+    assert override_for(line, got)["text"] == "we edit short form"
+    assert override_for(line[:3], got) is None  # the new plan broke the line elsewhere
+    assert override_for(line[:3], [{**got[0], "voice": None}])["text"] == "we edit short form"  # no voice: as before
+
+
+def test_caption_endpoint(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from montivo.server import app as A
+    started = []
+
+    class FakeJob:
+        def public(self):
+            return {"id": "j"}
+
+    monkeypatch.setattr(A, "start_job", lambda st, run_id, kind, label, args, chat=None:
+                        started.append((kind, label, args, chat)) or FakeJob())
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    (tmp_path / "runs" / "r1").mkdir(parents=True)
+    (tmp_path / "runs" / "r1" / "run.json").write_text("{}")
+    (tmp_path / "runs" / "r1" / "edl_v3.json").write_text("{}")
+    c = TestClient(A.create_app(tmp_path))
+    edits = [{"at": 6.68, "text": " we  edit short form "}, {"at": 18.2, "text": "--from 1"}]
+    assert c.post("/api/runs/r1/caption", json={"edits": edits}).status_code == 200
+    kind, label, args, chat = started[0]
+    assert (kind, label) == ("caption", "Edit 2 caption lines")
+    assert args == ["-m", "montivo.human", "caption", "runs/r1", "--at=6.680", "--text=we edit short form",
+                    "--at=18.200", "--text=--from 1", "--from", "3", "--review", "0"]
+    got = []
+    monkeypatch.setattr(human, "caption", lambda *a: got.append(a) or {})
+    human.main([args[2], str(tmp_path / "runs" / "r1"), *args[4:]])
+    assert got[0][1] == [(6.68, "we edit short form"), (18.2, "--from 1")] and got[0][2] == 3
+    assert chat["kind"] == "caption" and "we edit short form" in chat["text"]
+    for bad in ({}, {"edits": []}, {"edits": [{"at": 1}]}, {"edits": [{"at": "x", "text": "a"}]},
+                {"edits": [{"at": 1, "text": "  "}]}, {"edits": "a"}):
+        assert c.post("/api/runs/r1/caption", json=bad).status_code == 400
+    assert c.post("/api/runs/r1/caption", json={"edits": edits, "review": 1}).status_code == 409  # review needs the key
+
+
+def test_the_replan_prompt_names_the_current_callouts():
+    from montivo.engine.edl import edl_summary
+    span = {"id": "s5", "role": "body", "t_in": 36.62, "t_out": 41.28, "speaker": "A", "words": "meta models do all the work"}
+    with_call = edl_summary({"runtime_s": 4.7, "spans": [{**span, "callout": "Four Meta models"}]})
+    assert 'callout "Four Meta models"' in with_call and "Keep these callouts" in with_call
+    assert "callout" not in edl_summary({"runtime_s": 4.7, "spans": [{**span, "callout": ""}]})

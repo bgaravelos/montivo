@@ -425,6 +425,35 @@ def create_app(root: Path) -> FastAPI:
         job = start_job(st, run_id, "punch", label, args, chat={"role": "user", "text": text, "chips": [f"v{frm}"], "kind": "punch"})
         return {"job": job.public()}
 
+    @app.post("/api/runs/{run_id}/caption")
+    async def caption(run_id: str, request: Request):
+        """Retext caption lines ({"edits": [{"at": cut second, "text": words spoken}]}): the next version, ffmpeg only."""
+        d = st.run_dir(run_id)
+        b = await request.json()
+        frm = int(b.get("from") or latest_version(d))
+        passes = int(b.get("review") or 0)
+        if passes:
+            need_key("Reviewing the new cut")
+        edits = b.get("edits") or []
+        if not isinstance(edits, list) or not 0 < len(edits) <= 40:
+            raise HTTPException(400, "edits: 1 to 40 of {at, text}")
+        flags, quoted = [], []
+        for e in edits:
+            try:
+                at, text = float(e["at"]), " ".join(str(e["text"]).split())
+            except (KeyError, TypeError, ValueError):
+                raise HTTPException(400, "each edit needs at (cut seconds) and text")
+            if not text or len(text) > 200:
+                raise HTTPException(400, "caption text: 1 to 200 characters")
+            flags += [f"--at={at:.3f}", f"--text={text}"]  # = keeps a text that starts with "-" a value
+            quoted.append(f"“{text}”")
+        args = ["-m", "montivo.human", "caption", f"runs/{run_id}", *flags, "--from", str(frm), "--review", str(passes)]
+        n = len(edits)
+        job = start_job(st, run_id, "caption", f"Edit {n} caption line{'s' if n > 1 else ''}", args,
+                        chat={"role": "user", "text": f"Caption{'s' if n > 1 else ''} in v{frm}: {', '.join(quoted)}.",
+                              "chips": [f"v{frm}"], "kind": "caption"})
+        return {"job": job.public()}
+
     @app.post("/api/runs/{run_id}/replan")
     async def replan(run_id: str, request: Request):
         d = st.run_dir(run_id)
@@ -451,8 +480,9 @@ def create_app(root: Path) -> FastAPI:
         frm = int(b.get("from") or latest_version(d))
         passes = int(b.get("passes") or 3)
         args = ["-m", "montivo.cli", "review", f"runs/{run_id}", "--edl", f"edl_v{frm}.json", "--passes", str(passes)]
-        job = start_job(st, run_id, "review", "Review loop", args,
-                        chat={"role": "user", "text": f"Review v{frm} blind, up to {passes} passes.", "kind": "review"})
+        job = start_job(st, run_id, "review", "Review loop" if passes > 1 else "Blind review", args,
+                        chat={"role": "user", "kind": "review",
+                              "text": f"Review v{frm} blind, up to {passes} passes." if passes > 1 else f"Review v{frm} blind."})
         return {"job": job.public()}
 
     @app.post("/api/runs/{run_id}/stop")

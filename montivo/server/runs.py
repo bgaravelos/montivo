@@ -184,7 +184,9 @@ def versions(run_dir: Path) -> list[dict]:
                                  for c in edl.get("callouts") or []],
                     "caption_lines": [{"id": c.get("id"), "text": c.get("text"), "t_in": c.get("t_in"), "t_out": c.get("t_out"),
                                        "spans": c.get("spans") or [], "placement": c.get("placement"),
-                                       "over_face": bool(c.get("over_face"))} for c in edl.get("captions") or []],
+                                       "over_face": bool(c.get("over_face")),
+                                       "heard": next((w["voice"] for w in c.get("words") or [] if w.get("voice")), None)}
+                                      for c in edl.get("captions") or []],
                     "caption_style": edl.get("caption_style"), "caption_style_note": edl.get("caption_style_note"),
                     "punch": bool(edl.get("punch")), "punch_skip": list(edl.get("punch_skip") or []),
                     "punch_ins": [{k: e.get(k) for k in ("key", "kind", "word", "span", "excess_db", "t_in", "t_out", "zoom")}

@@ -241,6 +241,12 @@ def test_loop_stops_when_the_same_fix_comes_back(tmp_path):
     v2 = json.loads((tmp_path / "edl_v2.json").read_text())
     assert v2["spans"][0]["word_to"] == 4 and v2["patches"][0]["from"] == 1
     assert json.loads((tmp_path / "review" / "loop.json").read_text())["best"]["version"] == 2
+    # a later review of one version (the editor's "Review this version") keeps the agent loop's history beside it
+    R.review_loop(tmp_path, tmp_path / "edl_v2.json", passes=1, budget_usd=1.0, log=lambda m: None, render_fn=render_fn,
+                  review_fn=review_fn, ledger=R.Ledger(tmp_path / "ledger.json"))
+    kept = list((tmp_path / "review").glob("loop_*.json"))
+    assert len(kept) == 1 and json.loads(kept[0].read_text())["reviews"] == 2
+    assert json.loads((tmp_path / "review" / "loop.json").read_text())["stop"] == "max passes (1)"
 
 
 def test_loop_budget_guard(tmp_path):

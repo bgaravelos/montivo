@@ -19,6 +19,7 @@ const P: Record<string, string> = {
   check: "M5 12.5l4.5 4.5L19 7.5",
   trash: "M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6",
   close: "M6 6l12 12M18 6L6 18",
+  pencil: "M15.5 4.5l4 4L8 20H4v-4zM13 7l4 4",
   chevron: "M9 6l6 6-6 6",
   chevronDown: "M6 9l6 6 6-6",
   zoomIn: "M10.5 4.5a6 6 0 110 12 6 6 0 010-12zM15 15l5 5M8 10.5h5M10.5 8v5",

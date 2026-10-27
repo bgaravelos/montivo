@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { fileUrl, tc } from "./api";
 import { originKind, originLabel, parentOf } from "./edit";
 import { Icon } from "./icons";
@@ -35,10 +36,35 @@ export function MediaPanel({ state }: { state: RunState }) {
   );
 }
 
-export function CaptionsPanel({ v, t, onSeek }: { v: Version | null; t: number; onSeek: (a: number) => void }) {
+export type CaptionEdit = { at: number; text: string };
+
+/** The caption lines of a version; each can be retexted where Voice misheard a word. Edits are staged here and applied
+ *  together as the next version (the reviewer's caption_text patch, $0, a re-render), so four fixes are one render. */
+export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply }: {
+  v: Version | null; t: number; next: number; canEdit: string | null; onSeek: (a: number) => void;
+  onApply: (edits: CaptionEdit[]) => void;
+}) {
   const lines = v?.caption_lines ?? [];
   const st = v?.caption_style;
   const font = st?.font_path?.split("/").pop()?.replace(/\.(ttf|otf)$/, "").replace(/-/g, " ");
+  const [staged, setStaged] = useState<Record<string, string>>({});
+  const [editing, setEditing] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  useEffect(() => { setStaged({}); setEditing(null); }, [v?.n]);
+  const n = Object.keys(staged).length;
+  const open = (id: string, text: string) => { if (canEdit) return; setEditing(id); setDraft(staged[id] ?? text); };
+  const commit = (id: string, text: string) => {
+    const clean = draft.split(/\s+/).filter(Boolean).join(" ");
+    setStaged((s) => {
+      const { [id]: _, ...rest } = s;
+      return clean && clean !== text ? { ...rest, [id]: clean } : rest;
+    });
+    setEditing(null);
+  };
+  const apply = () => {
+    const edits = lines.filter((c) => staged[c.id]).map((c) => ({ at: (c.t_in + c.t_out) / 2, text: staged[c.id] }));
+    if (edits.length) onApply(edits);
+  };
   return (
     <section className="side-panel">
       <div className="panel-head"><span className="ph-title">Captions</span><span className="ph-sub">{lines.length} lines</span></div>
@@ -58,17 +84,48 @@ export function CaptionsPanel({ v, t, onSeek }: { v: Version | null; t: number; 
             </>
           ) : <p className="mute small">This version was rendered without captions.</p>}
         </div>
+        {lines.length > 0 && <p className="mute small">Double-click a line (or its pencil) to fix a word Voice misheard; the timing stays.</p>}
         <div className="list">
-          {lines.map((c) => (
-            <button key={c.id} className={`list-row ${t >= c.t_in && t < c.t_out ? "on" : ""}`} onClick={() => onSeek(c.t_in)}>
+          {lines.map((c) => editing === c.id ? (
+            <div key={c.id} className="list-row cap-edit">
               <span className="lr-t mono">{tc(c.t_in)}</span>
-              <span className="lr-txt">{c.text}</span>
-              {c.over_face && <span className="lr-flag" title="moved off the face">moved</span>}
-            </button>
+              <input autoFocus value={draft} maxLength={200} aria-label={`Caption at ${tc(c.t_in)}`} onFocus={(e) => e.currentTarget.select()}
+                onChange={(e) => setDraft(e.target.value)} onBlur={() => commit(c.id, c.text)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { e.preventDefault(); commit(c.id, c.text); }
+                  else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setEditing(null); }
+                }} />
+            </div>
+          ) : (
+            <div key={c.id} role="button" tabIndex={0} className={`list-row cap-row ${t >= c.t_in && t < c.t_out ? "on" : ""} ${staged[c.id] ? "staged" : ""}`}
+              onClick={() => onSeek(c.t_in)} onDoubleClick={() => open(c.id, c.text)}
+              onKeyDown={(e) => { if (e.key === "Enter") open(c.id, c.text); }}>
+              <span className="lr-t mono">{tc(c.t_in)}</span>
+              <span className="lr-txt">
+                {staged[c.id] ?? c.text}
+                {staged[c.id] ? <span className="lr-was">was: {c.text}</span>
+                  : c.heard && c.heard !== c.text ? <span className="lr-was" title="The words Voice heard; the line was corrected">Voice: {c.heard}</span> : null}
+              </span>
+              <span className="lr-end">
+                {staged[c.id] ? <span className="lr-flag edited">edited</span> : c.over_face && <span className="lr-flag" title="moved off the face">moved</span>}
+                <button className="icon-btn lr-edit" disabled={!!canEdit} title={canEdit ?? "Edit this line"}
+                  onClick={(e) => { e.stopPropagation(); open(c.id, c.text); }}><Icon name="pencil" size={13} /></button>
+              </span>
+            </div>
           ))}
           {!lines.length && <p className="mute small pad">No caption lines in this version.</p>}
         </div>
       </div>
+      {n > 0 && (
+        <div className="cap-apply">
+          <span>{n} line{n > 1 ? "s" : ""} edited</span>
+          <span className="grow" />
+          <button className="btn quiet" onClick={() => setStaged({})}>Discard</button>
+          <button className="btn" disabled={!!canEdit} title={canEdit ?? `Makes Version ${next} with the new text ($0, a re-render)`} onClick={apply}>
+            Make Version {next}
+          </button>
+        </div>
+      )}
     </section>
   );
 }

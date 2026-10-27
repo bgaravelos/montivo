@@ -47,7 +47,8 @@ export type PunchIn = {
   t_in: number; t_out: number; zoom: number;
 };
 
-export type CaptionLine = { id: string; text: string; t_in: number; t_out: number; spans: string[]; placement: string | null; over_face: boolean };
+export type CaptionLine = { id: string; text: string; t_in: number; t_out: number; spans: string[]; placement: string | null; over_face: boolean;
+  heard: string | null }; // heard: the words Voice heard, when the line was retexted (by a human or the reviewer)
 
 export type CaptionStyle = { font?: number; max_words?: number; default_top?: number; font_path?: string; glossary?: Record<string, string> };
 

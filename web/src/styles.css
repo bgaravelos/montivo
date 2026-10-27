@@ -145,6 +145,17 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .lr-t { color: var(--mute); font-size: 11px; }
 .lr-txt { color: var(--text); }
 .lr-flag { font-size: 11px; color: var(--mute); }
+.cap-row { cursor: pointer; }
+.lr-txt .lr-was { display: block; font-size: 11px; color: var(--mute); text-decoration: line-through; text-decoration-color: var(--dim); }
+.lr-end { display: flex; align-items: center; gap: 4px; }
+.lr-edit { width: 24px; height: 24px; opacity: 0; }
+.cap-row:hover .lr-edit, .cap-row.on .lr-edit, .cap-row:focus-visible .lr-edit, .lr-edit:focus-visible { opacity: 1; }
+.cap-row.staged { box-shadow: inset 2px 0 0 var(--accent); }
+.lr-flag.edited { color: var(--accent); }
+.cap-edit { grid-template-columns: 52px 1fr; align-items: center; background: var(--panel-3); }
+.cap-edit input { background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: 5px; padding: 4px 6px; font: inherit; min-width: 0; }
+.cap-edit input:focus { outline: none; }
+.cap-apply { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); background: var(--panel-2); font-size: 13px; }
 .media-card { display: flex; flex-direction: column; gap: 10px; }
 .media-card video { width: 100%; border-radius: var(--r); background: #000; aspect-ratio: 16 / 9; }
 .media-ph { aspect-ratio: 16 / 9; display: grid; place-items: center; background: var(--bg); border-radius: var(--r); color: var(--mute); }

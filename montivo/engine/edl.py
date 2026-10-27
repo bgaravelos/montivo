@@ -139,7 +139,12 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
 
 
 def edl_summary(edl: dict) -> str:
+    """The current cut for a re-plan's prompt, callouts included: without them the planner dropped both of run 015's
+    callouts on "make it about 30 seconds" (015-ui v5), an edit nobody asked for."""
     lines = [f"runtime {edl['runtime_s']} s, {len(edl['spans'])} spans"]
     for s in edl["spans"]:
-        lines.append(f"- {s['id']} [{s['role']}] source {s['t_in']:.2f}-{s['t_out']:.2f}s speaker {s['speaker']}: \"{s['words']}\"")
+        call = f" callout \"{s['callout']}\"" if s.get("callout") else ""
+        lines.append(f"- {s['id']} [{s['role']}] source {s['t_in']:.2f}-{s['t_out']:.2f}s speaker {s['speaker']}: \"{s['words']}\"{call}")
+    if any(s.get("callout") for s in edl["spans"]):
+        lines.append("Keep these callouts on the spans that still say those words, unless the editor's note says otherwise.")
     return "\n".join(lines)

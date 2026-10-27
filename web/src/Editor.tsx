@@ -225,7 +225,10 @@ export function Editor({ id, replay, go }: Props) {
             onStop={() => act("stop", {})} />
         )}
         {panel === "media" && <MediaPanel state={state} />}
-        {panel === "captions" && <CaptionsPanel v={v} t={t} onSeek={seek} />}
+        {panel === "captions" && (
+          <CaptionsPanel v={v} t={t} next={next} canEdit={canEdit} onSeek={seek}
+            onApply={(edits) => { setPanel("assistant"); act("caption", { edits, from: v?.n }); }} />
+        )}
         {panel === "text" && <TextPanel state={state} v={v} t={t} onSeek={seek} />}
         {panel === "versions" && <VersionsPanel id={id} state={state} versions={visible} sel={sel} onPick={pick} go={go} replay={replay} />}
       </aside>

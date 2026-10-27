@@ -4,8 +4,40 @@
     {
       "name": "montivo-ui",
       "runtimeExecutable": "env",
-      "runtimeArgs": ["-u", "MODEL_API_KEY", "-u", "BASETEN_API_KEY", ".venv/bin/montivo", "serve"],
+      "runtimeArgs": [
+        "-u",
+        "MODEL_API_KEY",
+        "-u",
+        "BASETEN_API_KEY",
+        ".venv/bin/montivo",
+        "serve"
+      ],
       "port": 8765
+    },
+    {
+      "name": "montivo-ui-8766",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "-u",
+        "MODEL_API_KEY",
+        "-u",
+        "BASETEN_API_KEY",
+        ".venv/bin/montivo",
+        "serve",
+        "--port",
+        "8766"
+      ],
+      "port": 8766
+    },
+    {
+      "name": "montivo-ui-key",
+      "runtimeExecutable": ".venv/bin/montivo",
+      "runtimeArgs": [
+        "serve",
+        "--port",
+        "8767"
+      ],
+      "port": 8767
     }
   ]
 }

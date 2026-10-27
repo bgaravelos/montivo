@@ -162,8 +162,18 @@ montivo.human caption RUN --at CUT_S --text "..."` (repeatable) retexts the line
 reviewer's `caption_text` patch -> next edl_vN; `captions.override_for` now merges every override of a line in order
 (later text wins, a forced top stays) and its end is strict (an abutting next line's src_t used to match too). Billy
 confirmed four Voice mishearings -> run 015 v3 / `cut_v3.mp4`: "we edit short form", "Four Meta models do all",
-"watches its own render", "scores it against" (frames checked; "the Muse Spark" left as Voice heard it). v3 not
-reviewed. Not in the editor UI yet. The evening-by-evening table is in README.md.
+"watches its own render", "scores it against" (frames checked; "the Muse Spark" left as Voice heard it).
+Editor gaps closed (27/10 evening, $0.11): the Captions panel retexts lines (double-click or the pencil, edits staged,
+"Make Version N" -> POST `/api/runs/{id}/caption` -> `montivo.human caption`, one render for all; a corrected line
+shows what Voice heard, `caption_lines[].heard`); a re-plan carries the caption texts to the new spans
+(`human.carry_caption_text`, with `voice` = the words Voice heard, applied only where the new plan breaks the line the
+same way) and the re-plan prompt now lists the current callouts (`edl_summary`: without them Spark dropped both of 015's
+callouts on "make it about 30 seconds"); a later review keeps the agent loop's `review/loop.json` as
+`review/loop_<time>.json`. First real clicks with the key: "Review this version" on 015 v3 -> 87 pass
+(captions_match_speech 10, was 5 in v1; the only issue is the brief's "this is the part that matters", never said);
+Ask Montivo on the sandbox `runs/015-ui` (v4 + two test caption edits) -> v5 7 spans 32.0 s, review 100 pass, captions
+carried, callouts lost -> after the fix v6 kept both. `.claude/launch.json` "montivo-ui-key" serves WITH the key on 8767
+(it spends: stop it after use). The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

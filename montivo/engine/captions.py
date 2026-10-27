@@ -357,9 +357,13 @@ def override_for(words: list[CWord], overrides: list[dict]) -> dict | None:
     An override carries `top` (a forced y, used to plant a known fault and removed by caption_fix) and/or `text`
     (the words actually spoken, from the reviewer's caption_fix or a human caption edit). Several entries on one line
     merge in order, so a later text (a human correcting the reviewer's) wins and a forced `top` stays. The end is
-    strict: src_t is the line's first word + 0.01 s, which would also land on the end of a line it abuts (run 015)."""
+    strict: src_t is the line's first word + 0.01 s, which would also land on the end of a line it abuts (run 015).
+    An entry with `voice` (a text carried across a re-plan) applies only to a line that still reads exactly those
+    words: the new plan can break the lines elsewhere, and the old text would then replace the wrong words."""
+    heard = " ".join(w.w for w in words)
     hit = [ov for ov in overrides if any(w.span == ov.get("span") for w in words)
-           and words[0].t_in - 0.01 <= float(ov["src_t"]) < words[-1].t_out]
+           and words[0].t_in - 0.01 <= float(ov["src_t"]) < words[-1].t_out
+           and ov.get("voice") in (None, heard)]
     return {k: v for ov in hit for k, v in ov.items() if v is not None} or None
 
 
