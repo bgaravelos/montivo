@@ -68,7 +68,15 @@ NLE redesign (27/10, commit `767e5f2`): `web/src/Editor.tsx` replaces `Room.tsx`
 multi-track timeline with filmstrip / waveform / issue markers, J/K/L, export), trim by drag via `montivo.human trim`
 (snaps to word boundaries, reviewer rules), `montivo/server/media.py` (filmstrip, peaks). Caption style is read-only (one
 renderer style); Ask Montivo and "Review this version" not yet clicked with a key.
-Next: the NASA clip (needs speaker -> person mapping), the Open Weight planner test. The evening-by-evening table is in README.md.
+Cloud session (27/10, offline, no key, commits `397c94f`, `065420a`, `391a297`): tests pass on any machine (font-independent
+span test, `pythonpath`); `engine/speakers.py` makes the crop follow the span's Voice speaker on the side watch's
+`speaker_map` gives (EDL pin `reframe_speaker_ids` {"A": "3"} wins; off camera / centre / varies = old pick), checked on a
+synthetic two-shot render only; Open Weight planner: `meta-models/muse-spark-open-1026` on Baseten via Chat Completions
+(`BASETEN_API_KEY`, text only), `montivo run --planner open`, `montivo plan RUN --planner open` -> `edl_open.json`,
+`cut_open.mp4` + v1 comparison. Not yet called with a key: endpoint, auth and the price in `config.py` (an aggregator's) are
+unverified.
+Next: `montivo plan runs/012 --planner open` (first real Baseten call), a run on `footage/nasa_exp72_thanksgiving.mp4` to
+check the speaker mapping on real watch output. The evening-by-evening table is in README.md.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
