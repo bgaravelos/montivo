@@ -168,8 +168,10 @@ def checked_captions(edl: dict) -> set[str]:
         c = cmap.get(o.get("span"))
         if c is None:
             continue
-        cap = _caption_at(edl, c.cut_in + float(o["src_t"]) - spans[c.span]["t_in"], within=0.0)
-        if cap is not None and o["span"] in cap["spans"]:
+        # an in edge tightened into the line's first word puts src_t before the clip: its first line, if the text applied
+        cap = _caption_at(edl, c.cut_in + max(0.0, float(o["src_t"]) - spans[c.span]["t_in"]), within=0.0)
+        if cap is not None and o["span"] in cap["spans"] \
+                and " ".join(norm_tokens(o["text"])) in " ".join(norm_tokens(cap["text"])):
             out.add(cap["id"])
     return out
 

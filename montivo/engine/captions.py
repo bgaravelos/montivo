@@ -72,6 +72,7 @@ class CWord:
     t_out: float
     span: str
     src: str = ""  # what Voice said when a correction changed it
+    t0: float | None = None  # Voice's own start of the word, before a span edge clipped t_in (override_for)
 
     def to_json(self) -> dict:
         return {"w": self.w, "t_in": round(self.t_in, 3), "t_out": round(self.t_out, 3)}
@@ -105,7 +106,7 @@ def span_words(spans: list[dict], words: list[dict]) -> dict[str, list[CWord]]:
         tw = by_turn.get(int(s["turn_id"]), [])
         a, b = float(s.get("t_in", 0.0)), float(s.get("t_out", math.inf))
         out[s["id"]] = [CWord(w=w["w"], t_in=min(b, max(a, float(w["t_start"]))),
-                              t_out=max(a, min(b, float(w["t_end"]))), span=s["id"])
+                              t_out=max(a, min(b, float(w["t_end"]))), span=s["id"], t0=float(w["t_start"]))
                         for w in tw if s["word_from"] <= w["i"] <= s["word_to"]]
     return out
 
@@ -121,7 +122,7 @@ def dedupe_words(words: list[CWord], max_gap_s: float = DEDUPE_GAP_S) -> tuple[l
             fixes.append({"kind": "dedupe", "from": f"{prev.w} {w.w}", "to": prev.w, "src_t": round(prev.t_in, 3), "span": w.span})
             prev.t_out = max(prev.t_out, w.t_out)
             continue
-        out.append(CWord(w=w.w, t_in=w.t_in, t_out=w.t_out, span=w.span, src=w.src))
+        out.append(CWord(w=w.w, t_in=w.t_in, t_out=w.t_out, span=w.span, src=w.src, t0=w.t0))
     return out, fixes
 
 
@@ -171,7 +172,8 @@ def apply_glossary(words: list[CWord], glossary: dict[str, str]) -> tuple[list[C
         t = t0
         for x in new:
             d = (t1 - t0) * len(x) / total
-            out.append(CWord(w=x, t_in=round(t, 3), t_out=round(t + d, 3), span=old[0].span, src=src))
+            out.append(CWord(w=x, t_in=round(t, 3), t_out=round(t + d, 3), span=old[0].span, src=src,
+                             t0=old[0].t0 if t == t0 else None))
             t += d
         fixes.append({"kind": "glossary", "from": src, "to": " ".join(new), "src_t": round(t0, 3), "span": old[0].span})
         i += n
@@ -479,11 +481,14 @@ def override_for(words: list[CWord], overrides: list[dict]) -> dict | None:
     merge in order, so a later text (a human correcting the reviewer's) wins and a forced `top` stays. The end is
     strict: src_t is the line's first word + 0.01 s, which would also land on the end of a line it abuts (run 015).
     An entry with `voice` (a text carried across a re-plan) applies only to a line that still reads exactly those
-    words: the new plan can break the lines elsewhere, and the old text would then replace the wrong words."""
+    words: the new plan can break the lines elsewhere, and the old text would then replace the wrong words.
+    The start is the first word's own Voice start when an edge clipped it: an in edge tightened into the silence Voice
+    puts inside a passage's first word keeps that word, and its line keeps its text (016 copy, 28/10: "Four Meta")."""
     heard = [w.w for w in words]
+    lo = min(words[0].t_in, words[0].t0 if words[0].t0 is not None else words[0].t_in)
     hit = []
     for ov in overrides:
-        if not (any(w.span == ov.get("span") for w in words) and words[0].t_in - 0.01 <= float(ov["src_t"]) < words[-1].t_out):
+        if not (any(w.span == ov.get("span") for w in words) and lo - 0.01 <= float(ov["src_t"]) < words[-1].t_out):
             continue
         if ov.get("voice") is not None:
             text = carried_text(heard, ov["voice"].split(), ov.get("text"))

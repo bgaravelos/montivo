@@ -181,3 +181,30 @@ def test_a_replan_that_drops_the_lines_first_word_still_carries_it():
     got = human.carry_caption_text(prev, new)
     assert len(got) == 1 and got[0]["span"] == "s5" and 36.7 < got[0]["src_t"] < 37.62  # inside what is left of the line
     assert got[0]["text"] == "Four Meta models do all" and got[0]["voice"] == "meta models do all"
+
+
+def test_an_in_edge_tightened_into_the_first_word_keeps_its_line_override():
+    # bug bash 28/10 (016 copy): deleting s4 tightened s5's in edge 36.70 -> 36.94, into the silence Voice puts at the
+    # start of "meta" (sound from 37.05); the hand text "Four Meta models do all" (src_t 36.71, the word's own start +
+    # 0.01 s) no longer matched the line, whose first word is clipped to the edge, and the cut showed "meta models"
+    from montivo.engine.captions import span_words
+    words = [{"w": w, "t_start": 36.7 + 0.4 * k, "t_end": 37.1 + 0.4 * k, "turn_id": 0, "i": 50 + k}
+             for k, w in enumerate("meta models do all".split())]
+    span = {"id": "s5", "turn_id": 0, "t_in": 36.94, "t_out": 38.3, "word_from": 50, "word_to": 53}
+    line = span_words([span], words)["s5"]
+    ov = {"span": "s5", "src_t": 36.71, "text": "Four Meta models do all", "why": "human"}
+    assert line[0].t_in == 36.94 and override_for(line, [ov])["text"] == "Four Meta models do all"
+    # a trim past the whole first word: the line now starts on "models", the text is not its own
+    trimmed = span_words([{**span, "t_in": 37.1, "word_from": 51}], words)["s5"]
+    assert override_for(trimmed, [ov]) is None
+
+
+def test_a_checked_line_before_its_clipped_in_edge_is_still_checked():
+    # same 016 copy: the override's src_t (36.71) sat 0.23 s before s5's tightened in edge, so checked_captions looked
+    # it up in the previous clip's time and the hand-checked line lost its standing against the reviewer
+    edl = rendered_edl()
+    edl["captions"][1]["text"] = "Four scores"
+    edl["caption_overrides"] = [{"span": "s3", "src_t": 30.41, "text": "Four scores", "why": "human"}]
+    assert R.checked_captions(edl) == {"c2"}
+    edl["captions"][1]["text"] = "w12 w13"  # the text did not apply (its word was trimmed away): not checked
+    assert R.checked_captions(edl) == set()
