@@ -328,7 +328,7 @@ export function Editor({ id, replay, go }: Props) {
               <SafeArea kind={guide} />
             </>} />
         ) : (
-          busy || replay ? <Waiting state={state} lines={lines} progress={progress} />
+          busy || replay ? <Waiting progress={progress} />
             : <div className="player-wait">No cut rendered yet.</div>
         )}
       </main>
