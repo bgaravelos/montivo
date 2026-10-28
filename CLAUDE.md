@@ -529,7 +529,9 @@ it as `brief_missing` after `edl.brief_missing` drops any item whose content wor
 planner reads Voice's transcript: on 015 it listed "SAM tracks me" and "four Meta models", misheard but kept); the
 reviewer gets it as a fact about the source (`facts_text(not_in_source=)`), the chat says it once under the planned
 version. On a copy of 015 (removed): re-plan + review 100 pass, no brief_covered major. Old EDLs have no list, so 015
-itself still shows the major until a re-plan. Not deployed (UX batch A, engine hygiene and A3 all wait for one deploy).
+itself still shows the major until a re-plan. UX batch A, engine hygiene and A3 deployed to Modal 28/10 15:52 (no job
+was running, last run.log write 15:19; the 15:15 web container stopped); smoke drop on 015: 34.3 s, -14.0 LUFS /
+-1.7 dBTP, render 17.2 s (was 22 s), 16.6 MB. The new UI on the live URL not yet opened (needs the sign-in).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
