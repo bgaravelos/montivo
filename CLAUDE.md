@@ -627,6 +627,21 @@ clip pulled from the Volume): no pass (NASA 58 -> 66, after the fixes 62: the as
 changes, not a sample for run 017; USGS 68; TEDx 62 -> 70). Open for day 3: the clean export's punch-ins and pip, an
 upload quota per judge (needs Billy's number); Nice ones on the Board. The judge cookie change needs the deploy; the
 iPhone HDR clip was not in ~/Downloads (day 2).
+Debugging day 2 (28/10 evening, $1.12, commits ac581c4 7c0d9ba d442e5a f5c96c7 c6e9b4c 2a3115f 898c7e8 fdb04c5
+544ae75, findings in `docs/notes/debugging-day2_2026-10-29.md`): the judge checklist walked in a local hosted-mode
+server (password, budget, ONE_JOB, limits, key) over clones of 016 and 014, two judges at 1440 and 375 px; 410 -> 419
+tests. Fixed: (Must, live on Modal) look.preview / look.layout read a `concept` Batch F stopped setting: Style
+preview, every cover render and the 4:5 / 1:1 pre-flight answered 500; (Must, live) under 900 px body's overflow
+hidden reached the viewport, so nothing scrolled on a phone; a drop that tightens the next clip's in edge into its
+first word lost that line's hand text (CWord.t0, "Four Meta"); an edit refused by ONE_JOB first copied the sample;
+the upright copy is encoded veryfast and no taller than 1920 (90 s iPhone 4K HDR: 479 s; 10 s clip 30 -> 9.4 s); a
+phrase Voice heard twice back to back shows once ("You have You have"); a version shows its music only once the
+render recorded the bed (stems 404'd in between); a refused $0 edit says why in the chat. Uploads (Billy's pick):
+MONTIVO_MAX_UPLOAD_MB 1000 on Modal, the state carries `limits`, Home checks size and length before the upload, the
+server refuses a Content-Length over the limit unread. Billy's iPhone clips: the audio is the RØDE lav (L = R, mono
+over USB-C); clip 1 tone-maps clean (skin right, captions under the face, run 70 -> 74); tips take 2 (future 017) is
+160.5 s with a second ending and Greek at the end, so the sample needs a trim to 90 s, and its planner cut dropped the
+payoff (28 s). Not deployed: day 3 ships the fixes with Billy's go.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
