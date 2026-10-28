@@ -4,7 +4,7 @@ This folder (`~/Documents/montivo`, public repo https://github.com/bgaravelos/mo
 hackathon project lives. Work here, not in `~/Documents/nocta-digital` (Nocta's agency work, off limits for this project).
 
 ## What this is
-Montivo is Billy Gkaravelos's own Indie entry (as an individual, not Nocta Digital's) for the Meta Global AI Developer Hackathon (build window 26/10 to 4/11/2026, kickoff 26/10 18:00 Athens,
+Montivo is Billy's (official name Vasileios Gkaravelos) own Indie entry (as an individual, not Nocta Digital's) for the Meta Global AI Developer Hackathon (build window 26/10 to 4/11/2026, kickoff 26/10 18:00 Athens,
 submission on cerebralvalley.ai by Wed 4/11 evening, deadline Thu 5/11 04:00 Athens). An agent-first video editor:
 Muse Spark 1.3 watches the footage and plans a paper edit, Muse Voice gives turns and word timings, SAM 3.1 tracks
 the speaker for the 9:16 reframe and callouts, ffmpeg renders, then Spark reviews its own render against a rubric and
@@ -19,7 +19,7 @@ Submit until Wed 4/11 9:00 PM ET, early submission gives no edge. Still open: wh
 with one Spark Open stage.
 Track decision (Billy, 28/10, FINAL): Indie, as Billy's own entry as an individual. Nocta Digital is a Greek OE
 (general partnership, can employ people), so by the bot's rule the agency would fit Startup: every public credit
-(team name "Montivo", README, brand title/end cards, demo end card, submission drafts, X post) must name Billy, not
+(team name "Montivo", README, brand title/end cards, demo end card, submission drafts, X post) must name Vasileios Gkaravelos (Billy's official name), not
 Nocta Digital; the open list is in the Board card «Credit από Nocta Digital στον Billy (Indie)». Follow-up
 in thread 4 (28/10): the bot would not rule on our case and passed it to the organizers; their answer is pending there.
 Event pages (read 28/10): Indie = "individual builders and students", judged on creativity, technical ambition and
