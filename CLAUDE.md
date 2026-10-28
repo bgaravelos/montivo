@@ -658,6 +658,16 @@ drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 8.9 s; `--music midnight_cru
 dB; `--cover` headline and sticker pass every check (zscale yes). Billy checked it live (28/10): phone scroll on Home
 and the review mode, Style preview (desktop only: the rail is hidden under 900 px) and Export cover work. Tag
 `freeze-2026-10-31` on c545d70 (his go): from here only what breaks the demo changes.
+Second Codex review (28/10 night, $0, brief `docs/notes/codex-review-brief-2_2026-10-28.md`, read-only, partial: it
+did not get to paid-action admission, Ask Montivo chains or stopped renders): 3 musts, each checked in the code and fixed
+with a test that fails on the old code (commit `34e876b`, 426 tests): judge cookies are signed with a server secret
+(`hosted.judge_key`: MONTIVO_JUDGE_SECRET, else `<root>/judge.key`, made once, 0600, git-ignored), not the password every
+judge knows; the upload's ffprobe runs in a worker thread with a 20 s timeout (`UPLOAD_PROBE_S`, a hung probe used to
+hold the event loop); `share.LOCK` around every shares.json write (an Unshare during a Share came back). README: caption
+fixes are in the Captions panel too. Deployed on Billy's go at 23:33 from a clean worktree (last job 012-f41e1e7a ended
+23:22; the 22:26 container stopped); `judge.key` made on the Volume, so every judge cookie from before is void (new id at
+the next request; Billy's own test copies no longer show for him); live /api/health 200, /api/runs 401, /s/nope 404,
+host spend $2.79 of $15; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 8.3 s.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
