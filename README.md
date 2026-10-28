@@ -178,6 +178,9 @@ the brand (`assets/brand/`: the symbol, wordmark, colours, cards and sting, all 
 Used as they are: ffmpeg, Pillow, httpx, FastAPI, React and Vite, and the Inter Tight and JetBrains Mono fonts (SIL OFL 1.1). The concept
 and the name come from an earlier personal project of Billy Gkaravelos; none of its code is used here.
 
+The demo video is narrated off camera by an AI voice cloned from Billy's own recording (an ElevenLabs instant clone,
+made through Magnific). The clone is used only for the video; Montivo itself calls Meta models only.
+
 ## Pipeline in detail
 
 Works end to end from raw footage to a finished 9:16 cut with captions, callouts, a title card and loudnorm, then
