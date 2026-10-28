@@ -247,39 +247,60 @@ def _window_centres(t_in: float, t_out: float, sw: int, crop_w: int, fps: float,
 def plan_segment(t_in: float, t_out: float, source: dict, track: dict | None, params: ReframeParams | None = None,
                  span_ids: list[str] | None = None, follow: list[dict] | None = None,
                  aspect: tuple[int, int] = (9, 16), fallback: dict | None = None,
-                 hold: float | None = None) -> SegmentPath:
+                 hold: float | None = None, shots: list[float] | None = None) -> SegmentPath:
     """Crop path for one rendered segment. `source` has width/height/fps; `track` is tracks.json's content
     (objects + track_fps + source size) or None for a centre crop. `follow` ([{t_in, t_out, speaker, ids}] covering
     the segment in order, from the speaker map) steers each piece to its speaker's head. `aspect` is the output's.
     A window the track does not cover follows the `fallback` track (the person boxes when the crop follows heads),
     else holds the centre the camera was on (the piece before, else `hold`: the previous segment's last centre), and
-    only then the frame's centre; `fallbacks` on the path records each such window."""
+    only then the frame's centre; `fallbacks` on the path records each such window.
+
+    `shots` are the source's camera cuts (ingest.detect_shots): a segment that holds one is planned in pieces split
+    there, each picked, smoothed and eased on its own (the smoother used to pan across a cut to the new shot's head)
+    and never holding the x of the other shot; `pieces` then lists them."""
     params = params or ReframeParams()
     sw, sh, fps = int(source["width"]), int(source["height"]), float(source["fps"])
     crop_w, crop_h = crop_size(sw, sh, aspect)
     pieces: list[dict] = []
     fallbacks: list[dict] = []
-    if follow and any(p.get("ids") for p in follow) and track and track.get("objects"):
+    cuts = sorted(c for c in shots or [] if t_in + 1.0 / fps < c < t_out - 1.0 / fps)
+    by_speaker = bool(follow and any(p.get("ids") for p in follow) and track and track.get("objects"))
+    if by_speaker or cuts:
         n = max(1, int(math.ceil(max(1.0 / fps, t_out - t_in) * fps - 1e-6)))
-        tw, th = int(track["source"]["width"]), int(track["source"]["height"])
-        track_fps = float(track.get("track_fps") or 10.0)
-        for p in follow:
-            tid = pick_track(track["objects"], p["t_in"], p["t_out"], track_fps, tw, th, params.min_coverage, p.get("ids"))
-            if pieces and pieces[-1]["track_id"] == tid:
-                pieces[-1]["t_out"] = p["t_out"]
-                pieces[-1]["speaker"] = pieces[-1]["speaker"] if pieces[-1]["speaker"] == p.get("speaker") else None
-            else:
-                pieces.append({"t_in": p["t_in"], "t_out": p["t_out"], "speaker": p.get("speaker"), "track_id": tid})
+        if by_speaker:
+            tw, th = int(track["source"]["width"]), int(track["source"]["height"])
+            track_fps = float(track.get("track_fps") or 10.0)
+            for p in follow:
+                tid = pick_track(track["objects"], p["t_in"], p["t_out"], track_fps, tw, th, params.min_coverage,
+                                 p.get("ids"))
+                if pieces and pieces[-1]["track_id"] == tid:
+                    pieces[-1]["t_out"] = p["t_out"]
+                    pieces[-1]["speaker"] = pieces[-1]["speaker"] if pieces[-1]["speaker"] == p.get("speaker") else None
+                else:
+                    pieces.append({"t_in": p["t_in"], "t_out": p["t_out"], "speaker": p.get("speaker"), "track_id": tid})
+        else:
+            pieces = [{"t_in": t_in, "t_out": t_out, "speaker": None, "track_id": None}]
+        if cuts:  # every piece split at the camera cuts inside it; the part after a cut picks its own track
+            split: list[dict] = []
+            for p in pieces:
+                edges = [p["t_in"], *(c for c in cuts if p["t_in"] < c < p["t_out"]), p["t_out"]]
+                for j, (a, b) in enumerate(zip(edges, edges[1:])):
+                    split.append({**p, "t_in": a, "t_out": b, "shot_cut": j > 0 or a in cuts,
+                                  "repick": len(edges) > 2 or not by_speaker})
+            pieces = split
         centres: list[float] = []
         for k, p in enumerate(pieces):
             k0 = 0 if k == 0 else int(round((p["t_in"] - t_in) * fps))
             k1 = n if k == len(pieces) - 1 else int(round((p["t_out"] - t_in) * fps))
+            repick, shot_cut = p.pop("repick", False), p.pop("shot_cut", False)
             if k1 <= k0:
                 continue
             a = t_in + k0 / fps
-            _, cs, how = _window_centres(a, t_in + k1 / fps, sw, crop_w, fps, track, params,
-                                         [p["track_id"]] if p["track_id"] else None, fallback,
-                                         centres[-1] if centres else hold)
+            before = None if shot_cut else centres[-1] if centres else hold
+            got, cs, how = _window_centres(a, t_in + k1 / fps, sw, crop_w, fps, track, params,
+                                           [p["track_id"]] if p["track_id"] else None, fallback, before)
+            if repick:
+                p["track_id"] = got
             if how != "track":
                 fallbacks.append({"t_in": round(a, 4), "t_out": round(t_in + k1 / fps, 4), "by": how})
             centres += (cs + [cs[-1]] * (k1 - k0))[:k1 - k0]

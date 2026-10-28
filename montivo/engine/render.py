@@ -845,15 +845,20 @@ def plan_paths(edl: dict, track: dict | None, speaker_ids: dict[str, list[str]],
     """The frame-aligned segments of the EDL and the crop path of each (one crop x per output frame), as the render
     burns them; the editor's preview still (look.py) and the review's head checks plan the same way. The crop's width
     follows the EDL's aspect (frame.frame_for). `fallback` is the person track for windows the head track misses;
-    a window neither covers holds the previous segment's last centre."""
+    a window neither covers holds the previous segment's last centre unless a camera cut lies between the two (the
+    source's `shots`, ingest.detect_shots), which also splits a segment's crop path into pieces."""
     segments = frame_align(merge_segments(edl["spans"]), float(edl["source"]["fps"]))
     aspect = frame_for(edl).ratio
+    shots = [float(c) for c in edl["source"].get("shots") or []]
     paths: list[SegmentPath] = []
-    hold = None
+    hold, prev = None, None
     for seg in segments:
+        if prev is not None and any(min(prev.t_out, seg.t_in) < c <= max(prev.t_out, seg.t_in) for c in shots):
+            hold = None
         path = plan_segment(seg.t_in, seg.t_out, edl["source"], track, params, span_ids=seg.span_ids,
                             follow=follow_pieces(seg, edl["spans"], speaker_ids), aspect=aspect, fallback=fallback,
-                            hold=hold)
+                            hold=hold, shots=shots)
+        prev = seg
         path.xs = path.xs[:seg.frames] + [path.xs[-1]] * max(0, seg.frames - len(path.xs))
         hold = path.xs[-1] + path.crop_w / 2
         bias = segment_bias(edl["spans"], seg.span_ids)

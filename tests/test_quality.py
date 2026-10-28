@@ -1,7 +1,8 @@
 """Offline: batch F, what a viewer sees and hears in every cut (28/10). E13 the equal-power crossfade at every cut
 (no dip, the frames' length kept), E12 caption lines that do not end on a function word (behind the look's
 `line_breaks`, old EDLs keep the greedy lines), E8 the eased reframe (zero-phase Gaussian, 1 px steps, exact crop),
-E10 the person box and then the last x where the head track loses the speaker."""
+E10 the person box and then the last x where the head track loses the speaker, E11 camera cuts found at ingest and the
+reframe split there."""
 import array
 import math
 import shutil
@@ -13,6 +14,7 @@ import pytest
 from montivo.engine.captions import FUNCTION_WORDS, CWord, group_lines
 from montivo.engine.edl import norm
 from montivo.engine.graphics import CaptionStyle, normalize_look, restyle
+from montivo.engine.ingest import detect_shots
 from montivo.engine.look import with_style
 from montivo.engine.reframe import ReframeParams, gaussian, plan_segment
 from montivo.engine.render import AUDIO_RATE, Segment, cut_graph, handles, plan_paths, render_audio, segment_encode
@@ -197,3 +199,43 @@ def test_plan_paths_holds_the_previous_segments_x_and_pieces_hold_the_piece_befo
               {"t_in": 2.0, "t_out": 5.0, "speaker": "B", "ids": ["9"]}]
     seg = plan_segment(1.0, 5.0, SRC, head, follow=follow)
     assert seg.xs[-1] == seg.xs[0]
+
+
+# E11 ---------------------------------------------------------------------------------------------------------------
+
+@needs_ffmpeg
+def test_detect_shots_finds_the_camera_cuts_and_not_motion(tmp_path):
+    clip = tmp_path / "two_cameras.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=480x270:r=30:d=2",
+                    "-f", "lavfi", "-i", "mandelbrot=s=480x270:r=30", "-filter_complex",
+                    "[1:v]trim=duration=1.5,format=yuv420p[m];[0:v]format=yuv420p,split[a][b];[b]trim=start=0,setpts=PTS-STARTPTS[c];"
+                    "[a][m][c]concat=n=3:v=1:a=0", "-c:v", "libx264", "-preset", "ultrafast", str(clip)], check=True)
+    assert detect_shots(clip) == [2.0, 3.5]
+    one = tmp_path / "one_camera.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=480x270:r=30:d=3", "-c:v", "libx264",
+                    "-preset", "ultrafast", str(one)], check=True)
+    assert detect_shots(one) == []
+    assert detect_shots(tmp_path / "missing.mp4") == []
+
+
+def test_the_crop_cuts_with_the_camera_and_picks_each_shots_head():
+    """Wide shot (head at proxy x 300), close-up from 4 s (head at 620, another SAM id, bigger): without shots the
+    one window picks the close-up's head and frames its spot through the wide shot too; with them each shot gets its
+    own head and the crop jumps with the picture at the cut, still on either side."""
+    tr = trk({"0": boxes(lambda t: 300, 0.0, 3.8), "5": boxes(lambda t: 620, 4.0, 8.0, w=200)})
+    old = plan_segment(1.0, 7.0, SRC, tr)
+    new = plan_segment(1.0, 7.0, SRC, tr, shots=[4.0])
+    k = 90  # the cut, 3 s into the segment
+    assert set(old.xs) == {620 * 2 - 304}  # the wide shot framed on the close-up's head
+    assert set(new.xs[:k]) == {300 * 2 - 304} and set(new.xs[k:]) == {620 * 2 - 304}
+    assert [(p["t_in"], p["t_out"], p["track_id"]) for p in new.pieces] == [(1.0, 4.0, "0"), (4.0, 7.0, "5")]
+    assert plan_segment(1.0, 7.0, SRC, tr, shots=[0.5, 9.0]).pieces == []  # cuts outside the segment
+
+
+def test_no_hold_across_a_camera_cut():
+    head = trk({"0": boxes(lambda t: 700, 0.0, 3.0)})
+    edl = {"source": {**SRC, "shots": [4.0]}, "target": {"aspect": "9:16"},
+           "spans": [{"id": "s1", "t_in": 1.0, "t_out": 2.0, "role": "hook"},
+                     {"id": "s2", "t_in": 5.0, "t_out": 6.0, "role": "payoff"}]}
+    _, paths = plan_paths(edl, head, {})
+    assert paths[1].fallbacks == [{"t_in": 5.0, "t_out": 6.0, "by": "centre"}]

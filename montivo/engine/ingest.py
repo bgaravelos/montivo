@@ -1,4 +1,5 @@
-"""Ingest: ffprobe the source, make the 960 px proxy (source fps), the 24 kHz mono wav, and upload the proxy once.
+"""Ingest: ffprobe the source, make the 960 px proxy (source fps), the 24 kHz mono wav, find the camera cuts in the
+proxy (scdet, `shots`), and upload the proxy once.
 
 The proxy's Files API id is the one every Spark call reuses. SAM gets its own upload (a resampled copy when the
 source is long), see track.py.
@@ -6,8 +7,9 @@ source is long), see track.py.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from ..config import PROXY_MAX_DIM
@@ -36,6 +38,7 @@ class Ingested:
     wav: Path
     file_id: str
     upload_seconds: float
+    shots: list[float] = field(default_factory=list)  # camera cuts in source seconds (detect_shots)
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -105,6 +108,29 @@ def make_proxy(src: Path, dst: Path, p: Probe, max_dim: int = PROXY_MAX_DIM, fps
     return ffprobe(dst)
 
 
+SHOT_THRESHOLD = 10.0  # scdet score of a camera cut: single-camera talking heads peak at 3.3 (runs 012-015), cuts ~28
+SHOT_MIN_S = 0.5  # a cut closer than this to the one before (a flash, a fast whip) is not a new shot
+_SCD = re.compile(r"lavfi\.scd\.score:\s*([0-9.]+),\s*lavfi\.scd\.time:\s*([0-9.]+)")
+
+
+def detect_shots(proxy: Path, threshold: float = SHOT_THRESHOLD, min_s: float = SHOT_MIN_S, log=None) -> list[float]:
+    """The camera cuts of a clip (multi-camera footage like a TEDx talk: wide stage shots and close-ups), from
+    ffmpeg's scdet on the proxy, $0 and a few seconds: the cut times in seconds, at least min_s apart. The reframe
+    splits its windows there (reframe.plan_segment), so the crop never pans from one shot's head to the next's."""
+    proc = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(proxy), "-map", "0:v:0", "-an",
+                           "-vf", f"scdet=threshold={threshold:g}", "-f", "null", "-"], capture_output=True, text=True)
+    if proc.returncode != 0:
+        if log:
+            log(f"ingest: shot detection failed (ffmpeg exit {proc.returncode}), the crop treats the clip as one shot")
+        return []
+    cuts: list[float] = []
+    for score, t in _SCD.findall(proc.stderr):
+        t = round(float(t), 3)
+        if float(score) >= threshold and t > 0 and (not cuts or t - cuts[-1] >= min_s):
+            cuts.append(t)
+    return cuts
+
+
 def make_wav(src: Path, dst: Path, rate: int = 24000, start: float | None = None, seconds: float | None = None,
              log=None) -> Path:
     """24 kHz mono 16-bit PCM wav, the format the Voice endpoint measures best on."""
@@ -157,6 +183,11 @@ def ingest(source: Path, out: Path, ledger: Ledger, log=print, hflip: bool = Fal
     ledger.add(Entry(stage="ingest.ffmpeg", model="ffmpeg", seconds=t_proxy.seconds, cost_usd=0.0,
                      note=f"proxy {pp.width}x{pp.height} @ {pp.fps:g} fps, wav 24 kHz mono"))
     log(f"ingest: proxy {pp.width}x{pp.height} ({proxy.stat().st_size / 1e6:.1f} MB), wav {wav.stat().st_size / 1e6:.1f} MB in {t_proxy.seconds}s")
+    with Timer() as t_shots:
+        shots = detect_shots(proxy, log=log)
+    ledger.add(Entry(stage="ingest.shots", model="ffmpeg", seconds=t_shots.seconds, cost_usd=0.0,
+                     note=f"{len(shots)} camera cut(s) (scdet {SHOT_THRESHOLD:g})"))
+    log(f"ingest: {len(shots)} camera cut(s){': ' + ', '.join(f'{c:g}' for c in shots[:12]) if shots else ''} in {t_shots.seconds}s")
 
     up = upload_file(proxy, "video/mp4")
     ledger.add(Entry(stage="ingest.upload", model="files", seconds=up["upload_seconds"], cost_usd=0.0,
@@ -164,7 +195,7 @@ def ingest(source: Path, out: Path, ledger: Ledger, log=print, hflip: bool = Fal
     log(f"ingest: uploaded proxy as {up['id']} in {up['upload_seconds']}s")
 
     ing = Ingested(source=source, probe=probe, proxy=proxy, proxy_probe=pp, wav=wav,
-                   file_id=up["id"], upload_seconds=up["upload_seconds"])
+                   file_id=up["id"], upload_seconds=up["upload_seconds"], shots=shots)
     dump_json(out / "ingest.json", {**ing.to_json(), "hflip": hflip, "rotation": rotation, "original_source": str(original),
                                     "upload": {k: v for k, v in up.items() if k != "upload_seconds"}})
     return ing

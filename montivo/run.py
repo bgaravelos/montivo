@@ -17,7 +17,7 @@ from .engine.api import dump_json
 from .engine.edges import Audio, Words, tighten_edges
 from .engine.edl import build_edl, carry_run_words
 from .engine.image import generate_title_card
-from .engine.ingest import Ingested, Probe, ingest
+from .engine.ingest import Ingested, Probe, detect_shots, ingest
 from .engine.render import render as render_edl
 from .engine.spark import Spark, SparkCall
 from .engine.speakers import is_mic, speakers_run
@@ -150,6 +150,12 @@ def run(opts: RunOptions) -> dict:
                              f"{opts.footage}{' with --hflip' if opts.hflip else ''}; use a new --out for other footage")
         ing = Ingested(source=Path(d["source"]), probe=Probe(**d["probe"]), proxy=Path(d["proxy"]), proxy_probe=Probe(**d["proxy_probe"]),
                        wav=Path(d["wav"]), file_id=d["file_id"], upload_seconds=d["upload_seconds"])
+        if "shots" in d:
+            ing.shots = list(d["shots"])
+        else:  # ingested before shot detection ($0, a few seconds): found now and kept
+            ing.shots = detect_shots(ing.proxy, log=log)
+            dump_json(out / "ingest.json", {**d, "shots": ing.shots})
+            log(f"resume: {len(ing.shots)} camera cut(s) found in the proxy")
         log(f"resume: ingest from ingest.json (file_id {ing.file_id}{', hflip' if d.get('hflip') else ''})")
     else:
         ing = ingest(opts.footage, out, ledger, log, hflip=opts.hflip)
@@ -289,7 +295,7 @@ def run(opts: RunOptions) -> dict:
     source = {"path": str(ing.source), "original_path": str(opts.footage), "hflip": ing.source != opts.footage,
               "proxy": str(ing.proxy), "file_id": ing.file_id, "duration_s": ing.probe.duration,
               "width": ing.probe.width, "height": ing.probe.height, "fps": ing.probe.fps,
-              "proxy_width": ing.proxy_probe.width, "proxy_height": ing.proxy_probe.height}
+              "proxy_width": ing.proxy_probe.width, "proxy_height": ing.proxy_probe.height, "shots": ing.shots}
     track_summary = {c: t.summary() for c, t in tracks.items()}
     if reuse and (out / "edl_v1.json").is_file():
         # the same plan builds the same v1, and later versions were patched from this file: keep it as it is
