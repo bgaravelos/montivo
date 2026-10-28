@@ -73,9 +73,10 @@ def small_copy(src: Path, out: Path) -> Path:
         return out
 
 
-def probe_duration(src: Path) -> float:
+def probe_duration(src: Path, timeout: float | None = None) -> float:
+    """ffprobe's duration, 0.0 when it has none; past `timeout` seconds ffprobe is killed and TimeoutExpired raised."""
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(src)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, timeout=timeout)
     try:
         return float(r.stdout.strip())
     except ValueError:

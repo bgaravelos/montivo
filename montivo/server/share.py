@@ -9,6 +9,7 @@ from __future__ import annotations
 import html
 import secrets
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -25,6 +26,11 @@ CRITERIA = {"hook_in_1_5s": "Hook in 1.5 s", "brief_covered": "Brief covered", "
 SEV = {"blocker": 0, "major": 1, "minor": 2}
 
 
+# every read-modify-write of shares.json holds this (Codex review 28/10): Share runs on the event loop, Unshare in a
+# worker thread, and an Unshare between Share's read and write used to bring the removed link back
+LOCK = threading.Lock()
+
+
 class Shares:
     def __init__(self, root: Path):
         self.path = root / "shares.json"
@@ -33,14 +39,15 @@ class Shares:
         return read_json(self.path) or {}
 
     def create(self, run: str, version: int) -> str:
-        d = self.all()
-        for tok, s in d.items():
-            if s.get("run") == run and s.get("version") == version:
-                return tok
-        tok = secrets.token_urlsafe(9)
-        d[tok] = {"run": run, "version": version, "created": time.strftime("%Y-%m-%dT%H:%M:%S")}
-        dump_json(self.path, d)
-        return tok
+        with LOCK:
+            d = self.all()
+            for tok, s in d.items():
+                if s.get("run") == run and s.get("version") == version:
+                    return tok
+            tok = secrets.token_urlsafe(9)
+            d[tok] = {"run": run, "version": version, "created": time.strftime("%Y-%m-%dT%H:%M:%S")}
+            dump_json(self.path, d)
+            return tok
 
     def of_run(self, run: str) -> list[dict]:
         """This run's links, newest version first."""
@@ -48,12 +55,13 @@ class Shares:
                       key=lambda x: (-int(x.get("version") or 0), x.get("created") or ""))
 
     def delete(self, run: str, tok: str) -> bool:
-        d = self.all()
-        if d.get(tok, {}).get("run") != run:
-            return False
-        del d[tok]
-        dump_json(self.path, d)
-        return True
+        with LOCK:
+            d = self.all()
+            if d.get(tok, {}).get("run") != run:
+                return False
+            del d[tok]
+            dump_json(self.path, d)
+            return True
 
     def get(self, tok: str) -> dict:
         s = self.all().get(tok)

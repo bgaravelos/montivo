@@ -42,3 +42,4 @@ docs/notes/
 # sample zips for the GitHub release
 dist/
 shares.json
+judge.key

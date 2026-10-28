@@ -43,3 +43,33 @@ def test_a_protected_runs_links_cannot_be_removed(tmp_path):
     c = TestClient(app)
     assert c.delete(f"/api/runs/015/share/{a}").status_code == 403 and s.get(a)["run"] == "015"
     assert c.delete(f"/api/runs/mine/share/{b}").status_code == 200
+
+
+def test_an_unshare_during_a_share_stays_removed(tmp_path, monkeypatch):
+    # Codex review 28/10: Share (event loop) and Unshare (worker thread) both read, change and write shares.json; an
+    # Unshare between Share's read and its write came back with Share's older snapshot
+    import threading
+
+    from montivo.server import share
+    s = share.Shares(tmp_path)
+    old = s.create("mine", 1)
+    real_all, paused, go = share.Shares.all, threading.Event(), threading.Event()
+
+    def slow_all(self):
+        d = real_all(self)
+        if threading.current_thread().name == "share":
+            paused.set()
+            go.wait(0.5)  # Unshare tries to run here
+        return d
+
+    monkeypatch.setattr(share.Shares, "all", slow_all)
+    t = threading.Thread(target=lambda: s.create("mine", 2), name="share")
+    t.start()
+    paused.wait(2)
+    u = threading.Thread(target=lambda: s.delete("mine", old))
+    u.start()
+    go.set()
+    t.join(2)
+    u.join(2)
+    toks = real_all(s)
+    assert old not in toks and [v["version"] for v in toks.values()] == [2]

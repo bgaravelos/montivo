@@ -458,7 +458,7 @@ through the reviewer's own `drop_span` patch and tightens the two edges that now
 one Spark plan call (about $0.04) on the stored Voice words and shot log with the instruction added to the brief, the
 title card kept as it was, then the edge pass and the render. For a word Voice misheard, `python -m montivo.human caption
 runs/015 --at 18.5 --text "Four Meta models do all" [--at ... --text ...]` gives the caption line on screen at that cut
-second the words actually spoken (the reviewer's `caption_text` patch, timing kept, $0); shell only, not in the editor yet.
+second the words actually spoken (the reviewer's `caption_text` patch, timing kept, $0); in the editor, the Captions panel does the same (double-click a line or the pencil, then Make Version N).
 
 ## Run folder
 

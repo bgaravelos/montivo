@@ -8,6 +8,7 @@ Both switch on from the environment only, so `montivo serve` on a laptop is unch
     MONTIVO_MAX_FOOTAGE_S=95    a new run's clip may be at most this long
     MONTIVO_MAX_UPLOAD_MB=1000  an upload stops past this size (95 s of iPhone 4K HDR is about 600 MB)
     MONTIVO_MAX_UPLOADS=5       clips one judge may upload (with the budget on)
+    MONTIVO_JUDGE_SECRET=...    signs the judge cookies (else <root>/judge.key, made once; never the password)
 
 The budget is read from the ledgers every run writes (runs/<id>/ledger.json `total_cost_usd`), counted from a baseline
 taken the first time the host saw each run (budget.json next to runs/): the seeded sample runs bring their own Mac
@@ -139,24 +140,42 @@ JUDGE_ID = re.compile(r"[0-9a-f]{4,16}")
 JUDGE_SCOPE = "montivo.judge"  # the gate puts the checked judge id in the request scope (app.judge_of reads it)
 
 
-def judge_cookie(password: str, jid: str) -> str:
+def judge_key(root: Path) -> str:
+    """The secret the judge cookies are signed with: MONTIVO_JUDGE_SECRET, else <root>/judge.key, made the first time
+    (on the Volume, so it outlives a redeploy). Never the password: every judge knows that one, and could sign any
+    other judge's id with it (Codex review, 28/10)."""
+    if env := os.environ.get("MONTIVO_JUDGE_SECRET"):
+        return env
+    p = root / "judge.key"
+    try:
+        if key := p.read_text().strip():
+            return key
+    except OSError:
+        pass
+    key = secrets.token_hex(32)
+    write_atomic(p, key)
+    os.chmod(p, 0o600)
+    return key
+
+
+def judge_cookie(key: str, jid: str) -> str:
     """<id>.<signature>: the id alone could be copied from a run name (runs/<sample>-<id>) and let one judge act as
-    another; the signature (HMAC with the password) makes the cookie the server's own."""
-    sig = hmac.new(password.encode(), f"montivo-judge-v1:{jid}".encode(), hashlib.sha256).hexdigest()[:20]
+    another; the signature (HMAC with the server's judge_key) makes the cookie the server's own."""
+    sig = hmac.new(key.encode(), f"montivo-judge-v1:{jid}".encode(), hashlib.sha256).hexdigest()[:20]
     return f"{jid}.{sig}"
 
 
-def judge_id(request: Request, password: str | None) -> str | None:
-    """The browser's judge id when its cookie is valid (signed, when there is a password), else None."""
+def judge_id(request: Request, key: str | None) -> str | None:
+    """The browser's judge id when its cookie is valid (signed, when there is a key), else None."""
     raw = request.cookies.get(JUDGE, "")
-    if password is None:
+    if key is None:
         return raw if JUDGE_ID.fullmatch(raw) else None
     jid = raw.partition(".")[0]
-    return jid if JUDGE_ID.fullmatch(jid) and hmac.compare_digest(raw, judge_cookie(password, jid)) else None
+    return jid if JUDGE_ID.fullmatch(jid) and hmac.compare_digest(raw, judge_cookie(key, jid)) else None
 
 
-def set_judge(resp, password: str, jid: str) -> None:
-    resp.set_cookie(JUDGE, judge_cookie(password, jid), max_age=60 * 86400, httponly=True, samesite="lax")
+def set_judge(resp, key: str, jid: str) -> None:
+    resp.set_cookie(JUDGE, judge_cookie(key, jid), max_age=60 * 86400, httponly=True, samesite="lax")
 
 
 LOGIN_HTML = """<!doctype html>
@@ -187,10 +206,11 @@ __ERROR__
 </form></body></html>"""
 
 
-def install(app, password: str | None) -> None:
+def install(app, password: str | None, root: Path) -> None:
     """Put the sign-in in front of every route of the app when a password is set."""
     if not password:
         return
+    key = judge_key(root)
 
     @app.middleware("http")
     async def gate(request: Request, call_next):
@@ -198,12 +218,12 @@ def install(app, password: str | None) -> None:
         if path.startswith(OPEN_PATHS):
             return await call_next(request)
         if signed_in(request, password):
-            jid = judge_id(request, password)
+            jid = judge_id(request, key)
             request.scope[JUDGE_SCOPE] = jid or secrets.token_hex(4)
             if jid:
                 return await call_next(request)
             resp = await call_next(request)  # no judge cookie yet, or one the server did not sign: a new id
-            set_judge(resp, password, request.scope[JUDGE_SCOPE])
+            set_judge(resp, key, request.scope[JUDGE_SCOPE])
             return resp
         if path.startswith("/api/"):
             return JSONResponse({"error": "sign in first"}, status_code=401)
@@ -228,8 +248,8 @@ def install(app, password: str | None) -> None:
             await asyncio.sleep(1.0)  # slows a guesser down without holding the other requests
             return RedirectResponse("/login?error=1", status_code=303)
         resp = RedirectResponse("/", status_code=303)
-        if not judge_id(request, password):
-            set_judge(resp, password, secrets.token_hex(4))
+        if not judge_id(request, key):
+            set_judge(resp, key, secrets.token_hex(4))
         resp.set_cookie(COOKIE, token(password), max_age=14 * 86400, httponly=True, samesite="lax",
                         secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https")
         return resp

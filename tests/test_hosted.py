@@ -17,7 +17,7 @@ def ledger(d, usd):
 @pytest.fixture
 def hosted_env(monkeypatch):
     for k in ("MONTIVO_PASSWORD", "MONTIVO_BUDGET_USD", "MONTIVO_ONE_JOB", "MONTIVO_MAX_FOOTAGE_S",
-              "MONTIVO_MAX_UPLOAD_MB", "MONTIVO_MAX_UPLOADS"):
+              "MONTIVO_MAX_UPLOAD_MB", "MONTIVO_MAX_UPLOADS", "MONTIVO_JUDGE_SECRET"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("MODEL_API_KEY", "test")
     return monkeypatch
@@ -174,7 +174,7 @@ def test_sign_in_gives_each_browser_a_judge_id(tmp_path, hosted_env):
     c = TestClient(A.create_app(tmp_path))
     r = c.post("/api/login", data={"password": "pw"}, follow_redirects=False)
     jid, _, sig = (r.cookies.get(H.JUDGE) or "").partition(".")
-    assert len(jid) == 8 and r.cookies.get(H.JUDGE) == H.judge_cookie("pw", jid)
+    assert len(jid) == 8 and r.cookies.get(H.JUDGE) == H.judge_cookie(H.judge_key(tmp_path), jid)
     old = TestClient(A.create_app(tmp_path))  # signed in before the judge cookie existed
     old.cookies.set(H.COOKIE, H.token("pw"))
     assert old.get("/api/runs").cookies.get(H.JUDGE)
@@ -241,7 +241,7 @@ def test_a_judge_never_reads_another_judges_project(tmp_path, hosted_env):
     for judge in ("aaaa", "bbbb"):
         c = TestClient(A.create_app(tmp_path))
         c.post("/api/login", data={"password": "pw"})
-        c.cookies.set(H.JUDGE, H.judge_cookie("pw", judge))
+        c.cookies.set(H.JUDGE, H.judge_cookie(H.judge_key(tmp_path), judge))
         clients[judge] = c
     a, b = clients["aaaa"], clients["bbbb"]
     for path in ("", "/file/edl_v2.json", "/log", "/heads", "/frame?t=0.5", "/export", "/events"):
@@ -295,16 +295,18 @@ def test_a_judge_cookie_the_server_did_not_sign_is_another_judge(tmp_path, hoste
     (victim / "ui" / "owner").write_text("6fa922fb")
     owner = TestClient(A.create_app(tmp_path))
     owner.post("/api/login", data={"password": "pw"})
-    owner.cookies.set(H.JUDGE, H.judge_cookie("pw", "6fa922fb"))
+    owner.cookies.set(H.JUDGE, H.judge_cookie(H.judge_key(tmp_path), "6fa922fb"))
     assert owner.get("/api/runs/r1-6fa922fb").status_code == 200
     thief = TestClient(A.create_app(tmp_path))
     thief.post("/api/login", data={"password": "pw"})
-    for forged in ("6fa922fb", "6fa922fb.0000", "a b", "../x", H.judge_cookie("other", "6fa922fb")):
+    # Codex review 28/10: every judge knows the password, so a cookie signed with it is a forgery too
+    for forged in ("6fa922fb", "6fa922fb.0000", "a b", "../x", H.judge_cookie("other", "6fa922fb"),
+                   H.judge_cookie("pw", "6fa922fb")):
         thief.cookies.set(H.JUDGE, forged)
         r = thief.get("/api/runs/r1-6fa922fb")
         assert r.status_code == 404, forged
         new = r.cookies.get(H.JUDGE)  # a fresh signed id instead
-        assert new and new.partition(".")[0] != "6fa922fb" and new == H.judge_cookie("pw", new.partition(".")[0])
+        assert new and new.partition(".")[0] != "6fa922fb" and new == H.judge_cookie(H.judge_key(tmp_path), new.partition(".")[0])
     thief.cookies.set(H.JUDGE, "a b")
     assert thief.post("/api/runs/r1/drop", json={"span": "s1"}).json()["job"]["run"] != "r1-a b"
     assert not (tmp_path / "runs" / "r1-a b").exists()
@@ -433,3 +435,39 @@ def test_health_names_no_server_path_on_the_host(tmp_path, hosted_env):
     hosted_env.setenv("MONTIVO_PASSWORD", "pw")
     r = TestClient(A.create_app(tmp_path)).get("/api/health")
     assert r.status_code == 200 and r.json()["ok"] is True and "root" not in r.json()
+
+
+def test_the_judge_key_is_made_once_kept_and_never_the_password(tmp_path, hosted_env):
+    key = H.judge_key(tmp_path)
+    assert len(key) == 64 and key != "pw" and H.judge_key(tmp_path) == key  # kept across restarts (the Volume)
+    assert (tmp_path / "judge.key").stat().st_mode & 0o077 == 0
+    hosted_env.setenv("MONTIVO_JUDGE_SECRET", "from-the-modal-secret")
+    assert H.judge_key(tmp_path) == "from-the-modal-secret"
+
+
+def test_the_upload_probe_runs_off_the_loop_and_a_hung_probe_is_refused(tmp_path, hosted_env):
+    # Codex review 28/10: ffprobe ran on the event loop with no timeout, so one file that made it hang held every
+    # other request (progress, Stop) until it returned
+    import asyncio
+    import subprocess
+    seen = []
+
+    def on_loop() -> bool:
+        try:
+            return asyncio.get_running_loop() is not None
+        except RuntimeError:
+            return False
+
+    def hung(src, timeout=None):
+        seen.append((on_loop(), timeout))
+        raise subprocess.TimeoutExpired("ffprobe", timeout)
+
+    hosted_env.setattr(A.media, "probe_duration", hung)
+    hosted_env.setenv("MONTIVO_BUDGET_USD", "15")
+    hosted_env.setenv("MONTIVO_MAX_FOOTAGE_S", "95")
+    c = TestClient(A.create_app(tmp_path))
+    c.cookies.set(H.JUDGE, "aaaa")
+    r = c.put("/api/footage/odd.mp4", content=b"\0" * 1000)
+    assert r.status_code == 400 and "could not read this clip" in r.json()["error"]
+    assert seen == [(False, A.UPLOAD_PROBE_S)]
+    assert sorted(p.name for p in (tmp_path / "footage").iterdir()) == []  # no clip, no .part, no owner entry

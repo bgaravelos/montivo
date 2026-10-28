@@ -40,6 +40,7 @@ VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 RUN_PATH = re.compile(r"^/api/runs/([^/]+)")  # every route of one run (state, files, media, events, edits)
 ARCHIVE = "_archive"  # runs/_archive/<id>: archived run folders (list_runs skips it: it has no run.json)
+UPLOAD_PROBE_S = 20  # ffprobe reads only the container header: a phone clip answers in well under a second
 PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 
 # rough prices and times for the hint on each button (README "Measured behaviour"; the planner A/B on runs/012-open:
@@ -376,7 +377,7 @@ def create_app(root: Path) -> FastAPI:
                 return JSONResponse({"error": "no such run"}, status_code=404)
         return await call_next(request)
 
-    hosted.install(app, os.environ.get("MONTIVO_PASSWORD"))
+    hosted.install(app, os.environ.get("MONTIVO_PASSWORD"), st.root)
 
     def key_ok() -> bool:
         """The key is set and, on the hosted demo, the budget still covers the cheapest paid action."""
@@ -971,7 +972,13 @@ def create_app(root: Path) -> FastAPI:
                     fh.write(chunk)
             # a clip New project would refuse never lands (nor counts in the quota): the browser checks first, this
             # is for the one whose length it could not read
-            dur = media.probe_duration(part) if max_footage_s else 0.0
+            # in a worker thread and bounded (Codex review 28/10): a file that makes ffprobe hang used to hold the
+            # event loop, and with it every other request, Stop included
+            try:
+                dur = await asyncio.to_thread(media.probe_duration, part, UPLOAD_PROBE_S) if max_footage_s else 0.0
+            except subprocess.TimeoutExpired:
+                raise HTTPException(400, "the demo server could not read this clip's length: try an MP4 or MOV "
+                                         "straight from the camera or phone")
             if max_footage_s and dur > max_footage_s:
                 raise HTTPException(400, f"this clip is {dur:.0f} s: the demo server takes clips up to "
                                          f"{max_footage_s:.0f} s")
