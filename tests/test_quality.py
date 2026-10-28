@@ -2,7 +2,7 @@
 (no dip, the frames' length kept), E12 caption lines that do not end on a function word (behind the look's
 `line_breaks`, old EDLs keep the greedy lines), E8 the eased reframe (zero-phase Gaussian, 1 px steps, exact crop),
 E10 the person box and then the last x where the head track loses the speaker, E11 camera cuts found at ingest and the
-reframe split there."""
+reframe split there, E9 odd inputs made standard at ingest, E15 human.drop and an end-to-end render()."""
 import array
 import math
 import shutil
@@ -14,7 +14,8 @@ import pytest
 from montivo.engine.captions import FUNCTION_WORDS, CWord, group_lines
 from montivo.engine.edl import norm
 from montivo.engine.graphics import CaptionStyle, normalize_look, restyle
-from montivo.engine.ingest import detect_shots
+from montivo.engine.ingest import (Probe, bit_depth, detect_shots, ffprobe, hdr_kind, make_upright, standard_fps,
+                                   standardise, to_sdr_chain)
 from montivo.engine.look import with_style
 from montivo.engine.reframe import ReframeParams, gaussian, plan_segment
 from montivo.engine.render import AUDIO_RATE, Segment, cut_graph, handles, plan_paths, render_audio, segment_encode
@@ -239,3 +240,111 @@ def test_no_hold_across_a_camera_cut():
                      {"id": "s2", "t_in": 5.0, "t_out": 6.0, "role": "payoff"}]}
     _, paths = plan_paths(edl, head, {})
     assert paths[1].fallbacks == [{"t_in": 5.0, "t_out": 6.0, "by": "centre"}]
+
+
+# E9 ----------------------------------------------------------------------------------------------------------------
+
+def probe(**kw) -> Probe:
+    base = dict(width=1920, height=1080, fps=30.0, duration=3.0, bytes=1, has_audio=True, codec="h264", r_fps=30.0,
+                pix_fmt="yuv420p", transfer="bt709", primaries="bt709")
+    return Probe(**{**base, **kw})
+
+
+def test_odd_inputs_are_made_standard_and_plain_ones_left_alone():
+    assert standardise(probe()) == ([], None, None)
+    assert standardise(probe(fps=29.97, r_fps=29.97)) == ([], None, None)
+    assert standard_fps(probe(fps=31.579, r_fps=31.579)) == 30.0  # the DJI's 600/19
+    assert standard_fps(probe(fps=120.0, r_fps=120.0)) == 60.0
+    assert standard_fps(probe(fps=119.88, r_fps=119.88)) == 59.94
+    assert standard_fps(probe(fps=29.87, r_fps=30.0)) == 29.97  # a phone's variable rate
+    assert standard_fps(probe(fps=21.0, r_fps=60.0)) == 23.976
+    reasons, fps, sdr = standardise(probe(pix_fmt="yuv420p10le", transfer="arib-std-b67", primaries="bt2020"))
+    assert fps is None and sdr == to_sdr_chain("HLG") and reasons[0].startswith("HDR HLG")
+    assert standardise(probe(pix_fmt="yuv422p10le"))[0] == ["10-bit -> 8-bit BT.709"]
+    assert standardise(probe(rotation=90), hflip=True)[0] == ["mirrored", "rotation 90 baked"]
+    assert bit_depth(probe(pix_fmt="yuvj420p")) == 8 and bit_depth(probe(pix_fmt="p010le")) == 8  # p010: by name only
+
+
+def test_hdr_goes_through_zscale_when_there_is_one_and_pq_without_it_is_refused():
+    assert to_sdr_chain("PQ", zscale=True).startswith("zscale=t=linear") and "tonemap=hable" in to_sdr_chain("HLG", True)
+    assert to_sdr_chain("HLG", zscale=False).startswith("colorspace=all=bt709:iall=bt2020")
+    with pytest.raises(ValueError, match="HDR10"):
+        to_sdr_chain("PQ", zscale=False)
+    assert "out_color_matrix=bt709" in to_sdr_chain(None, zscale=False)
+
+
+@needs_ffmpeg
+def test_an_hlg_120_fps_clip_becomes_8_bit_bt709_60_fps_with_its_audio_untouched(tmp_path):
+    src = tmp_path / "hlg120.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=120:d=1", "-f", "lavfi",
+                    "-i", "sine=d=1", "-vf", "format=yuv420p10le,setparams=color_primaries=bt2020:color_trc=arib-std-b67:"
+                    "colorspace=bt2020nc:range=tv", "-c:v", "libx264", "-profile:v", "high10", "-preset", "ultrafast",
+                    "-c:a", "aac", str(src)], check=True)
+    p = ffprobe(src)
+    assert hdr_kind(p) == "HLG" and bit_depth(p) == 10
+    _, fps, sdr = standardise(p)
+    out = make_upright(src, tmp_path / "source_upright.mp4", fps=fps, sdr=sdr)
+    assert (out.fps, out.pix_fmt, out.transfer) == (60.0, "yuv420p", "bt709") and standardise(out) == ([], None, None)
+    assert abs(out.duration - p.duration) < 0.05
+
+
+# E15 ---------------------------------------------------------------------------------------------------------------
+
+def test_human_drop_removes_the_clip_and_refuses_one_it_would_not_drop(tmp_path, monkeypatch):
+    import json as _json
+
+    import montivo.human as H
+    from tests.test_ui import _human_run
+    d = _human_run(tmp_path, monkeypatch)
+    with pytest.raises(SystemExit, match="s1 was not dropped: the hook span"):
+        H.drop(d, "s1")  # used to write an edl_v2 identical to v1
+    assert not (d / "edl_v2.json").exists()
+    out = H.drop(d, "s2")
+    v1, v2 = (_json.loads((d / f"edl_v{n}.json").read_text()) for n in (1, 2))
+    assert out["version"] == 2 and [s["id"] for s in v2["spans"]] == ["s1", "s3"]
+    assert v2["spans"][0]["role"] == "hook" and v2["patches"][-1]["action"] == "drop"
+    assert v2["runtime_s"] == round(sum(x["duration"] for x in v1["spans"] if x["id"] != "s2"), 2)
+    with pytest.raises(SystemExit, match="not a span"):
+        H.drop(d, "s9")
+
+
+def frame_tags(media: Path) -> set[tuple]:
+    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                          "frame=color_range,color_space,color_primaries,color_transfer", "-of", "csv=p=0", str(media)],
+                         capture_output=True, text=True, check=True).stdout
+    return {tuple(line.strip(",").split(",")) for line in out.splitlines() if line}
+
+
+@needs_ffmpeg
+def test_render_end_to_end_title_three_spans_captions(tmp_path):
+    """A lavfi clip (testsrc2 + a tone, full range like Billy's DJI footage) through render(): a title card and three
+    segments in one file of the frames' length, audio as long as the video, every frame limited-range BT.709 (one
+    set of colour tags across the title and the segments), -14 LUFS."""
+    from PIL import Image
+
+    from montivo.ledger import Ledger
+    from montivo.engine import render as R
+    from tests.test_segcache import edl_for, words
+    src = tmp_path / "src.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=1920x1080:r=30:d=3", "-f", "lavfi",
+                    "-i", "sine=f=220:r=48000:d=3", "-vf", "scale=out_range=pc", "-c:v", "libx264", "-preset",
+                    "ultrafast", "-pix_fmt", "yuvj420p", "-color_range", "pc", "-c:a", "aac", str(src)], check=True)
+    run = tmp_path / "run"
+    run.mkdir()
+    title = run / "title.png"
+    Image.new("RGB", (1080, 1920), (20, 20, 20)).save(title)
+    edl = edl_for(src)
+    rec = R.render(run, edl, src, Ledger(run / "ledger.json"), words=words(), title_png=title, log=lambda m: None)
+    out = run / "cut_v1.mp4"
+    frames = rec["title"]["frames"] + sum(s["frames"] for s in rec["segments"])
+    streams = {s["codec_type"]: s for s in __import__("json").loads(subprocess.run(
+        ["ffprobe", "-v", "error", "-count_frames", "-show_entries",
+         "stream=codec_type,nb_read_frames,duration,color_range,color_space,width,height", "-of", "json", str(out)],
+        capture_output=True, text=True, check=True).stdout)["streams"]}
+    v, a = streams["video"], streams["audio"]
+    assert int(v["nb_read_frames"]) == frames and (v["width"], v["height"]) == (1080, 1920)
+    assert abs(float(a["duration"]) - frames / 30.0) < 0.03 and abs(float(v["duration"]) - frames / 30.0) < 1e-3
+    assert (v["color_range"], v["color_space"]) == ("tv", "bt709")
+    assert frame_tags(out) == {("tv", "bt709", "bt709", "bt709")}
+    assert rec["loudnorm"]["output"]["output_i"] == pytest.approx(-14.0, abs=0.5)
+    assert len(rec["segments"]) == 3 and edl["captions"]

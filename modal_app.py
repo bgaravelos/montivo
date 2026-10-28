@@ -103,6 +103,8 @@ def smoke(run: str = "015", span: str = "s4", music: str = "", cover: bool = Fal
     import subprocess
     import sys
 
+    from montivo.engine.ingest import has_zscale
+    print(f"zscale: {'yes, HDR clips are tone-mapped' if has_zscale() else 'no: HLG via colorspace, PQ refused'}", flush=True)
     root = Path("/tmp/smoke")
     shutil.rmtree(root, ignore_errors=True)
     (root / "runs").mkdir(parents=True)

@@ -122,6 +122,8 @@ def drop(run_dir: Path, span_id: str, from_v: int | None = None, passes: int = 0
         neighbours.add((ids[k + 1], "in"))
     fix = Fix(op="drop_span", target=span_id, issue=-1, severity="human", t_s=0.0)
     new, plog = apply_fixes(edl, [fix], words, audio)
+    if plog[0].get("skipped"):  # e.g. the hook: a version that changes nothing would only look like an edit
+        raise SystemExit(f"{span_id} was not dropped: {plog[0]['note'].removeprefix('not applied: ')}")
     if audio is not None and neighbours:
         for m in tighten_edges(new, words, audio, only=neighbours)["moves"]:
             plog[0]["note"] += f"; {m['span']} {m['edge']} edge tightened to the speech {m['from']:.3f} -> {m['to']:.3f}"
