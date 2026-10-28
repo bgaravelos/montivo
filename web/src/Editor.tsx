@@ -133,6 +133,15 @@ export function Editor({ id, replay, go }: Props) {
       if (r.job?.run && r.job.run !== id) go(`#/run/${r.job.run}`); // the hosted demo edits the judge's own copy of a sample
     } catch (e) { flash(String((e as Error).message), "error"); }
   }, [id, flash, go]);
+  const shareLink = async (n: number) => {
+    try {
+      const r = await api<{ path: string }>(`/api/runs/${id}/share`, { version: n });
+      const url = `${window.location.origin}${r.path}`;
+      let copied = false;
+      try { await navigator.clipboard.writeText(url); copied = true; } catch { /* no clipboard permission */ }
+      flash(`${copied ? "Link copied" : "Share link"}: ${url}`);
+    } catch (e) { flash(String((e as Error).message), "error"); }
+  };
   const seek = useCallback((a: number, b?: number) => player.current?.seek(a, b), []);
   const scrub = useCallback((x: number) => { player.current?.pause(); player.current?.seek(x); }, []);
   const onTime = useCallback((x: number) => { tRef.current = x; setT(x); }, []);
@@ -276,6 +285,10 @@ export function Editor({ id, replay, go }: Props) {
             </div>
           )}
         </div>
+        <button className="btn quiet share-btn" disabled={!v?.cut || !!replay} onClick={() => v && shareLink(v.n)}
+          title="A read-only page with this version, its blind review and the score history; anyone with the link can watch it">
+          <Icon name="link" /> Share
+        </button>
         <button className="btn export" disabled={!v?.cut} onClick={() => setDialog({ kind: "export" })}><Icon name="export" /> Export</button>
       </header>
 

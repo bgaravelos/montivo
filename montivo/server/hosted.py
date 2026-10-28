@@ -36,7 +36,7 @@ from ..engine.api import write_atomic
 
 COOKIE = "montivo_auth"
 JUDGE = "montivo_judge"  # one id per browser: the judge's own copies of the samples and their own runs
-OPEN_PATHS = ("/login", "/api/login", "/api/health", "/favicon", "/apple-touch-icon")
+OPEN_PATHS = ("/login", "/api/login", "/api/health", "/favicon", "/apple-touch-icon", "/s/")  # /s/: share links (share.py)
 MIN_PAID_USD = 0.01  # the cheapest paid action (a Muse Image title card)
 
 

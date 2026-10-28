@@ -31,7 +31,7 @@ from ..config import OPEN_MODEL
 from ..engine.api import dump_json as write_json
 from ..engine.frame import ASPECTS
 from ..engine.graphics import FONTS, PRESET_NAMES, PRESETS, normalize_look
-from . import hosted, media, preflight
+from . import hosted, media, preflight, share
 from .runs import fingerprint, heads, list_runs, parse_log, progress, read_json, replay_script, run_state
 
 STATIC = Path(__file__).parent / "static"
@@ -1435,6 +1435,8 @@ def create_app(root: Path) -> FastAPI:
     @app.exception_handler(HTTPException)
     async def http_error(_req, exc: HTTPException):
         return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+
+    share.install(app, st)  # /s/<token>: a read-only page per shared version, open without the sign-in
 
     if STATIC.is_dir():
         app.mount("/", WebFiles(directory=STATIC, html=True), name="web")

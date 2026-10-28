@@ -104,6 +104,7 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .score-chip.none { cursor: default; }
 .score-chip:hover:not(.none) { border-color: var(--dim); }
 .btn.export { padding: 7px 14px; margin-left: 4px; }
+.share-btn { padding: 6px 10px; }
 
 .menu-wrap { position: relative; }
 .menu, .ctx-menu {
@@ -927,6 +928,7 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
     grid-template-areas: "top" "note" "viewer" "insp" "panel";
   }
   .editor .rail, .editor .tl-wrap, .editor .divider, .editor .undo-redo, .editor .chip-aspect, .editor .loop-btn, .editor .mark { display: none; }
+  .editor .score-chip span { display: none; }
   .editor .top { gap: 6px; padding: 0 8px 0 4px; }
   .editor .proj { max-width: 46vw; }
   .mobile-note { display: block; grid-area: note; padding: 8px 14px; font-size: 12px; color: var(--text-2); background: var(--panel-2); border-bottom: 1px solid var(--line); }
