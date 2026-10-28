@@ -217,6 +217,28 @@ one frame, Backspace to delete a clip, Cmd+Z / Shift+Cmd+Z across versions. Spok
 yet. The server only reads the run folders and starts the engine as a subprocess; the React build is committed, so
 the editor needs Python only.
 
+Edits after the first cut, all through the same versions: S (or Cmd+K) splits the clip at the playhead, trims and
+moves snap to the playhead, clip edges and issue markers (N turns snapping off, Shift drags free), Shift- or Cmd-click
+selects several clips for one delete; the Transcript shows the words the plan left out, and Insert (or a ghost clip's
+"Bring it back") puts a passage back in source order (`python -m montivo.human insert`); "N pauses, -X s" removes the
+pauses the audio has between abutting words, cut at the nearest word edge (`human pauses`); the B-roll track asks Muse
+Image for a still from a prompt and lays it under the captions, tied to its words, full frame, as a card or in the
+corner away from the head (one call, $0.01; moving, resizing and removing it are $0); Restore copies an older version
+forward as the next one with its review. Ask Montivo is an agent over those operations: one Spark 1.3 call (about
+$0.005) reads the message next to the version (its clips, caption lines, look, music and last review) and picks
+operations from a closed list (music, style, captions, callouts, title, drop, reorder, cut, re-plan, review), run as
+one version and rendered once; a structural change (re-plan, drop, reorder, cut) or anything over $0.02 first comes
+back as a card with the change, its cost and time (Apply, or Try something else), a question gets an answer and no
+version, a selection of clips, words or a caption line scopes the request, and a message typed during a job waits
+for it. Share makes a read-only page for
+one version (`/s/<token>`: the cut, its score and score history, the top notes; Unshare removes it). On the Export
+page the cover maker lays a headline over a still (frame, headline, sticker, or a cutout with the headline behind the
+speaker, cut out by SAM 3.1 from that one still, $0.010), or "Design it with Muse Spark" picks the still from a
+numbered contact sheet, writes the headline, checks the cover and its grid tile and fixes it once ($0.011 on run 015);
+"Post text" writes a title, description and hashtags for Reels, TikTok, Shorts and LinkedIn (one call, about $0.01).
+The Voice and Music tracks of a version with music have a fader each that plays live in the browser before "Make
+Version" renders the mix. Under 900 px the editor is a review mode (player, review, chat, export).
+
 ## Built during the hackathon
 
 Everything in this repository was written from scratch for the Meta Global AI Developer Hackathon, from the kickoff
@@ -656,8 +678,9 @@ loudnorm figures and the ebur128 measurement of the finished file).
 |---|---|
 | 26/10 evening (kickoff day) | engine skeleton, run to `edl_v1.json` with a ledger; reframe and render to `cut_v1.mp4`; kill test (a) on the NASA clip; captions, callouts, the Muse Image title card, loudness; the blind review loop; kill test (b) 3 of 3 in 3 of 3 |
 | 27/10 | the edge pass (loops 76 to 100 and 65 to 85); two-pass loudness and a minimum caption duration; a second source (run 013) and its three fixes; SAM at 5 fps for every concept; the API and the review room, then the NLE editor with trim by drag; the bundled caption font and CI; speaker to head mapping; the Open Weight planner; punch-ins, then their switch, markers and removal in the editor; the hook A/B; the brand (logo, tokens in the editor and the render, social preview, title and end cards, logo sting) |
-| 28/10 | the hosted demo on Modal and its first upload; the Codex review fixes; caption looks and the canvas drag; the Export page with its pre-flight; style by prompt; saved looks; the Spark cover; Feed 4:5 and Square 1:1 exports; a music bed with ducking (eight CC0 tracks from OpenGameArt) |
-| 28/10 to 4/11 | runs on more footage, the planner A/B, polish, the demo video, the submission |
+| 28/10 | the hosted demo on Modal and its first upload; the Codex review fixes; caption looks and the canvas drag; the Export page with its pre-flight; style by prompt; saved looks; the Spark cover; Feed 4:5 and Square 1:1 exports; a music bed with ducking (eight CC0 tracks from OpenGameArt) and live voice and music faders; the Ask Montivo agent over the edit operations, with a preview and its cost for a structural change and a queue for messages typed during a job; restore and share links; split, snapping and multi-select on the timeline; a segment cache (a caption edit re-renders in about 2.5 s instead of 10); adding back a passage, removing pauses and Muse Image B-roll stills; the cover maker (Spark designs it, SAM 3.1 cuts the speaker out of the still) and post text per platform; picture and sound (an eased reframe, a crossfade at every cut, phrase-aware caption lines, camera cuts, VFR and HDR sources) |
+| 28/10 night | debugging: a combination matrix of chained edits (`tools/combo_check.py`, 44 versions with every invariant checked, 0 failures), real runs again on the NASA, USGS and TEDx clips, a code review and a bug bash as a judge on the hosted setup, 27 fixes each with a test first; then the feature freeze (tag `freeze-2026-10-31`) |
+| 29/10 to 4/11 | the samples for the hosted demo, the demo video, the submission; after the freeze, only fixes for what breaks the demo |
 
 Design rules fixed on 26/10:
 
