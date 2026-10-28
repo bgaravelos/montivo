@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 
 from ..config import SPARK_MODEL
+from ..engine.graphics import normalize_look
 
 LINE = re.compile(r"^\[\s*([\d.]+)s\] ?(.*)$")
 EDL = re.compile(r"edl_v(\d+)\.json")
@@ -123,7 +124,7 @@ def replay_script(lines: list[dict]) -> list[dict]:
 RENDER_PREP, RENDER_SEGS = 0.05, 0.75
 COMMANDS = {"run": "Run", "render": "Render", "drop": "Delete clip", "trim": "Trim clip", "caption": "Edit captions",
             "punch": "Punch-ins", "replan": "Ask Montivo", "edges": "Edges", "text": "Edit text", "reorder": "Move clip",
-            "pin": "Pin speaker", "cut": "Delete words"}
+            "pin": "Pin speaker", "cut": "Delete words", "style": "Style"}
 TO_VERSION = re.compile(r"-> \S*?(?:edl|cut)_v(\d+)\b")
 SEGMENTS = re.compile(r"^render: \d+ spans -> (\d+) segments(?: \((\d+) frames\))?")
 SEG_DONE = re.compile(r"^render: seg (\d+) .*?\((\d+) frames")
@@ -423,7 +424,7 @@ def list_runs(runs_dir: Path) -> list[dict]:
 
 def _span(s: dict) -> dict:
     keys = ("id", "order", "turn_id", "speaker", "role", "words", "t_in", "t_out", "duration", "word_from", "word_to",
-            "why", "callout", "contiguous_with_previous", "verbatim")
+            "why", "callout", "callout_xy", "contiguous_with_previous", "verbatim")
     return {k: s.get(k) for k in keys}
 
 
@@ -502,11 +503,15 @@ def versions(run_dir: Path) -> list[dict]:
                     "title_card_text": edl.get("title_card_text"), "title_s": title_s,
                     "spans": [_span(s) for s in edl.get("spans", [])], "origin": origin,
                     "loudness": render.get("loudness_ebur128"), "captions": render.get("captions"),
-                    "callouts": [{"span": c.get("span"), "text": c.get("text"), "t_in": c.get("t_in"), "t_out": c.get("t_out")}
+                    "callouts": [{"span": c.get("span"), "text": c.get("text"), "t_in": c.get("t_in"), "t_out": c.get("t_out"),
+                                  "box": c.get("box"), "placement": c.get("placement"), "head_box": c.get("head_box"),
+                                  "over_face": bool(c.get("over_face"))}
                                  for c in edl.get("callouts") or []],
+                    "look": _look(edl),
                     "caption_lines": [{"id": c.get("id"), "text": c.get("text"), "t_in": c.get("t_in"), "t_out": c.get("t_out"),
                                        "spans": c.get("spans") or [], "placement": c.get("placement"),
-                                       "over_face": bool(c.get("over_face")),
+                                       "over_face": bool(c.get("over_face")), "box": c.get("box"),
+                                       "head_box": c.get("head_box"),
                                        "heard": next((w["voice"] for w in c.get("words") or [] if w.get("voice")), None)}
                                       for c in edl.get("captions") or []],
                     "caption_style": edl.get("caption_style"), "caption_style_note": edl.get("caption_style_note"),
@@ -519,6 +524,13 @@ def versions(run_dir: Path) -> list[dict]:
                     "plan_compare": cmp,
                     "review": _review(rv, run_dir) if rv else None})
     return out
+
+
+def _look(edl: dict) -> dict | None:
+    try:
+        return normalize_look(edl.get("look")).to_json()
+    except ValueError:
+        return None
 
 
 def heads(run_dir: Path) -> dict:

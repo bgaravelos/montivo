@@ -4,6 +4,7 @@ export type Span = {
   id: string; order: number; turn_id: number; speaker: string; role: string; words: string;
   t_in: number; t_out: number; duration: number; word_from: number; word_to: number;
   why: string; callout: string; contiguous_with_previous: boolean; verbatim: boolean;
+  callout_xy: [number, number] | null; // a callout a person pinned on the canvas (montivo.human style)
 };
 
 export type Issue = {
@@ -49,7 +50,9 @@ export type Version = {
   n: number; edl: string; cut: string | null; runtime_s: number; duration_s: number | null;
   title_card: boolean; title_card_text: string | null; title_s: number; spans: Span[]; origin: Origin;
   loudness: { integrated_lufs: number; true_peak_dbtp: number; lra_lu: number } | null; captions: number | null;
-  callouts: { span: string; text: string; t_in: number; t_out: number }[]; review: Review | null;
+  callouts: { span: string; text: string; t_in: number; t_out: number; box: number[] | null; placement: string | null;
+    head_box: number[] | null; over_face: boolean }[]; review: Review | null;
+  look: Look | null; // the caption look this version was rendered with (graphics.normalize_look)
   caption_lines: CaptionLine[]; caption_style: CaptionStyle | null; caption_style_note: string | null; bytes: number | null;
   punch: boolean; punch_skip: string[]; punch_ins: PunchIn[];
   speaker_pins: Record<string, string>; // reframe_speaker_ids: Voice speaker -> the head the crop follows (a human pin)
@@ -64,7 +67,17 @@ export type PunchIn = {
 };
 
 export type CaptionLine = { id: string; text: string; t_in: number; t_out: number; spans: string[]; placement: string | null; over_face: boolean;
+  box: number[] | null; head_box: number[] | null; // [x, y, w, h] and the head [x0, y0, x1, y1] in the 1080 x 1920 frame
   heard: string | null }; // heard: the words Voice heard, when the line was retexted (by a human or the reviewer)
+
+/** The caption and callout look (engine/graphics.py Look): a preset and every choice on top of it. */
+export type Look = {
+  preset: string; font: string; size: number; case: "as_said" | "upper"; max_words: number; text: string; stroke: string;
+  stroke_w: number; shadow: boolean; active: "pill" | "color" | "karaoke" | "none"; active_fg: string; active_bg: string;
+  highlight: string; box: string; position: "auto" | "fixed"; top: number; callout_bg: string; callout_fg: string;
+  highlight_add: string[]; highlight_off: string[];
+};
+export type LooksInfo = { presets: { id: string; name: string; look: Look }[]; fonts: { id: string; name: string }[]; default: Look };
 
 export type CaptionStyle = { font?: number; max_words?: number; default_top?: number; font_path?: string; glossary?: Record<string, string> };
 

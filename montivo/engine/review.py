@@ -603,6 +603,8 @@ def gate_check(caps: dict, edges: list[dict] | None, edge_words: dict | None, he
     for o in caps.get("over_face") or []:
         if o.get("placement") == "over_head":
             continue  # the renderer found no clear place (run 013: the head fills the frame), a patch cannot move it
+        if o.get("placement") == "fixed":
+            continue  # a person put the captions there (the look's fixed position): the editor warns, the gate does not
         reasons.append(f"caption over the head at {o['t_in']:.2f}-{o['t_out']:.2f} s")
         issue((o["t_in"] + o["t_out"]) / 2, (o["t_in"] + o["t_out"]) / 2, "captions_legible", "caption_fix",
               f"caption \"{o['text']}\" over the head", "caption_face")
@@ -1034,6 +1036,8 @@ def resolve(issue: dict, k: int, edl: dict, words: Words, cmap: list[CutSpan],
             return mk("caption_text", key, span=sid, src_t=src_t, text=text), ""
         x, y, w, h = cap["box"]
         head = cap.get("head_box")
+        if cap.get("placement") == "fixed":
+            return None, "a person placed the captions (fixed position): the position stays"
         if head and overlaps([x, y, x + w, y + h], head):
             top = int(head[3] + HEAD_MARGIN + 1)
             top = top if top + h <= SAFE_BOTTOM else CAPTION_TOP

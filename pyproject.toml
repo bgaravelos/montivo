@@ -29,7 +29,7 @@ include = ["montivo*"]
 
 [tool.setuptools.package-data]
 "montivo.server" = ["static/**/*"]
-"montivo" = ["fonts/*"]
+"montivo" = ["fonts/*", "fonts/licenses/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -347,6 +347,16 @@ two rows marked as scored before the gate, hook A/B and punch-ins with their rea
 v6 34.3 s, -14.0 LUFS); the TEDx clip is deleted from the Volume (Billy, 28/10) and its run moved to runs/_archive/ui-1027-2252, so its
 $0.40 stays in the cap; a judge now edits, archives, lists and restores only their own projects (commit abb969c) and reads only
 the samples and their own (one middleware over /api/runs/<id>/..., another judge's run answers like a missing one, commit b780b56).
+Caption styles + canvas (28/10, $0): EDL `look` (graphics.Look/normalize_look: 6 presets marker/clean/box/karaoke/
+bold_pop/minimal, 5 OFL fonts in montivo/fonts + licenses/, colours, outline, shadow, box, words per line, case, active
+word pill/color/karaoke/none, highlight_add/off, position auto|fixed + top), callouts in the look's font/colours, span
+`callout_xy` pins a callout (placement "pinned"); a fixed caption is placement "fixed": gate_check skips it, resolve
+refuses caption_move on it; an over-wide line shrinks to fit (`captions.fit_line`); replan carries look + pins (by callout
+text). `python -m montivo.human style RUN --look JSON --callout s5=X,Y|auto`, POST /style, GET /api/looks, POST /preview
+(`engine/look.py`: source frame cropped by `render.plan_paths` + build_overlays draw_at, 0.4 s, ui/cache/preview/).
+UI: Style panel (rail), preset cards on real frames, preview still on the paused viewer, drag handles (StyleCanvas: the
+caption up/down -> fixed, a callout anywhere -> pinned, the face area shaded, snaps to centre / safe area / clear of the
+face). Checked keyless on a throwaway copy of 015 (callout pinned above the head, v6 rendered in 19 s; removed).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

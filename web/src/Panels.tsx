@@ -104,10 +104,10 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply }: {
               <dl className="props">
                 <dt>Font</dt><dd>{font ?? "–"} · {st.font ?? "–"} px</dd>
                 <dt>Line</dt><dd>up to {st.max_words ?? 4} words</dd>
-                <dt>Position</dt><dd>lower third (y {st.default_top}), moves off the face</dd>
+                <dt>Position</dt><dd>{v?.look?.position === "fixed" ? `fixed at y ${v.look.top} (your choice)` : `from y ${st.default_top}, moves off the face`}</dd>
               </dl>
               {v?.caption_style_note && <p className="mute small">Planner's note: {v.caption_style_note}</p>}
-              <p className="mute small">Style presets are not editable yet: the renderer has one caption style.</p>
+              <p className="mute small">Preset{v?.look ? ` ${v.look.preset.replace("_", " ")}` : ""}. Fonts, colours and position: the Style panel in the rail.</p>
             </>
           ) : <p className="mute small">This version was rendered without captions.</p>}
         </div>

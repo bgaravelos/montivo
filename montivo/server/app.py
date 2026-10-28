@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -28,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..config import OPEN_MODEL
 from ..engine.api import dump_json as write_json
+from ..engine.graphics import FONTS, PRESET_NAMES, PRESETS, normalize_look
 from . import hosted, media
 from .runs import fingerprint, heads, list_runs, parse_log, progress, read_json, replay_script, run_state
 
@@ -744,6 +746,85 @@ def create_app(root: Path) -> FastAPI:
             what.append("title card on" if card else "title card off")
         job = start_job(st, run_id, "text", "Edit text", args,
                         chat={"role": "user", "text": f"Text in v{frm}: {'; '.join(what)}.", "chips": [f"v{frm}"], "kind": "text"})
+        return {"job": job.public()}
+
+    @app.get("/api/looks")
+    def looks():
+        """The Style panel's choices: every preset as a full look, the fonts, the default (marker) look."""
+        return {"presets": [{"id": k, "name": PRESET_NAMES[k], "look": normalize_look({"preset": k}).to_json()} for k in PRESETS],
+                "fonts": [{"id": k, "name": v[0]} for k, v in FONTS.items()], "default": normalize_look(None).to_json()}
+
+    def style_body(b: dict) -> tuple[dict | None, dict[str, list[float] | None]]:
+        look, places = b.get("look"), b.get("callouts") or {}
+        if look is not None:
+            if not isinstance(look, dict):
+                raise HTTPException(400, "look: an object")
+            try:
+                normalize_look(look)
+            except ValueError as e:
+                raise HTTPException(400, f"look: {e}")
+        if not isinstance(places, dict) or not all(
+                re.fullmatch(r"s\d+", k) and (v is None or (isinstance(v, list) and len(v) == 2
+                                                           and all(isinstance(x, (int, float)) for x in v)))
+                for k, v in places.items()):
+            raise HTTPException(400, "callouts: {span id: [x, y] or null}")
+        return look, places
+
+    @app.post("/api/runs/{run_id}/preview")
+    def preview(run_id: str, b: dict):
+        """The Style panel's still ({"v": N, "t": cut second, "look": {...}, "callouts": {span: [x, y] | null}}): the
+        frame of version N at t as a new version with that look would burn it (engine/look.py), saved under
+        ui/cache/preview/, and the caption and callout boxes on screen then. $0, about 0.4 s."""
+        from ..engine.look import preview as still, with_style
+        d = st.run_dir(run_id)
+        try:
+            v, t = int(b.get("v")), round(float(b.get("t")), 2)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "v: a version, t: a cut second")
+        look, places = style_body(b)
+        edl_path = d / f"edl_v{v}.json"
+        if not edl_path.is_file():
+            raise HTTPException(404, f"no edl_v{v}.json")
+        key = hashlib.sha1(json.dumps([v, t, look, places, edl_path.stat().st_mtime_ns], sort_keys=True).encode()).hexdigest()[:16]
+        out = d / "ui" / "cache" / "preview" / f"{key}.jpg"
+        meta = out.with_suffix(".json")
+        if not (out.is_file() and meta.is_file()):
+            try:
+                img, info = still(d, with_style(read_json(edl_path), look, places), t, d / f"cut_v{v}.mp4")
+            except (FileNotFoundError, subprocess.CalledProcessError) as e:
+                raise HTTPException(500, f"preview failed: {e}")
+            out.parent.mkdir(parents=True, exist_ok=True)
+            for old in sorted(out.parent.glob("*.jpg"), key=lambda p: p.stat().st_mtime)[:-80]:  # keep the cache small
+                old.unlink(missing_ok=True)
+                old.with_suffix(".json").unlink(missing_ok=True)
+            img.convert("RGB").save(out, quality=86)
+            write_json(meta, info)
+        return {"image": f"/api/runs/{run_id}/file/ui/cache/preview/{out.name}", **read_json(meta)}
+
+    @app.post("/api/runs/{run_id}/style")
+    async def style_edit(run_id: str, request: Request):
+        """The caption look and callout places ({"look": {...}, "callouts": {span: [x, y] | null}}): the next version,
+        ffmpeg only."""
+        run_id = own(run_id, request)
+        d = st.run_dir(run_id)
+        b = await request.json()
+        frm = int(b.get("from") or latest_version(d))
+        passes = int(b.get("review") or 0)
+        look, places = style_body(b)
+        if look is None and not places:
+            raise HTTPException(400, "nothing to change")
+        if passes:
+            need_key("Reviewing the new cut", COST["review"] * passes)
+        args = ["-m", "montivo.human", "style", f"runs/{run_id}", *(["--look", json.dumps(look)] if look is not None else []),
+                *[f"--callout={k}={'auto' if v is None else f'{v[0]:.0f},{v[1]:.0f}'}" for k, v in places.items()],
+                "--from", str(frm), "--review", str(passes)]
+        what = []
+        if look is not None:
+            what.append(f"caption style {PRESET_NAMES.get(look.get('preset') or 'marker', 'custom')}"
+                        + (f", fixed at y {look.get('top')}" if look.get("position") == "fixed" else ""))
+        what += [f"callout {k} {'back to auto' if v is None else 'moved'}" for k, v in places.items()]
+        job = start_job(st, run_id, "style", "Style", args,
+                        chat={"role": "user", "text": f"Style in v{frm}: {'; '.join(what)}.", "chips": [f"v{frm}"], "kind": "style"})
         return {"job": job.public()}
 
     @app.post("/api/runs/{run_id}/reorder")

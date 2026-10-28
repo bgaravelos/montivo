@@ -34,7 +34,6 @@ from ..ledger import Entry, Ledger, Timer
 from .api import dump_json
 from .captions import Overlay, build_overlays
 from .edges import Audio
-from .graphics import font_path
 from .punch import plan_punches, zoom_filter
 from .reframe import ReframeParams, SegmentPath, plan_segment
 from .speakers import follow_ids
@@ -386,6 +385,23 @@ def mux(segment_files: list[Path], audio: Path, out: Path, render_dir: Path) -> 
     return out
 
 
+def plan_paths(edl: dict, track: dict | None, speaker_ids: dict[str, list[str]],
+               params: ReframeParams | None = None) -> tuple[list[Segment], list[SegmentPath]]:
+    """The frame-aligned segments of the EDL and the crop path of each (one crop x per output frame), as the render
+    burns them; the editor's preview still (look.py) plans the same way."""
+    segments = frame_align(merge_segments(edl["spans"]), float(edl["source"]["fps"]))
+    paths: list[SegmentPath] = []
+    for seg in segments:
+        path = plan_segment(seg.t_in, seg.t_out, edl["source"], track, params, span_ids=seg.span_ids,
+                            follow=follow_pieces(seg, edl["spans"], speaker_ids))
+        path.xs = path.xs[:seg.frames] + [path.xs[-1]] * max(0, seg.frames - len(path.xs))
+        bias = segment_bias(edl["spans"], seg.span_ids)
+        if bias:
+            apply_bias(path, bias, int(edl["source"]["width"]))
+        paths.append(path)
+    return segments, paths
+
+
 def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str = "cut_v1.mp4",
            params: ReframeParams | None = None, log=print, edl_path: Path | None = None, words: list[dict] | None = None,
            title_png: Path | None = None, captions: bool = True, callouts: bool = True, loudnorm: bool = True,
@@ -409,7 +425,7 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     fps = float(edl["source"]["fps"])
     concept, track = load_reframe_track(run_dir, edl)
     speaker_ids = load_speaker_ids(run_dir, concept, edl)
-    segments = frame_align(merge_segments(edl["spans"]), fps)
+    segments, paths = plan_paths(edl, track, speaker_ids, params)
     log(f"render: {len(edl['spans'])} spans -> {len(segments)} segments ({sum(s.frames for s in segments)} frames), "
         f"source {source.name}, track {concept or 'none (centre crop)'}"
         + (f", following speakers {', '.join(f'{k}->{'/'.join(v)}' for k, v in speaker_ids.items())}" if speaker_ids else ""))
@@ -418,15 +434,6 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     seg_info: list[dict] = []
     files: list[Path] = []
     with Timer() as t:
-        paths: list[SegmentPath] = []
-        for seg in segments:
-            path = plan_segment(seg.t_in, seg.t_out, edl["source"], track, params, span_ids=seg.span_ids,
-                                follow=follow_pieces(seg, edl["spans"], speaker_ids))
-            path.xs = path.xs[:seg.frames] + [path.xs[-1]] * max(0, seg.frames - len(path.xs))
-            bias = segment_bias(edl["spans"], seg.span_ids)
-            if bias:
-                apply_bias(path, bias, int(edl["source"]["width"]))
-            paths.append(path)
         title_frames = 0
         title_s = 0.0
         if title_png is not None:
@@ -438,10 +445,9 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
                                               load_track(run_dir, edl, "person"), ov_dir, title_s=title_s,
                                               captions=bool(captions and words), callouts=callouts,
                                               reframe_concept=concept)
-            fields["caption_style"]["font_path"] = font_path()
             edl.update(fields)
             log(f"render: {len(fields['captions'])} caption lines "
-                f"({sum(1 for c in fields['captions'] if c['placement'] != 'lower_third')} moved off the head, "
+                f"({sum(1 for c in fields['captions'] if c['placement'] in ('below_head', 'above_head'))} moved off the head, "
                 f"{sum(1 for c in fields['captions'] if c['over_face'])} over it), {len(fields['callouts'])} callouts, "
                 f"{len(fields['caption_corrections'])} corrections: "
                 + "; ".join(f"{f['from']} -> {f['to']}" for f in fields["caption_corrections"]))

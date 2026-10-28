@@ -21,11 +21,11 @@ from __future__ import annotations
 import difflib
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .edl import norm
-from .graphics import CaptionStyle, callout_size, draw_callout, draw_caption, line_width
+from .graphics import CaptionStyle, Look, callout_size, draw_callout, draw_caption, font_path, line_width, normalize_look
 from .reframe import id_at
 
 OUT_W, OUT_H = 1080, 1920
@@ -329,6 +329,27 @@ def place_caption(w: int, h: int, head: list[float] | None, top: int = CAPTION_T
     return max(top, SAFE_BOTTOM - h), "over_head"
 
 
+def fit_line(texts: list[str], style: CaptionStyle) -> CaptionStyle:
+    """The style a line is drawn in: its own, or smaller until the line fits style.max_w (a retexted line can be longer
+    than the grouping allowed, and a big look like bold_pop leaves little room)."""
+    if line_width(texts, style) <= style.max_w:
+        return style
+    size = style.size
+    while size > 36:
+        size -= 4
+        k = size / style.size
+        st = replace(style, size=size, stroke=max(0, round(style.stroke * k)), space=max(6, round(style.space * k)),
+                     pad_x=max(6, round(style.pad_x * k)), pad_y=max(4, round(style.pad_y * k)))
+        if line_width(texts, st) <= style.max_w:
+            return st
+    return st
+
+
+def pin_callout(w: int, h: int, xy: list) -> tuple[int, int]:
+    """A callout a person placed: its top-left at xy, kept whole inside the frame."""
+    return int(min(OUT_W - w, max(0, float(xy[0])))), int(min(OUT_H - h, max(0, float(xy[1]))))
+
+
 def place_callout(w: int, h: int, person: list[float] | None, head: list[float] | None,
                   avoid: list[list[float]]) -> tuple[int, int, str]:
     """A callout pill anchored to the person box: centred on it horizontally, sitting on top of the box when there is
@@ -437,7 +458,8 @@ class Overlay:
 def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, head_track: dict | None,
                    person_track: dict | None, out_dir: Path, title_s: float = 0.0, captions: bool = True,
                    callouts: bool = True, glossary: dict[str, str] | None = None,
-                   style: CaptionStyle | None = None, reframe_concept: str | None = None) -> tuple[dict, dict[int, list[Overlay]]]:
+                   style: CaptionStyle | None = None, reframe_concept: str | None = None,
+                   draw_at: float | None = None) -> tuple[dict, dict[int, list[Overlay]]]:
     """Caption lines and callouts for the rendered segments.
 
     `segments` are render.Segment (frame-aligned), `paths` the reframe SegmentPath of each (crop x per source frame).
@@ -446,8 +468,18 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
     head": SAM also tracked the passers-by in the background, and their union covered the whole frame.
     Returns the EDL fields ({"captions": [...], "callouts": [...], "caption_corrections": [...], ...}) and the PNG
     overlays per segment index in segment-local time.
+
+    The EDL's `look` (graphics.normalize_look) sets the font, colours, words per line and the caption position: auto
+    keeps every line off the head from the look's `top`, fixed puts every line at `top` (placement "fixed", a person's
+    choice: the review loop does not move it). A span's `callout_xy` [x, y] pins its callout there (placement
+    "pinned"). `draw_at` (cut seconds) draws only the PNGs on screen at that time, for the editor's preview still.
     """
-    style = style or CaptionStyle()
+    look = (style.look if style and style.look else None) or normalize_look(edl.get("look"))
+    style = style or CaptionStyle.from_look(look)
+    highlight_words = (HIGHLIGHT | set(look.highlight_add)) - set(look.highlight_off)
+
+    def on_screen(a: float, b: float) -> bool:
+        return draw_at is None or a <= draw_at < b
     sw = float(edl["source"]["width"])
     sh = float(edl["source"]["height"])
 
@@ -512,7 +544,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
     if captions:
         for i, ws in sorted(seg_words.items()):
             seg = segments[i]
-            grouped, forced = apply_overrides(group_lines(ws, style), overrides)
+            grouped, forced = apply_overrides(group_lines(ws, style, max_words=look.max_words), overrides)
             lines = [Line(words=lw, segment=i) for lw in grouped]
             for ln in lines:
                 ln.word_times = [(cut_t(i, w.t_in), cut_t(i, w.t_out)) for w in ln.words]
@@ -531,19 +563,23 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                     continue
                 head = union_out(head_src, i, la, lb, subject_head(i))
                 texts = [w.w for w in ln.words]
-                hl = [norm(w).replace("'s", "") in HIGHLIGHT for w in texts]
-                w_px, h_px = line_width(texts, style), style.height()
-                y, where = place_caption(w_px, h_px, head)
+                hl = [norm(w).replace("'s", "") in highlight_words for w in texts]
+                lstyle = fit_line(texts, style)
+                w_px, h_px = line_width(texts, lstyle), lstyle.height()
+                if look.position == "fixed":
+                    y, where = min(look.top, OUT_H - h_px), "fixed"
+                else:
+                    y, where = place_caption(w_px, h_px, head, top=min(look.top, SAFE_BOTTOM - h_px))
                 if k in forced:
                     y, where = int(forced[k]["top"]), "forced"
                 x = (OUT_W - w_px) // 2
                 caption_rects[i].append((la, lb, [x, y, x + w_px, y + h_px]))
                 for k in range(len(texts)):
                     png = out_dir / f"cap_{n_line:03d}_{k + 1}.png"
-                    draw_caption(texts, k, hl, style, png)
                     ka = la if k == 0 else ln.word_times[k][0] - seg_cut[i]
                     kb = lb if k == len(texts) - 1 else ln.word_times[k + 1][0] - seg_cut[i]
-                    if kb > ka:
+                    if kb > ka and on_screen(seg_cut[i] + ka, seg_cut[i] + kb):
+                        draw_caption(texts, k, hl, lstyle, png)
                         overlays[i].append(Overlay(png=png, x=x, y=y, t_in=round(ka, 4), t_out=round(kb, 4)))
                 cap_entries.append({
                     "id": f"c{n_line}", "segment": i, "spans": sorted({w.span for w in ln.words}), "text": ln.text,
@@ -574,18 +610,23 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
             person = clamp_frame(union_out(person_src, i, a, b, largest_at))
             head = union_out(head_src, i, a, b, subject_head(i))
             avoid = [r for (ra, rb, r) in caption_rects[i] if ra < b and rb > a]
-            w_px, h_px = callout_size(text)
+            w_px, h_px = callout_size(text, key=look.font)
             x, y, where = place_callout(w_px, h_px, person, head, avoid)
+            if s.get("callout_xy"):
+                x, y, where = pin_callout(w_px, h_px, s["callout_xy"]) + ("pinned",)
             png = out_dir / f"callout_{s['id']}.png"
-            draw_callout(text, png)
-            overlays[i].append(Overlay(png=png, x=x, y=y, t_in=round(a, 4), t_out=round(b, 4), fade_s=CALLOUT_FADE_S))
+            if on_screen(seg_cut[i] + a, seg_cut[i] + b):
+                draw_callout(text, png, look=look)
+                overlays[i].append(Overlay(png=png, x=x, y=y, t_in=round(a, 4), t_out=round(b, 4), fade_s=CALLOUT_FADE_S))
             call_entries.append({"span": s["id"], "text": text, "t_in": round(seg_cut[i] + a, 3), "t_out": round(seg_cut[i] + b, 3),
                                  "box": [x, y, w_px, h_px], "placement": where,
+                                 "over_face": overlaps([x, y, x + w_px, y + h_px], head),
                                  "person_box": [round(v) for v in person] if person else None,
                                  "head_box": [round(v) for v in head] if head else None})
 
     fields = {"captions": cap_entries, "callouts": call_entries, "caption_corrections": fixes,
-              "caption_style": {"font": style.size, "max_words": LINE_MAX_WORDS, "default_top": CAPTION_TOP,
+              "caption_style": {"font": style.size, "max_words": look.max_words, "default_top": look.top,
+                                "look": look.to_json(), "font_path": font_path(look.font),
                                 "min_line_s": LINE_MIN_S,
                                 "dedupe_gap_s": DEDUPE_GAP_S, "glossary": glossary if glossary is not None else GLOSSARY}}
     return fields, overlays

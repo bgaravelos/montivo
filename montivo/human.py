@@ -11,6 +11,7 @@
     python -m montivo.human cut runs/015 --words s2:16-16 [--words s3:0-2 ...]
     python -m montivo.human pin runs/014 --speaker A --head 3 (or --head none to drop the pin)
     python -m montivo.human edges runs/015
+    python -m montivo.human style runs/015 [--look '{"preset": "box", "position": "fixed", "top": 1180}'] [--callout s5=120,300] [--callout s5=auto]
 
 Each writes the next edl_vN.json (N = one past the highest version in the run folder, so no version is ever
 overwritten) with a `patches` entry marked `source: "human"`, renders cut_vN.mp4 and, with --review, runs the blind
@@ -24,7 +25,9 @@ reorder patch) and tightens the cuts that now meet; `pin` makes the crop follow 
 `reframe_speaker_ids`, for clips where the speaker map got it wrong, like run 014). Both $0. `cut` deletes the words
 of a transcript selection (turn word indices per span) in one version: whole clips are dropped, words at a clip's edge
 trimmed like a timeline drag, words inside a clip split it in two; $0. `edges` runs the edge pass again from the
-Voice word boundaries with today's rules, for a version made before a rule changed; $0.
+Voice word boundaries with today's rules, for a version made before a rule changed; $0. `style` sets the look of the
+captions and callouts (graphics.normalize_look: a preset, font, colours, words per line, the caption position auto or
+fixed) and pins callouts where a person dragged them on the canvas (span `callout_xy`), or back to auto; $0.
 """
 from __future__ import annotations
 
@@ -41,6 +44,7 @@ from types import SimpleNamespace
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, reset_edges, tighten_edges
 from .engine.edl import build_edl, edl_summary, normalize_roles
+from .engine.graphics import Look, normalize_look
 from .engine.punch import parse_key
 from .engine.review import (REACH_S, Fix, _caption_at, _src_time, apply_fixes, cut_map, finalize, kept_elsewhere,
                             refresh_span, review_loop)
@@ -339,6 +343,86 @@ def text(run_dir: Path, callouts: dict[str, str] | None = None, title: str | Non
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
 
 
+def look_note(was: Look, now: Look) -> str:
+    """What changed between two looks, for the patch note: "preset marker -> box, font poppins, top 1300 -> 1180"."""
+    a, b = was.to_json(), now.to_json()
+    return ", ".join(f"{k} {a[k]!r} -> {b[k]!r}" for k in b if a[k] != b[k])
+
+
+def style_fixes(edl: dict, look: dict | None, callouts: dict[str, list[float] | None]) -> tuple[dict | None, list[dict]]:
+    """The patch entries of a style edit: one `look` entry (the look normalized from its preset, every key checked) and
+    a `callout_pin` per span ([x, y] in the 1080x1920 frame, the pill's top-left) or `callout_auto` (None). Raises
+    SystemExit for a bad look, a span without a callout or an edit that changes nothing."""
+    out: list[dict] = []
+    new_look = None
+    if look is not None:
+        try:
+            now = normalize_look(look)
+            was = normalize_look(edl.get("look"))
+        except ValueError as e:
+            raise SystemExit(f"look: {e}")
+        if note := look_note(was, now):
+            new_look = now.to_json()
+            out.append({"op": "look", "target": "captions", "issue": -1, "severity": "human", "args": {"look": new_look},
+                        "note": f"look: {note}"})
+    by_id = {s["id"]: s for s in edl["spans"]}
+    for sid, xy in callouts.items():
+        s = by_id.get(sid)
+        if s is None or not (s.get("callout") or "").strip():
+            have = ", ".join(x["id"] for x in edl["spans"] if (x.get("callout") or "").strip()) or "none"
+            raise SystemExit(f"{sid} has no callout in this EDL (callouts on: {have})")
+        if xy is None:
+            if not s.get("callout_xy"):
+                continue
+            out.append({"op": "callout_auto", "target": sid, "issue": -1, "severity": "human",
+                        "note": f"callout {s['callout']!r} back to its automatic place"})
+            continue
+        xy = [round(float(xy[0])), round(float(xy[1]))]
+        if not (0 <= xy[0] <= 1080 and 0 <= xy[1] <= 1920):
+            raise SystemExit(f"callout position {xy} is outside the 1080x1920 frame")
+        if s.get("callout_xy") == xy:
+            continue
+        out.append({"op": "callout_pin", "target": sid, "issue": -1, "severity": "human", "args": {"xy": xy},
+                    "note": f"callout {s['callout']!r} pinned at x {xy[0]}, y {xy[1]}"})
+    if not out:
+        raise SystemExit("nothing to change: the look and the callout places are already these")
+    return new_look, out
+
+
+def style(run_dir: Path, look: dict | None = None, callouts: dict[str, list[float] | None] | None = None,
+          from_v: int | None = None, passes: int = 0, budget: float = 0.15) -> dict:
+    """The look of the captions and callouts and the callout places of edl_v{from} -> edl_vN, rendered, $0. The EDL's
+    `look` and every span's `callout_xy` travel with later versions (review patches deep-copy the EDL, replan carries
+    them), and the review loop keeps a fixed caption position (review.gate_check, resolve)."""
+    log = RunLog(run_dir / "run.log")
+    from_v, edl, n = _new_version(run_dir, from_v)
+    new_look, fixes = style_fixes(edl, look, callouts or {})
+    log(f"montivo style: {len(fixes)} change(s) in edl_v{from_v} -> edl_v{n}")
+    new, _ = apply_fixes(edl, [], _words(run_dir))
+    if new_look is not None:
+        new["look"] = new_look
+    by_id = {s["id"]: s for s in new["spans"]}
+    for f in fixes:
+        if f["op"] == "callout_pin":
+            by_id[f["target"]]["callout_xy"] = f["args"]["xy"]
+        elif f["op"] == "callout_auto":
+            by_id[f["target"]].pop("callout_xy", None)
+    edl_path = _save(run_dir, new, n, from_v, "style", fixes, log)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
+def carry_callout_places(prev: dict, new: dict) -> list[str]:
+    """A re-plan keeps a pinned callout where a person put it when the new plan has the same callout text."""
+    pins = {(s.get("callout") or "").strip().lower(): s["callout_xy"] for s in prev["spans"] if s.get("callout_xy")}
+    out = []
+    for s in new["spans"]:
+        key = (s.get("callout") or "").strip().lower()
+        if key and key in pins:
+            s["callout_xy"] = list(pins[key])
+            out.append(s["callout"])
+    return out
+
+
 def roles_by_position(spans: list[dict]) -> list[str]:
     """edl.normalize_roles on EDL span dicts: after a move, the first clip is the hook and the last the payoff."""
     ns = [SimpleNamespace(id=s["id"], role=s["role"], planner_role=s.get("planner_role")) for s in spans]
@@ -557,6 +641,7 @@ def cut(run_dir: Path, ranges: list[tuple[str, int, int]], from_v: int | None = 
                 p["id"], next_id = f"s{next_id}", next_id + 1
                 p["callout"] = ""
                 p.pop("callout_shift_s", None)
+                p.pop("callout_xy", None)
             tuned = p.get("edge_tuned") or {}
             if a != s["word_from"]:
                 p["t_in"] = tw[a]["t_start"]
@@ -738,6 +823,10 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
         new["punch_skip"] = list(prev["punch_skip"])
     if prev.get("reframe_speaker_ids"):
         new["reframe_speaker_ids"] = dict(prev["reframe_speaker_ids"])
+    if prev.get("look"):
+        new["look"] = dict(prev["look"])
+    if pinned := carry_callout_places(prev, new):
+        log(f"callout places carried from v{from_v}: " + ", ".join(repr(t) for t in pinned))
     carried = carry_caption_text(prev, new)
     if carried:
         new.setdefault("caption_overrides", []).extend(carried)
@@ -827,7 +916,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="turn word indices to delete from a span, inclusive (repeat for more ranges)")
     ed = sub.add_parser("edges", help="the edge pass again with today's rules -> edl_vN -> cut_vN ($0 without --review)")
     ed.add_argument("run_dir", type=Path)
-    for p in (d, t, r, pu, c, tx, ro, pn, cu, ed):
+    sy = sub.add_parser("style", help="caption look and callout places -> edl_vN -> cut_vN ($0)")
+    sy.add_argument("run_dir", type=Path)
+    sy.add_argument("--look", default=None, help='the look as JSON: {"preset": "box", "font": "anton", ...}')
+    sy.add_argument("--callout", action="append", default=[], metavar="SPAN=X,Y", help="pin a callout (SPAN=auto unpins it)")
+    for p in (d, t, r, pu, c, tx, ro, pn, cu, ed, sy):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
         p.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
@@ -861,6 +954,20 @@ def main(argv: list[str] | None = None) -> int:
         out = cut(a.run_dir, ranges, a.from_v, a.review, a.budget)
     elif a.cmd == "edges":
         out = edges(a.run_dir, a.from_v, a.review, a.budget)
+    elif a.cmd == "style":
+        try:
+            look = json.loads(a.look) if a.look else None
+        except json.JSONDecodeError as e:
+            ap.error(f"--look is not JSON: {e}")
+        if look is not None and not isinstance(look, dict):
+            ap.error("--look must be a JSON object")
+        places: dict[str, list[float] | None] = {}
+        for x in a.callout:
+            m = re.fullmatch(r"(s\d+)=(?:(auto)|(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?))", x)
+            if not m:
+                ap.error("--callout SPAN=X,Y or SPAN=auto, like s5=120,300")
+            places[m.group(1)] = None if m.group(2) else [float(m.group(3)), float(m.group(4))]
+        out = style(a.run_dir, look, places, a.from_v, a.review, a.budget)
     elif a.cmd == "pin":
         out = pin(a.run_dir, a.speaker, None if a.head.lower() == "none" else a.head, a.from_v, a.review, a.budget)
     else:

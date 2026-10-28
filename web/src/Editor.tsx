@@ -9,17 +9,19 @@ import { ProgressInline } from "./Progress";
 import { GUIDE_NAME, GUIDES, SafeArea, type Guide } from "./SafeArea";
 import { CaptionsPanel, MediaPanel, SpeakersPanel, TextPanel, VersionsPanel } from "./Panels";
 import { FPS, Player, type PlayerHandle } from "./Player";
+import { draftCount, EMPTY_DRAFT, StyleCanvas, StylePanel, usePreview, type StyleDraft } from "./Style";
 import { Timeline, ZOOM_MAX, ZOOM_MIN, type ClipMenu, type MoveAsk, type TrimAsk } from "./Timeline";
 import type { LogLine, RunState } from "./types";
 
 type Props = { id: string; replay: number; go: (hash: string) => void };
-type PanelId = "assistant" | "media" | "captions" | "text" | "speakers" | "versions";
+type PanelId = "assistant" | "media" | "captions" | "style" | "text" | "speakers" | "versions";
 type Dialog = { kind: "delete"; span: string } | { kind: "words"; ask: CutAsk } | { kind: "trim"; ask: TrimAsk } | { kind: "move"; ask: MoveAsk } | { kind: "export" } | { kind: "ledger" } | { kind: "keys" };
 
 const PANELS: { id: PanelId; label: string; icon: string }[] = [
   { id: "assistant", label: "Assistant", icon: "assistant" },
   { id: "media", label: "Media", icon: "media" },
   { id: "captions", label: "Captions", icon: "captions" },
+  { id: "style", label: "Style", icon: "style" },
   { id: "text", label: "Text", icon: "text" },
   { id: "speakers", label: "Speakers", icon: "speakers" },
   { id: "versions", label: "Versions", icon: "versions" },
@@ -55,6 +57,7 @@ export function Editor({ id, replay, go }: Props) {
   const setGuide = (g: Guide) => { setGuideState(g); try { localStorage.setItem("montivo.viewer.guide", g); } catch { /* this tab only */ } };
   const nextGuide = () => setGuide(GUIDES[(GUIDES.indexOf(guide) + 1) % GUIDES.length]);
   const player = useRef<PlayerHandle>(null);
+  const [styleDraft, setStyleDraft] = useState<StyleDraft>(EMPTY_DRAFT);
 
   // in replay, a version exists once the log rendered it; live, once it is on disk
   const visible = useMemo(() => {
@@ -98,6 +101,10 @@ export function Editor({ id, replay, go }: Props) {
   const punch = v && selKey?.startsWith("punch:") ? v.punch_ins.find((x) => `punch:${x.key}` === selKey) ?? null : null;
   useEffect(() => { if (selKey && v && !blocks.some((b) => b.key === selKey && b.kind !== "ghost")) setSelKey(null); }, [v?.n]); // eslint-disable-line
   useEffect(() => setWordSel(null), [v?.n, tlMode]);
+  useEffect(() => setStyleDraft(EMPTY_DRAFT), [v?.n]);
+  const styling = panel === "style" && !!v?.cut && !replay;
+  const staged = draftCount(styleDraft, v);
+  const { p: stylePreview, busy: previewBusy } = usePreview(id, v, t, styleDraft, styling && staged > 0 && !playing);
 
   const undoTo = v && state ? visible.find((x) => x.n === parent?.n) : undefined;
   const redoTo = v ? childOf(v, visible) : undefined;
@@ -277,6 +284,10 @@ export function Editor({ id, replay, go }: Props) {
           <CaptionsPanel v={v} t={t} next={next} canEdit={canEdit} onSeek={seek}
             onApply={(edits) => { setPanel("assistant"); act("caption", { edits, from: v?.n }); }} />
         )}
+        {panel === "style" && (
+          <StylePanel id={id} v={v} t={t} next={next} canEdit={canEdit} draft={styleDraft} setDraft={setStyleDraft} onSeek={(a) => { player.current?.pause(); seek(a); }}
+            onApply={() => { const d = styleDraft; setPanel("assistant"); act("style", { look: d.look, callouts: d.callouts, from: v?.n }); }} />
+        )}
         {panel === "text" && (
           <TextPanel state={state} v={v} t={t} next={next} canEdit={canEdit} onSeek={seek}
             onApply={(edit) => { setPanel("assistant"); act("text", { ...edit, from: v?.n }); }} />
@@ -298,7 +309,11 @@ export function Editor({ id, replay, go }: Props) {
         {v?.cut ? (
           <Player ref={player} key={`${v.n}`} src={fileUrl(id, v.cut)} onTime={onTime} onPlaying={setPlaying}
             marks={blocks.filter((b) => b.kind !== "ghost").map((b) => b.t0)}
-            label={`v${v.n}`} overlay={<SafeArea kind={guide} />} />
+            label={`v${v.n}`} overlay={<>
+              {v && <StyleCanvas v={v} t={t} draft={styleDraft} setDraft={setStyleDraft} preview={stylePreview} busy={previewBusy}
+                show={styling && !playing} />}
+              <SafeArea kind={guide} />
+            </>} />
         ) : (
           <div className="player-wait">{busy || replay ? <span><span className="pulse" /> Waiting for the first render…</span> : "No cut rendered yet."}</div>
         )}
