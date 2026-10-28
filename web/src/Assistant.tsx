@@ -139,10 +139,12 @@ function proposalStatus(id: string, chat: ChatLine[], versions: Version[], job: 
 }
 
 function story(state: RunState, versions: Version[], lines: LogLine[], job: Job | null, replay: number): Item[] {
-  const out: Item[] = [
-    { kind: "you", text: state.run.brief ?? "", chips: [state.run.footage?.split("/").pop() ?? "footage", `${state.run.target_s ?? 40} s`] },
-  ];
   const chat = state.chat ?? [];
+  // a new project's run.json comes a few seconds after the job starts: until then the brief is the job's chat line
+  const brief = state.run.brief || chat.find((c) => c.kind === "brief")?.text || "";
+  const out: Item[] = [
+    { kind: "you", text: brief, chips: [state.run.footage?.split("/").pop() ?? "footage", `${state.run.target_s ?? 40} s`] },
+  ];
   // the agent's answers that made no version: a reply, or a proposal waiting for Apply
   const asked = chat.filter((c) => c.role === "agent" && c.after != null && ((c.kind === "ask" && !c.version) || c.kind === "preview" || c.kind === "error"));
   const failed = job && !job.running && job.rc ? job : null; // the last job, when it failed: Try again runs it once more
@@ -338,6 +340,7 @@ function PreviewCard({ card, status, busy, onApply, onRetry }: {
 
 /** Up to three prompts the last review suggests, else the common asks. A click puts the words in the box. */
 function suggestions(state: RunState, v: Version | null): string[] {
+  if (!v) return []; // nothing to ask about before the first cut
   const out: string[] = [];
   const s = v?.review?.scores ?? {};
   const len = v ? v.duration_s ?? v.runtime_s : 0;
