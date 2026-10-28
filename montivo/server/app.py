@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -40,6 +41,8 @@ VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
 RUN_PATH = re.compile(r"^/api/runs/([^/]+)")  # every route of one run (state, files, media, events, edits)
 ARCHIVE = "_archive"  # runs/_archive/<id>: archived run folders (list_runs skips it: it has no run.json)
+STOP_GRACE_S = 5  # a stopped job's process group gets this long after SIGTERM, then SIGKILL
+STOP_HOLD_USD = 0.05  # at most this much is held on the hosted budget for a call a stopped job may have had in flight
 UPLOAD_PROBE_S = 20  # ffprobe reads only the container header: a phone clip answers in well under a second
 PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 
@@ -124,6 +127,8 @@ class State:
         self.lock = threading.Lock()
         self.one_job = os.environ.get("MONTIVO_ONE_JOB") == "1"  # hosted: one engine job at a time over all runs
         self.exporting: dict[str, int] = {}  # run id -> exports rendering in it (they share the run's render/ folder)
+        self.paid: str | None = None  # the run a paid call inside a request (cover, post text, mask) is spending on
+        self.on_stopped = None  # hosted: job -> None, holds the budget for a call a stopped job may have had in flight
 
     def run_dir(self, run_id: str) -> Path:
         if not SAFE_NAME.match(run_id):
@@ -146,6 +151,13 @@ class State:
         if other:
             raise HTTPException(409, f"{other.label} is running (another project): this demo server runs one job at a "
                                      "time, try again when it finishes")
+
+    def refuse_beside_paid_call(self, run_id: str) -> None:
+        """A job never starts beside a paid request call on its run, nor on any run on the hosted demo (Codex review
+        28/10: both passed the budget check against the same balance, and two ledger writers on one run dropped a
+        cost)."""
+        if self.paid and (self.one_job or self.paid == run_id):
+            raise HTTPException(409, "a Muse Spark request is running on this server: try again in a moment")
 
 
 def job_progress(st: "State", job: Job) -> dict | None:
@@ -216,7 +228,7 @@ def latest_cut(run_dir: Path) -> int:
     return max(vs, default=0) or latest_version(run_dir)
 
 
-def retry_estimate(root: Path, kind: str, args: list[str], duration=lambda p: None) -> float:
+def retry_estimate(root: Path, kind: str, args: list[str], duration=lambda p: None, floor: bool = True) -> float:
     """What a failed job's command may spend when it runs again, from its arguments (a retry used to check only the
     cheapest paid action, so a stopped run or review loop ran again on the last cent of the hosted budget)."""
     def num(flag: str, default: int = 0) -> int:
@@ -237,7 +249,28 @@ def retry_estimate(root: Path, kind: str, args: list[str], duration=lambda p: No
         est += COST["look"]
     if "--title" in args or "overlay" in args:
         est += 0.01
-    return round(max(est, hosted.MIN_PAID_USD), 4)
+    return round(max(est, hosted.MIN_PAID_USD) if floor else est, 4)
+
+
+def stop_hold(root: Path, job: "Job") -> float:
+    """What a stopped job may have spent that its ledger never got: a call is billed when it reaches the model, but
+    written down only when its answer comes back. At most STOP_HOLD_USD (one plan or review call), never more than
+    the job could spend beyond what it recorded, nothing for a $0 edit."""
+    est = retry_estimate(root, job.kind, job.cmd[1:], floor=False)
+    return round(min(STOP_HOLD_USD, max(0.0, est - (job.charged or 0.0))), 4)
+
+
+def end_group(pgid: int, grace: float = STOP_GRACE_S) -> None:
+    """Wait for a job's process group (its ffmpeg children) to go, SIGKILL whatever is left after `grace`."""
+    t0 = time.time()
+    while time.time() - t0 < grace:
+        try:
+            os.killpg(pgid, 0)
+        except (ProcessLookupError, PermissionError):
+            return
+        time.sleep(0.1)
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(pgid, signal.SIGKILL)
 
 
 def set_aside_unrendered(run_dir: Path, after: int, job_id: str) -> list[int]:
@@ -329,6 +362,7 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
         if st.exporting.get(run_id):
             raise HTTPException(409, "an export is rendering this run: try again when it is ready")
         st.refuse_second_job()
+        st.refuse_beside_paid_call(run_id)
         (d / "ui").mkdir(parents=True, exist_ok=True)
         jid = time.strftime("%Y%m%d-%H%M%S")
         out = d / "ui" / f"job-{jid}-{kind}.out"
@@ -338,17 +372,23 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
                   log_pos=logp.stat().st_size if logp.is_file() else 0, spent_at=ledger_total(d),
                   v0=latest_version(d))
         fh = out.open("w")
-        job.proc = subprocess.Popen(cmd, cwd=st.root, stdout=fh, stderr=subprocess.STDOUT, env=os.environ.copy())
+        # its own process group: Stop ends the engine and the ffmpeg encodes it started (Codex review 28/10: only
+        # the Python process went, its encodes kept writing into render/ while the next job started there)
+        job.proc = subprocess.Popen(cmd, cwd=st.root, stdout=fh, stderr=subprocess.STDOUT, env=os.environ.copy(),
+                                    start_new_session=True)
         st.jobs[run_id] = job
     if chat:
         chat_append(d, chat)
 
     def wait():
         rc = job.proc.wait()
+        end_group(job.proc.pid)  # the job's slot frees only once its encodes are gone too
         fh.close()
         job.charged = round(max(0.0, ledger_total(d) - job.spent_at), 5)
         if rc != 0:
             set_aside_unrendered(d, job.v0, job.id)
+        if rc < 0 and st.on_stopped:
+            st.on_stopped(job)
         job.rc, job.ended = rc, time.time()
         chat_append(d, result_message(st, job))
 
@@ -378,6 +418,14 @@ def create_app(root: Path) -> FastAPI:
         return await call_next(request)
 
     hosted.install(app, os.environ.get("MONTIVO_PASSWORD"), st.root)
+    if budget is not None:
+        st.on_stopped = lambda job: budget.hold(stop_hold(st.root, job), job.run)
+        # a container that stopped mid-job (scale to zero, a redeploy) never ran the job's clean-up: its unrendered
+        # versions would be listed, be the base of the next edit and make a pending proposal stale (Codex review 28/10)
+        # (only the tail past the newest cut: that is what a stop leaves)
+        for d in sorted(st.runs.glob("*/run.json")):
+            if moved := set_aside_unrendered(d.parent, latest_cut(d.parent), "restart"):
+                print(f"montivo-ui: {d.parent.name}: unrendered v{moved} set aside (stopped/)", file=sys.stderr)
 
     def key_ok() -> bool:
         """The key is set and, on the hosted demo, the budget still covers the cheapest paid action."""
@@ -585,18 +633,23 @@ def create_app(root: Path) -> FastAPI:
         return {"checks": preflight.checks(d, v, aspect)}
 
     export_lock = threading.Lock()
-    paid_lock = threading.Lock()  # the paid calls that run inside a request (cover, post text, cutout mask)
-
     @contextlib.contextmanager
-    def one_paid_call():
-        """One paid call in a request at a time: the budget check and the call's ledger write happen together (two at
-        once both passed the check before either spent, and the run ledger's last writer dropped the other's cost)."""
-        if not paid_lock.acquire(timeout=0):
-            raise HTTPException(409, "another Muse Spark request is running on this server: try again in a moment")
+    def one_paid_call(run_id: str):
+        """One paid call in a request at a time, and none beside a job on its run (on the hosted demo, beside any
+        job): the budget check and the call's ledger write happen together (two at once both passed the check before
+        either spent, and the run ledger's last writer dropped the other's cost). start_job checks the same slot."""
+        with st.lock:
+            if st.paid:
+                raise HTTPException(409, "another Muse Spark request is running on this server: try again in a moment")
+            if st.busy(run_id):
+                raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: try again after it")
+            st.refuse_second_job()
+            st.paid = run_id
         try:
             yield
         finally:
-            paid_lock.release()
+            with st.lock:
+                st.paid = None
 
     @app.get("/api/runs/{run_id}/export/cover")
     def cover_get(run_id: str, v: int):
@@ -610,7 +663,7 @@ def create_app(root: Path) -> FastAPI:
         $0.025, 10-20 s; python -m montivo.export --suggest-cover)."""
         v = int(b.get("v") or 0)
         d, _ = cut_of(run_id, v)
-        with one_paid_call():
+        with one_paid_call(run_id):
             need_key("Picking a cover (Muse Spark)", COST["cover"])
             if st.busy(run_id):
                 raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: ask for a cover after it")
@@ -628,7 +681,7 @@ def create_app(root: Path) -> FastAPI:
         $0.01, 5-15 s; python -m montivo.export --post-text) -> post_vN.json."""
         v = int(b.get("v") or 0)
         d, _ = cut_of(run_id, v)
-        with one_paid_call():
+        with one_paid_call(run_id):
             need_key("Writing the post text (Muse Spark)", 0.01)
             if st.busy(run_id):
                 raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: write the post text after it")
@@ -667,7 +720,7 @@ def create_app(root: Path) -> FastAPI:
         if aspect not in ASPECTS:
             raise HTTPException(400, f"aspect: one of {', '.join(ASPECTS)}")
         d, _ = cut_of(run_id, v)
-        with one_paid_call():
+        with one_paid_call(run_id):
             need_key("Designing a cover (Muse Spark)", COST["cover_design"])
             if st.busy(run_id):
                 raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: design the cover after it")
@@ -681,7 +734,7 @@ def create_app(root: Path) -> FastAPI:
         v, aspect, design = cover_body(b)
         d, _ = cut_of(run_id, v)
         if not mask_path(d, v, design["t_s"], aspect).is_file():
-            with one_paid_call():
+            with one_paid_call(run_id):
                 need_key("Cutting out the speaker (SAM 3.1)", COST["cover_mask"])
                 export_cmd(d, v, "--cover-mask", "--cover-t", f"{design['t_s']:.2f}", *(["--aspect", aspect] if aspect != "9:16" else []))
         return {"ok": True}
@@ -1841,7 +1894,10 @@ def create_app(root: Path) -> FastAPI:
         j = st.job(run_id)
         if not j or j.ended is not None or not j.proc:
             raise HTTPException(409, "nothing running")
-        j.proc.terminate()
+        try:  # the whole group: the engine and its ffmpeg encodes (start_job; end_group SIGKILLs what is left)
+            os.killpg(j.proc.pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            j.proc.terminate()
         return {"job": j.public()}
 
     @app.exception_handler(HTTPException)

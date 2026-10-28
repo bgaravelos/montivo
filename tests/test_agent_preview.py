@@ -241,3 +241,12 @@ def test_a_look_from_a_sentence_is_styled_on_the_rendered_version_first(tmp_path
            op("style", look_prompt="big captions near the top")]
     written, done, skipped = agent.run_ops(d, 3, agent.check({"spans": SPANS}, ops)[0], None, print)
     assert [c[0] for c in calls] == ["style", "caption", "text"] and calls[0][1] == 3 and written == [4, 5, 6]
+
+
+def test_a_selection_never_turns_into_a_whole_cut_replan():
+    # Codex review 28/10: "make this shorter" on one selected clip could come back as a re-plan of every clip
+    edl = {"spans": SPANS}
+    replan = op("replan", instruction="shorter")
+    ops, skipped = agent.check(edl, [replan], agent.norm_scope({"clips": ["s2"]}))
+    assert ops == [] and "clear the selection" in skipped[0]
+    assert [o["op"] for o in agent.check(edl, [replan])[0]] == ["replan"]  # no selection: a re-plan is fine

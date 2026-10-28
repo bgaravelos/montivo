@@ -358,6 +358,8 @@ def check(edl: dict, ops: list[dict], scope: dict | None = None) -> tuple[list[d
             why = "caption: no line time or no text"
         elif op == "replan" and not (o.get("instruction") or "").strip():
             why = "replan: no instruction"
+        elif op == "replan" and (allowed or picked or line):  # a re-plan rebuilds every clip (Codex review 28/10)
+            why = "replan: it changes the whole cut, not just your selection; clear the selection to re-plan"
         elif op == "title_text" and not (o.get("text") or "").strip():
             why = "title: no words"
         elif op == "overlay" and (float(o.get("at_s", -1)) < 0 or not (o.get("text") or "").strip()):

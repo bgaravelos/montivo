@@ -101,8 +101,16 @@ class Budget:
     def save(self) -> None:
         write_atomic(self.file, json.dumps(self.data, indent=1))
 
+    def hold(self, usd: float, run: str) -> None:
+        """Count `usd` as spent with no ledger entry: a stopped job's call may have reached the model (and been
+        billed) before its answer, and with it the ledger entry, came back."""
+        if usd > 0:
+            self.data.setdefault("held", []).append({"run": run, "usd": round(usd, 4), "t": round(time.time())})
+            self.save()
+
     def spent(self) -> float:
-        return round(sum(max(0.0, c - self.baseline.get(n, 0.0)) for n, c in self.ledgers().items()), 4)
+        held = sum(h.get("usd", 0.0) for h in self.data.get("held", []))
+        return round(sum(max(0.0, c - self.baseline.get(n, 0.0)) for n, c in self.ledgers().items()) + held, 4)
 
     def left(self) -> float:
         return round(self.cap - self.spent(), 4)

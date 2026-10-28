@@ -471,3 +471,93 @@ def test_the_upload_probe_runs_off_the_loop_and_a_hung_probe_is_refused(tmp_path
     assert r.status_code == 400 and "could not read this clip" in r.json()["error"]
     assert seen == [(False, A.UPLOAD_PROBE_S)]
     assert sorted(p.name for p in (tmp_path / "footage").iterdir()) == []  # no clip, no .part, no owner entry
+
+
+def _wait(cond, s=10.0):
+    import time
+    t0 = time.time()
+    while not cond() and time.time() - t0 < s:
+        time.sleep(0.05)
+    return cond()
+
+
+def _state(app) -> "A.State":
+    """The app's own State (the routes' closure), so a test can start a real job the routes then see."""
+    stop = next(r.endpoint for r in app.routes if getattr(r, "path", "") == "/api/runs/{run_id}/stop")
+    return next(c.cell_contents for c in stop.__closure__ if isinstance(c.cell_contents, A.State))
+
+
+def test_stop_ends_the_jobs_encodes_and_frees_the_slot_after_them(tmp_path, hosted_env):
+    # Codex review 28/10: Stop terminated the Python job only; its ffmpeg children kept writing into render/ while the
+    # next job could already start there
+    import os
+    _run_folder(tmp_path)
+    c = TestClient(app := A.create_app(tmp_path))
+    pidf = tmp_path / "child.pid"
+    code = (f"import subprocess, time; c = subprocess.Popen(['sleep', '60']); open({str(pidf)!r}, 'w').write(str(c.pid)); "
+            "time.sleep(60)")
+    job = A.start_job(_state(app), "r1", "render", "Render", ["-c", code])
+    assert _wait(lambda: pidf.is_file() and pidf.read_text())
+    child = int(pidf.read_text())
+    assert c.post("/api/runs/r1/stop").status_code == 200
+    assert _wait(lambda: job.ended is not None) and job.rc < 0
+    with pytest.raises(ProcessLookupError):
+        os.kill(child, 0)  # the encode went with the job, before its slot was free
+    assert not _state(app).busy("r1")
+
+
+def test_a_job_never_starts_beside_a_paid_request_call(tmp_path, hosted_env):
+    # Codex review 28/10: a cover or post-text call held its own lock, but start_job never looked at it: a job could
+    # start against the same balance (any run on the host) and write the same run's ledger
+    (tmp_path / "runs" / "r2").mkdir(parents=True)
+    _run_folder(tmp_path)
+    st = A.State(tmp_path)
+    st.paid = "r1"
+    with pytest.raises(A.HTTPException) as e:
+        A.start_job(st, "r1", "drop", "Delete", ["-c", "pass"])
+    assert e.value.status_code == 409 and "Muse Spark request" in e.value.detail
+    st.one_job = True
+    with pytest.raises(A.HTTPException):
+        A.start_job(st, "r2", "drop", "Delete", ["-c", "pass"])  # on the hosted demo, beside any run
+    st.one_job, st.paid = False, None
+    job = A.start_job(st, "r1", "drop", "Delete", ["-c", "import time; time.sleep(0.3)"])
+    assert _wait(lambda: job.ended is not None) and job.rc == 0
+
+
+def test_the_cutout_mask_waits_for_a_job_on_its_run(tmp_path, hosted_env):
+    # Codex review 28/10: the mask route was the one paid request call with no check for a job on its run
+    d = _run_folder(tmp_path)
+    (d / "cut_v2.mp4").write_bytes(b"x")
+    c = TestClient(app := A.create_app(tmp_path))
+    job = A.start_job(_state(app), "r1", "render", "Render", ["-c", "import time; time.sleep(5)"])
+    r = c.post("/api/runs/r1/cover/mask", json={"v": 2, "t": 1.0})
+    assert r.status_code == 409 and "Render is running" in r.json()["error"]
+    assert c.post("/api/runs/r1/stop").status_code == 200 and _wait(lambda: job.ended is not None)
+
+
+def test_a_stopped_paid_job_holds_the_budget_for_its_call_in_flight(tmp_path, hosted_env):
+    # Codex review 28/10: a call reaches the model (and is billed) before its answer and its ledger entry come back
+    review = A.Job(id="j", run="r1", kind="review", label="Review", cmd=["py", "-m", "montivo.cli", "review", "runs/r1",
+                                                                         "--passes", "3"], charged=0.0)
+    assert A.stop_hold(tmp_path, review) == A.STOP_HOLD_USD
+    review.charged = 0.2  # it recorded more than it could still spend
+    assert A.stop_hold(tmp_path, review) == 0.0
+    drop = A.Job(id="j", run="r1", kind="drop", label="Delete", cmd=["py", "-m", "montivo.human", "drop", "runs/r1"])
+    assert A.stop_hold(tmp_path, drop) == 0.0  # a $0 edit holds nothing
+    b = H.Budget(tmp_path, 1.0)
+    b.hold(0.05, "r1")
+    b.hold(0.0, "r1")
+    assert b.spent() == 0.05 and H.Budget(tmp_path, 1.0).spent() == 0.05  # kept in budget.json
+
+
+def test_the_host_sets_aside_versions_a_restart_left_without_a_cut(tmp_path, hosted_env):
+    # Codex review 28/10: a container stopped mid-job never ran the job's clean-up, so an unrendered edl_vN became the
+    # newest version after the restart
+    d = _run_folder(tmp_path)
+    (d / "cut_v2.mp4").write_bytes(b"x")
+    A.create_app(tmp_path)
+    assert (d / "edl_v3.json").is_file()  # a laptop's run folders are left as they are
+    hosted_env.setenv("MONTIVO_BUDGET_USD", "15")
+    A.create_app(tmp_path)
+    assert not (d / "edl_v3.json").exists() and (d / "stopped" / "edl_v3-restart.json").is_file()
+    assert (d / "edl_v1.json").is_file() and (d / "edl_v2.json").is_file()
