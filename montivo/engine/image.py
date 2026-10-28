@@ -15,7 +15,7 @@ import httpx
 
 from ..config import BASE_URL, IMAGE_MODEL, PRICE, api_key
 from ..ledger import Entry, Ledger
-from .api import dump_json
+from .api import _send, dump_json
 
 TITLE_PROMPT = (
     "Vertical 9:16 title card for a short social video. The headline text, exactly as written and spelled: \"{text}\". "
@@ -36,14 +36,17 @@ def generate_title_card(text: str, out_dir: Path, ledger: Ledger, log=print, siz
     dump_json(out_dir / "request.json", body)
     log(f"image: title card \"{text}\" -> {IMAGE_MODEL} ...")
     t0 = time.perf_counter()
-    with httpx.Client(timeout=httpx.Timeout(300, connect=30)) as http:
-        r = http.post(f"{BASE_URL}/images/generations", headers={"Authorization": f"Bearer {api_key()}"}, json=body)
+
+    def send() -> httpx.Response:
+        with httpx.Client(timeout=httpx.Timeout(300, connect=30)) as http:
+            return http.post(f"{BASE_URL}/images/generations", headers={"Authorization": f"Bearer {api_key()}"}, json=body)
+    try:
+        data = _send("images", send).json()  # backs off on 429 / 5xx
+    except RuntimeError as exc:
+        ledger.add(Entry(stage="image.title", model=IMAGE_MODEL, seconds=round(time.perf_counter() - t0, 2), cost_usd=0.0,
+                         status="http_error", note=str(exc)[:200]))
+        raise
     seconds = round(time.perf_counter() - t0, 2)
-    if r.status_code != 200:
-        ledger.add(Entry(stage="image.title", model=IMAGE_MODEL, seconds=seconds, cost_usd=0.0, status=f"http_{r.status_code}",
-                         note=r.text[:200]))
-        raise RuntimeError(f"images {r.status_code}: {r.text[:500]}")
-    data = r.json()
     item = data["data"][0]
     raw = base64.b64decode(item["b64_json"])
     out = out_dir / "title_card.png"

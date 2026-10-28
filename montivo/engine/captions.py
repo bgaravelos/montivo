@@ -4,8 +4,7 @@ Pipeline, all offline:
 1. `span_words`: the Voice words of every EDL span (turn id + word_from..word_to), in cut order.
 2. `dedupe_words`: Voice doubles words at random ("its its", "that's that's", "in in"); an adjacent identical word whose
    gap to the previous one is under 150 ms is dropped from the caption (the audio is untouched) and recorded.
-3. `apply_glossary`: a small correction list for mishearings of names ("metal models" -> "Meta models",
-   "ready viewed" -> "reviewed", "MuseSpark"/"Newspark" -> "Muse Spark", "News Voice" -> "Muse Voice"); every
+3. `apply_glossary`: the run's correction list for mishearings of names (EDL `glossary`, run_glossary); every
    replacement is recorded.
 4. `group_lines`: 1 to 4 words per line, never across a cut, a pause over 0.45 s or end punctuation, never wider than the
    frame allows; a line that would be up under LINE_MIN_S joins a neighbour of the same phrase when the two fit on one
@@ -48,7 +47,11 @@ CALLOUT_LEAD_S = 0.3
 CALLOUT_MIN_S, CALLOUT_MAX_S = 2.0, 3.0
 CALLOUT_FADE_S = 0.2
 
-GLOSSARY: dict[str, str] = {
+# The name fixes and the highlighted names of Billy's demo footage ("metal models" -> "Meta models", "Montivo" in the
+# marker colour). They belong to those runs, not to every clip: build_edl writes an empty `glossary` and `highlight`
+# into every new EDL, so a judge saying "voice" gets no yellow word and no punch-in for it. An EDL from before the
+# per-run words has neither key and keeps these (runs 012-015, and the samples on the hosted demo, were cut with them).
+DEMO_GLOSSARY: dict[str, str] = {
     "metal models": "Meta models",
     "ready viewed": "reviewed",
     "musespark": "Muse Spark",
@@ -56,7 +59,7 @@ GLOSSARY: dict[str, str] = {
     "news spark": "Muse Spark",
     "news voice": "Muse Voice",
 }
-HIGHLIGHT = {"montivo", "muse", "spark", "voice", "sam", "meta"}
+DEMO_HIGHLIGHT = frozenset({"montivo", "muse", "spark", "voice", "sam", "meta"})
 _END = re.compile(r"[.!?,;:]$")
 
 
@@ -120,10 +123,26 @@ def dedupe_words(words: list[CWord], max_gap_s: float = DEDUPE_GAP_S) -> tuple[l
     return out, fixes
 
 
-def apply_glossary(words: list[CWord], glossary: dict[str, str] | None = None) -> tuple[list[CWord], list[dict]]:
+def run_glossary(edl: dict) -> dict[str, str]:
+    """The EDL's `glossary` {"heard words": "written words"}; DEMO_GLOSSARY for an EDL from before per-run words."""
+    gl = edl.get("glossary")
+    return dict(DEMO_GLOSSARY) if gl is None else {str(k): str(v) for k, v in gl.items()}
+
+
+def highlight_words(edl: dict, look: Look | None = None) -> set[str]:
+    """The words the captions colour and punch.py treats as names: the EDL's `highlight` (DEMO_HIGHLIGHT for an EDL
+    from before per-run words), plus the look's `highlight_add`, minus its `highlight_off`; normalised like
+    caption words."""
+    look = look or normalize_look(edl.get("look"))
+    base = edl.get("highlight")
+    words = set(DEMO_HIGHLIGHT) if base is None else {norm(str(w)) for w in base}
+    return {w for w in (words | {norm(w) for w in look.highlight_add}) - {norm(w) for w in look.highlight_off} if w}
+
+
+def apply_glossary(words: list[CWord], glossary: dict[str, str]) -> tuple[list[CWord], list[dict]]:
     """Replace known mishearings (matched on normalised tokens, longest phrase first). The replacement words share the
     time of the words they replace, split by character count."""
-    gl = {tuple(norm(t) for t in k.split()): v for k, v in (glossary if glossary is not None else GLOSSARY).items()}
+    gl = {tuple(norm(t) for t in k.split()): v for k, v in glossary.items()}
     longest = max((len(k) for k in gl), default=0)
     out: list[CWord] = []
     fixes: list[dict] = []
@@ -493,7 +512,8 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
     frame = frame_for(edl)
     look = (style.look if style and style.look else None) or normalize_look(edl.get("look"))
     style = style or CaptionStyle.from_look(look)
-    highlight_words = (HIGHLIGHT | set(look.highlight_add)) - set(look.highlight_off)
+    names = highlight_words(edl, look)
+    glossary = run_glossary(edl) if glossary is None else glossary
 
     def on_screen(a: float, b: float) -> bool:
         return draw_at is None or a <= draw_at < b
@@ -581,7 +601,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                     continue
                 head = union_out(head_src, i, la, lb, subject_head(i))
                 texts = [w.w for w in ln.words]
-                hl = [norm(w).replace("'s", "") in highlight_words for w in texts]
+                hl = [norm(w).replace("'s", "") in names for w in texts]
                 lstyle = fit_line(texts, style)
                 w_px, h_px = line_width(texts, lstyle), lstyle.height()
                 if look.position == "fixed":
@@ -647,5 +667,5 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
               "caption_style": {"font": style.size, "max_words": look.max_words, "default_top": look.top,
                                 "look": look.to_json(), "font_path": font_path(look.font),
                                 "min_line_s": LINE_MIN_S,
-                                "dedupe_gap_s": DEDUPE_GAP_S, "glossary": glossary if glossary is not None else GLOSSARY}}
+                                "dedupe_gap_s": DEDUPE_GAP_S, "glossary": glossary, "highlight": sorted(names)}}
     return fields, overlays

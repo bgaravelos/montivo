@@ -1,6 +1,8 @@
 """Offline tests for the review patcher: cut map, fix resolution, EDL patches, facts and the loop guards."""
 import json
 
+import pytest
+
 from montivo.engine import review as R
 from montivo.engine.captions import CWord, override_for, retext
 from montivo.engine.reframe import SegmentPath
@@ -494,3 +496,28 @@ def test_fixes_of_one_pass_are_checked_against_the_edl_the_earlier_ones_made():
     assert [s["id"] for s in new["spans"]] == ["s1", "s2"]  # a dropped span is never brought back as the hook
     new, log = R.apply_fixes(edl, [fx("swap_hook", "s3"), fx("drop_span", "s3")], words)
     assert [s["id"] for s in new["spans"]] == ["s3", "s1", "s2"] and "never dropped" in log[1]["note"]
+
+
+def test_a_pass_that_fails_still_writes_the_loop_with_the_reviews_before_it(tmp_path):
+    render_fn = _loop_folder(tmp_path)
+
+    def review_fn(e, cut, n):
+        if n == 2:
+            raise RuntimeError("responses 503: busy")  # the Spark call of the second pass
+        return {"name": f"review_v{n}", "cost_usd": 0.04, "review": {
+            "pass": False, "overall": 70, "scores": {},
+            "issues": [issue(R.cut_map(e)[0].cut_in + 0.1, "extend_span", edge="out", seconds=0.3)]}}
+
+    out = R.review_loop(tmp_path, passes=3, budget_usd=1.0, log=lambda m: None, render_fn=render_fn, review_fn=review_fn,
+                        ledger=R.Ledger(tmp_path / "ledger.json"))
+    loop = json.loads((tmp_path / "review" / "loop.json").read_text())
+    assert loop == out and loop["reviews"] == 1 and loop["best"]["version"] == 1
+    assert loop["stop"].startswith("error in pass 2 (v2): RuntimeError: responses 503") and "503" in loop["error"]
+    assert loop["last_edl"] == "edl_v2.json"
+
+    def review_fails(e, cut, n):
+        raise RuntimeError("no key")
+    with pytest.raises(RuntimeError, match="error in pass 1"):  # nothing to keep: the caller sees it, loop.json too
+        R.review_loop(tmp_path, passes=1, budget_usd=1.0, log=lambda m: None, render_fn=render_fn,
+                      review_fn=review_fails, ledger=R.Ledger(tmp_path / "ledger.json"))
+    assert json.loads((tmp_path / "review" / "loop.json").read_text())["reviews"] == 0

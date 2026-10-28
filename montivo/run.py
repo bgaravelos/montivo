@@ -15,7 +15,7 @@ from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, open_api_ke
 from .engine import track as track_mod
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, tighten_edges
-from .engine.edl import build_edl
+from .engine.edl import build_edl, carry_run_words
 from .engine.image import generate_title_card
 from .engine.ingest import Ingested, Probe, ingest
 from .engine.render import render as render_edl
@@ -296,8 +296,11 @@ def run(opts: RunOptions) -> dict:
         edl = json.loads((out / "edl_v1.json").read_text())
         log("resume: edl_v1 from edl_v1.json")
     else:
+        prev_v1 = json.loads((out / "edl_v1.json").read_text()) if (out / "edl_v1.json").is_file() else None
         edl = build_edl(planned.parsed, voice, watch.parsed, source, opts.brief, track_summary,
                         reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out))
+        if prev_v1:  # a new plan on a resumed run keeps the run's caption words (an old v1's demo words too)
+            carry_run_words(prev_v1, edl)
         if edl["role_fixes"]:
             log(f"roles set by position (one hook first, the payoff last): {', '.join(edl['role_fixes'])}")
         if edl.get("edge_pass"):

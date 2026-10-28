@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from montivo.engine.captions import (CAPTION_TOP, LINE_MIN_S, CWord, Line, apply_glossary, build_overlays, dedupe_words,
+from montivo.engine.captions import (CAPTION_TOP, DEMO_GLOSSARY, LINE_MIN_S, CWord, Line, apply_glossary, build_overlays, dedupe_words,
                                      group_lines, hold_short_lines, interp_box, merge_short_lines, place_callout,
                                      place_caption, span_words)
 from montivo.engine.graphics import CaptionStyle
@@ -27,7 +27,7 @@ def cw(items, span="s6"):
 
 def test_dedupe_and_glossary_on_billys_payoff_line():
     words, f1 = dedupe_words(cw(BILLY))
-    words, f2 = apply_glossary(words)
+    words, f2 = apply_glossary(words, DEMO_GLOSSARY)
     assert " ".join(w.w for w in words) == "that's Montivo raw footage in a reviewed cut out"
     assert [(f["kind"], f["from"], f["to"]) for f in f1 + f2] == [
         ("dedupe", "that's that's", "that's"), ("dedupe", "in in", "in"), ("glossary", "ready viewed", "reviewed")]
@@ -44,7 +44,7 @@ def test_dedupe_keeps_repeats_with_a_real_gap():
 
 def test_glossary_names_and_punctuation():
     words, fixes = apply_glossary(cw([("four", 0, 1), ("metal", 1, 2), ("models.", 2, 3), ("MuseSpark", 3, 5),
-                                      ("News", 5, 5.5), ("Voice,", 5.5, 6)]))
+                                      ("News", 5, 5.5), ("Voice,", 5.5, 6)]), DEMO_GLOSSARY)
     assert [w.w for w in words] == ["four", "Meta", "models.", "Muse", "Spark", "Muse", "Voice,"]
     assert words[3].t_in == 3 and words[4].t_out == 5 and words[3].t_out == words[4].t_in
     assert len(fixes) == 3
@@ -194,10 +194,14 @@ def test_overlay_graph_and_loudness_parsers():
     from montivo.engine.captions import Overlay
     from montivo.engine.render import _EBU, _LOUD_JSON, _overlay_graph
     args, graph = _overlay_graph("[base]", [Overlay(Path("a.png"), 10, 20, 0.0, 1.0),
-                                            Overlay(Path("b.png"), 30, 40, 0.5, 3.0, fade_s=0.2)], 1)
-    assert args == ["-i", "a.png", "-loop", "1", "-framerate", "30", "-t", "3.1000", "-i", "b.png"]
-    assert "[base][1:v]overlay=x=10:y=20" in graph and "gte(t,0.0000)*lt(t,1.0000)" in graph
-    assert "fade=t=in:st=0.5000:d=0.2:alpha=1" in graph and graph.endswith("format=yuv420p[v]")
+                                            Overlay(Path("b.png"), 30, 40, 0.5, 3.0, fade_s=0.2)], 1, 59.94)
+    # the fading overlay loops at the segment's rate (was a fixed 30: the fade stepped every other frame at 59.94)
+    assert args == ["-i", "a.png", "-loop", "1", "-framerate", "59.94", "-t", "3.1000", "-i", "b.png"]
+    assert "[base][o0]overlay=x=10:y=20" in graph and "gte(t,0.0000)*lt(t,1.0000)" in graph
+    assert "fade=t=in:st=0.5000:d=0.2:alpha=1" in graph
+    # every PNG goes to YUV with BT.709 limited range and the output is tagged so
+    assert graph.count("scale=out_color_matrix=bt709:out_range=tv,format=yuva420p") == 2
+    assert graph.endswith("format=yuv420p,setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709[v]")
     log = 'x\n[Parsed_loudnorm_0 @ 0x1]\n{\n\t"input_i" : "-28.53",\n\t"output_i" : "-14.06",\n\t"output_tp" : "-1.00"\n}\n'
     assert json.loads(_LOUD_JSON.findall(log)[-1])["output_i"] == "-14.06"
     summ = ("Summary:\n\n  Integrated loudness:\n    I:         -14.3 LUFS\n    Threshold: -25.2 LUFS\n\n  Loudness range:\n"

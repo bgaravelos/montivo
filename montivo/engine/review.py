@@ -1376,7 +1376,9 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
                 ledger: Ledger | None = None, log=print, clock: bool = True, apply: bool = True, spark=None,
                 render_fn=None, review_fn=None) -> dict:
     """review cut_vN -> patch -> edl_vN+1 -> render cut_vN+1 -> review ..., until the cut passes, `passes` reviews are
-    done, the budget would be exceeded, no fix applies, or a fix repeats. Writes review/loop.json."""
+    done, the budget would be exceeded, no fix applies, or a fix repeats. Writes review/loop.json, also when a pass
+    fails (a Spark or render error): the reviews before it are kept, `stop` and `error` say what failed, and only a
+    loop with no review at all raises (after writing it)."""
     from ..human import next_version  # human.py imports the engine; this one only reads file names
     from ..run import render_run  # run.py imports the engine; the loop needs its render entry point
     from .spark import Spark
@@ -1394,75 +1396,84 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
     history: list[dict] = []
     spent = 0.0
     stop = "max passes"
+    error = None
     for k in range(passes):
-        cut = run_dir / f"cut_v{n}.mp4"
-        rendered = Path((edl.get("render") or {}).get("output", "")).name
-        if not cut.is_file() or rendered != cut.name:
-            log(f"review: rendering {edl_path.name} -> {cut.name}")
-            render_fn(edl_path, cut.name)
-            edl = json.loads(edl_path.read_text())
-        est = estimate_cost((edl.get("render") or {}).get("duration_s") or edl["runtime_s"])
-        if spent + est > budget_usd:
-            stop = f"budget: ${spent:.3f} spent + ${est:.3f} for the next review > ${budget_usd:.2f}"
+        try:
+            cut = run_dir / f"cut_v{n}.mp4"
+            rendered = Path((edl.get("render") or {}).get("output", "")).name
+            if not cut.is_file() or rendered != cut.name:
+                log(f"review: rendering {edl_path.name} -> {cut.name}")
+                render_fn(edl_path, cut.name)
+                edl = json.loads(edl_path.read_text())
+            est = estimate_cost((edl.get("render") or {}).get("duration_s") or edl["runtime_s"])
+            if spent + est > budget_usd:
+                stop = f"budget: ${spent:.3f} spent + ${est:.3f} for the next review > ${budget_usd:.2f}"
+                break
+            rv = review_fn(edl, cut, n)
+            spent += rv["cost_usd"]
+            gate = rv.get("pass_gate")
+            fixes, skipped = plan_fixes(rv["review"], edl, words, audio, gate)
+            entry = {"version": n, "edl": edl_path.name, "cut": cut.name, "overall": rv["review"]["overall"],
+                     "pass": rv["review"]["pass"], "reviewer_pass": rv["review"].get("reviewer_pass", rv["review"]["pass"]),
+                     "gate": (gate or {}).get("reasons") or [], "checks": (gate or {}).get("checks", (gate or {}).get("reasons")) or [],
+                     "scores": rv["review"]["scores"], "issues": len(rv["review"]["issues"]),
+                     "cost_usd": rv["cost_usd"], "fixes": [{**asdict(f), "fingerprint": f.fingerprint} for f in fixes],
+                     "skipped": skipped}
+            history.append(entry)
+            rv["fixes"], rv["skipped"] = entry["fixes"], skipped
+            dump_json(run_dir / f"{rv['name']}.json", rv)
+            if rv["review"]["pass"]:
+                stop = "pass"
+                break
+            best_before = max(history[:-1], key=rank) if len(history) > 1 else None
+            if best_before and rank(entry) < rank(best_before):
+                stop = (f"regression: v{n} scored {entry['overall']}{' (gated)' if entry['gate'] else ''} < "
+                        f"v{best_before['version']} {best_before['overall']}, the best stays v{best_before['version']}")
+                break
+            if k == passes - 1:
+                stop = f"max passes ({passes})"
+                break
+            if not apply:
+                stop = "review only (--no-apply)"
+                break
+            if not fixes:
+                stop = "no applicable fix"
+                break
+            again = [f.fingerprint for f in fixes if f.fingerprint in seen]
+            if again:
+                stop = f"same fix twice: {', '.join(again)} (first applied in v{seen[again[0]]})"
+                break
+            new, patch_log = apply_fixes(edl, fixes, words, audio)
+            if all(p.get("skipped") for p in patch_log):
+                stop = "no applicable fix"
+                break
+            for p in patch_log:
+                if not p.get("skipped"):
+                    seen[p["fingerprint"]] = n
+            new.setdefault("patches", []).append({"from": n, "review": rv["name"], "fixes": patch_log})
+            nxt = next_version(run_dir)  # past every version in the folder: reviewing v1 of v1-v5 makes v6, never a new v2
+            for p in patch_log:
+                log(f"patch v{n} -> v{nxt}: {p['op']} {p['target']}: {p['note']}")
+            entry["applied"] = patch_log
+            n = nxt
+            edl_path = run_dir / f"edl_v{n}.json"
+            dump_json(edl_path, new)
+            edl = new
+        except Exception as exc:  # a failed review or render ends the loop, never the history before it
+            error = f"{type(exc).__name__}: {str(exc)[:500]}"
+            stop = f"error in pass {k + 1} (v{n}): {error}"
+            log(f"review loop: {stop}")
             break
-        rv = review_fn(edl, cut, n)
-        spent += rv["cost_usd"]
-        gate = rv.get("pass_gate")
-        fixes, skipped = plan_fixes(rv["review"], edl, words, audio, gate)
-        entry = {"version": n, "edl": edl_path.name, "cut": cut.name, "overall": rv["review"]["overall"],
-                 "pass": rv["review"]["pass"], "reviewer_pass": rv["review"].get("reviewer_pass", rv["review"]["pass"]),
-                 "gate": (gate or {}).get("reasons") or [], "checks": (gate or {}).get("checks", (gate or {}).get("reasons")) or [],
-                 "scores": rv["review"]["scores"], "issues": len(rv["review"]["issues"]),
-                 "cost_usd": rv["cost_usd"], "fixes": [{**asdict(f), "fingerprint": f.fingerprint} for f in fixes],
-                 "skipped": skipped}
-        history.append(entry)
-        rv["fixes"], rv["skipped"] = entry["fixes"], skipped
-        dump_json(run_dir / f"{rv['name']}.json", rv)
-        if rv["review"]["pass"]:
-            stop = "pass"
-            break
-        best_before = max(history[:-1], key=rank) if len(history) > 1 else None
-        if best_before and rank(entry) < rank(best_before):
-            stop = (f"regression: v{n} scored {entry['overall']}{' (gated)' if entry['gate'] else ''} < "
-                    f"v{best_before['version']} {best_before['overall']}, the best stays v{best_before['version']}")
-            break
-        if k == passes - 1:
-            stop = f"max passes ({passes})"
-            break
-        if not apply:
-            stop = "review only (--no-apply)"
-            break
-        if not fixes:
-            stop = "no applicable fix"
-            break
-        again = [f.fingerprint for f in fixes if f.fingerprint in seen]
-        if again:
-            stop = f"same fix twice: {', '.join(again)} (first applied in v{seen[again[0]]})"
-            break
-        new, patch_log = apply_fixes(edl, fixes, words, audio)
-        if all(p.get("skipped") for p in patch_log):
-            stop = "no applicable fix"
-            break
-        for p in patch_log:
-            if not p.get("skipped"):
-                seen[p["fingerprint"]] = n
-        new.setdefault("patches", []).append({"from": n, "review": rv["name"], "fixes": patch_log})
-        nxt = next_version(run_dir)  # past every version in the folder: reviewing v1 of v1-v5 makes v6, never a new v2
-        for p in patch_log:
-            log(f"patch v{n} -> v{nxt}: {p['op']} {p['target']}: {p['note']}")
-        entry["applied"] = patch_log
-        n = nxt
-        edl_path = run_dir / f"edl_v{n}.json"
-        dump_json(edl_path, new)
-        edl = new
     best = max(history, key=rank) if history else None
     summary = {"stop": stop, "passes": history, "reviews": len(history), "review_cost_usd": round(spent, 4),
                "best": {"version": best["version"], "cut": best["cut"], "overall": best["overall"]} if best else None,
-               "last_edl": edl_path.name, "budget_usd": budget_usd}
+               "last_edl": edl_path.name, "budget_usd": budget_usd, **({"error": error} if error else {})}
     prior = run_dir / "review" / "loop.json"
     if prior.is_file():  # a later review (the editor's "Review this version") keeps the agent loop's history
         shutil.copy2(prior, prior.with_name(f"loop_{time.strftime('%Y%m%d-%H%M%S', time.localtime(prior.stat().st_mtime))}.json"))
     dump_json(prior, summary)
     log(f"review loop: {len(history)} reviews, stop: {stop}; scores "
         + " -> ".join(f"v{h['version']} {h['overall']}" for h in history) + f"; ${spent:.4f}")
+    if error and not history:  # nothing to keep: the caller sees the failure
+        raise RuntimeError(f"review loop: {stop}")
     return summary

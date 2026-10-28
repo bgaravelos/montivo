@@ -46,7 +46,7 @@ from types import SimpleNamespace
 
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, reset_edges, tighten_edges
-from .engine.edl import build_edl, edl_summary, normalize_roles
+from .engine.edl import build_edl, carry_run_words, edl_summary, normalize_roles
 from .engine.graphics import Look, normalize_look
 from .engine.music import DUCK_DB as MUSIC_DUCK_DB, LEVEL_DB as MUSIC_LEVEL_DB, normalize_music
 from .engine.punch import parse_key
@@ -907,6 +907,7 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
         new["look"] = dict(prev["look"])
     if prev.get("music"):
         new["music"] = dict(prev["music"])
+    carry_run_words(prev, new)
     if pinned := carry_callout_places(prev, new):
         log(f"callout places carried from v{from_v}: " + ", ".join(repr(t) for t in pinned))
     carried = carry_caption_text(prev, new)

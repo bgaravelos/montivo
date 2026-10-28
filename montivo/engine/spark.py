@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,9 @@ from ..config import SPARK_MODEL, is_open_model, spark_cost
 from ..ledger import Entry, Ledger, Timer
 from . import schemas
 from .api import chat_as_response, chat_create, dump_json, output_text, responses_create
+
+PARSE_RETRIES = 1  # an incomplete or unparsable answer is asked once more
+PARSE_RETRY_TOKENS = 1.5
 
 
 @dataclass
@@ -86,29 +90,42 @@ class Spark:
         dump_json(self.dir / f"{name}_request.json", _without_media(body))
         self.log(f"spark: {name} -> {self.model}{' + video' if file_id or video else ''}"
                  f"{f' + {len(urls)} image(s)' if urls else ''} ...")
-        with Timer() as t:
-            if open_model:
-                raw = chat_create(body)
-                resp = chat_as_response(raw)
-            else:
-                resp = responses_create(body)
-        dump_json(self.dir / f"{name}_response.json", raw if open_model else resp)
-        usage = resp.get("usage") or {}
-        cost = spark_cost(usage, self.model)
-        status = resp.get("status", "?")
-        text = output_text(resp)
-        parsed, err = _parse_json(text)
-        entry_status = status if parsed is not None else f"{status}/parse_error"
-        self.ledger.add(Entry(stage=stage or f"spark.{name}", model=self.model, seconds=t.seconds, cost_usd=round(cost, 4),
-                              tokens_in=usage.get("input_tokens") or 0, tokens_out=usage.get("output_tokens") or 0,
-                              tokens_cached=(usage.get("input_tokens_details") or {}).get("cached_tokens") or 0,
-                              status=entry_status, note=f"response {resp.get('id', '?')}"))
-        self.log(f"spark: {name}: {status}, {usage.get('input_tokens', 0)} in / {usage.get('output_tokens', 0)} out, "
-                 f"${cost:.4f}, {t.seconds}s")
+        total_cost, total_s = 0.0, 0.0
+        for attempt in range(PARSE_RETRIES + 1):
+            with Timer() as t:
+                if open_model:
+                    raw = chat_create(body)
+                    resp = chat_as_response(raw)
+                else:
+                    resp = responses_create(body)
+            dump_json(self.dir / f"{name}_response.json", raw if open_model else resp)
+            usage = resp.get("usage") or {}
+            cost = spark_cost(usage, self.model)
+            total_cost, total_s = total_cost + cost, total_s + t.seconds
+            status = resp.get("status", "?")
+            text = output_text(resp)
+            parsed, err = _parse_json(text)
+            entry_status = status if parsed is not None else f"{status}/parse_error"
+            self.ledger.add(Entry(stage=stage or f"spark.{name}", model=self.model, seconds=t.seconds, cost_usd=round(cost, 4),
+                                  tokens_in=usage.get("input_tokens") or 0, tokens_out=usage.get("output_tokens") or 0,
+                                  tokens_cached=(usage.get("input_tokens_details") or {}).get("cached_tokens") or 0,
+                                  status=entry_status, note=f"response {resp.get('id', '?')}"))
+            self.log(f"spark: {name}: {status}, {usage.get('input_tokens', 0)} in / {usage.get('output_tokens', 0)} out, "
+                     f"${cost:.4f}, {t.seconds}s")
+            if parsed is not None or attempt >= PARSE_RETRIES:
+                break
+            # one more try: an answer cut at the token limit gets PARSE_RETRY_TOKENS x the room (look.suggest came
+            # back incomplete at 1500 tokens), an unparsable one the same call again
+            shutil.copy2(self.dir / f"{name}_response.json", self.dir / f"{name}_response_try{attempt + 1}.json")
+            key = "max_tokens" if open_model else "max_output_tokens"
+            if status == "incomplete":
+                body[key] = int(body[key] * PARSE_RETRY_TOKENS)
+            self.log(f"spark: {name}: no JSON ({err}), asking once more"
+                     + (f" with {body[key]} output tokens" if status == "incomplete" else ""))
         if parsed is None:
             raise RuntimeError(f"spark {name}: could not parse JSON ({err}); status={status}; head={text[:300]!r}")
-        return SparkCall(name=name, parsed=parsed, status=status, usage=usage, cost_usd=round(cost, 4), seconds=t.seconds,
-                         response_id=resp.get("id", ""))
+        return SparkCall(name=name, parsed=parsed, status=status, usage=usage, cost_usd=round(total_cost, 4),
+                         seconds=round(total_s, 2), response_id=resp.get("id", ""))
 
     # ----------------------------------------------------------------- the three editorial calls
 

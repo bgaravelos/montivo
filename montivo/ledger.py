@@ -7,6 +7,8 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .engine.api import write_atomic
+
 
 @dataclass
 class Entry:
@@ -68,8 +70,7 @@ class Ledger:
         }
 
     def _write(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.summary(), indent=2) + "\n")
+        write_atomic(self.path, json.dumps(self.summary(), indent=2) + "\n")
 
 
 class Timer:

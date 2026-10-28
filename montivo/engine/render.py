@@ -61,8 +61,16 @@ LIMIT_ATTACK_MS, LIMIT_RELEASE_MS = 5.0, 50.0
 LIMIT_TRIES = 3
 ENCODED_TP_MAX = -1.0  # the music mix's true peak, measured on the AAC file itself
 ENCODE_TRIES, ENCODE_MARGIN_DB = 2, 0.3
-X264 = ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-video_track_timescale", "90000",
+# veryfast: 2.7x faster segment encodes than medium at SSIM 0.992 (015 seg_01: 7.24 s -> 2.67 s, 28/10)
+X264 = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-video_track_timescale", "90000",
+        "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
         "-map_metadata", "-1", "-movflags", "+faststart"]
+# every frame leaves the graph limited range BT.709 and says so: run 015's full-range source used to come out
+# yuvj420p / pc, and the overlays went to YUV with BT.601 on untagged frames (marker #FFC629 came back #FFC122)
+TAG_709 = "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709"
+TO_709 = "scale=out_color_matrix=bt709:out_range=tv"
+_MATRIX = {"bt709": "bt709", "smpte170m": "smpte170m", "bt470bg": "bt470", "fcc": "fcc", "smpte240m": "smpte240m",
+           "bt2020nc": "bt2020", "bt2020c": "bt2020"}
 
 
 @dataclass
@@ -190,41 +198,60 @@ def _ffmpeg(args: list[str]) -> None:
         raise RuntimeError(f"ffmpeg failed ({proc.returncode}): {' '.join(args)}\n{proc.stderr[-2000:]}")
 
 
-def _overlay_graph(base: str, overlays: list[Overlay], first_input: int) -> tuple[list[str], str]:
+def source_color(source: Path) -> dict:
+    """The source's YUV range and matrix as the crop's scaler reads them: the stream's own tags, else what a player
+    assumes for an untagged stream (limited range; BT.709 from 720 lines up, BT.601 under)."""
+    proc = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                           "stream=height,pix_fmt,color_range,color_space", "-of", "json", str(source)],
+                          capture_output=True, text=True)
+    st = (json.loads(proc.stdout or "{}").get("streams") or [{}])[0]
+    full = st.get("color_range") == "pc" or str(st.get("pix_fmt", "")).startswith("yuvj")
+    matrix = _MATRIX.get(st.get("color_space") or "") or ("bt709" if int(st.get("height") or 0) >= 720 else "bt601")
+    return {"range": "pc" if full else "tv", "matrix": matrix}
+
+
+def _overlay_graph(base: str, overlays: list[Overlay], first_input: int, fps: float = 30.0) -> tuple[list[str], str]:
     """Input args and filter chain that burn `overlays` onto the stream labelled `base`; returns (args, graph) whose
-    last output label is [v]. Times are segment-local; each overlay shows on frames with t_in <= t < t_out."""
+    last output label is [v]. Times are segment-local; each overlay shows on frames with t_in <= t < t_out. A fading
+    overlay loops at the segment's `fps`, so its fade steps once per output frame. Every PNG goes to YUV with BT.709
+    limited range, as the base is (TO_709), so its colours land as drawn."""
     args: list[str] = []
     chain: list[str] = []
     cur = base
     for n, ov in enumerate(overlays):
         idx = first_input + n
         if ov.fade_s > 0:
-            args += ["-loop", "1", "-framerate", "30", "-t", f"{ov.t_out + 0.1:.4f}", "-i", str(ov.png)]
-            src = f"[{idx}:v]format=rgba,fade=t=in:st={ov.t_in:.4f}:d={ov.fade_s}:alpha=1," \
-                  f"fade=t=out:st={max(ov.t_in, ov.t_out - ov.fade_s):.4f}:d={ov.fade_s}:alpha=1[o{n}]"
-            chain.append(src)
-            src_lbl = f"[o{n}]"
+            args += ["-loop", "1", "-framerate", f"{fps:g}", "-t", f"{ov.t_out + 0.1:.4f}", "-i", str(ov.png)]
+            fade = f"fade=t=in:st={ov.t_in:.4f}:d={ov.fade_s}:alpha=1," \
+                   f"fade=t=out:st={max(ov.t_in, ov.t_out - ov.fade_s):.4f}:d={ov.fade_s}:alpha=1,"
         else:
             args += ["-i", str(ov.png)]
-            src_lbl = f"[{idx}:v]"
+            fade = ""
+        chain.append(f"[{idx}:v]format=rgba,{fade}{TO_709},format=yuva420p[o{n}]")
         nxt = f"[m{n}]"
-        chain.append(f"{cur}{src_lbl}overlay=x={ov.x}:y={ov.y}:format=auto:eof_action=repeat:"
+        chain.append(f"{cur}[o{n}]overlay=x={ov.x}:y={ov.y}:format=yuv420:eof_action=repeat:"
                      f"enable='gte(t,{ov.t_in:.4f})*lt(t,{ov.t_out:.4f})'{nxt}")
         cur = nxt
-    chain.append(f"{cur}format=yuv420p[v]")
+    chain.append(f"{cur}format=yuv420p,{TAG_709}[v]")
     return args, ";".join(chain)
 
 
 def render_segment_video(source: Path, seg: Segment, path: SegmentPath, render_dir: Path,
-                         overlays: list[Overlay] | None = None, zoom: dict | None = None, frame: Frame = FRAME_916) -> Path:
+                         overlays: list[Overlay] | None = None, zoom: dict | None = None, frame: Frame = FRAME_916,
+                         color: dict | None = None) -> Path:
+    """One segment's video: crop, scale to the frame (from the source's range and matrix, `color` = source_color, to
+    limited BT.709), the zoom, the overlays."""
     cmds = render_dir / f"seg_{seg.index + 1:02d}_crop.cmd"
     cmds.write_text(path.sendcmd_text())
     out = render_dir / f"seg_{seg.index + 1:02d}.mp4"
+    color = color or {"range": "tv", "matrix": "bt709"}
     # seek half a frame early so the frame on the grid is never lost to rounding, then rebase pts to 0
     seek = max(0.0, seg.t_in - 0.5 / seg.fps)
     vf = (f"setpts=PTS-STARTPTS,sendcmd=f={cmds.as_posix()},crop={path.crop_w}:{path.crop_h}:{path.xs[0]}:{path.crop_y},"
-          f"scale={frame.w}:{frame.h}:flags=lanczos,setsar=1" + (f",{zoom_filter(zoom, seg.fps, (frame.w, frame.h))}" if zoom else ""))
-    ov_args, ov_graph = _overlay_graph("[base]", overlays or [], 1)
+          f"scale={frame.w}:{frame.h}:flags=lanczos:in_range={color['range']}:in_color_matrix={color['matrix']}:"
+          f"out_range=tv:out_color_matrix=bt709,format=yuv420p,setsar=1"
+          + (f",{zoom_filter(zoom, seg.fps, (frame.w, frame.h))}" if zoom else "") + f",{TAG_709}")
+    ov_args, ov_graph = _overlay_graph("[base]", overlays or [], 1, seg.fps)
     graph = f"[0:v]{vf}[base];{ov_graph}"
     _ffmpeg(["-ss", f"{seek:.6f}", "-t", f"{(seg.frames + 2) / seg.fps:.6f}", "-i", str(source), *ov_args,
              "-filter_complex", graph, "-map", "[v]", "-an", "-frames:v", str(seg.frames), "-r", f"{seg.fps:g}",
@@ -240,7 +267,7 @@ def render_title_video(png: Path, fps: float, render_dir: Path, seconds: float =
     out = render_dir / "seg_00_title.mp4"
     d = frames / fps
     vf = (f"scale={frame.w}:{frame.h}:force_original_aspect_ratio=increase:flags=lanczos,crop={frame.w}:{frame.h},setsar=1,"
-          f"fade=t=out:st={d - fade_s:.4f}:d={fade_s},format=yuv420p")
+          f"fade=t=out:st={d - fade_s:.4f}:d={fade_s},{TO_709},format=yuv420p,{TAG_709}")
     _ffmpeg(["-loop", "1", "-framerate", f"{fps:g}", "-t", f"{d + 1 / fps:.6f}", "-i", str(png), "-vf", vf,
              "-frames:v", str(frames), "-r", f"{fps:g}", "-fps_mode", "cfr", *X264, str(out)])
     return out, frames
@@ -479,10 +506,17 @@ def measure_loudness(media: Path) -> dict | None:
 
 
 def mux(segment_files: list[Path], audio: Path, out: Path, render_dir: Path) -> Path:
+    """Join the segments and the audio by stream copy into `out`, written as <out>.part and renamed over it when done:
+    a version rendered again under the same name is never half a file to the player or the Volume's commit."""
     lst = render_dir / "concat.txt"
     lst.write_text("".join(f"file '{p.resolve().as_posix()}'\n" for p in segment_files))
-    _ffmpeg(["-f", "concat", "-safe", "0", "-i", str(lst), "-i", str(audio), "-map", "0:v:0", "-map", "1:a:0",
-             "-c", "copy", "-movflags", "+faststart", str(out)])
+    part = out.with_name(out.name + ".part")
+    try:
+        _ffmpeg(["-f", "concat", "-safe", "0", "-i", str(lst), "-i", str(audio), "-map", "0:v:0", "-map", "1:a:0",
+                 "-c", "copy", "-movflags", "+faststart", "-f", "mp4", str(part)])
+        part.replace(out)
+    finally:
+        part.unlink(missing_ok=True)
     return out
 
 
@@ -530,6 +564,7 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     concept, track = load_reframe_track(run_dir, edl)
     speaker_ids = load_speaker_ids(run_dir, concept, edl)
     segments, paths = plan_paths(edl, track, speaker_ids, params)
+    color = source_color(source)
     log(f"render: {len(edl['spans'])} spans -> {len(segments)} segments ({sum(s.frames for s in segments)} frames), "
         f"source {source.name}, {frame.w}x{frame.h} ({frame.aspect}), track {concept or 'none (centre crop)'}"
         + (f", following speakers {', '.join(f'{k}->{'/'.join(v)}' for k, v in speaker_ids.items())}" if speaker_ids else ""))
@@ -563,15 +598,16 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
             zooms, edl["punch_ins"] = plan_punches(edl, segments, paths, words or [], Audio.load(run_dir),
                                                    load_track(run_dir, edl, "head") if concept == "head" else None,
                                                    edl.get("captions") or [], title_s=title_s)
-            log(f"render: {len(edl['punch_ins'])} punch-ins: " + "; ".join(
-                f"{e['t_in']:.1f}s {e.get('word') or 'jump cut'} x{e['zoom']}" for e in edl["punch_ins"]))
+            log(f"render: {len(edl['punch_ins'])} punch-ins" + "".join(
+                f"{'; ' if k else ': '}{e['t_in']:.1f}s {e.get('word') or 'jump cut'} x{e['zoom']}"
+                for k, e in enumerate(edl["punch_ins"])))
         if title_png is not None:
             tfile, _ = render_title_video(title_png, fps, render_dir, frame=frame)
             files.append(tfile)
             log(f"render: title card {title_png.name} {title_s:.2f}s ({title_frames} frames, fade {TITLE_FADE_S}s)")
         for seg, path in zip(segments, paths):
             ovs = overlays.get(seg.index, [])
-            f = render_segment_video(source, seg, path, render_dir, ovs, zooms.get(seg.index), frame)
+            f = render_segment_video(source, seg, path, render_dir, ovs, zooms.get(seg.index), frame, color)
             files.append(f)
             keyframes.extend(path.keyframes)
             moving = sum(1 for a, b in zip(path.xs, path.xs[1:]) if a != b)
@@ -606,6 +642,7 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     edl["render"] = {"output": out.as_posix(), "aspect": frame.aspect, "width": frame.w, "height": frame.h, "duration_s": total, "segments": seg_info,
                      "title": {"png": title_png.as_posix(), "seconds": round(title_s, 4), "frames": title_frames,
                                "fade_out_s": TITLE_FADE_S, "text": edl.get("title_card_text", "")} if title_png else None,
+                     "color": {"source": color, "output": {"range": "tv", "matrix": "bt709"}},
                      "loudnorm": loud, "loudness_ebur128": measured, "music": bed,
                      "captions": len(edl.get("captions") or []), "callouts": len(edl.get("callouts") or []),
                      "audio": audio.as_posix(), "seconds": t.seconds, "bytes": out.stat().st_size}

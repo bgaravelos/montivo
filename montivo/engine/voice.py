@@ -18,6 +18,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import httpx
+
 from ..config import (VOICE_CHUNK_TARGET_S, VOICE_LAG_MS, VOICE_MAX_BYTES, VOICE_MAX_SECONDS, VOICE_MODEL, VOICE_SNAP_MS,
                       voice_cost)
 from ..ledger import Entry, Ledger, Timer
@@ -25,6 +27,7 @@ from .api import dump_json, stream_transcribe
 from .ingest import make_wav
 
 WAV_BYTES_PER_S = 24000 * 2  # 24 kHz mono 16-bit
+CHUNK_RETRIES = 1
 
 
 @dataclass
@@ -258,12 +261,22 @@ def transcribe(wav: Path, out_dir: Path, ledger: Ledger, language: str | None = 
             chunk_files.append((i, cw, s, e))
 
     def run_chunk(item: tuple[int, Path, float, float]) -> tuple[int, list[dict], float]:
+        """One chunk's events; a stream whose connection breaks after it opened (api.py retries only the opening)
+        runs the chunk again from the start, CHUNK_RETRIES times."""
         i, path, s, e = item
-        events: list[dict] = []
         with Timer() as t:
-            for ev in stream_transcribe(path, request):
-                ev["chunk"] = i
-                events.append(ev)
+            for attempt in range(CHUNK_RETRIES + 1):
+                events: list[dict] = []
+                try:
+                    for ev in stream_transcribe(path, request):
+                        ev["chunk"] = i
+                        events.append(ev)
+                    break
+                except httpx.TransportError as exc:
+                    if attempt >= CHUNK_RETRIES:
+                        raise
+                    log(f"voice: chunk {i} stream broke after {len(events)} events ({type(exc).__name__}: "
+                        f"{str(exc)[:200]}), running it again")
         log(f"voice: chunk {i} ({e - s:.0f} s) streamed {len(events)} events in {t.seconds}s")
         return i, events, t.seconds
 

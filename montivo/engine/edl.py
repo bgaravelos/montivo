@@ -5,6 +5,7 @@ closest contiguous block is used (difflib) and the span is flagged so the review
 """
 from __future__ import annotations
 
+import copy
 import difflib
 import re
 from dataclasses import asdict, dataclass
@@ -130,6 +131,8 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
         "speaker_map": watch.get("speaker_map", []),
         "tracks": tracks,
         "reframe_concept": reframe_concept,  # the SAM concept the 9:16 crop follows (falls back to person)
+        "glossary": {},  # this run's caption name fixes {"heard": "written"} and highlighted names (captions.py)
+        "highlight": [],
         "captions": [],  # filled by the caption step (evening 3)
         "reframe": [],  # filled by the reframe step (evening 2)
     }
@@ -148,3 +151,16 @@ def edl_summary(edl: dict) -> str:
     if any(s.get("callout") for s in edl["spans"]):
         lines.append("Keep these callouts on the spans that still say those words, unless the editor's note says otherwise.")
     return "\n".join(lines)
+
+
+RUN_WORDS = ("glossary", "highlight")
+
+
+def carry_run_words(prev: dict, new: dict) -> None:
+    """A re-plan keeps the run's caption words (`glossary`, `highlight`) as they were, absent ones too: an EDL from
+    before per-run words keeps the demo words (captions.run_glossary) in its re-plans."""
+    for k in RUN_WORDS:
+        if k in prev:
+            new[k] = copy.deepcopy(prev[k])
+        else:
+            new.pop(k, None)

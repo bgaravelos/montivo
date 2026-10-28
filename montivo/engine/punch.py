@@ -5,7 +5,7 @@ come from data the run already has, at no API cost:
 
 - Emphasis: every kept word's level in the source audio (the middle 60 % of the word) against the median of all kept
   words. A word at least EXCESS_DB over it, at least MIN_WORD_S long, MIN_LETTERS letters and not a stop word is a
-  candidate; a caption highlight word (Montivo, Meta, ...) is one at any level. Candidates are taken by excess, at most
+  candidate; a caption highlight word (captions.highlight_words: the run's names and the look's) is one at any level. Candidates are taken by excess, at most
   one per EVERY_S of cut and MIN_GAP_S apart. The zoom ramps to PUNCH_Z over RAMP_IN_S ending at the word's onset,
   holds to HOLD_AFTER_S after the word and ramps out over RAMP_OUT_S, inside the segment.
 - Jump cuts: when a segment opens on the head at almost the place and size where the previous one closed (same shot,
@@ -26,7 +26,7 @@ from __future__ import annotations
 import statistics
 from fractions import Fraction
 
-from .captions import HEAD_MARGIN, HIGHLIGHT, dedupe_words, interp_box, largest_at, norm, overlaps, span_words, \
+from .captions import HEAD_MARGIN, dedupe_words, highlight_words, interp_box, largest_at, norm, overlaps, span_words, \
     to_output
 from .frame import FRAME_916, Frame, frame_for
 from .reframe import id_at
@@ -196,9 +196,10 @@ def plan_punches(edl: dict, segments: list, paths: list, words: list[dict], audi
                     kept.append((i, w, word_level(audio, w.t_in, w.t_out)))
         if kept:
             median = statistics.median(db for _, _, db in kept)
+            names = highlight_words(edl)  # the caption's names: the run's words and the look's add / off
             for i, w, db in kept:
                 n = norm(w.w).replace("'s", "")
-                hl = n in HIGHLIGHT
+                hl = n in names
                 ok = w.t_out - w.t_in >= MIN_WORD_S and len(n) >= MIN_LETTERS and n not in STOP
                 if i in plan and (hl or (ok and db - median >= EXCESS_DB)):
                     cands.append((db - median + (3.0 if hl else 0.0), i, w, round(db - median, 1)))

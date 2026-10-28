@@ -32,6 +32,8 @@ from urllib.parse import parse_qs
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
+from ..engine.api import write_atomic
+
 COOKIE = "montivo_auth"
 JUDGE = "montivo_judge"  # one id per browser: the judge's own copies of the samples and their own runs
 OPEN_PATHS = ("/login", "/api/login", "/api/health", "/favicon", "/apple-touch-icon")
@@ -80,7 +82,7 @@ class Budget:
         return out
 
     def save(self) -> None:
-        self.file.write_text(json.dumps(self.data, indent=1))
+        write_atomic(self.file, json.dumps(self.data, indent=1))
 
     def spent(self) -> float:
         return round(sum(max(0.0, c - self.baseline.get(n, 0.0)) for n, c in self.ledgers().items()), 4)

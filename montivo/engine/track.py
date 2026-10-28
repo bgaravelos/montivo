@@ -14,11 +14,14 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import httpx
+
 from ..config import SAM_MODEL, TRACK_RESAMPLE_FPS, sam_cost
 from ..ledger import Entry, Ledger, Timer
 from .api import dump_json, stream_responses, upload_file
 from .ingest import Probe, ffprobe
 
+STREAM_RETRIES = 1
 FRAME_RE = re.compile(r"^<(\d+)f>")
 RECORD_RE = re.compile(
     r"(\d+)<\|box;x1=(-?\d+);y1=(-?\d+);x2=(-?\d+);y2=(-?\d+);w=(\d+);h=(\d+)(?:;c=([0-9.]+))?\|>(?:<\|mask;(.*?)\|>)?")
@@ -153,25 +156,33 @@ def track_concept(source: TrackSource, concept: str, out_dir: Path, ledger: Ledg
                 if mask:
                     masks.write(json.dumps({"f": frame, "id": oid, "w": w, "h": h, "mask": mask}) + "\n")
 
-        try:
-            for ev in stream_responses(body, raw_sink=cdir / "events.sse"):
-                et = ev.get("type")
-                if et == "response.output_text.delta":
-                    buf += ev.get("delta") or ""
-                    while "\n" in buf:
-                        line, buf = buf.split("\n", 1)
-                        handle(line)
-                elif et == "response.completed":
-                    resp = ev.get("response") or {}
-                    usage = resp.get("usage") or {}
-                    final_status = resp.get("status")
-                elif et in ("response.failed", "response.incomplete", "error"):
-                    status = et
-            if buf.strip():
-                handle(buf)
-        except Exception as exc:  # keep what we have, the ledger says it was partial
-            status = f"stream_error: {type(exc).__name__}: {str(exc)[:200]}"
-            log(f"track: {concept}: {status}")
+        for attempt in range(STREAM_RETRIES + 1):
+            try:
+                for ev in stream_responses(body, raw_sink=cdir / "events.sse"):
+                    et = ev.get("type")
+                    if et == "response.output_text.delta":
+                        buf += ev.get("delta") or ""
+                        while "\n" in buf:
+                            line, buf = buf.split("\n", 1)
+                            handle(line)
+                    elif et == "response.completed":
+                        resp = ev.get("response") or {}
+                        usage = resp.get("usage") or {}
+                        final_status = resp.get("status")
+                    elif et in ("response.failed", "response.incomplete", "error"):
+                        status = et
+                if buf.strip():
+                    handle(buf)
+                break
+            except Exception as exc:  # keep what we have, the ledger says it was partial
+                status = f"stream_error: {type(exc).__name__}: {str(exc)[:200]}"
+                log(f"track: {concept}: {status}")
+                # a connection that broke before the first frame line costs nothing to ask again; after it, the
+                # frames that came are kept (asking again would bill every frame twice)
+                if lines or attempt >= STREAM_RETRIES or not isinstance(exc, httpx.TransportError):
+                    break
+                status, buf = "ok", ""
+                log(f"track: {concept}: no frame came before the break, asking again")
 
     for recs in result.objects.values():
         recs.sort(key=lambda r: r["f"])

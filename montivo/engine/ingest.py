@@ -66,6 +66,23 @@ def ffprobe(path: Path) -> Probe:
                  has_audio=has_audio, codec=video.get("codec_name", "?"), rotation=int(round(float(rot))) % 360)
 
 
+class FfmpegError(subprocess.CalledProcessError):
+    """A failed ffmpeg step whose message carries the end of ffmpeg's stderr (CalledProcessError's does not)."""
+
+    def __str__(self) -> str:
+        return f"{super().__str__()}\n{(self.stderr or '').strip()[-1500:]}"
+
+
+def run_ffmpeg(cmd: list[str], what: str, log=None) -> None:
+    """Run one ffmpeg step with its stderr captured; on failure the end of it goes to `log` (run.log) and into the
+    FfmpegError (it used to reach only the terminal of whoever started the run)."""
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        if log:
+            log(f"ingest: {what} failed (ffmpeg exit {proc.returncode}):\n{proc.stderr.strip()[-1500:]}")
+        raise FfmpegError(proc.returncode, cmd, proc.stdout, proc.stderr)
+
+
 def even(n: float) -> int:
     return max(2, int(round(n / 2)) * 2)
 
@@ -75,7 +92,7 @@ def proxy_size(p: Probe, max_dim: int = PROXY_MAX_DIM) -> tuple[int, int]:
     return even(p.width * scale), even(p.height * scale)
 
 
-def make_proxy(src: Path, dst: Path, p: Probe, max_dim: int = PROXY_MAX_DIM, fps: float | None = None) -> Probe:
+def make_proxy(src: Path, dst: Path, p: Probe, max_dim: int = PROXY_MAX_DIM, fps: float | None = None, log=None) -> Probe:
     """H.264 proxy at most max_dim px on the long side, source fps unless fps is given, AAC audio if present."""
     w, h = proxy_size(p, max_dim)
     vf = [f"scale={w}:{h}:flags=lanczos"]
@@ -84,11 +101,12 @@ def make_proxy(src: Path, dst: Path, p: Probe, max_dim: int = PROXY_MAX_DIM, fps
     cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?",
            "-vf", ",".join(vf), "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
            "-c:a", "aac", "-b:a", "128k", "-ac", "2", "-movflags", "+faststart", "-map_metadata", "-1", str(dst)]
-    subprocess.run(cmd, check=True)
+    run_ffmpeg(cmd, "proxy", log)
     return ffprobe(dst)
 
 
-def make_wav(src: Path, dst: Path, rate: int = 24000, start: float | None = None, seconds: float | None = None) -> Path:
+def make_wav(src: Path, dst: Path, rate: int = 24000, start: float | None = None, seconds: float | None = None,
+             log=None) -> Path:
     """24 kHz mono 16-bit PCM wav, the format the Voice endpoint measures best on."""
     cmd = ["ffmpeg", "-y", "-loglevel", "error"]
     if start is not None:
@@ -96,19 +114,19 @@ def make_wav(src: Path, dst: Path, rate: int = 24000, start: float | None = None
     if seconds is not None:
         cmd += ["-t", f"{seconds:.3f}"]
     cmd += ["-i", str(src), "-vn", "-ac", "1", "-ar", str(rate), "-c:a", "pcm_s16le", "-map_metadata", "-1", str(dst)]
-    subprocess.run(cmd, check=True)
+    run_ffmpeg(cmd, "wav", log)
     return dst
 
 
-def make_upright(src: Path, dst: Path, hflip: bool = False) -> Probe:
+def make_upright(src: Path, dst: Path, hflip: bool = False, log=None) -> Probe:
     """Re-encode the footage once, upright (the decoder applies the display rotation) and mirrored when hflip
     (selfie / mirror-mode clips where on-screen text reads backwards): libx264 crf 18 at the source fps, audio copied
     untouched so the Voice clock is unchanged. Everything downstream (proxy, wav, SAM, render) reads this file, so
     boxes, crops and the probed size all describe the frame as it is shown."""
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?",
-                    *(["-vf", "hflip"] if hflip else []),
-                    "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "copy",
-                    "-movflags", "+faststart", str(dst)], check=True)
+    run_ffmpeg(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?",
+                *(["-vf", "hflip"] if hflip else []),
+                "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "copy",
+                "-movflags", "+faststart", str(dst)], "upright copy", log)
     return ffprobe(dst)
 
 
@@ -124,7 +142,7 @@ def ingest(source: Path, out: Path, ledger: Ledger, log=print, hflip: bool = Fal
         upright = out / ("source_hflip.mp4" if hflip else "source_upright.mp4")
         what = " and ".join(x for x in ("mirrored" if hflip else "", f"rotation {rotation} baked" if rotation else "") if x)
         with Timer() as t_flip:
-            probe = make_upright(source, upright, hflip)
+            probe = make_upright(source, upright, hflip, log)
         ledger.add(Entry(stage="ingest.hflip" if hflip else "ingest.upright", model="ffmpeg", seconds=t_flip.seconds,
                          cost_usd=0.0, note=f"{what}: {source.name} -> {upright.name} ({upright.stat().st_size / 1e6:.1f} MB)"))
         log(f"ingest: {what} to {upright.name} {probe.width}x{probe.height} ({upright.stat().st_size / 1e6:.1f} MB) "
@@ -134,8 +152,8 @@ def ingest(source: Path, out: Path, ledger: Ledger, log=print, hflip: bool = Fal
     proxy = out / "proxy.mp4"
     wav = out / "audio.wav"
     with Timer() as t_proxy:
-        pp = make_proxy(source, proxy, probe)
-        make_wav(source, wav)
+        pp = make_proxy(source, proxy, probe, log=log)
+        make_wav(source, wav, log=log)
     ledger.add(Entry(stage="ingest.ffmpeg", model="ffmpeg", seconds=t_proxy.seconds, cost_usd=0.0,
                      note=f"proxy {pp.width}x{pp.height} @ {pp.fps:g} fps, wav 24 kHz mono"))
     log(f"ingest: proxy {pp.width}x{pp.height} ({proxy.stat().st_size / 1e6:.1f} MB), wav {wav.stat().st_size / 1e6:.1f} MB in {t_proxy.seconds}s")
