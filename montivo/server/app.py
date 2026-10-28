@@ -271,15 +271,7 @@ def create_app(root: Path) -> FastAPI:
         """A run seeded onto the host for everyone (adopted, no owner): the judges edit their own copies of it."""
         return budget is not None and d.name in budget.baseline and owner(d) is None
 
-    def own(run_id: str, request: Request) -> str:
-        """The run an edit goes to: the run itself, or on the hosted demo the judge's own copy of a sample (made on
-        their first edit, runs/<id>-<judge>), so one judge's edits never become the next judge's opening version."""
-        d = st.run_dir(run_id)
-        if not is_sample(d):
-            if budget is not None and owner(d) != judge_of(request):
-                raise HTTPException(404, "no such run")  # another judge's project
-            return run_id
-        judge = judge_of(request)
+    def copy_sample(run_id: str, d: Path, judge: str) -> str:
         mine = f"{run_id}-{judge}"
         with copying:
             if not (st.runs / mine / "run.json").is_file():
@@ -294,6 +286,20 @@ def create_app(root: Path) -> FastAPI:
                 chat_append(st.runs / mine, {"role": "agent", "kind": "result", "text": f"Your own copy of the "
                              f"sample {run_id}: your edits go here and the sample stays as it was for the next judge."})
         return mine
+
+    async def own(run_id: str, request: Request) -> str:
+        """The run an edit goes to: the run itself, or on the hosted demo the judge's own copy of a sample (made on
+        their first edit, runs/<id>-<judge>), so one judge's edits never become the next judge's opening version.
+        The request body is read before the copy (Starlette keeps it for the route) and the copy runs in a thread:
+        015 takes 13 s on the Modal Volume, and copying first left the body unread until the client gave up (408,
+        the edit lost) while the event loop answered nobody else (28/10)."""
+        d = st.run_dir(run_id)
+        if not is_sample(d):
+            if budget is not None and owner(d) != judge_of(request):
+                raise HTTPException(404, "no such run")  # another judge's project
+            return run_id
+        await request.body()
+        return await asyncio.to_thread(copy_sample, run_id, d, judge_of(request))
 
     def key_info() -> dict:
         return {"has_key": key_ok(), "key_note": budget.note() if budget else None,
@@ -697,7 +703,7 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/runs/{run_id}/drop")
     async def drop(run_id: str, request: Request):
-        run_id = own(run_id, request)
+        run_id = await own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         span = str(b.get("span", ""))
@@ -715,7 +721,7 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/runs/{run_id}/trim")
     async def trim(run_id: str, request: Request):
         """Move one clip edge to a word boundary (a timeline drag): the reviewer's trim_span / extend_span op."""
-        run_id = own(run_id, request)
+        run_id = await own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         span, edge = str(b.get("span", "")), str(b.get("edge", ""))
@@ -740,7 +746,7 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/runs/{run_id}/punch")
     async def punch(run_id: str, request: Request):
         """Punch-ins on or off ({"on": true|false}) or one removed ({"skip": key}): the next version, ffmpeg only."""
-        run_id = own(run_id, request)
+        run_id = await own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
@@ -765,7 +771,7 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/runs/{run_id}/caption")
     async def caption(run_id: str, request: Request):
         """Retext caption lines ({"edits": [{"at": cut second, "text": words spoken}]}): the next version, ffmpeg only."""
-        run_id = own(run_id, request)
+        run_id = await own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
@@ -796,7 +802,7 @@ def create_app(root: Path) -> FastAPI:
     async def text_edit(run_id: str, request: Request):
         """Callouts ({"callouts": {span: text}}, "" removes one), the title card on or off ({"title_card": bool}) or new
         title words ({"title": text}: one Muse Image call, $0.01, so it needs the key): the next version."""
-        run_id = own(run_id, request)
+        run_id = await own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
@@ -853,7 +859,7 @@ def create_app(root: Path) -> FastAPI:
         """A music bed under the speech ({"track": id, "level_db": -20, "duck_db": -12}), another track or level, or
         none ({"track": null}): the next version, ffmpeg only."""
         from ..engine.music import normalize_music
-        run_id = own(run_id, request)
+        run_id = await own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
@@ -980,7 +986,7 @@ def create_app(root: Path) -> FastAPI:
     async def style_edit(run_id: str, request: Request):
         """The caption look and callout places ({"look": {...}, "callouts": {span: [x, y] | null}}): the next version,
         ffmpeg only."""
-        run_id = own(run_id, request)
+        run_id = await own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
@@ -1014,7 +1020,7 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/runs/{run_id}/reorder")
     async def reorder(run_id: str, request: Request):
         """Move a clip in front of another ({"span": "s4", "before": "s2"}) or to the end ("before": null)."""
-        run_id = own(run_id, request)
+        run_id = await own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
@@ -1035,7 +1041,7 @@ def create_app(root: Path) -> FastAPI:
     async def cut(run_id: str, request: Request):
         """Delete the words of a transcript selection ({"words": [{"span": "s2", "from": 16, "to": 18}, ...]}, turn
         word indices) in one version: whole clips dropped, clip edges trimmed, the middle of a clip split."""
-        run_id = own(run_id, request)
+        run_id = await own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
@@ -1088,7 +1094,7 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/runs/{run_id}/pin")
     async def pin(run_id: str, request: Request):
         """{"speaker": "A", "head": "3"}: the crop follows that head when A talks; "head": null drops the pin."""
-        run_id = own(run_id, request)
+        run_id = await own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
@@ -1108,7 +1114,7 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/runs/{run_id}/replan")
     async def replan(run_id: str, request: Request):
-        run_id = own(run_id, request)
+        run_id = await own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         model = planner_of(b)
@@ -1128,7 +1134,7 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/runs/{run_id}/review")
     async def review(run_id: str, request: Request):
-        run_id = own(run_id, request)
+        run_id = await own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
@@ -1144,7 +1150,7 @@ def create_app(root: Path) -> FastAPI:
     async def hook(run_id: str, request: Request):
         """The hook A/B on one version: the next version opens on another line, both are reviewed blind, the higher
         (pass, overall) is kept (`montivo hook`, one or two reviews, $0.10 budget)."""
-        run_id = own(run_id, request)
+        run_id = await own(run_id, request)
         d = st.run_dir(run_id)
         b = await request.json()
         need_key("The hook A/B", 0.07)

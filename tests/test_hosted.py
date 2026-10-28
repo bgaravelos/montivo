@@ -240,3 +240,29 @@ def test_a_judge_never_reads_another_judges_project(tmp_path, hosted_env):
     assert b.get("/api/runs/nope").json() == b.get("/api/runs/ra").json()  # absent and foreign look the same
     signed_out = TestClient(A.create_app(tmp_path))
     assert signed_out.get("/api/runs/r1").status_code == 401  # the sign-in gate still comes first
+
+
+def test_a_slow_sample_copy_runs_off_the_event_loop_after_the_body_is_read(tmp_path, hosted_env):
+    # 015 took 13 s to copy on the Modal Volume: copying before the body was read lost the edit (408) and held the loop
+    import asyncio
+    d = _run_folder(tmp_path)
+    ledger(d, 0.36)
+    hosted_env.setenv("MONTIVO_BUDGET_USD", "15")
+    seen = fake_jobs(hosted_env)
+    real, threads = A.shutil.copytree, []
+
+    def slow_copy(*a, **k):
+        try:
+            asyncio.get_running_loop()
+            threads.append("event loop")
+        except RuntimeError:
+            threads.append("worker")
+        return real(*a, **k)
+
+    hosted_env.setattr(A.shutil, "copytree", slow_copy)
+    c = TestClient(A.create_app(tmp_path))
+    c.cookies.set(H.JUDGE, "aa11")
+    r = c.post("/api/runs/r1/music", json={"track": "chill_lofi", "level_db": -22, "from": 2})
+    assert r.status_code == 200 and r.json()["job"]["run"] == "r1-aa11"
+    assert seen[-1][3:7] == ["runs/r1-aa11", "--track", "chill_lofi", "--level"] and seen[-1][7] == "-22"
+    assert threads == ["worker"]  # copied in a worker thread, not on the loop
