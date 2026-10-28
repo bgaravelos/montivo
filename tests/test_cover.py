@@ -43,3 +43,28 @@ def test_an_unreviewed_version_uploads_its_own_copy(tmp_path, monkeypatch):
     monkeypatch.setattr(C, "upload_file", lambda path, mime: {"id": "file-new"})
     assert C.video_for_spark(d, 1, log=lambda *a: None) == "file-new"
     assert (d / "review" / "cover_v1" / "cut_v1_review.mp4").is_file()
+
+
+def test_cover_cli_prints_only_the_record_on_stdout(tmp_path, monkeypatch, capsys):
+    """The server parses the CLI's stdout as JSON: the run log goes to stderr (the UI's cover buttons used to 500)."""
+    from montivo import export
+    from montivo.engine import thumb
+
+    d = tmp_path / "r1"
+    d.mkdir()
+
+    def fake(kind):
+        def f(run_dir, n, ledger, log, *rest):
+            log(f"cover: {kind} for v{n}")
+            return {"kind": kind}
+        return f
+
+    monkeypatch.setattr(C, "suggest", fake("suggest"))
+    monkeypatch.setattr(thumb, "design", fake("design"))
+    monkeypatch.setattr(thumb, "still_mask", lambda *a: tmp_path / "m.png")
+    for flags, want in ((["--suggest-cover"], {"kind": "suggest"}), (["--design-cover"], {"kind": "design"}),
+                        (["--cover-mask", "--cover-t", "1.5"], {"mask": str(tmp_path / "m.png")})):
+        assert export.main([str(d), "--version", "1", *flags]) == 0
+        out = capsys.readouterr()
+        assert json.loads(out.out) == want
+    assert "cover: design for v1" in (d / "run.log").read_text()

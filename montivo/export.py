@@ -24,6 +24,7 @@ agent's design into cover_vN.json, and SAM 3.1's person mask of the still at --c
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import json
 import shutil
@@ -216,22 +217,22 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(sys.argv[1:] if argv is None else argv)
     if not a.run_dir.is_dir():
         ap.error(f"{a.run_dir} is not a run folder")
-    if a.suggest_cover:
+    if a.suggest_cover or a.design_cover or a.cover_mask:
+        if a.cover_mask and a.cover_t is None:
+            ap.error("--cover-mask needs --cover-t")
+        from .engine import thumb
         from .engine.cover import suggest
         from .run import RunLog
-        print(json.dumps(suggest(a.run_dir, a.version, Ledger.resume(a.run_dir / "ledger.json"), RunLog(a.run_dir / "run.log")), indent=2))
-        return 0
-    if a.design_cover or a.cover_mask:
-        from .engine import thumb
-        from .run import RunLog
         ledger, log = Ledger.resume(a.run_dir / "ledger.json"), RunLog(a.run_dir / "run.log")
-        if a.design_cover:
-            print(json.dumps(thumb.design(a.run_dir, a.version, ledger, log, a.aspect), indent=2))
-        else:
-            if a.cover_t is None:
-                ap.error("--cover-mask needs --cover-t")
-            path = thumb.still_mask(a.run_dir, a.version, a.cover_t, a.aspect, ledger, log)
-            print(json.dumps({"mask": str(path)}))
+        # RunLog echoes every line to stdout; the server reads stdout as this one JSON record
+        with contextlib.redirect_stdout(sys.stderr):
+            if a.suggest_cover:
+                rec = suggest(a.run_dir, a.version, ledger, log)
+            elif a.design_cover:
+                rec = thumb.design(a.run_dir, a.version, ledger, log, a.aspect)
+            else:
+                rec = {"mask": str(thumb.still_mask(a.run_dir, a.version, a.cover_t, a.aspect, ledger, log))}
+        print(json.dumps(rec, indent=2))
         return 0
     if a.out is None:
         ap.error("--out is needed for an export")
