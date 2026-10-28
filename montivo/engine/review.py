@@ -211,7 +211,8 @@ def cut_edge_levels(edl: dict, audio: "Audio") -> list[dict]:
 def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: float,
                edges: list[dict] | None = None, timeline: list[dict] | None = None,
                heard: list[dict] | None = None, edge_words: dict | None = None, head: dict | None = None,
-               diff_heard: list[dict] | None = None, music: dict | None = None) -> str:
+               diff_heard: list[dict] | None = None, music: dict | None = None,
+               not_in_source: list[str] | None = None) -> str:
     """The facts handed to the reviewer, numbered. `music` (the render's music record) says a bed is mixed in on
     purpose and that the silences and heard words come from the speech without it. `heard` adds the heard phrases and the caption diff (a reviewer that
     cannot hear); `diff_heard` adds only the caption diff (Spark 1.3: in the benchmark the phrases cost it the weak
@@ -307,6 +308,10 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
                    f"anyone speaks" + (f" (measured: the speech sits {m['margin_db']:g} dB over it)" if m.get("margin_db")
                    is not None else "") + ". The silence gaps and the words heard above come from the speech alone. "
                    "The music is a fault only where it covers or competes with the words.")
+    if not_in_source:
+        out.append(f"{len(out) + 1}. The source footage was searched for everything the brief asks for; these are not "
+                   "in it, so no cut of this footage can contain them: " + "; ".join(f"\"{x}\"" for x in not_in_source)
+                   + ". Judge brief_covered on the rest of the brief.")
     return "\n".join(out)
 
 
@@ -1324,7 +1329,8 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
                       if vpath.is_file() else None)
         head = head_frame_facts(run_dir, edl)
         facts = facts_text(sil, caps, duration, edges, timeline, words_heard if heard else None, edge_words=edge_words,
-                           head=head, diff_heard=words_heard, music=(edl.get("render") or {}).get("music"))
+                           head=head, diff_heard=words_heard, music=(edl.get("render") or {}).get("music"),
+                           not_in_source=edl.get("brief_missing"))
         gate = gate_check(caps, edges, edge_words, head)
         gate["checked_captions"] = [[c["t_in"], c["t_out"]] for c in timeline if c.get("checked")]
         copy_path = review_copy(cut, rdir, clock=clock)

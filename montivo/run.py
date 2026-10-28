@@ -303,6 +303,8 @@ def run(opts: RunOptions) -> dict:
             carry_run_words(prev_v1, edl)
         if edl["role_fixes"]:
             log(f"roles set by position (one hook first, the payoff last): {', '.join(edl['role_fixes'])}")
+        if edl.get("brief_missing"):
+            log(f"plan: not in the footage: {'; '.join(edl['brief_missing'])}")
         if edl.get("edge_pass"):
             ep = edl["edge_pass"]
             log(f"edges: {ep['moved']} cut edges tightened to the speech, {ep['removed_s']} s of pause removed "

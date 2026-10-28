@@ -186,6 +186,12 @@ class Spark:
             "only for a closing call to action after the payoff; 'body' for every span in between. So an edit has one "
             "hook, one payoff and everything else body.\n"
             "- Give a 2 to 4 word callout for a span only when a concrete on-screen object or number deserves it, else empty.\n"
+            "- If the brief asks for a line, a moment or a detail that is not in the transcript or the footage at all (a line "
+            "never said, a take that does not exist), list it in brief_not_in_footage in the brief's own words and plan the "
+            "best edit without it. Never stand in a different line for it. The transcript is machine-made and mishears "
+            "names and words (\"Soundtracks me\" for \"SAM tracks me\", \"meta meta\" for \"four Meta\"): a line that is there "
+            "in a misheard form is not missing, and a line you keep in the paper edit is never listed. Leave the list empty "
+            "when everything is there.\n"
             "- Propose a short title card text (max 6 words), a caption style note and a one-sentence reframe note.\n"
             f"- estimated_runtime_s = total kept words / {wps:.1f}.\n\n"
             f"TRANSCRIPT (authoritative):\n{transcript_text}")

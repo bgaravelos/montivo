@@ -151,6 +151,8 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
     const by = v.planner && (o.source === "plan" || o.action === "replan")
       ? `Planned by ${v.planner.name}${side?.plan_cost_usd != null ? ` in ${side.plan_seconds?.toFixed(1)} s for ${usd(side.plan_cost_usd, 3)}` : ""}` : "";
     out.push({ kind: "version", v, by });
+    const missing = o.source === "plan" || o.action === "replan" ? v.brief_missing ?? [] : [];
+    if (missing.length) out.push({ kind: "text", who: "montivo", text: `Your brief asks for ${missing.map((x) => `“${x}”`).join(", ")}, but ${missing.length === 1 ? "it is" : "they are"} not in the footage, so the cut goes without ${missing.length === 1 ? "it" : "them"}. The reviewer is told the same.` });
     if (v.review) out.push({ kind: "review", v });
     const ab = o.source === "hook_ab" ? o.result : null;
     if (ab) out.push({ kind: "text", who: "montivo", text: `Keeping ${vName(ab.kept)} (${ab.reason}${ab.decisive ? "" : "; within the reviewer's 10-point noise"}).` });

@@ -24,6 +24,25 @@ def norm_tokens(text: str) -> list[str]:
     return [n for n in (norm(t) for t in text.split()) if n]
 
 
+# words too common to tell one line from another when a missing brief item is matched against the kept words
+_FILLER = {"the", "a", "an", "and", "or", "of", "to", "in", "on", "at", "for", "with", "is", "it", "its", "it's", "i",
+           "me", "my", "we", "so", "that", "this", "when", "like", "about", "keep", "line", "take", "second", "first"}
+
+
+def brief_missing(items: list[str], spans: list["Span"]) -> list[str]:
+    """The planner's brief_not_in_footage, cleaned. An item whose words are mostly in the kept spans is dropped: the
+    planner reads Voice's transcript, so a line Voice misheard ("SAM tracks me" as "Soundtracks me", "Four Meta" as
+    "meta meta") looked missing to it on run 015 although it kept that very line. Told to the reviewer as missing,
+    such an item would hide a real drop."""
+    kept = {t for s in spans for t in norm_tokens(s.words)}
+    out = []
+    for x in (i.strip() for i in items or []):
+        content = [t for t in norm_tokens(x) if t not in _FILLER]
+        if x and (not content or sum(t in kept for t in content) / len(content) < 0.5):
+            out.append(x)
+    return out
+
+
 @dataclass
 class Span:
     id: str
@@ -128,6 +147,9 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
         "title_card_text": plan.get("title_card_text", ""),
         "caption_style_note": plan.get("caption_style_note", ""),
         "reframe_note": plan.get("reframe_note", ""),
+        # what the brief asks for and the footage does not have, as the planner found it: said once in the chat and
+        # handed to the reviewer as a fact about the source, so it does not come back as a brief_covered major
+        "brief_missing": brief_missing(plan.get("brief_not_in_footage") or [], spans),
         "speaker_map": watch.get("speaker_map", []),
         "tracks": tracks,
         "reframe_concept": reframe_concept,  # the SAM concept the 9:16 crop follows (falls back to person)

@@ -519,6 +519,7 @@ def versions(run_dir: Path) -> list[dict]:
                                        "heard": next((w["voice"] for w in c.get("words") or [] if w.get("voice")), None)}
                                       for c in edl.get("captions") or []],
                     "caption_style": edl.get("caption_style"), "caption_style_note": edl.get("caption_style_note"),
+                    "brief_missing": list(edl.get("brief_missing") or []),
                     "punch": bool(edl.get("punch")), "punch_skip": list(edl.get("punch_skip") or []),
                     "speaker_pins": {str(k): str(v) for k, v in (edl.get("reframe_speaker_ids") or {}).items()},
                     "punch_ins": [{k: e.get(k) for k in ("key", "kind", "word", "span", "excess_db", "t_in", "t_out", "zoom")}

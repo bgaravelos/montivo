@@ -62,7 +62,7 @@ export type Version = {
     head_box: number[] | null; over_face: boolean }[]; review: Review | null;
   look: Look | null; // the caption look this version was rendered with (graphics.normalize_look)
   music: (MusicSetting & { voice_db: number; margin_db: number | null; ducked_s: number | null; ducked: [number, number][] }) | null; // the bed under the speech (engine/music.py)
-  caption_lines: CaptionLine[]; caption_style: CaptionStyle | null; caption_style_note: string | null; bytes: number | null;
+  caption_lines: CaptionLine[]; caption_style: CaptionStyle | null; caption_style_note: string | null; brief_missing?: string[]; bytes: number | null;
   punch: boolean; punch_skip: string[]; punch_ins: PunchIn[];
   speaker_pins: Record<string, string>; // reframe_speaker_ids: Voice speaker -> the head the crop follows (a human pin)
   planner: { model: string; name: string } | null; // the paper edit's planner: v1 and every re-plan

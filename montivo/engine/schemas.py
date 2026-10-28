@@ -52,8 +52,12 @@ PLAN = {
         "title_card_text": {"type": "string"},
         "caption_style_note": {"type": "string"},
         "reframe_note": {"type": "string", "description": "who the camera should follow and when, in one sentence"},
+        "brief_not_in_footage": {"type": "array", "items": {"type": "string"},
+                                 "description": "each thing the brief asks to keep or show that the transcript and footage do not "
+                                                "contain, in the brief's own words; empty when everything is there"},
     },
-    "required": ["paper_edit", "estimated_runtime_s", "title_card_text", "caption_style_note", "reframe_note"],
+    "required": ["paper_edit", "estimated_runtime_s", "title_card_text", "caption_style_note", "reframe_note",
+                 "brief_not_in_footage"],
 }
 
 CRITERIA = ["hook_in_1_5s", "brief_covered", "no_cut_mid_word", "captions_legible", "captions_match_speech",
