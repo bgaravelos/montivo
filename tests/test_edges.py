@@ -297,3 +297,20 @@ def test_a_join_on_the_same_source_second_is_not_a_cut_inside_speech():
     assert edges[0]["continuous"] and not edges[0]["loud"]
     b2 = dict(b, t_in=12.4)  # 0.4 s left out: a real cut, inside speech
     assert R.cut_edge_levels(edl_of(a, b2), audio)[0]["loud"]
+
+
+def test_a_reviewer_extension_never_settles_into_another_speakers_kept_turn():
+    # d1-nasa v2: extend_span on "sardines" (a one-word turn) added no word, then settled 57.1 -> 57.3 on the dip inside
+    # the next speaker's kept "Brussels sprouts"
+    ws = [{"w": f"a{i}", "t_start": 10.0 + 0.5 * i, "t_end": 10.5 + 0.5 * i, "turn_id": 0, "i": i, "speaker": "A"}
+          for i in range(4)] + \
+         [{"w": f"b{i}", "t_start": 12.0 + 0.5 * i, "t_end": 12.5 + 0.5 * i, "turn_id": 1, "i": i, "speaker": "B"}
+          for i in range(4)] + [{"w": "c0", "t_start": 30.0, "t_end": 30.5, "turn_id": 5, "i": 0, "speaker": "C"}]
+    audio = SynthAudio([(10.0, 12.2), (12.35, 14.0)])
+    a = {"id": "s1", "turn_id": 0, "word_from": 0, "word_to": 3, "t_in": 10.0, "t_out": 12.0, "duration": 2.0, "role": "hook"}
+    mid = {"id": "s9", "turn_id": 5, "word_from": 0, "word_to": 0, "t_in": 30.0, "t_out": 30.5, "duration": 0.5, "role": "body"}
+    b = {"id": "s2", "turn_id": 1, "word_from": 0, "word_to": 3, "t_in": 12.0, "t_out": 14.0, "duration": 2.0, "role": "payoff"}
+    fix = R.Fix(op="extend_span", target="s1", issue=0, severity="major", t_s=1.9, args={"edge": "out", "seconds": 0.5})
+    new, log = R.apply_fixes(edl_of(a, mid, b), [fix], E.Words(ws), audio)
+    s1, s2 = new["spans"][0], new["spans"][2]
+    assert s1["t_out"] <= s2["t_in"] + 1e-6, log[0]["note"]

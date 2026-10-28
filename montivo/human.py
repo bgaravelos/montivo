@@ -679,9 +679,15 @@ def split_pieces(new: dict, words: Words, sid: str, runs: list[tuple[int, int]],
         refresh_span(p, words)
         pieces.append(p)
     new["spans"][k:k + 1] = pieces
-    ovs = new.get("caption_overrides") or []  # an override goes with the piece over its source time, or goes
+    ovs = new.get("caption_overrides") or []  # an override goes with the piece that keeps its word, or goes
+    tw = words.turn(pieces[0]["turn_id"])
     for o in [o for o in ovs if o.get("span") == sid]:
-        home = next((p for p in pieces if p["t_in"] - 0.05 <= float(o["src_t"]) < p["t_out"]), None)
+        t = float(o["src_t"])
+        # by the Voice word under its source second: a shortened pause moves the clip's edge past its first word's
+        # start (combination matrix, 016: pauses, then a split, lost "Four Meta models do all"); else by time
+        i = next((w["i"] for w in tw if w["t_start"] <= t < w["t_end"]), None)
+        home = next((p for p in pieces if i is not None and p["word_from"] <= i <= p["word_to"]), None) or \
+            next((p for p in pieces if p["t_in"] - 0.05 <= t < p["t_out"]), None)
         if home is None:
             ovs.remove(o)
         else:

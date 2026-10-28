@@ -772,18 +772,27 @@ def kept_elsewhere(edl: dict, span: dict) -> set[int]:
             for i in range(s["word_from"], s["word_to"] + 1)}
 
 
-def valley(span: dict, words: Words, edge: str, audio: Audio, blocked: set[int]) -> tuple[float, float, float]:
+def fence(edl: dict, span: dict) -> list[tuple[float, float]]:
+    """The source time of every other span: an edge never moves into it (edges.widen)."""
+    return [(o["t_in"], o["t_out"]) for o in edl["spans"] if o["id"] != span["id"]]
+
+
+def valley(span: dict, words: Words, edge: str, audio: Audio, blocked: set[int],
+           fenced: list[tuple[float, float]] | None = None) -> tuple[float, float, float]:
     """The quietest point within VALLEY_RANGE_S of an edge, never past half the span, never into a word another span
-    keeps. Returns (new time, its dB, the current edge's dB)."""
+    keeps nor into another span's source time (`fenced`, any turn: run d1-nasa's "sardines" extended 0.2 s into the
+    next speaker's kept "Brussels sprouts"). Returns (new time, its dB, the current edge's dB)."""
     tw = words.turn(span["turn_id"])
     r = VALLEY_RANGE_S
     if edge == "out":
         t = span["t_out"]
         lo = max(span["t_in"] + (span["t_out"] - span["t_in"]) / 2, t - r)
         hi = t if span["word_to"] + 1 in blocked else t + r
+        hi = max(t, min([hi] + [a for a, b in fenced or [] if a >= t - 0.005]))
     else:
         t = span["t_in"]
         lo = t if span["word_from"] - 1 in blocked else t - r
+        lo = min(t, max([lo] + [b for a, b in fenced or [] if b <= t + 0.005]))
         hi = min(span["t_out"] - (span["t_out"] - span["t_in"]) / 2, t + r)
     x, db = audio.quietest(lo, hi, step=VALLEY_STEP_S)
     return x, db, audio.level(t - 0.02, t + 0.02)
@@ -1027,7 +1036,7 @@ def resolve(issue: dict, k: int, edl: dict, words: Words, cmap: list[CutSpan],
             return mk("move_cut", sp.span, edge=edge, mode="words", seconds=sec), ""
         if audio is None:
             return None, "edge on its word boundary and no audio.wav to find a quieter point"
-        x, db, now = valley(s, words, edge, audio, kept_elsewhere(edl, s))
+        x, db, now = valley(s, words, edge, audio, kept_elsewhere(edl, s), fence(edl, s))
         cur = s["t_out" if edge == "out" else "t_in"]
         if abs(x - cur) < 0.005 or db > now - 3.0:  # only a clearly quieter point (3 dB) is worth a re-cut
             return None, f"{edge} edge of {sp.span} is already at the quietest point ({now:.1f} dB, best {db:.1f} dB at {x:.2f})"
@@ -1157,13 +1166,14 @@ def conflict(edl: dict, f: Fix) -> str:
     return ""
 
 
-def settle(span: dict, words: Words, edge: str, audio: Audio | None, blocked: set[int]) -> str:
+def settle(span: dict, words: Words, edge: str, audio: Audio | None, blocked: set[int],
+           fenced: list[tuple[float, float]] | None = None) -> str:
     """After a word-level edit the new edge sits on a Voice word boundary, which can be up to 0.3 s inside speech (run
     012: the trim to "Hi. I'm Billy." ended at -25.1 dB). Move it to the quietest point nearby when that is clearly
     quieter. Returns a note, empty when nothing moved."""
     if audio is None:
         return ""
-    x, db, now = valley(span, words, edge, audio, blocked)
+    x, db, now = valley(span, words, edge, audio, blocked, fenced)
     key = "t_out" if edge == "out" else "t_in"
     if abs(x - span[key]) < 0.005 or db > now - 3.0:
         return ""
@@ -1202,7 +1212,7 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
             elif f.args["mode"] == "words":
                 n = shift_words(s, words, edge, f.args["seconds"], kept_elsewhere(new, s))
                 note = (f"{edge} edge moved by {n} words ({f.args['seconds']:+.2f} s asked)"
-                        + settle(s, words, edge, audio, kept_elsewhere(new, s)))
+                        + settle(s, words, edge, audio, kept_elsewhere(new, s), fence(new, s)))
             else:
                 key = "t_out" if edge == "out" else "t_in"
                 before = s[key]
@@ -1214,7 +1224,7 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
             n = trim_at(s, words, f.args["edge"], f.args["src_t"])
             note = (f"{n} words trimmed at the {f.args['edge']} end, keeps: "
                     f"{' '.join(w['w'] for w in words.turn(s['turn_id'])[s['word_from']:s['word_to'] + 1])[:60]}"
-                    + settle(s, words, f.args["edge"], audio, kept_elsewhere(new, s)))
+                    + settle(s, words, f.args["edge"], audio, kept_elsewhere(new, s), fence(new, s)))
         elif f.op == "extend_span" and (note := rejoin_pause(new, s, f.args["edge"])):
             rejoined = True
         elif f.op == "extend_span":
@@ -1231,7 +1241,7 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
                     prv = s["word_from"] - 1
                     sentence_edge(s, words, "in", hi=orig[0] - 1,
                                   lo=prv if prv >= 0 and prv not in blocked else s["word_from"])
-            note = f"{n} words added at the {f.args['edge']} end" + settle(s, words, f.args["edge"], audio, kept_elsewhere(new, s))
+            note = f"{n} words added at the {f.args['edge']} end" + settle(s, words, f.args["edge"], audio, kept_elsewhere(new, s), fence(new, s))
         elif f.op == "drop_span":
             new["spans"] = [x for x in new["spans"] if x["id"] != f.target]
             overrides[:] = [o for o in overrides if o.get("span") != f.target]

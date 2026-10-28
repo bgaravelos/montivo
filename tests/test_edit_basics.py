@@ -133,3 +133,17 @@ def test_a_cut_that_deletes_the_hook_whole_writes_nothing(tmp_path, monkeypatch)
     with pytest.raises(SystemExit, match="s1 cannot go"):
         H.cut(d, [("s1", s1["word_from"], s1["word_to"])])
     assert not (d / "edl_v2.json").exists()
+
+
+def test_a_split_keeps_the_caption_fix_of_a_clip_whose_edge_a_pause_moved(tmp_path, monkeypatch):
+    # combination matrix, debugging day 1 (016: pauses, then split): the clip's in edge sat 0.2 s past its first
+    # word's Voice start, the override (that word + 0.01 s) found no piece by time and was dropped
+    import montivo.human as H
+    d = _human_run(tmp_path, monkeypatch)  # s3 = turn 1 words 2-6 (30.6-32.1)
+    edl = json.loads((d / "edl_v1.json").read_text())
+    edl["spans"][2]["t_in"] = 30.8
+    edl["caption_overrides"] = [{"span": "s3", "src_t": 30.61, "text": "Four Meta", "why": "human"}]
+    (d / "edl_v1.json").write_text(json.dumps(edl))
+    H.split(d, "s3", 4)
+    v2 = json.loads((d / "edl_v2.json").read_text())
+    assert v2["caption_overrides"] == [{"span": "s3", "src_t": 30.61, "text": "Four Meta", "why": "human"}]
