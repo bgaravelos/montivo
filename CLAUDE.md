@@ -330,6 +330,20 @@ local runs changes. `modal run modal_app.py::rereview --run ID --version N` re-r
 the loop (stop the web container first and after: it does not see another container's writes). Live re-review: v2's
 lines fixed, captions_match_speech 10, 74 with one major (hook); the loop's swap_hook put the brief's ending first ->
 v3 48, the regression guard kept v2; $0.07; host spend $0.40 of $15 (commit 32e3416).
+Codex review fixes (28/10, $0, brief in `docs/notes/codex-review-brief_2026-10-27.md`): Codex reviewed the repo
+read-only (11 findings), each checked in the code first, all fixed with tests (209 -> 220): uploads never replace a clip
+(`app.free_name`: clip-2.mp4, written to a `.part` first, the size limit no longer deletes the old file; the UI takes
+the returned path) and on the host each judge sees the seeded clips and only their own uploads (`footage/.owners.json`;
+run ids get a free name too); ingest bakes a display rotation (`Probe.rotation`, `make_upright`, `source_upright.mp4`,
+phone portrait clips); the loop's `rank` puts a passing version first and a new version takes `human.next_version`
+(reviewing v1 of v1-v5 makes v6); `apply_fixes` checks each structural fix against the EDL the earlier fixes of the pass
+made (`review.conflict`, a skipped fix logged `skipped`, a pass with nothing applied stops "no applicable fix"); the
+dropped-word rule needs the dropped word's own Voice window mostly quiet (`edges.displaced`, `DROPPED_HEARD` 0.5: a short
+first word said where Voice put it stays) and edge searches stay inside the source (`Audio.inside`, `quietest` clamps);
+Voice turn ids count only kept turns (unique across chunks); `run --resume` refuses other footage, another hflip or
+missing track concepts (commit 36540de). No edge moves on any run folder (old vs new edge pass compared on all 16). README: the guard in
+the one-liner, the "16 editors we looked at", the pass gate bullet, the benchmark and the TEDx upload rows, the first
+two rows marked as scored before the gate, hook A/B and punch-ins with their real runs. Not deployed to Modal yet.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
