@@ -456,6 +456,12 @@ back into view; a bundle name other than its own reloads the page at the next ro
 then (none on the Vite dev server). Live as Modal v12 = 15d14e0 + 9d74697, built in a clean worktree: the Cover maker
 (b214930) is on main but NOT deployed yet; the next `modal deploy` from main ships it. A tab loaded before v12 has no
 check and needs one manual reload.
+Stale page after deploys, the real cause (28/10, commit `6d15e28`): Modal's image stamps every file 1970-01-01 and
+index.html is always 1066 bytes, so Starlette's ETag never changed and a revalidating browser got 304 and kept its old
+page (and old bundle) through reloads. `WebFiles` now never answers 304 for HTML and drops ETag / Last-Modified. Live as
+Modal v13 (15d14e0 + 9d74697 + 6d15e28, still without the Cover maker). Before `modal container stop` after a deploy,
+check no job is running (the newest runs' run.log on the Volume): stopping v12's container cut Billy's ui-1028-1209 in
+its review_v1 call (cut_v1 kept, no review).
 Cover maker (28/10, $0.011, Billy's pick A + D + E after research in `docs/notes/cover-maker-*_2026-10-28`): the cover was
 a raw frame of cut_vN with that second's half caption. `engine/thumb.py`: templates `frame` (clean still), `headline`
 (face punched in, ink gradient, headline with a marker word), `sticker` (tilted marker sticker, edges darkened), `cutout`
