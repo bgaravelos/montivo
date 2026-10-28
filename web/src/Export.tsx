@@ -36,8 +36,9 @@ function download(url: string, name: string) {
   a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
 }
 
-export function ExportPage({ id, versions, initial, onClose, onStyle }: {
+export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, keyNote, coverCost }: {
   id: string; versions: Version[]; initial: number | null; onClose: () => void; onStyle: () => void;
+  hasKey: boolean; keyNote: string | null; coverCost: number;
 }) {
   const cuts = versions.filter((x) => x.cut);
   const [n, setN] = useState(initial ?? cuts.at(-1)?.n ?? 1);
@@ -50,6 +51,17 @@ export function ExportPage({ id, versions, initial, onClose, onStyle }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<{ name: string; url: string; bytes: number }[] | null>(null);
+  const [moments, setMoments] = useState<{ t_s: number; why: string }[]>([]);
+  const [picking, setPicking] = useState(false);
+  useEffect(() => { setMoments([]); api<{ moments: { t_s: number; why: string }[] }>(`/api/runs/${id}/export/cover?v=${n}`).then((r) => setMoments(r.moments)).catch(() => {}); }, [id, n]);
+  const pickCover = async () => {
+    setPicking(true); setErr(null);
+    try {
+      const r = await api<{ moments: { t_s: number; why: string }[] }>(`/api/runs/${id}/export/cover`, { v: n });
+      setMoments(r.moments);
+      if (r.moments[0]) setCoverT(r.moments[0].t_s);
+    } catch (e) { setErr(String((e as Error).message)); } finally { setPicking(false); }
+  };
   useEffect(() => { try { localStorage.setItem("montivo.export", JSON.stringify(saved)); } catch { /* this tab only */ } }, [saved]);
   useEffect(() => { setName((x) => x.replace(/-v\d+$/, `-v${n}`)); setChecks(null); setDone(null); setErr(null);
     api<{ checks: Check[] }>(`/api/runs/${id}/export/check?v=${n}`).then((r) => setChecks(r.checks))
@@ -90,6 +102,15 @@ export function ExportPage({ id, versions, initial, onClose, onStyle }: {
             <label className="field">Cover frame <span className="mono mute">{tc(coverT)}</span>
               <input type="range" min={0} max={Math.max(0.1, total - 0.1)} step={0.1} value={coverT} onChange={(e) => setCoverT(Number(e.target.value))} />
             </label>
+            <div className="ex-pick">
+              <button className="btn quiet small" disabled={!v || picking || !hasKey} onClick={pickCover}
+                title={hasKey ? `Muse Spark watches Version ${n} and names its best cover moments (about $${coverCost.toFixed(3)})` : keyNote ?? "Set MODEL_API_KEY to let Muse Spark pick"}>
+                {picking ? <><span className="pulse" /> Watching…</> : <><Icon name="spark" size={12} /> Let Muse Spark pick · ~${coverCost.toFixed(3)}</>}</button>
+              {moments.map((m, k) => (
+                <button key={k} className={`ex-moment ${Math.abs(m.t_s - coverT) < 0.05 ? "on" : ""}`} onClick={() => setCoverT(m.t_s)} title={m.why}>
+                  <b>{tc(m.t_s)}</b> <span>{m.why}</span></button>
+              ))}
+            </div>
             <label className="st-check"><input type="checkbox" checked={saved.grid} onChange={(e) => setSaved({ ...saved, grid: e.target.checked })} /> Show the Instagram grid crop</label>
             <label className="field">File name
               <input className="st-input" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />

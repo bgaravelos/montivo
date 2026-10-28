@@ -149,8 +149,9 @@ step's expected time (this run's earlier calls in `ledger.json`, else the measur
 on Muse Spark Open, review 26 s) and a bar that moves by time but never past the last checkpoint `run.log` logged
 (Voice, SAM and Watch on a new run have no estimate, so their bar says so); replay drives the same view. The viewer has safe-area guides (Reels, TikTok, Shorts, approximate; G cycles them), N and Shift+N jump to the next
 and previous reviewer issue, and Versions marks the version the project opens on apart from the loop's best. Export is
-a page of its own: a cover frame (scrub to pick it, with the Instagram profile grid's 3:4 crop shown) and the file
-name; the destination (1080 x 1920 as rendered, or a 720 x 1280 copy for messages; no bitrate knobs, the apps
+a page of its own: a cover frame (scrub to pick it, with the Instagram profile grid's 3:4 crop shown, or "Let Muse Spark
+pick": one call on the version's review copy, the blind review's upload reused, names three moments with a reason each,
+and each lands on the sharpest frame within 0.25 s; $0.018 on run 015 v5) and the file name; the destination (1080 x 1920 as rendered, or a 720 x 1280 copy for messages; no bitrate knobs, the apps
 re-encode anyway); what goes in the bundle (the video, the video without burned-in captions, rendered again from a
 copy of the EDL so the run folder never changes, SRT, WebVTT, the cover and its grid crop, WAV, a transcript; more
 than one file comes as a zip, `python -m montivo.export`, $0); and a pre-flight read from the EDL and the review:

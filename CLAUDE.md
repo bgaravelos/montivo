@@ -391,6 +391,11 @@ Saved looks (28/10, $0): GET /api/looks `saved`, POST /api/looks/saved {name, lo
 DELETE /api/looks/saved/{id}; `<root>/looks/saved.json` (git-ignored; per judge on the hosted demo); "Your looks" row
 + Save look in the Style panel. Music bed is on branch `music-bed` (f1dd64b, its own session): Billy approved the
 rest but not the synth loops (28/10): better loops first in that session, then merge + `make web`.
+Spark cover (28/10, $0.018): `engine/cover.py` (prompt on the review copy with the clock, the review's file_id reused
+else a new review copy uploaded, moments outside the cut or on the title dropped, `settle` = sharpest frame +-0.25 s by
+edge variance in the face band), `python -m montivo.export RUN --version N --suggest-cover` -> `cover_vN.json`,
+GET/POST /export/cover, "Let Muse Spark pick" + moment chips on the Export page. 015 v5: 1.9 s "Hi. I'm Billy.",
+18.4 s "Four Meta models" callout, 22.5 s.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

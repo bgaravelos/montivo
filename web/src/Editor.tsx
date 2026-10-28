@@ -362,7 +362,8 @@ export function Editor({ id, replay, go }: Props) {
           onConfirm={(review) => { setDialog(null); setPanel("assistant"); act("reorder", { span: dialog.ask.span, before: dialog.ask.before, from: v.n, review: review ? 1 : 0 }); }} />
       )}
       {dialog?.kind === "export" && <ExportPage id={id} versions={visible} initial={sel} onClose={() => setDialog(null)}
-        onStyle={() => { setDialog(null); setPanel("style"); }} />}
+        onStyle={() => { setDialog(null); setPanel("style"); }}
+        hasKey={state.has_key} keyNote={state.key_note ?? null} coverCost={state.costs?.cover ?? 0.025} />}
       {dialog?.kind === "ledger" && <LedgerDialog state={state} onClose={() => setDialog(null)} />}
       {dialog?.kind === "keys" && <ShortcutsDialog onClose={() => setDialog(null)} />}
       {toast && <div className={`toast ${toast.tone ?? ""}`} onClick={() => setToast(null)}>{toast.text}</div>}

@@ -49,7 +49,7 @@ PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 # the review loop adds about two reviews and a render (run 015: $0.07, 85 s)
 COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_fixed": 0.045,
         "run_per_s": 0.0026, "run_wall_fixed_s": 60, "run_wall_per_s": 0.9, "review_loop": 0.07, "review_loop_s": 85,
-        "hook_ab": 0.04, "look": 0.008,
+        "hook_ab": 0.04, "look": 0.008, "cover": 0.025,
         "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175}
 
 
@@ -402,6 +402,28 @@ def create_app(root: Path) -> FastAPI:
         return {"checks": preflight.checks(d, v)}
 
     export_lock = threading.Lock()
+
+    @app.get("/api/runs/{run_id}/export/cover")
+    def cover_get(run_id: str, v: int):
+        """Muse Spark's cover moments for version v, when they were asked for before (cover_vN.json)."""
+        d, _ = cut_of(run_id, v)
+        return read_json(d / f"cover_v{v}.json") or {"moments": []}
+
+    @app.post("/api/runs/{run_id}/export/cover")
+    def cover_post(run_id: str, b: dict):
+        """{"v": N}: Muse Spark watches the version and names its best cover moments (engine/cover.py, one call, about
+        $0.025, 10-20 s; python -m montivo.export --suggest-cover)."""
+        v = int(b.get("v") or 0)
+        d, _ = cut_of(run_id, v)
+        need_key("Picking a cover (Muse Spark)", COST["cover"])
+        if st.busy(run_id):
+            raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: ask for a cover after it")
+        args = [sys.executable, "-m", "montivo.export", str(d.relative_to(st.root)) if d.is_relative_to(st.root) else str(d),
+                "--version", str(v), "--suggest-cover"]
+        proc = subprocess.run(args, cwd=st.root, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise HTTPException(500, f"cover failed: {(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")
+        return json.loads(proc.stdout)
 
     @app.post("/api/runs/{run_id}/export/bundle")
     def export_bundle(run_id: str, b: dict):
