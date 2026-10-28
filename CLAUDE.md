@@ -429,7 +429,11 @@ pauses 0.8 s, so the bed stays ducked throughout. Checked keyless in the browser
 Billy listened to all eight under his 015 cut and kept all eight (commits f1dd64b, 2a47ff5). Merged into main as 8322446 and
 deployed to Modal 28/10 with the 4:5 / 1:1 exports (`modal run modal_app.py::smoke --music midnight_cruiser`: 37.9 s,
 -14.0 LUFS / -1.7 dBTP, speech 17.1 dB over the bed, same as the Mac; the plain drop smoke 34.3 s, -14.0 / -1.7); host
-spend unchanged at $0.40 of $15.
+spend unchanged at $0.40 of $15. After a redeploy the old web container keeps serving (its SSE `/events` streams
+never close) and, with max_containers=1, the new version never starts: every request stayed Pending from 12:54 on
+28/10. After every `modal deploy`: `modal container list`, then `modal container stop` the web container that started
+before the deploy. The judge copy on a sample now reads the body first and copies in a thread (a11fa77): the first
+edit used to fail with a 408 while the 13 s copy of 015 ran.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

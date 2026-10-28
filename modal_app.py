@@ -6,6 +6,10 @@ run folders on a Volume, the Meta model spend capped (montivo/server/hosted.py).
     .venv/bin/modal volume put montivo-data dist/montivo-sample-015.zip /seed/
     .venv/bin/modal run modal_app.py::seed                     # unzip into the Volume, adopt the runs' spend so far
     .venv/bin/modal deploy modal_app.py                        # https://<workspace>--montivo-web.modal.run
+    .venv/bin/modal container list                             # then stop the web container older than the deploy:
+    .venv/bin/modal container stop <id>                        # its open SSE streams never end, and max_containers=1
+                                                               # keeps the new version from starting (28/10: every
+                                                               # request pending from the deploy until it was stopped)
 
 One container at most (the server keeps its jobs in memory, MONTIVO_ONE_JOB runs them one at a time), 4 CPUs for the
 ffmpeg renders, scaled to zero when nobody has the page open. The engine runs as a subprocess with /data as its
