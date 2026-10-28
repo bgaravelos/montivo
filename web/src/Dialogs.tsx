@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
-import { dur, tc, usd } from "./api";
+import { dur, usd } from "./api";
 import { Icon } from "./icons";
 import type { CutAsk } from "./edit";
 import type { MoveAsk, TrimAsk } from "./Timeline";
@@ -68,49 +68,6 @@ export function EditDialog({ kind, state, v, span, trim, move, cut, next, onCanc
         <button className={`btn ${kind === "delete" || kind === "words" ? "danger" : ""}`} autoFocus disabled={!!cut?.error} onClick={() => onConfirm(review && canReview)}>
           {kind === "words" ? "Delete words" : kind === "delete" ? "Delete clip" : kind === "move" ? "Move clip" : trim!.words > 0 ? "Extend clip" : "Trim clip"}
         </button>
-      </div>
-    </Modal>
-  );
-}
-
-const mb = (b: number | null | undefined) => (b == null ? "–" : `${(b / 1e6).toFixed(1)} MB`);
-
-export function ExportDialog({ id, versions, initial, onClose }: { id: string; versions: Version[]; initial: number | null; onClose: () => void }) {
-  const cuts = versions.filter((x) => x.cut);
-  const [n, setN] = useState(initial ?? cuts.at(-1)?.n ?? 1);
-  const [preset, setPreset] = useState<"full" | "720">("full");
-  const v = cuts.find((x) => x.n === n);
-  return (
-    <Modal title="Export" onClose={onClose}>
-      <div className="modal-body">
-        <label className="field">Version
-          <select value={n} onChange={(e) => setN(Number(e.target.value))}>
-            {[...cuts].reverse().map((x) => (
-              <option key={x.n} value={x.n}>Version {x.n}{x.review ? ` · ${x.review.overall}${x.review.pass ? " ✓" : ""}` : ""}</option>
-            ))}
-          </select>
-        </label>
-        <label className="field">Preset
-          <select value={preset} onChange={(e) => setPreset(e.target.value as "full" | "720")}>
-            <option value="full">Reels · TikTok · Shorts: 1080 × 1920, as rendered</option>
-            <option value="720">Smaller: 720 × 1280 for messaging and review links</option>
-          </select>
-        </label>
-        {v && (
-          <dl className="props export-props">
-            <dt>Format</dt><dd>{preset === "full" ? "MP4 · H.264 + AAC · 1080 × 1920 (9:16)" : "MP4 · H.264 CRF 26 + AAC 128k · 720 × 1280 (9:16), made on download"}</dd>
-            <dt>Duration</dt><dd className="mono">{tc(v.duration_s ?? v.runtime_s, 2)}</dd>
-            <dt>Loudness</dt><dd>{v.loudness ? <>{v.loudness.integrated_lufs} LUFS · peak {v.loudness.true_peak_dbtp} dBTP</> : "–"}</dd>
-            {/* the 720p copy of run 015's v4: 2.9 MB from 26.7 MB */}
-            <dt>Size</dt><dd>{preset === "full" ? mb(v.bytes) : `about ${mb(v.bytes && v.bytes * 0.11)}`}</dd>
-            <dt>Review</dt><dd>{v.review ? `${v.review.overall}/100${v.review.pass ? ", passes" : ""}` : "not reviewed"}</dd>
-          </dl>
-        )}
-      </div>
-      <div className="modal-foot">
-        <span className="grow" />
-        <button className="btn quiet" onClick={onClose}>Cancel</button>
-        {v && <a className="btn" href={`/api/runs/${id}/export?v=${v.n}${preset === "720" ? "&preset=720" : ""}`} download onClick={() => window.setTimeout(onClose, 300)}><Icon name="export" /> Download</a>}
       </div>
     </Modal>
   );

@@ -30,7 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from ..config import OPEN_MODEL
 from ..engine.api import dump_json as write_json
 from ..engine.graphics import FONTS, PRESET_NAMES, PRESETS, normalize_look
-from . import hosted, media
+from . import hosted, media, preflight
 from .runs import fingerprint, heads, list_runs, parse_log, progress, read_json, replay_script, run_state
 
 STATIC = Path(__file__).parent / "static"
@@ -394,6 +394,52 @@ def create_app(root: Path) -> FastAPI:
         except subprocess.CalledProcessError:
             raise HTTPException(500, "the 720p copy failed")
         return FileResponse(out, media_type="video/mp4", filename=f"montivo-{run_id}-v{v}-720p.mp4")
+
+    @app.get("/api/runs/{run_id}/export/check")
+    def export_check(run_id: str, v: int):
+        """The Export page's pre-flight for version v (preflight.py): review, loudness, format, length, safe areas."""
+        d, _ = cut_of(run_id, v)
+        return {"checks": preflight.checks(d, v)}
+
+    export_lock = threading.Lock()
+
+    @app.post("/api/runs/{run_id}/export/bundle")
+    def export_bundle(run_id: str, b: dict):
+        """{"v": N, "include": ["video", "clean", "srt", ...], "preset": "full" | "720", "name": stem, "cover_t": s}:
+        the files (python -m montivo.export, $0) under ui/cache/exports/<key>/, made once per choice; returns their
+        download URLs and the zip's when there is more than one. "clean" renders again, about as long as a render."""
+        from ..export import KINDS
+        d, _ = cut_of(run_id, int(b.get("v") or 0))
+        v = int(b["v"])
+        inc = [k for k in KINDS if k in (b.get("include") or [])]
+        preset = b.get("preset") or "full"
+        name = re.sub(r"[^A-Za-z0-9._-]+", "-", str(b.get("name") or f"montivo-{run_id}-v{v}")).strip("-.")[:80] or f"montivo-{run_id}-v{v}"
+        cover = b.get("cover_t")
+        if not inc or preset not in ("full", "720") or (cover is not None and not isinstance(cover, (int, float))):
+            raise HTTPException(400, f"include: some of {', '.join(KINDS)}; preset: full or 720; cover_t: seconds")
+        if "clean" in inc and st.busy(run_id):
+            raise HTTPException(409, f"{st.jobs[run_id].label} is running: the copy without captions renders after it")
+        edl = d / f"edl_v{v}.json"
+        key = hashlib.sha1(json.dumps([v, inc, preset, name, cover, edl.stat().st_mtime_ns]).encode()).hexdigest()[:12]
+        out = d / "ui" / "cache" / "exports" / key
+        rec_p = out / "export.json"
+        with export_lock:  # one export at a time: "clean" uses the run's render/ scratch folder
+            if not rec_p.is_file():
+                shutil.rmtree(out, ignore_errors=True)
+                old = sorted((x for x in out.parent.glob("*") if x.is_dir()), key=lambda x: x.stat().st_mtime) if out.parent.is_dir() else []
+                for x in old[:-3]:  # keep the last three bundles: each holds a copy of the cut
+                    shutil.rmtree(x, ignore_errors=True)
+                args = [sys.executable, "-m", "montivo.export", str(d.relative_to(st.root)) if d.is_relative_to(st.root) else str(d),
+                        "--version", str(v), "--out", str(out), "--name", name, "--include", ",".join(inc), "--preset", preset,
+                        *(["--cover-t", f"{float(cover):.2f}"] if cover is not None else [])]
+                proc = subprocess.run(args, cwd=st.root, capture_output=True, text=True)
+                if proc.returncode != 0:
+                    raise HTTPException(500, f"export failed: {(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")
+                rec_p.write_text(proc.stdout)
+        rec = json.loads(rec_p.read_text())
+        url = lambda f: f"/api/runs/{run_id}/file/ui/cache/exports/{key}/{f}"  # noqa: E731
+        return {"files": [{**f, "url": url(f["name"])} for f in rec["files"]],
+                "zip": {**rec["zip"], "url": url(rec["zip"]["name"])} if rec.get("zip") else None}
 
     @app.get("/api/runs/{run_id}/log")
     def log(run_id: str, replay: bool = False):

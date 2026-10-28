@@ -357,6 +357,14 @@ text). `python -m montivo.human style RUN --look JSON --callout s5=X,Y|auto`, PO
 UI: Style panel (rail), preset cards on real frames, preview still on the paused viewer, drag handles (StyleCanvas: the
 caption up/down -> fixed, a callout anywhere -> pinned, the face area shaded, snaps to centre / safe area / clear of the
 face). Checked keyless on a throwaway copy of 015 (callout pinned above the head, v6 rendered in 19 s; removed).
+Export page (28/10, $0): `web/src/Export.tsx` replaces the Export dialog (cover frame + grid 3:4 crop, file name,
+destination full / 720, include video / clean / srt / vtt / cover / audio / transcript, settings in localStorage);
+`python -m montivo.export RUN --version N --out DIR --include ... [--preset 720] [--cover-t S]` (clean = render_run with
+captions=False from a copy of the EDL, own ledger, no log, title only when title_ready; nothing in the run folder
+changes; zip when more than one file); POST /export/bundle (ui/cache/exports/<key>/, last 3 kept, one at a time, 409
+for clean while a job runs), GET /export/check -> `server/preflight.py` (review + gate, loudness, format, length vs
+Reels/Shorts 3 min and TikTok 10 min, safe area per app from SafeArea.tsx zones, right column only in the lower half,
+captions over the face). On 015 v5 the pre-flight says 25 of 28 lines meet TikTok's caption (bottom 1480).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

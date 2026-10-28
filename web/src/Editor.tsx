@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, dur, fileUrl, tc, usd, useRun } from "./api";
 import { Assistant } from "./Assistant";
-import { EditDialog, ExportDialog, LedgerDialog, ShortcutsDialog } from "./Dialogs";
+import { EditDialog, LedgerDialog, ShortcutsDialog } from "./Dialogs";
+import { ExportPage } from "./Export";
 import { childOf, cutAsk, flatWords, layout, parentOf, projectName, type CutAsk, type WordSel } from "./edit";
 import { Icon } from "./icons";
 import { Inspector, type PunchAsk } from "./Inspector";
@@ -358,7 +359,8 @@ export function Editor({ id, replay, go }: Props) {
         <EditDialog kind="move" state={state} v={v} span={dialog.ask.span} move={dialog.ask} next={next} onCancel={() => setDialog(null)}
           onConfirm={(review) => { setDialog(null); setPanel("assistant"); act("reorder", { span: dialog.ask.span, before: dialog.ask.before, from: v.n, review: review ? 1 : 0 }); }} />
       )}
-      {dialog?.kind === "export" && <ExportDialog id={id} versions={visible} initial={sel} onClose={() => setDialog(null)} />}
+      {dialog?.kind === "export" && <ExportPage id={id} versions={visible} initial={sel} onClose={() => setDialog(null)}
+        onStyle={() => { setDialog(null); setPanel("style"); }} />}
       {dialog?.kind === "ledger" && <LedgerDialog state={state} onClose={() => setDialog(null)} />}
       {dialog?.kind === "keys" && <ShortcutsDialog onClose={() => setDialog(null)} />}
       {toast && <div className={`toast ${toast.tone ?? ""}`} onClick={() => setToast(null)}>{toast.text}</div>}

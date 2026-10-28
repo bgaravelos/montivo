@@ -148,8 +148,15 @@ and its card on the project list: the step (plan, edges, render "segment 2 of 3"
 step's expected time (this run's earlier calls in `ledger.json`, else the measured hints: plan 35 s on Spark 1.3, 7 s
 on Muse Spark Open, review 26 s) and a bar that moves by time but never past the last checkpoint `run.log` logged
 (Voice, SAM and Watch on a new run have no estimate, so their bar says so); replay drives the same view. The viewer has safe-area guides (Reels, TikTok, Shorts, approximate; G cycles them), N and Shift+N jump to the next
-and previous reviewer issue, Versions marks the version the project opens on apart from the loop's best, and Export
-has a 720 x 1280 preset for messaging and review links. The Text panel rewrites, adds or removes callouts and turns
+and previous reviewer issue, and Versions marks the version the project opens on apart from the loop's best. Export is
+a page of its own: a cover frame (scrub to pick it, with the Instagram profile grid's 3:4 crop shown) and the file
+name; the destination (1080 x 1920 as rendered, or a 720 x 1280 copy for messages; no bitrate knobs, the apps
+re-encode anyway); what goes in the bundle (the video, the video without burned-in captions, rendered again from a
+copy of the EDL so the run folder never changes, SRT, WebVTT, the cover and its grid crop, WAV, a transcript; more
+than one file comes as a zip, `python -m montivo.export`, $0); and a pre-flight read from the EDL and the review:
+the gated blind review, -14 LUFS and the peak, the format, the length against Reels, TikTok and Shorts, and how many
+caption lines and callouts reach into each app's own UI (the viewer's safe-area guides; on run 015 v5, 25 of 28
+lines sit low enough to meet TikTok's caption, which the Style panel's fixed position fixes). The Text panel rewrites, adds or removes callouts and turns
 the title card off or on ($0) or gives it new words (one Muse Image call, $0.01), staged into one version like
 captions; dragging a clip's body on the video track moves it (the reviewer's reorder op, the cuts that now meet
 tightened again, roles by position); the Speakers panel shows every Voice speaker with the head the speaker map
@@ -368,7 +375,7 @@ on a real frame of the cut and previews every change on the paused viewer with t
 
 The editor: `make ui` (or `.venv/bin/montivo serve [--port 8765] [--root .]`). It reads the run folders and starts the
 engine as a subprocess (`montivo run ... --review`, `montivo review`, `python -m montivo.human drop|trim|replan|punch`); it never
-imports the engine. The React build is committed in `montivo/server/static`, so it needs Python only; after editing
+imports the engine, apart from the caption look for the Style panel's stills (`engine/graphics.py`, `engine/look.py`). The React build is committed in `montivo/server/static`, so it needs Python only; after editing
 `web/src`, `make web` rebuilds it (Node 18+). `python -m montivo.human drop runs/012 --span s3 [--from 2] [--review 1]`
 and `python -m montivo.human replan runs/012 --instruction "..." [--from 2] [--review 1]` (and `python -m montivo.human
 trim runs/012 --span s3 --edge out --word 12`, `python -m montivo.human punch runs/012 --on|--off|--skip KEY`) are the
