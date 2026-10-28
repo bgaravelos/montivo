@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, frameUrl, tc, usd, type Seen } from "./api";
+import { api, crit, frameUrl, tc, usd, type Seen } from "./api";
 import { sevRank } from "./edit";
 import { Icon } from "./icons";
 import { Bar, expTip, measure, useTick } from "./Progress";
@@ -108,7 +108,7 @@ type Item =
   | { kind: "error"; text: string };
 
 const vName = (n: number | undefined) => (n == null ? "the cut" : `Version ${n}`);
-const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
+const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : /(s|x|ch|sh)$/.test(w) ? "es" : "s"}`;
 
 function story(state: RunState, versions: Version[], lines: LogLine[], job: Job | null, replay: number): Item[] {
   const out: Item[] = [
@@ -137,7 +137,9 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
           const voice = m?.voice_db ? `, voice ${m.voice_db > 0 ? "+" : ""}${m.voice_db} dB` : "";
           return m ? `Music: ${m.track.replace(/_/g, " ")} at ${m.level_db} LUFS${voice}.` : "Put music under the speech."; })())
         : o.action === "pin" ? `Follow ${(f?.args as { head?: string | null } | null)?.head != null ? `head ${(f!.args as { head: string }).head}` : "the speaker map"} when speaker ${f?.target ?? ""} talks.`
-        : (o.instruction ?? "Ask Montivo.");
+        : o.action === "edges" ? "Tighten the cut edges again."
+        : o.action === "style" ? "Change the caption style."
+        : o.instruction ?? (o.action === "replan" ? "Plan the edit again." : "Edit by hand.");
       out.push({ kind: "you", text: what, chips: [`from v${o.from}`] });
       if (fixes.length) out.push({ kind: "steps", title: o.action === "replan" ? "Re-planned the edit" : `Made the edit · ${plural(fixes.length, "step")}`, lines: fixes });
     } else if (o.source === "review") {
@@ -229,7 +231,7 @@ function VersionCard({ id, v, by, current, onPick, onCompare }: {
       </button>
       <div className="vc-text">
         <b>Version {v.n}</b>
-        <span>{plural(v.spans.length, "clip")} · {tc(len)}{v.loudness ? ` · ${v.loudness.integrated_lufs} LUFS` : ""}</span>
+        <span>{plural(v.spans.length, "clip")} · {tc(len)}</span>
         {by && <span className="vc-by">{by}</span>}
       </div>
       <div className="vc-acts">
@@ -243,8 +245,7 @@ function VersionCard({ id, v, by, current, onPick, onCompare }: {
 function ReviewCard({ v, current, onPick, onSeek }: { v: Version; current: boolean; onPick: (n: number) => void; onSeek: (t: number) => void }) {
   const r = v.review!;
   const top = [...r.issues].sort((a, b) => sevRank(a.severity) - sevRank(b.severity) || a.t_s - b.t_s)[0];
-  const scores = Object.values(r.scores);
-  const full = scores.filter((s) => s >= 10).length;
+  const weakest = Object.entries(r.scores).sort((a, b) => a[1] - b[1])[0];
   const tone = r.pass ? "pass" : r.gate?.blocked ? "held" : "fail";
   const verdict = r.pass ? "Pass" : r.gate?.blocked && r.reviewer_pass ? "Held by the gate" : "No pass";
   const go = (t: number) => (current ? onSeek(t) : onPick(v.n));
@@ -254,7 +255,7 @@ function ReviewCard({ v, current, onPick, onSeek }: { v: Version; current: boole
         <span className={`ring ${tone}`} style={{ "--p": `${r.overall}%` } as React.CSSProperties}><span>{r.overall}</span></span>
         <div className="rc-text">
           <b className={tone}>{verdict}</b>
-          <span>{vName(v.n)} · {full} of {scores.length} criteria at 10</span>
+          <span>{vName(v.n)}{weakest && weakest[1] < 10 ? ` · weakest: ${crit(weakest[0])} ${weakest[1]}/10` : " · every criterion at 10"}</span>
         </div>
       </div>
       {top ? (
@@ -368,7 +369,10 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
   const items = story(state, versions, lines, job, replay);
   const end = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [items.length, job?.running]);
+  useEffect(() => { // scroll the messages only: scrollIntoView also moved the whole page on a phone
+    const list = end.current?.parentElement;
+    if (list) list.scrollTop = list.scrollHeight;
+  }, [items.length, job?.running]);
   useEffect(() => { if (focusNonce) { setUseClip(true); box.current?.focus(); } }, [focusNonce]);
   useLayoutEffect(() => { // the box grows with the text, up to about six lines
     const el = box.current;
@@ -429,7 +433,7 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
               <Icon name="eyeOff" size={13} />Review{review && state.has_key ? "" : " off"}
             </button>
             <span className="grow" />
-            <span className="cost" title={state.has_key ? `One Muse Spark 1.3 call picks the edits${review ? ", plus one blind review" : ""}; a re-plan adds ~${usd(planner === "open" ? state.costs.plan_open : state.costs.plan)} on ${planner === "open" ? "Muse Spark Open" : "Muse Spark 1.3"}. Music, look, captions and clip edits are $0.` : "Without the key Montivo reads keywords: $0"}>~{usd(cost)}</span>
+            <span className="cost" title={state.has_key ? `One Muse Spark 1.3 call picks the edits${review ? ", plus one blind review" : ""}; a re-plan adds ~${usd(planner === "open" ? state.costs.plan_open : state.costs.plan)} on ${planner === "open" ? "Muse Spark Open" : "Muse Spark 1.3"}. Music, look, captions and clip edits are $0.` : "Without the key Montivo reads keywords: $0"}>~{usd(cost)}{state.budget ? <span className="mute"> · {usd(state.budget.left)} left</span> : null}</span>
             {running && !replay
               ? <button className="send stop" onClick={onStop} title="Stop the running job"><Icon name="stop" size={11} /></button>
               : <button className="send" disabled={!!blocked || !text.trim()} onClick={send} title="Send (Enter)"><Icon name="send" size={15} /></button>}

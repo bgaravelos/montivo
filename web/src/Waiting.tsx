@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Progress } from "./types";
 
 type Step = { title: string; what: string };
@@ -30,10 +31,11 @@ function stepOf(p: Progress | null): Step {
 /** The viewer while a new project has no cut yet: the logo sting on a loop (the in and out points close in, the V fills
  *  down, holds, and it opens again; assets/brand/src/sting.mjs), the step that runs and one line on what it does.
  *  Only while no version has a cut; edits on a project with a cut keep the player. */
-export function Waiting({ progress }: { progress: Progress | null }) {
+export function Waiting({ progress, live }: { progress: Progress | null; live: boolean }) {
   const s = stepOf(progress);
+  const [still, setStill] = useState(false); // WCAG 2.2.2: a loop that runs this long can be paused
   return (
-    <div className="wait" role="status" aria-live="polite">
+    <div className={`wait ${still ? "still" : ""}`} role="status" aria-live="polite">
       <svg className="wait-mark" viewBox="0 0 64 64" width="56" height="56" aria-hidden>
         <defs><clipPath id="wait-v"><path d="M14 14H24L32 28L40 14H50L32 44Z" /></clipPath></defs>
         <path className="wm-l" fill="#F3F0E8" d="M6 6H24V14H14V50H24V58H6Z" />
@@ -42,6 +44,8 @@ export function Waiting({ progress }: { progress: Progress | null }) {
       </svg>
       <h2 key={s.title} className="shimmer">{s.title}</h2>
       <p key={s.what}>{s.what}</p>
+      {live && <p className="wait-leave">You can close this tab: the agent keeps working on the server and the cut is here when you come back.</p>}
+      <button className="link wait-pause" onClick={() => setStill(!still)}>{still ? "Play the animation" : "Pause the animation"}</button>
     </div>
   );
 }

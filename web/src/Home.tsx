@@ -3,7 +3,7 @@ import { api, dur, frameUrl, tc, usd } from "./api";
 import { nameOf } from "./edit";
 import { Icon } from "./icons";
 import { PlannerPicker } from "./Panels";
-import { ProgressMini } from "./Progress";
+import { askToNotify, ProgressMini } from "./Progress";
 import type { Budget, CardScore, Costs, Planner, RunCard } from "./types";
 
 type Footage = { path: string; name: string; mb: number; duration_s: number | null };
@@ -55,6 +55,7 @@ export function Home({ go }: { go: (h: string) => void }) {
   const [keyNote, setKeyNote] = useState<string | null>(null);
   const [budget, setBudget] = useState<Budget | null>(null);
   const [costs, setCosts] = useState<Costs>(COSTS);
+  const [introGone, setIntroGone] = useState(() => { try { return localStorage.getItem("montivo.intro") === "gone"; } catch { return false; } });
   const [planner, setPlanner] = useState<Planner>("spark");
   const [footage, setFootage] = useState<Footage[]>([]);
   const [f, setF] = useState("");
@@ -102,6 +103,7 @@ export function Home({ go }: { go: (h: string) => void }) {
     if (res.ok) { setF((await res.json()).path); load(); }
   };
   const start = async () => {
+    askToNotify(); // the first cut takes minutes: a notification when it is ready
     setErr(null);
     try {
       const r = await api<{ id: string }>("/api/runs", { footage: f, brief, target, hflip, review, planner, punch, hook_ab: review && hookAb });
@@ -111,6 +113,8 @@ export function Home({ go }: { go: (h: string) => void }) {
   const clip = footage.find((x) => x.path === f) ?? null;
   const est = clip?.duration_s ? estimate(costs, clip.duration_s, { review, hookAb, open: planner === "open" }) : null;
   const all = (runs ?? []).filter((r) => r.has_cut || r.job?.running); // a new project shows while it works on its first cut
+  const sample = [...all].filter((r) => r.card?.score).sort((x, y) => Number(y.card!.score!.pass) - Number(x.card!.score!.pass)
+    || y.card!.score!.overall - x.card!.score!.overall)[0] ?? all[0]; // the best passing cut is the one to start from
   const shown = useMemo(() => {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     const hay = (r: RunCard) => `${r.id} ${nameFor(r)} ${r.footage} ${r.brief}`.toLowerCase();
@@ -161,6 +165,25 @@ export function Home({ go }: { go: (h: string) => void }) {
           {!runs && <div className="mute">loading…</div>}
           {runs && !all.length && <div className="mute">No run folder with a cut in runs/ yet. Start one, or unpack the sample run (README, “For judges”).</div>}
           {runs && !!all.length && !shown.length && <div className="mute">No project matches. <button className="link" onClick={() => { setQ(""); setOnly("all"); }}>Show all</button></div>}
+          {budget && !introGone && sample && (
+            <div className="start-here">
+              <div className="sh-text">
+                <b>Start here</b>
+                <span>Open <a href={`#/run/${sample.id}`}>{nameFor(sample)}</a>: the agent already cut it and its blind reviewer scored it. Then ask for a change in the chat, for example:</span>
+                <ul>
+                  <li>“Make it 30 seconds” <span className="btn-cost">~{usd((costs.ask ?? 0.006) + costs.review)}</span></li>
+                  <li>“Add some chill music under it” <span className="btn-cost">~{usd(costs.ask ?? 0.006)}</span></li>
+                  <li>Try another hook, in the Review panel <span className="btn-cost">~{usd(costs.hook_ab ?? 2 * costs.review)}</span></li>
+                  <li>Captions, style, music and timeline edits by hand <span className="btn-cost free">free</span></li>
+                </ul>
+                <span className="mute small">Your first edit makes your own copy: the sample stays as it is. Every edit is a new version you can go back to.</span>
+              </div>
+              <div className="sh-acts">
+                <a className="btn" href={`#/run/${sample.id}`}>Open the sample</a>
+                <button className="link small" onClick={() => { setIntroGone(true); try { localStorage.setItem("montivo.intro", "gone"); } catch { /* private mode */ } }}>Hide</button>
+              </div>
+            </div>
+          )}
           <div className="run-grid">
             {shown.map((r) => (
               <a key={r.id} className="run-card" href={`#/run/${r.id}`}>

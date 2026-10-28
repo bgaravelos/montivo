@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { crit, dur, fileUrl, frameUrl, tc, usd, useRun } from "./api";
-import { chain, originKind, originLabel, parentOf, projectName, sevRank } from "./edit";
+import { chain, fixText, originKind, originLabel, parentOf, projectName, sevRank } from "./edit";
 import { Icon } from "./icons";
 import { GateNote } from "./Inspector";
 import type { PlanSide, RunState, Version } from "./types";
@@ -131,7 +131,7 @@ function Link({ state, v, prev, compare }: { state: RunState; v: Version; prev: 
       const pr = parent?.review;
       const issue = [...(pr?.issues ?? []), ...(pr?.gate?.issues ?? [])].find((i) => i.k === f.issue);
       const moved = issue ? ` · ${crit(issue.criterion)} ${pr!.scores[issue.criterion]} → ${v.review?.scores[issue.criterion] ?? "?"}` : "";
-      return `${f.check ? "measured · " : ""}${f.op.replace(/_/g, " ")} ${f.target}${moved}`;
+      return `${f.check ? "measured · " : ""}${fixText(f.op, f.target)}${moved}`;
     });
   } else if (o.source === "hook_ab") {
     who = "Hook A/B";

@@ -96,6 +96,32 @@ export function blockAt(blocks: Block[], t: number): Block | undefined {
 
 export const sevRank = (s: string) => (s === "blocker" ? 0 : s === "major" ? 1 : 2);
 
+/** What a clip says as the captions show it (with the hand fixes and the glossary), else the words Voice heard. */
+export function spanText(v: Version, sp: Span): string {
+  const lines = v.caption_lines.filter((l) => l.spans.includes(sp.id));
+  return lines.length ? lines.map((l) => l.text).join(" ") : sp.words;
+}
+
+/** A fix op (the reviewer's or the patch the engine applied) in plain words; the op itself stays in the tooltip. */
+export function fixText(op: string, target?: string | null): string {
+  const clip = target && /^s\d+$/.test(target) ? `clip ${target}` : "the clip";
+  switch (op) {
+    case "drop_span": return `Drop ${clip}`;
+    case "extend_span": return `Lengthen ${clip}`;
+    case "trim_span": return `Shorten ${clip}`;
+    case "move_cut": return `Move the cut at ${clip}`;
+    case "reframe_bias": return `Re-aim the crop on ${clip}`;
+    case "caption_fix": case "caption_text": return "Fix the caption text";
+    case "caption_move": return "Move the caption";
+    case "caption_unforce": return "Let the caption find its place again";
+    case "retime_callout": return "Retime the callout";
+    case "swap_hook": return "Open on another line";
+    case "reorder": return "Change the clip order";
+    case "drop_title": return "Drop the title card";
+    default: return op.replace(/_/g, " ");
+  }
+}
+
 /** The newest version made from this one: redo after an undo. */
 export function childOf(v: Version, all: Version[]): Version | undefined {
   return [...all].reverse().find((x) => x.n !== v.n && parentOf(x, all)?.n === v.n);

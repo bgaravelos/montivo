@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { tc } from "./api";
-import type { Progress } from "./types";
+import type { Job, Progress } from "./types";
 
 /** Re-render every `ms` while `on`, so the clocks and the time-driven bar move between two log lines. */
 export function useTick(on: boolean, ms = 250) {
@@ -24,6 +24,39 @@ export function measure(p: Progress, now = performance.now()) {
   else if (p.expected_s) frac = Math.min(Math.max(stage / p.expected_s, p.floor), p.ceil);
   else frac = p.floor > 0 ? p.floor : null;
   return { stage, job, frac };
+}
+
+/** Ask once for browser notifications, from the click that starts a long job (browsers only ask on a user gesture). */
+export function askToNotify() {
+  try { if ("Notification" in window && Notification.permission === "default") void Notification.requestPermission(); } catch { /* no API */ }
+}
+
+/** A job seen from another tab: the page title carries its progress, and when it ends while the tab is hidden the title
+ *  says so (until the tab is seen again) and a browser notification fires if the viewer allowed them. */
+export function useJobSignals(name: string, job: Job | null, progress: Progress | null) {
+  const was = useRef<string | null>(null); // the id of the job that was running
+  const [done, setDone] = useState<string | null>(null);
+  useTick(!!job?.running, 1000);
+  useEffect(() => {
+    if (job?.running) { was.current = job.id; return; }
+    if (!job || was.current !== job.id) return;
+    was.current = null;
+    const ok = !job.rc;
+    const text = ok ? `${job.label} is done` : `${job.label} failed`;
+    if (!document.hidden) return;
+    setDone(ok ? "✓" : "✕");
+    try { if ("Notification" in window && Notification.permission === "granted") new Notification(`Montivo · ${name}`, { body: text, icon: "/favicon.svg" }); } catch { /* no API */ }
+  }, [job, name]);
+  useEffect(() => {
+    const seen = () => { if (!document.hidden) setDone(null); };
+    document.addEventListener("visibilitychange", seen);
+    return () => document.removeEventListener("visibilitychange", seen);
+  }, []);
+  const m = job?.running && progress?.active ? measure(progress) : null;
+  const title = job?.running ? `${m?.frac != null ? `${Math.round(m.frac * 100)}% · ` : ""}${job.label} · Montivo`
+    : done ? `${done} ${name} · Montivo` : "Montivo";
+  useEffect(() => { document.title = title; }, [title]);
+  useEffect(() => () => { document.title = "Montivo"; }, []);
 }
 
 const clock = (s: number) => tc(Math.max(s, 0), 0);

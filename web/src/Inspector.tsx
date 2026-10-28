@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 import { crit, fileUrl, frameUrl, tc, usd } from "./api";
-import { chain, originLabel, parentOf, punchLabel, sevRank, type Block } from "./edit";
+import { chain, fixText, originLabel, parentOf, punchLabel, sevRank, type Block } from "./edit";
 import { CRIT_ICON, Icon } from "./icons";
 import type { Issue, PunchIn, Review, RunState, Version, Word } from "./types";
 
@@ -212,7 +212,6 @@ function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onRe
         <div className="vsum">
           <span className={`origin ${v.origin.source === "plan" ? "plan" : v.origin.source === "review" ? "review" : "human"}`}>{originLabel(v)}</span>
           <span>{v.spans.length} clips · {tc(v.duration_s ?? v.runtime_s)}{parent?.duration_s && v.duration_s ? ` (${v.duration_s - parent.duration_s >= 0 ? "+" : ""}${(v.duration_s - parent.duration_s).toFixed(1)} s)` : ""}</span>
-          {v.loudness && <span title={`true peak ${v.loudness.true_peak_dbtp} dBTP`}>{v.loudness.integrated_lufs} LUFS</span>}
         </div>
         {v.cut && <PunchToggle v={v} next={next} canEdit={canEdit} onPunch={onPunch} />}
         {v.cut && <HookTry state={state} versions={versions} v={v} next={next} canEdit={canEdit} onPick={onPick} onHook={onHook} />}
@@ -254,12 +253,6 @@ function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onRe
             </div>
             <p className="summary">{r.summary}</p>
             <GateNote r={r} />
-            <div className="facts" title={r.facts_text}>
-              <span className="fact">silent gaps <b>{r.facts.silences}</b></span>
-              <span className="fact">captions over the face <b>{r.facts.over_face}</b></span>
-              <span className="fact">loud cuts <b>{r.facts.loud_edges}</b> of {r.facts.cut_edges}</span>
-              {r.gate && <span className="fact">measured faults <b>{r.gate.checks.length}</b></span>}
-            </div>
             <div className="pn-k"><Icon name="info" size={12} />Notes</div>
             <div className="issues">
               {[...r.issues].sort((a, b) => sevRank(a.severity) - sevRank(b.severity) || a.t_s - b.t_s).map((i) => (
@@ -273,7 +266,18 @@ function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onRe
                 {r.gate.issues.map((i) => <IssueCard key={i.k} id={id} issue={i} v={v} all={state.versions} onSeek={onSeek} />)}
               </div>
             </>}
-            <div className="rv-cost mute">review {usd(r.cost_usd, 3)} · {r.seconds?.toFixed(0)} s · watched {r.duration_s?.toFixed(1)} s</div>
+            <details className="rv-details">
+              <summary>Details</summary>
+              <p className="mute small">The reviewer is blind: it gets the rendered video, the brief, the rubric and these measured facts, never the plan or the edit list.</p>
+              <div className="facts" title={r.facts_text}>
+                <span className="fact">silent gaps <b>{r.facts.silences}</b></span>
+                <span className="fact">captions over the face <b>{r.facts.over_face}</b></span>
+                <span className="fact">cuts inside speech <b>{r.facts.loud_edges}</b> of {r.facts.cut_edges}</span>
+                {r.gate && <span className="fact">measured faults <b>{r.gate.checks.length}</b></span>}
+                {v.loudness && <span className="fact" title="Reels, TikTok and Shorts play at about -14 LUFS">loudness <b>{v.loudness.integrated_lufs} LUFS</b>, peak {v.loudness.true_peak_dbtp} dBTP</span>}
+              </div>
+              <div className="rv-cost mute">review {usd(r.cost_usd, 3)} · {r.seconds?.toFixed(0)} s · watched {r.duration_s?.toFixed(1)} s</div>
+            </details>
           </>
         )}
       </div>
@@ -314,6 +318,8 @@ export function GateNote({ r, compact }: { r: Review; compact?: boolean }) {
 export function IssueCard({ id, issue, v, all, onSeek }: { id: string; issue: Issue; v: Version; all: Version[]; onSeek: Seek }) {
   const c = chain(issue, v, all);
   const fixOp = c.planned ? `${c.planned.op} ${c.planned.target}` : issue.fix_op && issue.fix_op !== "none" ? issue.fix_op : null;
+  const fix = c.planned ? fixText(c.planned.op, c.planned.target) : fixOp ? fixText(fixOp) : null;
+  const unapplied = v.review?.pass ? "Not applied: the cut already passes" : "Not applied: no version was made from this review";
   const resolved = c.applied && c.after != null && c.before != null && c.after > c.before;
   const loop = () => onSeek(Math.max(0, issue.t_s - 1), issue.t_end_s + 0.5);
   return (
@@ -331,10 +337,10 @@ export function IssueCard({ id, issue, v, all, onSeek }: { id: string; issue: Is
         </button>
         <ol className="steps">
           <li><span className="k">saw</span><span>{issue.what}</span></li>
-          <li><span className="k">fix</span>{fixOp ? <code>{fixOp}</code> : <span className="mute">none proposed</span>}</li>
-          <li><span className="k">patch</span>{c.applied ? <span>{c.applied.note}</span>
-            : c.skipped ? <span className="mute">skipped: {c.skipped.reason}</span>
-            : c.planned ? <span className="mute">planned, not applied (the loop stopped)</span> : <span className="mute">–</span>}</li>
+          <li><span className="k">fix</span>{fix ? <span title={fixOp ?? undefined}>{fix}</span> : <span className="mute">none proposed</span>}</li>
+          <li><span className="k">done</span>{c.applied ? <span>{c.applied.note}</span>
+            : c.skipped ? <span className="mute">Skipped: {c.skipped.reason}</span>
+            : c.planned ? <span className="mute">{unapplied}</span> : <span className="mute">–</span>}</li>
           <li><span className="k">result</span>{c.next && c.after != null ? <span>{crit(issue.criterion)} {c.before} → <b>{c.after}</b> in v{c.next.n}</span> : <span className="mute">–</span>}</li>
         </ol>
       </div>

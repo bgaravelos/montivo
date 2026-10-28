@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { crit, tc } from "./api";
-import { blockAt, edgeSnaps, flatWords, punchLabel, selRange, sevRank, type Block, type Snap, type WordSel } from "./edit";
+import { blockAt, edgeSnaps, flatWords, punchLabel, selRange, sevRank, spanText, type Block, type Snap, type WordSel } from "./edit";
 import { Icon } from "./icons";
 import { LEVEL_RANGE, VOICE_RANGE, type Mix } from "./Mix";
 import type { Issue, Version, Word } from "./types";
@@ -353,7 +353,7 @@ const Tracks = memo(function Tracks(p: TrackProps) {
                 if (b.kind === "span" && canTrim) startMove(e, b);
               }}
               onContextMenu={(e) => { e.preventDefault(); if (b.kind === "span") { onSelect(b.key); onMenu({ x: e.clientX, y: e.clientY, span: b.span!.id }); } }}
-              title={b.kind === "span" ? `${b.span!.id} · ${b.span!.role} · ${(b.t1 - b.t0).toFixed(1)} s\n${b.span!.words}` : "Title card"}>
+              title={b.kind === "span" ? `${b.span!.id} · ${b.span!.role} · ${(b.t1 - b.t0).toFixed(1)} s\n${spanText(v, b.span!)}` : "Title card"}>
               <div className="film">
                 {sprite && frames != null && Array.from({ length: n }, (_, k) => {
                   const at = b.t0 + ((k + 0.5) * tileW) / pps;
@@ -364,7 +364,7 @@ const Tracks = memo(function Tracks(p: TrackProps) {
               </div>
               <span className="clip-label">
                 <b>{b.kind === "title" ? "Title" : b.span!.id}</b>
-                {b.kind === "span" && w > 70 && <span className="cl-words">{b.span!.words}</span>}
+                {b.kind === "span" && w > 70 && <span className="cl-words">{spanText(v, b.span!)}</span>}
               </span>
               {b.kind === "span" && canTrim && (sel || isDrag) && <>
                 <span className="trim-h in" onPointerDown={(e) => startTrim(e, b, "in")} title="Drag to trim or extend the start (snaps to words)" />

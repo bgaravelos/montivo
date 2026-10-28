@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { crit, fileUrl, tc, useRun } from "./api";
-import { chain, sevRank } from "./edit";
+import { chain, fixText, sevRank } from "./edit";
 import { Player, type PlayerHandle } from "./Player";
 
 /** Two versions side by side, one transport, parked on a moment the reviewer flagged in the first. */
@@ -74,7 +74,7 @@ export function Compare({ id, a, b, replay, go }: { id: string; a: number; b: nu
           <div className="note-card after">
             <div className="nc-v">Version {b} <b>{vb.review?.overall ?? "·"}</b>{vb.review?.pass && <span className="tick-mark"> ✓ pass</span>}</div>
             {c?.applied ? <>
-              <div className="nc-line"><code>{c.applied.op} {c.applied.target}</code></div>
+              <div className="nc-line" title={`${c.applied.op} ${c.applied.target}`}>{fixText(c.applied.op, c.applied.target)}</div>
               <div className="nc-what">{c.applied.note}</div>
               {c.after != null && <div className="nc-line">{crit(issue!.criterion)} {c.before} → <b>{c.after}</b></div>}
             </> : vb.origin.source === "human" ? <div className="nc-what">your edit: {vb.origin.action === "drop" ? `deleted clip ${vb.origin.fixes?.[0]?.target}` : vb.origin.action === "trim" ? `trimmed clip ${vb.origin.fixes?.[0]?.target}` : vb.origin.instruction}</div>

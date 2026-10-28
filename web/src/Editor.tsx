@@ -8,7 +8,7 @@ import { Icon } from "./icons";
 import { Inspector, type PunchAsk } from "./Inspector";
 import { mixOf, sameMix, useLiveMix, type Mix } from "./Mix";
 import { MusicPanel } from "./Music";
-import { ProgressInline } from "./Progress";
+import { askToNotify, ProgressInline, useJobSignals } from "./Progress";
 import { GUIDE_NAME, GUIDES, SafeArea, type Guide } from "./SafeArea";
 import { CaptionsPanel, MediaPanel, SpeakersPanel, TextPanel, VersionsPanel } from "./Panels";
 import { FPS, Player, type PlayerHandle } from "./Player";
@@ -122,10 +122,12 @@ export function Editor({ id, replay, go }: Props) {
   const undoTo = v && state ? visible.find((x) => x.n === parent?.n) : undefined;
   const redoTo = v ? childOf(v, visible) : undefined;
   const busy = !!job?.running;
+  useJobSignals(state ? projectName(v, state.run.brief) : id, replay ? null : job, progress);
   const canEdit = replay ? "Replay is on" : busy ? `${job!.label} is running` : null;
 
   const flash = useCallback((text: string, tone?: string) => { setToast({ text, tone }); window.setTimeout(() => setToast(null), 4500); }, []);
   const act = useCallback(async (path: string, body: unknown) => {
+    if (["ask", "review", "hook"].includes(path)) askToNotify(); // the jobs that take a minute or more
     try {
       const r = await api<{ job?: { run?: string } }>(`/api/runs/${id}/${path}`, body);
       if (r.job?.run && r.job.run !== id) go(`#/run/${r.job.run}`); // the hosted demo edits the judge's own copy of a sample
@@ -277,6 +279,8 @@ export function Editor({ id, replay, go }: Props) {
         <button className="btn export" disabled={!v?.cut} onClick={() => setDialog({ kind: "export" })}><Icon name="export" /> Export</button>
       </header>
 
+      <div className="mobile-note">Review mode: watch the cut, read the review, ask Montivo, export. The timeline and the editing panels open on a desktop.</div>
+
       <nav className="rail">
         {PANELS.map((x) => (
           <button key={x.id} className={`rail-btn ${panel === x.id ? "on" : ""}`} onClick={() => setPanel(x.id)} title={x.label}>
@@ -337,7 +341,7 @@ export function Editor({ id, replay, go }: Props) {
               <SafeArea kind={guide} />
             </>} />
         ) : (
-          busy || replay ? <Waiting progress={progress} />
+          busy || replay ? <Waiting progress={progress} live={!replay} />
             : <div className="player-wait">No cut rendered yet.</div>
         )}
       </main>
