@@ -372,3 +372,21 @@ def test_two_paid_calls_in_requests_never_run_at_once(tmp_path, hosted_env):
     t.join(5)
     assert first["r"].status_code == 200
     assert c.post("/api/runs/r1/export/post", json={"v": 2}).status_code == 200  # free again
+
+
+def test_an_edit_the_one_job_rule_refuses_makes_no_copy_of_the_sample(tmp_path, hosted_env):
+    # bug bash 28/10: judge 2 deleted a clip on sample 014 while judge 1's review ran; the 409 came after a full copy
+    # (014-<judge>, 265 MB, ~13 s on the Modal Volume) that then replaced the sample on judge 2's project list
+    d = _run_folder(tmp_path)
+    ledger(d, 0.36)
+    hosted_env.setenv("MONTIVO_BUDGET_USD", "15")
+    hosted_env.setenv("MONTIVO_ONE_JOB", "1")
+    running = A.Job(id="j", run="r9-aa11", kind="review", label="Blind review", cmd=[])
+    init = A.State.__init__
+    hosted_env.setattr(A.State, "__init__", lambda self, root: (init(self, root), self.jobs.update({"r9-aa11": running}))[0])
+    c = TestClient(A.create_app(tmp_path))
+    c.cookies.set(H.JUDGE, "bb22")
+    r = c.post("/api/runs/r1/drop", json={"span": "s1", "from": 2})
+    assert r.status_code == 409 and "one job at a time" in r.json()["error"]
+    assert not (tmp_path / "runs" / "r1-bb22").exists()
+    assert [x["id"] for x in c.get("/api/runs").json()["runs"]] == ["r1"]

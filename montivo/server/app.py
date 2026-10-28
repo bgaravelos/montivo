@@ -139,6 +139,13 @@ class State:
         j = self.jobs.get(run_id)
         return bool(j and j.ended is None)
 
+    def refuse_second_job(self) -> None:
+        """Hosted (one job at a time): a 409 while any run has a job going."""
+        other = next((j for j in self.jobs.values() if j.ended is None), None) if self.one_job else None
+        if other:
+            raise HTTPException(409, f"{other.label} is running (another project): this demo server runs one job at a "
+                                     "time, try again when it finishes")
+
 
 def job_progress(st: "State", job: Job) -> dict | None:
     """The job's progress from its own run.log lines (runs.progress), with the clock brought up to now: the stage
@@ -305,10 +312,7 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
             raise HTTPException(409, f"{st.jobs[run_id].label} is still running on this run")
         if st.exporting.get(run_id):
             raise HTTPException(409, "an export is rendering this run: try again when it is ready")
-        other = next((j for j in st.jobs.values() if j.ended is None), None) if st.one_job else None
-        if other:
-            raise HTTPException(409, f"{other.label} is running (another project): this demo server runs one job at a "
-                                     "time, try again when it finishes")
+        st.refuse_second_job()
         (d / "ui").mkdir(parents=True, exist_ok=True)
         jid = time.strftime("%Y%m%d-%H%M%S")
         out = d / "ui" / f"job-{jid}-{kind}.out"
@@ -405,6 +409,7 @@ def create_app(root: Path) -> FastAPI:
                 raise HTTPException(404, "no such run")  # another judge's project
             return run_id
         await request.body()
+        st.refuse_second_job()  # each route here starts a job: no copy for an edit the one-job rule refuses (28/10)
         return await asyncio.to_thread(copy_sample, run_id, d, judge_of(request))
 
     def key_info() -> dict:
