@@ -386,6 +386,12 @@ def run_ops(run_dir: Path, from_v: int, ops: list[dict], planner: str | None, lo
         title = next((o["text"] for o in ops if o["op"] == "title_text"), None)
         card = next((o["op"] == "title_on" for o in ops if o["op"] in ("title_on", "title_off")), None)
         steps: list[tuple[str, callable]] = []
+        for o in ops:  # the look first, on the rendered version: a sentence is styled against the caption rows and the
+            if o["op"] == "style":  # face it reads there (an unrendered edit before it has no captions: no face rule)
+                look = {"preset": o["preset"]} if o["preset"] else None
+                prompt = None if look else o["look_prompt"]
+                steps.append((f"captions: {PRESET_NAMES[o['preset']] if look else o['look_prompt']}",
+                              lambda look=look, prompt=prompt: human.style(run_dir, look, from_v=at(), prompt=prompt)))
         if caps:
             steps.append((f"{len(caps)} caption line(s) retexted", lambda: human.caption(run_dir, caps, from_v=at())))
         for o in ops:  # cut seconds of this version: before anything moves the clips
@@ -400,12 +406,7 @@ def run_ops(run_dir: Path, from_v: int, ops: list[dict], planner: str | None, lo
             steps.append(("callout and title text", lambda: human.text(run_dir, texts, title, card, from_v=at())))
         for o in ops:
             op = o["op"]
-            if op == "style":
-                look = {"preset": o["preset"]} if o["preset"] else None
-                prompt = None if look else o["look_prompt"]
-                steps.append((f"captions: {PRESET_NAMES[o['preset']] if look else o['look_prompt']}",
-                              lambda look=look, prompt=prompt: human.style(run_dir, look, from_v=at(), prompt=prompt)))
-            elif op == "music_on":
+            if op == "music_on":
                 lvl = float(o["level_db"]) or None
                 steps.append((f"music {o['track']}" + (f" at {lvl:g} LUFS" if lvl else ""),
                               lambda o=o, lvl=lvl: human.music(run_dir, o["track"], level_db=lvl, from_v=at())))

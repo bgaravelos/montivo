@@ -73,6 +73,24 @@ def test_cuts_crossfade_without_a_dip_and_keep_the_frames_length(tmp_path):
         assert worst > tone - 2.0, (t, worst, tone)
 
 
+@needs_ffmpeg
+def test_a_segment_past_the_end_of_the_audio_keeps_every_later_segment_in_place(tmp_path):
+    """Code review, debugging day 1: a 3.0 s audio stream in a 3.1 s container, the clip at its end moved first
+    (a reorder, the hook A/B): atrim gave fewer samples than the segment's frames, the crossfade ate them and every later
+    segment played early against its video. Each segment is now padded to its exact length."""
+    src = tmp_path / "short.wav"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "anoisesrc=d=3.0:c=white:r=48000:a=0.05:s=3",
+                    "-ac", "2", str(src)], check=True)
+    s = segs((2.5, 3.1), (0.5, 1.0))  # the first segment runs 0.1 s past the audio
+    out, _, _ = render_audio(src, s, tmp_path, loudnorm=False, source_s=3.1)
+    x = pcm(out)
+    total = sum(round(g.duration * AUDIO_RATE) for g in s)
+    assert abs(len(x) - total) <= 1024  # was 4800 + 480 samples short
+    # the second segment's noise starts where its frames do: the padded 0.1 s is silence, then the tone
+    gap = round(0.55 * AUDIO_RATE)
+    assert rms_db(x[gap:gap + 960]) < -60 and rms_db(x[round(0.62 * AUDIO_RATE):round(0.7 * AUDIO_RATE)]) > -40
+
+
 # E12 ---------------------------------------------------------------------------------------------------------------
 
 def timed(text: str, span: str = "s1", step: float = 0.28, pauses: dict[int, float] | None = None) -> list[CWord]:
@@ -287,6 +305,22 @@ def test_an_hlg_120_fps_clip_becomes_8_bit_bt709_60_fps_with_its_audio_untouched
     assert (out.fps, out.pix_fmt, out.transfer) == (60.0, "yuv420p", "bt709") and standardise(out) == ([], None, None)
     assert abs(out.duration - p.duration) < 0.05
 
+
+
+@needs_ffmpeg
+def test_a_camera_clip_with_pcm_audio_gets_an_upright_copy_with_lossless_audio(tmp_path):
+    """Code review, debugging day 1: 10-bit camera clips (XAVC S, .MOV) carry PCM, which older ffmpeg builds cannot
+    copy into the upright .mp4: it goes in as ALAC, sample for sample."""
+    src = tmp_path / "cam.mov"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=25:d=1", "-f", "lavfi",
+                    "-i", "sine=d=1:sample_rate=48000", "-vf", "format=yuv420p10le", "-c:v", "libx264", "-profile:v",
+                    "high10", "-preset", "ultrafast", "-c:a", "pcm_s16le", str(src)], check=True)
+    p = ffprobe(src)
+    assert p.audio_codec == "pcm_s16le" and bit_depth(p) == 10
+    _, fps, sdr = standardise(p)
+    out = make_upright(src, tmp_path / "source_upright.mp4", fps=fps, sdr=sdr)
+    assert out.audio_codec == "alac" and out.pix_fmt == "yuv420p"
+    assert pcm(src) == pcm(tmp_path / "source_upright.mp4")
 
 # E15 ---------------------------------------------------------------------------------------------------------------
 

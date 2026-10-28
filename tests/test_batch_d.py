@@ -380,3 +380,15 @@ def test_the_version_lists_its_overlays(tmp_path):
     assert (ov["id"], ov["t_in"], ov["t_out"], ov["shown"], ov["placement"]) == ("b1", 3.0, 5.5, True, "full")
     assert versions(d)[0]["overlays"] == []
     assert copy.deepcopy(ov)["image"] == "broll/b1.png"
+
+
+def test_an_inserted_clip_never_widens_into_the_words_after_the_selection(tmp_path, monkeypatch):
+    # combination matrix, debugging day 1 (run 016): "and then Spark watches" was added back and its out edge, loud
+    # at Voice's boundary, widened 0.4 s to the next pause, into the "on" nobody selected
+    import montivo.human as H
+    d = _human_run(tmp_path, monkeypatch)  # turn 1: w17 32.1-32.4, w18 32.4-32.7, w19 32.7-33.0
+    audio = SynthAudio([(10.0, 11.2), (11.8, 12.7), (30.6, 32.95)])  # the speech runs on through w19
+    monkeypatch.setattr(H.Audio, "load", staticmethod(lambda run_dir: audio))
+    H.insert(d, 1, 7, 8, before="s1")
+    s = next(x for x in json.loads((d / "edl_v2.json").read_text())["spans"] if x["word_from"] == 7)
+    assert s["word_to"] == 8 and s["t_out"] <= 32.75

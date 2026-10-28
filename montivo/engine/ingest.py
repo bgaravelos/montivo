@@ -32,6 +32,7 @@ class Probe:
     pix_fmt: str = ""
     transfer: str = ""  # color_transfer: arib-std-b67 = HLG (the iPhone's HDR default), smpte2084 = PQ (HDR10)
     primaries: str = ""
+    audio_codec: str = ""  # the first audio stream's codec (pcm_* from cameras: make_upright cannot copy it to .mp4)
 
 
 @dataclass
@@ -62,7 +63,8 @@ def ffprobe(path: Path) -> Probe:
     video = next((s for s in data["streams"] if s.get("codec_type") == "video"), None)
     if video is None:
         raise SystemExit(f"{path}: no video stream")
-    has_audio = any(s.get("codec_type") == "audio" for s in data["streams"])
+    audio = next((s for s in data["streams"] if s.get("codec_type") == "audio"), None)
+    has_audio = audio is not None
     rate = video.get("avg_frame_rate") or video.get("r_frame_rate") or "30/1"
     if rate in ("0/0", "0"):
         rate = video.get("r_frame_rate") or "30/1"
@@ -74,7 +76,7 @@ def ffprobe(path: Path) -> Probe:
                  duration=float(data["format"]["duration"]), bytes=int(data["format"]["size"]),
                  has_audio=has_audio, codec=video.get("codec_name", "?"), rotation=int(round(float(rot))) % 360,
                  r_fps=round(r_fps, 3), pix_fmt=video.get("pix_fmt", ""), transfer=video.get("color_transfer", ""),
-                 primaries=video.get("color_primaries", ""))
+                 primaries=video.get("color_primaries", ""), audio_codec=(audio or {}).get("codec_name", ""))
 
 
 def _rate(rate: str) -> float:
@@ -221,9 +223,11 @@ def make_upright(src: Path, dst: Path, hflip: bool = False, log=None, fps: float
     is then tagged BT.709)."""
     vf = [x for x in (sdr, f"fps={fps:g}" if fps else "", "hflip" if hflip else "") if x]
     tags = ["-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709"] if sdr else []
+    # camera PCM (10-bit XAVC S, .MOV) cannot be copied into .mp4 by older ffmpeg builds: lossless ALAC instead
+    audio = "alac" if ffprobe(src).audio_codec.startswith("pcm_") else "copy"
     run_ffmpeg(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?",
                 *(["-vf", ",".join(vf)] if vf else []), *(["-fps_mode", "cfr"] if fps else []),
-                "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", *tags, "-c:a", "copy",
+                "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", *tags, "-c:a", audio,
                 "-movflags", "+faststart", str(dst)], "upright copy", log)
     return ffprobe(dst)
 

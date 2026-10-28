@@ -331,3 +331,32 @@ def test_try_again_checks_what_the_job_costs_not_the_cheapest_action(tmp_path, h
     assert A.retry_estimate(tmp_path, "review", ["-m", "montivo.cli", "review", "runs/r", "--passes", "3"]) == \
         pytest.approx(3 * A.COST["review"])
     assert A.retry_estimate(tmp_path, "drop", ["-m", "montivo.human", "drop", "runs/r", "--span", "s1"]) == H.MIN_PAID_USD
+
+
+def test_two_paid_calls_in_requests_never_run_at_once(tmp_path, hosted_env):
+    # code review, debugging day 1: the cover and post-text routes run their Spark call inside the request; two at once
+    # both passed the budget check before either spent, and the run ledger's last writer dropped the other's cost
+    import threading
+    d = _run_folder(tmp_path)
+    (d / "cut_v2.mp4").write_bytes(b"x")
+    started, release = threading.Event(), threading.Event()
+
+    class Done:
+        returncode, stdout, stderr = 0, json.dumps({"platforms": {}}), ""
+
+    def slow(*a, **k):
+        started.set()
+        release.wait(5)
+        return Done()
+    hosted_env.setattr(A.subprocess, "run", slow)
+    c = TestClient(A.create_app(tmp_path))
+    first = {}
+    t = threading.Thread(target=lambda: first.update(r=c.post("/api/runs/r1/export/post", json={"v": 2})))
+    t.start()
+    assert started.wait(5)
+    r = c.post("/api/runs/r1/export/cover", json={"v": 2})
+    assert r.status_code == 409 and "try again" in r.json()["error"]
+    release.set()
+    t.join(5)
+    assert first["r"].status_code == 200
+    assert c.post("/api/runs/r1/export/post", json={"v": 2}).status_code == 200  # free again

@@ -221,3 +221,23 @@ def test_apply_refuses_a_proposal_made_on_an_older_version(tmp_path, monkeypatch
     except SystemExit as e:
         assert "changed since this proposal (v3 -> v4)" in str(e)
     assert json.loads((d / "ui" / "pending" / f"{card['id']}.json").read_text())["status"] == "open"
+
+
+def test_a_look_from_a_sentence_is_styled_on_the_rendered_version_first(tmp_path, monkeypatch):
+    # code review, debugging day 1: after a caption or callout step the chain's EDL has no captions, so look.suggest
+    # saw no face and a fixed top could land on the head; the look now goes first, on the version that was rendered
+    d = _run(tmp_path)
+    calls = []
+
+    def fake(name):
+        def edit(run_dir, *a, from_v=None, **k):
+            calls.append((name, from_v))
+            n = (human.DEFER[-1] if human.DEFER else 3) + 1
+            human.DEFER.append(n)
+        return edit
+    for name in ("caption", "text", "style"):
+        monkeypatch.setattr(human, name, fake(name))
+    ops = [op("caption", at_s=1.0, text="Hi I'm Billy"), op("callout", span="s2", text="Raw in"),
+           op("style", look_prompt="big captions near the top")]
+    written, done, skipped = agent.run_ops(d, 3, agent.check({"spans": SPANS}, ops)[0], None, print)
+    assert [c[0] for c in calls] == ["style", "caption", "text"] and calls[0][1] == 3 and written == [4, 5, 6]

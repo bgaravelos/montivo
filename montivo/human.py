@@ -962,7 +962,14 @@ def insert(run_dir: Path, turn: int, a: int, b: int, before: str | None = None, 
     if joined:
         note += f"; joined to the clip it continues ({', '.join(joined)})"
     if audio is not None and meet:
-        for m in tighten_edges(new, words, audio, only=meet)["moves"]:
+        # the new clip's own edges never widen into the words around the selection (run 016: "and then Spark watches"
+        # widened 0.4 s into the "on" nobody selected); the neighbours' edges as before
+        unselected = {turn: {i for i in range(len(words.turn(turn))) if not a <= i <= b}}
+        own = {m for m in meet if m[0] == span["id"]}
+        moves = tighten_edges(new, words, audio, only=own, keep_out=unselected)["moves"] if own else []
+        if meet - own:
+            moves += tighten_edges(new, words, audio, only=meet - own)["moves"]
+        for m in moves:
             note += f"; {m['span']} {m['edge']} edge tightened to the speech {m['from']:.3f} -> {m['to']:.3f}"
         for s in new["spans"]:
             refresh_span(s, words)

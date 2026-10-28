@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
 import os
@@ -558,6 +559,18 @@ def create_app(root: Path) -> FastAPI:
         return {"checks": preflight.checks(d, v, aspect)}
 
     export_lock = threading.Lock()
+    paid_lock = threading.Lock()  # the paid calls that run inside a request (cover, post text, cutout mask)
+
+    @contextlib.contextmanager
+    def one_paid_call():
+        """One paid call in a request at a time: the budget check and the call's ledger write happen together (two at
+        once both passed the check before either spent, and the run ledger's last writer dropped the other's cost)."""
+        if not paid_lock.acquire(timeout=0):
+            raise HTTPException(409, "another Muse Spark request is running on this server: try again in a moment")
+        try:
+            yield
+        finally:
+            paid_lock.release()
 
     @app.get("/api/runs/{run_id}/export/cover")
     def cover_get(run_id: str, v: int):
@@ -571,15 +584,11 @@ def create_app(root: Path) -> FastAPI:
         $0.025, 10-20 s; python -m montivo.export --suggest-cover)."""
         v = int(b.get("v") or 0)
         d, _ = cut_of(run_id, v)
-        need_key("Picking a cover (Muse Spark)", COST["cover"])
-        if st.busy(run_id):
-            raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: ask for a cover after it")
-        args = [sys.executable, "-m", "montivo.export", str(d.relative_to(st.root)) if d.is_relative_to(st.root) else str(d),
-                "--version", str(v), "--suggest-cover"]
-        proc = subprocess.run(args, cwd=st.root, capture_output=True, text=True)
-        if proc.returncode != 0:
-            raise HTTPException(500, f"cover failed: {(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")
-        return json.loads(proc.stdout)
+        with one_paid_call():
+            need_key("Picking a cover (Muse Spark)", COST["cover"])
+            if st.busy(run_id):
+                raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: ask for a cover after it")
+            return export_cmd(d, v, "--suggest-cover")
 
     @app.get("/api/runs/{run_id}/export/post")
     def post_get(run_id: str, v: int):
@@ -593,10 +602,11 @@ def create_app(root: Path) -> FastAPI:
         $0.01, 5-15 s; python -m montivo.export --post-text) -> post_vN.json."""
         v = int(b.get("v") or 0)
         d, _ = cut_of(run_id, v)
-        need_key("Writing the post text (Muse Spark)", 0.01)
-        if st.busy(run_id):
-            raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: write the post text after it")
-        return export_cmd(d, v, "--post-text")
+        with one_paid_call():
+            need_key("Writing the post text (Muse Spark)", 0.01)
+            if st.busy(run_id):
+                raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: write the post text after it")
+            return export_cmd(d, v, "--post-text")
 
     def export_cmd(d: Path, v: int, *extra: str) -> dict:
         args = [sys.executable, "-m", "montivo.export", str(d.relative_to(st.root)) if d.is_relative_to(st.root) else str(d),
@@ -631,10 +641,11 @@ def create_app(root: Path) -> FastAPI:
         if aspect not in ASPECTS:
             raise HTTPException(400, f"aspect: one of {', '.join(ASPECTS)}")
         d, _ = cut_of(run_id, v)
-        need_key("Designing a cover (Muse Spark)", COST["cover_design"])
-        if st.busy(run_id):
-            raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: design the cover after it")
-        return export_cmd(d, v, "--design-cover", *(["--aspect", aspect] if aspect != "9:16" else []))
+        with one_paid_call():
+            need_key("Designing a cover (Muse Spark)", COST["cover_design"])
+            if st.busy(run_id):
+                raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: design the cover after it")
+            return export_cmd(d, v, "--design-cover", *(["--aspect", aspect] if aspect != "9:16" else []))
 
     @app.post("/api/runs/{run_id}/cover/mask")
     def cover_mask(run_id: str, b: dict):
@@ -644,8 +655,9 @@ def create_app(root: Path) -> FastAPI:
         v, aspect, design = cover_body(b)
         d, _ = cut_of(run_id, v)
         if not mask_path(d, v, design["t_s"], aspect).is_file():
-            need_key("Cutting out the speaker (SAM 3.1)", COST["cover_mask"])
-            export_cmd(d, v, "--cover-mask", "--cover-t", f"{design['t_s']:.2f}", *(["--aspect", aspect] if aspect != "9:16" else []))
+            with one_paid_call():
+                need_key("Cutting out the speaker (SAM 3.1)", COST["cover_mask"])
+                export_cmd(d, v, "--cover-mask", "--cover-t", f"{design['t_s']:.2f}", *(["--aspect", aspect] if aspect != "9:16" else []))
         return {"ok": True}
 
     @app.post("/api/runs/{run_id}/cover/render")

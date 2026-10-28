@@ -620,8 +620,10 @@ def cut_graph(segments: list[Segment], source_s: float | None = None, xfade_s: f
             fades.append(f"afade=t=in:st=0:d={AUDIO_FADE_S}")
         if i == len(segments) - 1:
             fades.append(f"afade=t=out:st={max(0.0, n / AUDIO_RATE - AUDIO_FADE_S):.6f}:d={AUDIO_FADE_S}")
+        # apad: exactly n samples even where the audio stream ends before the container (a phone clip's video runs on),
+        # else the crossfade eats the short segment's end and every later segment plays early against its video
         lines.append(f"[0:a]aresample={AUDIO_RATE},atrim=start={start / AUDIO_RATE:.9f}:duration={n / AUDIO_RATE:.9f},"
-                     f"asetpts=PTS-STARTPTS,{','.join(fades + [fmt])}[s{i}]")
+                     f"asetpts=PTS-STARTPTS,apad=whole_len={n},{','.join(fades + [fmt])}[s{i}]")
     cur = "[s0]"
     for i in range(1, len(segments)):
         ns = hs[i - 1][1] + hs[i][0]
@@ -695,10 +697,10 @@ def render_audio(source: Path, segments: list[Segment], render_dir: Path, lead_s
 
 @functools.lru_cache(maxsize=1)
 def _code_id() -> str:
-    """This module and music.py: the audio's cache key cannot see the ffmpeg graphs it would run, so a change to the
+    """This module, music.py and edges.py (the speech runs the bed ducks along without words): the audio's cache key cannot see the ffmpeg graphs it would run, so a change to the
     code that builds them starts the audio cache over."""
     here = Path(__file__).resolve().parent
-    return hashlib.sha256(b"".join((here / f).read_bytes() for f in ("render.py", "music.py"))).hexdigest()[:16]
+    return hashlib.sha256(b"".join((here / f).read_bytes() for f in ("render.py", "music.py", "edges.py"))).hexdigest()[:16]
 
 
 def audio_key(source: Path, segments: list[Segment], lead_s: float, loudnorm: bool, music: dict | None,
@@ -714,6 +716,7 @@ def audio_key(source: Path, segments: list[Segment], lead_s: float, loudnorm: bo
         wav = run_dir / "audio.wav"
         rec["audio_wav"] = _source_id(wav) if not words and wav.is_file() else None
         rec["track"] = _source_id(Path(bed_mod.track(music["track"])["path"]))
+        rec["track_meta"] = {k: v for k, v in bed_mod.track(music["track"]).items() if k != "path"}  # its lufs sets the gain
     return hashlib.sha256(json.dumps(rec, sort_keys=True).encode()).hexdigest()[:24]
 
 
