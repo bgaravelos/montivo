@@ -265,8 +265,9 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply }: {
   );
 }
 
-export function VersionsPanel({ id, state, versions, sel, onPick, go, replay, opening }: {
+export function VersionsPanel({ id, state, versions, sel, onPick, go, replay, opening, canEdit, onRestore }: {
   id: string; state: RunState; versions: Version[]; sel: number | null; onPick: (n: number) => void; go: (h: string) => void; replay: number;
+  canEdit: string | null; onRestore: (n: number) => void;
   opening: number | null; // the version the editor opens on (a human edit or the hook A/B's pick, else the loop's best)
 }) {
   const v = versions.find((x) => x.n === sel);
@@ -299,6 +300,12 @@ export function VersionsPanel({ id, state, versions, sel, onPick, go, replay, op
             );
           })}
         </div>
+        {v && v.cut && v.n !== versions.at(-1)?.n && (
+          <button className="btn wide" disabled={!!canEdit} onClick={() => onRestore(v.n)}
+            title={canEdit ?? `Version ${v.n} comes back as the newest version, rendered again; the versions after it stay`}>
+            <Icon name="undo" /> Restore Version {v.n} <span className="btn-cost">$0</span>
+          </button>
+        )}
         {versions.length > 1 && (
           <button className="btn quiet wide" onClick={() => go(`#/run/${id}/loop${replay ? `?replay=${replay}` : ""}`)}>
             <Icon name="loop" /> Watch the agent loop

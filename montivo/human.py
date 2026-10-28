@@ -834,6 +834,30 @@ def edges(run_dir: Path, from_v: int | None = None, passes: int = 0, budget: flo
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
 
 
+def restore(run_dir: Path, from_v: int, passes: int = 0, budget: float = 0.15) -> dict:
+    """An earlier version back as the newest one: its EDL as it was -> edl_vN, rendered, $0. Nothing is deleted (the
+    versions after it stay), and the editor opens on it as on any human edit. The same edit keeps its blind review:
+    review_vK.json is carried to the new cut, marked `carried_from`."""
+    log = RunLog(run_dir / "run.log")
+    if not (run_dir / f"edl_v{from_v}.json").is_file():
+        raise SystemExit(f"edl_v{from_v}.json not found in {run_dir}")
+    from_v, edl, n = _new_version(run_dir, from_v)
+    new = copy.deepcopy(edl)
+    log(f"montivo restore: edl_v{from_v} as it was -> edl_v{n}")
+    fixes = [{"op": "restore", "target": f"v{from_v}", "issue": -1, "severity": "human", "args": {"version": from_v},
+              "note": f"Version {from_v} as it was"}]
+    edl_path = _save(run_dir, new, n, from_v, "restore", fixes, log)
+    out = _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+    old = run_dir / f"review_v{from_v}.json"
+    if passes == 0 and DEFER is None and old.is_file() and not (run_dir / f"review_v{n}.json").exists():
+        rv = json.loads(old.read_text())
+        dump_json(run_dir / f"review_v{n}.json", {**rv, "name": f"review_v{n}", "version": n,
+                                                  "cut": (run_dir / f"cut_v{n}.mp4").as_posix(),
+                                                  "carried_from": from_v})
+        log(f"restore: review_v{from_v} carried to v{n} (the same edit)")
+    return out
+
+
 def target_from(instruction: str) -> float | None:
     """'make it 30 seconds' -> 30.0: a runtime named in the instruction replaces the run's target."""
     m = re.search(r"(\d{2,3})\s*(?:s\b|sec|second)", instruction, re.I)
@@ -1014,7 +1038,9 @@ def main(argv: list[str] | None = None) -> int:
     mu.add_argument("--level", type=float, default=None, help="the bed's loudness in LUFS where nobody speaks (default -20)")
     mu.add_argument("--duck", type=float, default=None, help="dB the bed drops while anyone speaks (default -12)")
     mu.add_argument("--voice", type=float, default=None, help="dB on the speech against the bed, -12..6 (default 0)")
-    for p in (d, t, r, pu, c, tx, ro, pn, cu, ed, sy, mu):
+    rs = sub.add_parser("restore", help="an earlier version back as the newest -> edl_vN -> cut_vN ($0)")
+    rs.add_argument("run_dir", type=Path)
+    for p in (d, t, r, pu, c, tx, ro, pn, cu, ed, sy, mu, rs):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
         p.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
@@ -1048,6 +1074,10 @@ def main(argv: list[str] | None = None) -> int:
         out = cut(a.run_dir, ranges, a.from_v, a.review, a.budget)
     elif a.cmd == "edges":
         out = edges(a.run_dir, a.from_v, a.review, a.budget)
+    elif a.cmd == "restore":
+        if a.from_v is None:
+            ap.error("restore needs --from N")
+        out = restore(a.run_dir, a.from_v, a.review, a.budget)
     elif a.cmd == "style":
         try:
             look = json.loads(a.look) if a.look else None

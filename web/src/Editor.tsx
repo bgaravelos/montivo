@@ -297,7 +297,8 @@ export function Editor({ id, replay, go }: Props) {
             clip={block?.kind === "span" ? block.span!.id : null} getTime={getTime} focusNonce={askNonce}
             onSend={(text, chips, review, planner) => act("ask", { message: text, chips, from: v?.n, review, planner })}
             onStop={() => act("stop", {})} onPick={pick} onSeek={(x) => { player.current?.pause(); seek(x); }}
-            onCompare={(a, b) => go(`${base}/compare?a=${a}&b=${b}${replay ? `&replay=${replay}` : ""}`)} />
+            onCompare={(a, b) => go(`${base}/compare?a=${a}&b=${b}${replay ? `&replay=${replay}` : ""}`)}
+            onRestore={canEdit ? null : (n) => act("restore", { from: n })} />
         )}
         {panel === "media" && <MediaPanel state={state} />}
         {panel === "captions" && (
@@ -322,7 +323,8 @@ export function Editor({ id, replay, go }: Props) {
           <SpeakersPanel id={id} v={v} next={next} canEdit={canEdit}
             onApply={(speaker, head) => { setPanel("assistant"); act("pin", { speaker, head, from: v?.n }); }} />
         )}
-        {panel === "versions" && <VersionsPanel id={id} state={state} versions={visible} sel={sel} onPick={pick} go={go} replay={replay} opening={opening} />}
+        {panel === "versions" && <VersionsPanel id={id} state={state} versions={visible} sel={sel} onPick={pick} go={go} replay={replay} opening={opening}
+          canEdit={canEdit} onRestore={(n) => { setPanel("assistant"); act("restore", { from: n }); }} />}
       </aside>
 
       <main className="viewer">

@@ -276,7 +276,7 @@ function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onRe
                 {r.gate && <span className="fact">measured faults <b>{r.gate.checks.length}</b></span>}
                 {v.loudness && <span className="fact" title="Reels, TikTok and Shorts play at about -14 LUFS">loudness <b>{v.loudness.integrated_lufs} LUFS</b>, peak {v.loudness.true_peak_dbtp} dBTP</span>}
               </div>
-              <div className="rv-cost mute">review {usd(r.cost_usd, 3)} · {r.seconds?.toFixed(0)} s · watched {r.duration_s?.toFixed(1)} s</div>
+              <div className="rv-cost mute">{r.carried_from ? `the review of Version ${r.carried_from} (the same edit, restored) · ` : ""}review {usd(r.cost_usd, 3)} · {r.seconds?.toFixed(0)} s · watched {r.duration_s?.toFixed(1)} s</div>
             </details>
           </>
         )}

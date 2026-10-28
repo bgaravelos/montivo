@@ -146,6 +146,7 @@ export function originLabel(v: Version): string {
   }
   if (o.action === "reorder") return `your edit · moved clip ${o.fixes?.[0]?.target ?? ""}`;
   if (o.action === "cut") return "your edit · deleted words";
+  if (o.action === "restore") return `your edit · restored v${o.from}`;
   if (o.action === "music") return `your edit · ${o.fixes?.[0]?.op === "music_off" ? "music off" : "music"}`;
   if (o.action === "pin") return `your edit · pinned speaker ${o.fixes?.[0]?.target ?? ""}`;
   if (o.action === "punch") {

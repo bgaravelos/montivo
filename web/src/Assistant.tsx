@@ -137,6 +137,7 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
           const voice = m?.voice_db ? `, voice ${m.voice_db > 0 ? "+" : ""}${m.voice_db} dB` : "";
           return m ? `Music: ${m.track.replace(/_/g, " ")} at ${m.level_db} LUFS${voice}.` : "Put music under the speech."; })())
         : o.action === "pin" ? `Follow ${(f?.args as { head?: string | null } | null)?.head != null ? `head ${(f!.args as { head: string }).head}` : "the speaker map"} when speaker ${f?.target ?? ""} talks.`
+        : o.action === "restore" ? `Restore Version ${o.from}.`
         : o.action === "edges" ? "Tighten the cut edges again."
         : o.action === "style" ? "Change the caption style."
         : o.instruction ?? (o.action === "replan" ? "Plan the edit again." : "Edit by hand.");
@@ -220,8 +221,9 @@ function Steps({ title, lines, live }: { title: string; lines: string[]; live?: 
   );
 }
 
-function VersionCard({ id, v, by, current, onPick, onCompare }: {
-  id: string; v: Version; by: string; current: boolean; onPick: (n: number) => void; onCompare: (a: number, b: number) => void;
+function VersionCard({ id, v, by, current, newest, onPick, onCompare, onRestore }: {
+  id: string; v: Version; by: string; current: boolean; newest: boolean; onPick: (n: number) => void; onCompare: (a: number, b: number) => void;
+  onRestore: ((n: number) => void) | null;
 }) {
   const len = v.duration_s ?? v.runtime_s;
   const poster = v.title_s + Math.max(0, len - v.title_s) / 3;
@@ -239,6 +241,7 @@ function VersionCard({ id, v, by, current, onPick, onCompare }: {
       <div className="vc-acts">
         <button className="ib" onClick={() => onPick(v.n)} title={`Open Version ${v.n}`}><Icon name="play" size={12} /></button>
         {from != null && <button className="ib" onClick={() => onCompare(from, v.n)} title={`Compare with Version ${from}`}><Icon name="compare" size={14} /></button>}
+        {!newest && v.cut && onRestore && <button className="ib" onClick={() => onRestore(v.n)} title={`Restore Version ${v.n}: it comes back as the newest version, nothing is deleted ($0)`}><Icon name="undo" size={13} /></button>}
       </div>
     </div>
   );
@@ -357,11 +360,12 @@ function PlannerMenu({ value, onChange, hasOpen, state }: { value: Planner; onCh
   );
 }
 
-export function Assistant({ state, versions, lines, job, seen, progress, replay, v, clip, getTime, focusNonce, onSend, onStop, onPick, onSeek, onCompare }: {
+export function Assistant({ state, versions, lines, job, seen, progress, replay, v, clip, getTime, focusNonce, onSend, onStop, onPick, onSeek, onCompare, onRestore }: {
   state: RunState; versions: Version[]; lines: LogLine[]; job: Job | null; seen: Seen; progress: Progress | null; replay: number; v: Version | null;
   clip: string | null; getTime: () => number; focusNonce: number;
   onSend: (text: string, chips: string[], review: number, planner: Planner) => void; onStop: () => void;
   onPick: (n: number) => void; onSeek: (t: number) => void; onCompare: (a: number, b: number) => void;
+  onRestore: ((n: number) => void) | null; // null while an edit runs or in replay
 }) {
   const [text, setText] = useState("");
   const [useClip, setUseClip] = useState(true);
@@ -405,7 +409,7 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
               <span className="name">{b.who === "montivo" ? "Montivo" : <>Reviewer <span className="blind">blind</span></>}</span>
               {b.items.map((it, j) => it.kind === "text" ? <p key={j} className={`say ${it.tone ?? ""}`}>{it.text}</p>
                 : it.kind === "steps" ? <Steps key={j} title={it.title} lines={it.lines} live={it.live} />
-                : it.kind === "version" ? <VersionCard key={j} id={state.id} v={it.v} by={it.by} current={it.v.n === v?.n} onPick={onPick} onCompare={onCompare} />
+                : it.kind === "version" ? <VersionCard key={j} id={state.id} v={it.v} by={it.by} current={it.v.n === v?.n} newest={it.v.n === versions.at(-1)?.n} onPick={onPick} onCompare={onCompare} onRestore={onRestore} />
                 : it.kind === "review" ? <ReviewCard key={j} v={it.v} current={it.v.n === v?.n} onPick={onPick} onSeek={onSeek} />
                 : it.kind === "error" ? <p key={j} className="say error">{it.text}</p> : null)}
             </div>

@@ -931,6 +931,23 @@ def create_app(root: Path) -> FastAPI:
         job = start_job(st, run_id, "punch", label, args, chat={"role": "user", "text": text, "chips": [f"v{frm}"], "kind": "punch"})
         return {"job": job.public()}
 
+    @app.post("/api/runs/{run_id}/restore")
+    async def restore(run_id: str, request: Request):
+        """An earlier version back as the newest ({"from": N}): its EDL copied to the next version and rendered, $0."""
+        run_id = await own(run_id, request)
+        d = st.run_dir(run_id)
+        b = await request.json()
+        try:
+            frm = int(b["from"])
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(400, "from: the version to restore")
+        if not (d / f"edl_v{frm}.json").is_file():
+            raise HTTPException(404, f"no version {frm}")
+        args = ["-m", "montivo.human", "restore", f"runs/{run_id}", "--from", str(frm)]
+        job = start_job(st, run_id, "restore", f"Restore Version {frm}", args,
+                        chat={"role": "user", "text": f"Restore Version {frm}.", "chips": [f"v{frm}"], "kind": "restore"})
+        return {"job": job.public()}
+
     @app.post("/api/runs/{run_id}/caption")
     async def caption(run_id: str, request: Request):
         """Retext caption lines ({"edits": [{"at": cut second, "text": words spoken}]}): the next version, ffmpeg only."""

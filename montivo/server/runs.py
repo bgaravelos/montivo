@@ -448,7 +448,7 @@ def _review(rv: dict, run_dir: Path) -> dict:
     r = rv.get("review") or {}
     facts = rv.get("facts") or {}
     copy = rv.get("review_copy")
-    return {"name": rv.get("name"), "overall": r.get("overall"), "pass": r.get("pass"),
+    return {"name": rv.get("name"), "carried_from": rv.get("carried_from"), "overall": r.get("overall"), "pass": r.get("pass"),
             "reviewer_pass": r.get("reviewer_pass", r.get("pass")), "gate": _gate(rv), "scores": r.get("scores") or {},
             "summary": r.get("summary", ""), "issues": [{"k": k, **i} for k, i in enumerate(r.get("issues") or [])],
             "fixes": rv.get("fixes") or [], "skipped": rv.get("skipped") or [], "facts_text": rv.get("facts_text", ""),

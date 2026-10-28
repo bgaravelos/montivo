@@ -21,7 +21,7 @@ export type Gate = { blocked: boolean; reasons: string[]; checks: string[];
   open_majors: { t_s: number; criterion: string; severity: string }[]; issues: Issue[] };
 
 export type Review = {
-  name: string; overall: number; pass: boolean; scores: Record<string, number>; summary: string; issues: Issue[];
+  name: string; carried_from?: number | null; overall: number; pass: boolean; scores: Record<string, number>; summary: string; issues: Issue[];
   reviewer_pass: boolean; gate: Gate | null; // pass is the gated pass, reviewer_pass the reviewer's own
   fixes: PlannedFix[]; skipped: { issue: number; reason: string }[]; facts_text: string;
   facts: { silences: number; over_face: number; caption_lines: number; cut_edges: number; loud_edges: number };
