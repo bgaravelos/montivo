@@ -178,26 +178,39 @@ def make_proxy(src: Path, dst: Path, p: Probe, max_dim: int = PROXY_MAX_DIM, fps
 
 
 SHOT_THRESHOLD = 10.0  # scdet score of a camera cut: single-camera talking heads peak at 3.3 (runs 012-015), cuts ~28
+SHOT_MIN_SCORE, SHOT_OVER_P95 = 5.0, 25.0  # a dark stage cuts lower (TEDx: 7.5-8.9 with every other frame under 0.7):
+#                                           also a cut when over SHOT_MIN_SCORE and 25x the clip's 95th percentile
 SHOT_MIN_S = 0.5  # a cut closer than this to the one before (a flash, a fast whip) is not a new shot
 _SCD = re.compile(r"lavfi\.scd\.score:\s*([0-9.]+),\s*lavfi\.scd\.time:\s*([0-9.]+)")
 
 
+def shot_cuts(scores: list[tuple[float, float]], threshold: float = SHOT_THRESHOLD, min_s: float = SHOT_MIN_S) -> list[float]:
+    """The cut times among (score, time) per frame: over `threshold`, or over SHOT_MIN_SCORE and SHOT_OVER_P95 times
+    the clip's own 95th percentile (a dim multi-camera talk scores its cuts under 10; single-camera clips peak at 3.3
+    with a 95th percentile of 0.1-0.34, so 25x keeps the handheld ones out)."""
+    if not scores:
+        return []
+    ranked = sorted(x for x, _ in scores)
+    bar = min(threshold, max(SHOT_MIN_SCORE, SHOT_OVER_P95 * ranked[int(0.95 * (len(ranked) - 1))]))
+    cuts: list[float] = []
+    for score, t in scores:
+        t = round(t, 3)
+        if score >= bar and t > 0 and (not cuts or t - cuts[-1] >= min_s):
+            cuts.append(t)
+    return cuts
+
+
 def detect_shots(proxy: Path, threshold: float = SHOT_THRESHOLD, min_s: float = SHOT_MIN_S, log=None) -> list[float]:
     """The camera cuts of a clip (multi-camera footage like a TEDx talk: wide stage shots and close-ups), from
-    ffmpeg's scdet on the proxy, $0 and a few seconds: the cut times in seconds, at least min_s apart. The reframe
-    splits its windows there (reframe.plan_segment), so the crop never pans from one shot's head to the next's."""
+    ffmpeg's scdet on the proxy, $0 and a few seconds: the cut times in seconds, at least min_s apart (shot_cuts). The
+    reframe splits its windows there (reframe.plan_segment), so the crop never pans from one shot's head to the next's."""
     proc = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(proxy), "-map", "0:v:0", "-an",
-                           "-vf", f"scdet=threshold={threshold:g}", "-f", "null", "-"], capture_output=True, text=True)
+                           "-vf", "scdet=threshold=0", "-f", "null", "-"], capture_output=True, text=True)
     if proc.returncode != 0:
         if log:
             log(f"ingest: shot detection failed (ffmpeg exit {proc.returncode}), the crop treats the clip as one shot")
         return []
-    cuts: list[float] = []
-    for score, t in _SCD.findall(proc.stderr):
-        t = round(float(t), 3)
-        if float(score) >= threshold and t > 0 and (not cuts or t - cuts[-1] >= min_s):
-            cuts.append(t)
-    return cuts
+    return shot_cuts([(float(a), float(b)) for a, b in _SCD.findall(proc.stderr)], threshold, min_s)
 
 
 def make_wav(src: Path, dst: Path, rate: int = 24000, start: float | None = None, seconds: float | None = None,

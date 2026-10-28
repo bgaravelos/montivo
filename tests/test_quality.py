@@ -382,3 +382,15 @@ def test_render_end_to_end_title_three_spans_captions(tmp_path):
     assert frame_tags(out) == {("tv", "bt709", "bt709", "bt709")}
     assert rec["loudnorm"]["output"]["output_i"] == pytest.approx(-14.0, abs=0.5)
     assert len(rec["segments"]) == 3 and edl["captions"]
+
+
+def test_a_dim_multi_camera_talk_finds_its_cuts_by_its_own_scores():
+    """Debugging day 1, the TEDx run: a dark stage cut at scdet 7.5-8.9 with every other frame under 0.7, under the
+    absolute 10, so E11 found no shot; a single-camera handheld clip peaks at 3.3 with a far busier 95th percentile."""
+    from montivo.engine.ingest import shot_cuts
+    calm = [(0.02 + 0.1 * (k % 10) / 10, k / 25) for k in range(2100)]  # p95 about 0.11
+    tedx = [(8.9 if k in (81, 528, 922) else x, t) for k, (x, t) in enumerate(calm)]
+    assert shot_cuts(tedx) == [3.24, 21.12, 36.88]
+    handheld = [(3.3 if k % 300 == 0 else 0.3 + 0.1 * (k % 7), k / 25) for k in range(2100)]  # p95 0.9: bar 10
+    assert shot_cuts(handheld) == []
+    assert shot_cuts([(12.0, 2.0), (12.0, 2.2), (0.1, 3.0)]) == [2.0]  # absolute bar, min spacing
