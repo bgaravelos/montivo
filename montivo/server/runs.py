@@ -124,7 +124,8 @@ def replay_script(lines: list[dict]) -> list[dict]:
 RENDER_PREP, RENDER_SEGS = 0.05, 0.75
 COMMANDS = {"run": "Run", "render": "Render", "drop": "Delete clip", "trim": "Trim clip", "caption": "Edit captions",
             "punch": "Punch-ins", "replan": "Ask Montivo", "edges": "Edges", "text": "Edit text", "reorder": "Move clip",
-            "pin": "Pin speaker", "cut": "Delete words", "style": "Style"}
+            "pin": "Pin speaker", "cut": "Delete words", "style": "Style",
+            "music": "Music"}
 TO_VERSION = re.compile(r"-> \S*?(?:edl|cut)_v(\d+)\b")
 SEGMENTS = re.compile(r"^render: \d+ spans -> (\d+) segments(?: \((\d+) frames\))?")
 SEG_DONE = re.compile(r"^render: seg (\d+) .*?\((\d+) frames")
@@ -508,6 +509,7 @@ def versions(run_dir: Path) -> list[dict]:
                                   "over_face": bool(c.get("over_face"))}
                                  for c in edl.get("callouts") or []],
                     "look": _look(edl),
+                    "music": _music(edl, render),
                     "caption_lines": [{"id": c.get("id"), "text": c.get("text"), "t_in": c.get("t_in"), "t_out": c.get("t_out"),
                                        "spans": c.get("spans") or [], "placement": c.get("placement"),
                                        "over_face": bool(c.get("over_face")), "box": c.get("box"),
@@ -524,6 +526,14 @@ def versions(run_dir: Path) -> list[dict]:
                     "plan_compare": cmp,
                     "review": _review(rv, run_dir) if rv else None})
     return out
+
+
+def _music(edl: dict, render: dict) -> dict | None:
+    """The version's music bed (EDL `music`) and what its render measured (speech over the bed, in dB)."""
+    if not edl.get("music"):
+        return None
+    m = (render.get("music") or {}).get("measured") or {}
+    return {**edl["music"], "margin_db": m.get("margin_db"), "ducked_s": m.get("under_s")}
 
 
 def _look(edl: dict) -> dict | None:

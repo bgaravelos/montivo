@@ -211,8 +211,9 @@ def cut_edge_levels(edl: dict, audio: "Audio") -> list[dict]:
 def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: float,
                edges: list[dict] | None = None, timeline: list[dict] | None = None,
                heard: list[dict] | None = None, edge_words: dict | None = None, head: dict | None = None,
-               diff_heard: list[dict] | None = None) -> str:
-    """The facts handed to the reviewer, numbered. `heard` adds the heard phrases and the caption diff (a reviewer that
+               diff_heard: list[dict] | None = None, music: dict | None = None) -> str:
+    """The facts handed to the reviewer, numbered. `music` (the render's music record) says a bed is mixed in on
+    purpose and that the silences and heard words come from the speech without it. `heard` adds the heard phrases and the caption diff (a reviewer that
     cannot hear); `diff_heard` adds only the caption diff (Spark 1.3: in the benchmark the phrases cost it the weak
     hook, 4/4 -> 2/4, while the diff brought caption text 4/6 -> 6/6)."""
     sil = ", ".join(f"{a:.2f}-{b:.2f} s ({b - a:.2f} s)" for a, b in silences) or "none"
@@ -299,6 +300,13 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
                    + (" A person checked these lines against the recording, so they are right as written and are left "
                       "out of the comparison: " + "; ".join(f"{c['t_in']:.2f} s \"{c['text']}\"" for c in checked) + "."
                       if checked else ""))
+    if music:
+        m = music.get("measured") or {}
+        out.append(f"{len(out) + 1}. Music: a background music bed (\"{music['name']}\") is mixed under the speech on "
+                   f"purpose, {music['level_db']:g} LUFS where nobody speaks and {-music['duck_db']:g} dB lower while "
+                   f"anyone speaks" + (f" (measured: the speech sits {m['margin_db']:g} dB over it)" if m.get("margin_db")
+                   is not None else "") + ". The silence gaps and the words heard above come from the speech alone. "
+                   "The music is a fault only where it covers or competes with the words.")
     return "\n".join(out)
 
 
@@ -329,6 +337,13 @@ def caption_heard_diff(timeline: list[dict], heard: list[dict]) -> list[dict]:
 
 HEARD_GAP_S = 0.3  # a pause this long starts a new phrase in the heard-words fact
 HEARD_MAX_WORDS = 8
+
+
+def speech_audio(edl: dict, cut: Path) -> Path:
+    """What the measured facts listen to: the cut, or with a music bed the speech stem its render kept
+    (render/<cut>.speech.m4a), so the bed fills no silence gap and Voice hears the words without it."""
+    stem = ((edl.get("render") or {}).get("music") or {}).get("speech_stem")
+    return Path(stem) if stem and Path(stem).is_file() else cut
 
 
 def heard_words(cut: Path, out_dir: Path, ledger: Ledger, log=print) -> list[dict]:
@@ -1295,19 +1310,20 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
     log(f"review: {name}: facts, review copy and upload ...")  # the UI's progress: prep starts here, not at the facts
     with Timer() as t:
         duration = media_duration(cut)
-        sil = silences_in(cut)
+        speech = speech_audio(edl, cut)  # with a music bed, the speech stem the render kept
+        sil = silences_in(speech)
         caps = caption_face_facts(edl)
         audio = Audio.load(run_dir)
         edges = cut_edge_levels(edl, audio) if audio else None
         timeline = caption_timeline(edl)
-        words_heard = heard_words(cut, heard_dir or rdir / "heard", ledger, log=log)
+        words_heard = heard_words(speech, heard_dir or rdir / "heard", ledger, log=log)
         vpath = run_dir / "voice" / "voice.json"
         edge_words = (edge_words_unheard(kept_words(edl, Words(json.loads(vpath.read_text())["words"])), words_heard,
                                          edge_speech(edl, audio) if audio else None)
                       if vpath.is_file() else None)
         head = head_frame_facts(run_dir, edl)
         facts = facts_text(sil, caps, duration, edges, timeline, words_heard if heard else None, edge_words=edge_words,
-                           head=head, diff_heard=words_heard)
+                           head=head, diff_heard=words_heard, music=(edl.get("render") or {}).get("music"))
         gate = gate_check(caps, edges, edge_words, head)
         gate["checked_captions"] = [[c["t_in"], c["t_out"]] for c in timeline if c.get("checked")]
         copy_path = review_copy(cut, rdir, clock=clock)

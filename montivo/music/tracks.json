@@ -1,0 +1,52 @@
+{
+  "tracks": [
+    {
+      "id": "low_light",
+      "name": "Low Light",
+      "mood": "lo-fi keys, 80 bpm",
+      "file": "low_light.m4a",
+      "bpm": 80,
+      "loop_s": 24.0,
+      "lufs": -12.4,
+      "true_peak_dbtp": -0.8,
+      "licence": "CC0-1.0",
+      "source": "synthesised by montivo/music/build.py"
+    },
+    {
+      "id": "forward",
+      "name": "Forward",
+      "mood": "upbeat synth pluck, 112 bpm",
+      "file": "forward.m4a",
+      "bpm": 112,
+      "loop_s": 17.1429,
+      "lufs": -10.2,
+      "true_peak_dbtp": 2.0,
+      "licence": "CC0-1.0",
+      "source": "synthesised by montivo/music/build.py"
+    },
+    {
+      "id": "still_air",
+      "name": "Still Air",
+      "mood": "ambient pads, no drums, 70 bpm",
+      "file": "still_air.m4a",
+      "bpm": 70,
+      "loop_s": 27.4286,
+      "lufs": -8.2,
+      "true_peak_dbtp": -1.1,
+      "licence": "CC0-1.0",
+      "source": "synthesised by montivo/music/build.py"
+    },
+    {
+      "id": "snap",
+      "name": "Snap",
+      "mood": "bouncy marimba and claps, 96 bpm",
+      "file": "snap.m4a",
+      "bpm": 96,
+      "loop_s": 20.0,
+      "lufs": -12.4,
+      "true_peak_dbtp": -0.9,
+      "licence": "CC0-1.0",
+      "source": "synthesised by montivo/music/build.py"
+    }
+  ]
+}

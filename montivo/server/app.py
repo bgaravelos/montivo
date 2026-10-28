@@ -794,6 +794,51 @@ def create_app(root: Path) -> FastAPI:
                         chat={"role": "user", "text": f"Text in v{frm}: {'; '.join(what)}.", "chips": [f"v{frm}"], "kind": "text"})
         return {"job": job.public()}
 
+    @app.get("/api/music")
+    def music_tracks():
+        """The Music panel's choices: the bundled tracks (montivo/music/tracks.json, CC0), the defaults and ranges."""
+        from ..engine import music as bed
+        return {"tracks": [{k: t[k] for k in ("id", "name", "mood", "bpm", "loop_s", "licence")} | {"url": f"/api/music/{t['id']}"}
+                           for t in bed.tracks()],
+                "default": {"level_db": bed.LEVEL_DB, "duck_db": bed.DUCK_DB},
+                "level_range": list(bed.LEVEL_RANGE), "duck_range": list(bed.DUCK_RANGE)}
+
+    @app.get("/api/music/{track_id}")
+    def music_file(track_id: str):
+        """A bundled track's loop for the panel's preview player."""
+        from ..engine import music as bed
+        try:
+            t = bed.track(track_id)
+        except ValueError as e:
+            raise HTTPException(404, str(e))
+        return FileResponse(t["path"], media_type="audio/mp4", headers={"Cache-Control": "max-age=86400"})
+
+    @app.post("/api/runs/{run_id}/music")
+    async def music_edit(run_id: str, request: Request):
+        """A music bed under the speech ({"track": id, "level_db": -20, "duck_db": -12}), another track or level, or
+        none ({"track": null}): the next version, ffmpeg only."""
+        from ..engine.music import normalize_music
+        run_id = own(run_id, request)
+        d = st.run_dir(run_id)
+        b = await request.json()
+        frm = int(b.get("from") or latest_version(d))
+        passes = int(b.get("review") or 0)
+        if passes:
+            need_key("Reviewing the new cut", COST["review"] * passes)
+        track = b.get("track")
+        if track is None:
+            flag, label, text = ["--off"], "Music off", f"Take the music out of v{frm}."
+        else:
+            try:
+                m = normalize_music({k: b[k] for k in ("track", "level_db", "duck_db") if b.get(k) is not None})
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            flag = ["--track", m["track"], "--level", f"{m['level_db']:g}", "--duck", f"{m['duck_db']:g}"]
+            label, text = "Music", f"Music in v{frm}: {m['track'].replace('_', ' ')} at {m['level_db']:g} LUFS, ducked {m['duck_db']:g} dB."
+        args = ["-m", "montivo.human", "music", f"runs/{run_id}", *flag, "--from", str(frm), "--review", str(passes)]
+        job = start_job(st, run_id, "music", label, args, chat={"role": "user", "text": text, "chips": [f"v{frm}"], "kind": "music"})
+        return {"job": job.public()}
+
     @app.get("/api/looks")
     def looks():
         """The Style panel's choices: every preset as a full look, the fonts, the default (marker) look."""

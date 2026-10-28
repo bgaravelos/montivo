@@ -677,6 +677,12 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .head:hover:not(:disabled) { border-color: var(--text-2); }
 .link.small { font-size: 11.5px; align-self: flex-start; }
 
+/* Music panel (Music.tsx) */
+.music-panel .field input[type="range"] { width: 100%; accent-color: var(--accent); }
+.mu-row { grid-template-columns: 28px 1fr auto; align-items: center; cursor: pointer; }
+.mu-mood { display: block; font-size: 11px; color: var(--mute); }
+.mu-play { width: 24px; height: 24px; display: grid; place-items: center; }
+
 /* Style panel and its canvas handles (Style.tsx) */
 .style-panel .field input[type="range"] { width: 100%; accent-color: var(--accent); }
 .preset-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
