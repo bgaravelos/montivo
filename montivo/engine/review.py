@@ -523,23 +523,11 @@ def edge_speech(edl: dict, audio: Audio):
 
 
 def crop_paths(run_dir: Path, edl: dict) -> tuple[str | None, list, list]:
-    """The crop path of every rendered segment, planned exactly as render.render plans it (same track, speaker map,
-    pins and reframe bias): (concept, segments, paths). Deterministic and offline."""
-    from .frame import frame_for
-    from .reframe import plan_segment
-    from .render import apply_bias, follow_pieces, load_reframe_track, load_speaker_ids, segment_bias
-    concept, track = load_reframe_track(run_dir, edl)
-    speaker_ids = load_speaker_ids(run_dir, concept, edl)
-    segs = frame_align(merge_segments(edl["spans"]), float(edl["source"]["fps"]))
-    paths = []
-    for seg in segs:
-        path = plan_segment(seg.t_in, seg.t_out, edl["source"], track, span_ids=seg.span_ids,
-                            follow=follow_pieces(seg, edl["spans"], speaker_ids), aspect=frame_for(edl).ratio)
-        path.xs = path.xs[:seg.frames] + [path.xs[-1]] * max(0, seg.frames - len(path.xs))
-        bias = segment_bias(edl["spans"], seg.span_ids)
-        if bias:
-            apply_bias(path, bias, int(edl["source"]["width"]))
-        paths.append(path)
+    """The crop path of every rendered segment, planned exactly as render.render plans it (same track, person fallback,
+    speaker map, pins and reframe bias): (concept, segments, paths). Deterministic and offline."""
+    from .render import plan_paths, reframe_inputs
+    concept, track, speaker_ids, fallback = reframe_inputs(run_dir, edl)
+    segs, paths = plan_paths(edl, track, speaker_ids, fallback=fallback)
     return concept, segs, paths
 
 

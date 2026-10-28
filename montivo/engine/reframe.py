@@ -6,7 +6,10 @@ pixels. A lean moves the head about three times further than the body box centre
 object whose box is largest and most centred inside that window, map its centre to source pixels, interpolate the
 gaps, then run a camera-operator smoother: dead zone of +-8 % of the crop width (the camera does not chase small head
 moves), EMA toward the target when it leaves the dead zone (tau 0.25 s), pan speed clamped (450 px/s on a 1280 px
-source, 675 at 1920: a 340 px lean in 0.6 s is followed without lag), x clamped inside the frame. The crop is full height, width = even(h * 9/16).
+source, 675 at 1920: a 340 px lean in 0.6 s is followed without lag), x clamped inside the frame. That path, resampled
+to the source frames, goes through a zero-phase Gaussian (sigma 0.13 s) per window, so a pan eases in and out (on run
+015 v5 the EMA's pans started and stopped in one frame, 7200 px/s^2), and x is rounded to 1 px (even px made a slow
+pan step 0 / 60 px/s frame to frame); the render crops with exact=1. The crop is full height, width = even(h * 9/16).
 Other output aspects (frame.py: 4:5, 1:1) only change that width. A source narrower than the aspect (a phone clip cut
 to 4:5) keeps its full width and the height is cut instead, at one y per segment that puts the followed head's centre
 HEAD_Y_FRAC down the crop.
@@ -32,6 +35,7 @@ class ReframeParams:
     keyframe_every_s: float = 0.5
     min_coverage: float = 0.2  # a track must cover this share of the window to be picked
     edge_px: int = 2  # ignore x changes smaller than this when deciding "moving"
+    smooth_sigma_s: float = 0.13  # zero-phase Gaussian over the per-frame path, per piece (0 = off)
 
 
 @dataclass
@@ -46,6 +50,7 @@ class SegmentPath:
     keyframes: list[dict] = field(default_factory=list)
     pieces: list[dict] = field(default_factory=list)  # [{t_in, t_out, speaker, track_id}] when a speaker map steered it
     crop_y: int = 0  # top of the crop, 0 unless the source is narrower than the aspect
+    fallbacks: list[dict] = field(default_factory=list)  # [{t_in, t_out, by: person | hold | centre}] windows off the track
 
     def sendcmd_text(self) -> str:
         """One line per source frame. Command k fires half a frame before frame k so rounding never skips it."""
@@ -169,6 +174,22 @@ def resample(values: list[float], src_fps: float, dst_fps: float, duration: floa
     return out
 
 
+def gaussian(values: list[float], sigma: float) -> list[float]:
+    """Zero-phase Gaussian smoothing (sigma in samples, the kernel 3 sigma each side), the edges held: a pan eases in
+    and out over a few frames instead of starting and stopping in one, and a still camera stays exactly still. A
+    convex mix of the values, so the result stays inside the frame when they do."""
+    n = len(values)
+    if sigma <= 0 or n < 2:
+        return list(values)
+    r = max(1, int(math.ceil(3 * sigma)))
+    kernel = [math.exp(-0.5 * (j / sigma) ** 2) for j in range(-r, r + 1)]
+    total = sum(kernel)
+    kernel = [k / total for k in kernel]
+    # as the value plus the weighted differences: a still stretch stays bit-exact, so its rounding never flips 1 px
+    return [values[i] + sum(kernel[j + r] * (values[min(n - 1, max(0, i + j))] - values[i]) for j in range(-r, r + 1))
+            for i in range(n)]
+
+
 def keyframes_for(xs: list[int], fps: float, t_in: float, every_s: float, edge_px: int, span_ids: list[str]) -> list[dict]:
     """Sparse keyframes: one every `every_s` and one whenever the camera starts or stops moving."""
     kfs: list[dict] = []
@@ -186,32 +207,58 @@ def keyframes_for(xs: list[int], fps: float, t_in: float, every_s: float, edge_p
     return kfs
 
 
-def _window_centres(t_in: float, t_out: float, sw: int, crop_w: int, fps: float, track: dict | None,
-                    params: ReframeParams, prefer: list[str] | None = None) -> tuple[str | None, list[float]]:
-    """Picked track id and the smoothed crop centre per source frame over [t_in, t_out] (centre crop without one)."""
+def _follow(t_in: float, t_out: float, sw: int, crop_w: int, fps: float, track: dict | None, params: ReframeParams,
+            prefer: list[str] | None = None) -> tuple[str | None, list[float] | None]:
+    """The picked object of `track` over [t_in, t_out] and the smoothed crop centre per source frame, or (None, None)
+    when nothing in it covers the window."""
+    if not track or not track.get("objects"):
+        return None, None
     duration = max(1.0 / fps, t_out - t_in)
-    if track and track.get("objects"):
-        track_fps = float(track.get("track_fps") or 10.0)
-        tw = int(track["source"]["width"])
-        th = int(track["source"]["height"])
-        track_id = pick_track(track["objects"], t_in, t_out, track_fps, tw, th, params.min_coverage, prefer)
-        if track_id is not None:
-            raw = centre_samples(track["objects"][track_id], t_in, t_out, track_fps, sw / tw)
-            smooth = smooth_centres(raw, 1.0 / track_fps, crop_w, sw, params)
-            return track_id, resample(smooth, track_fps, fps, duration)
-    return None, [sw / 2] * max(1, int(math.ceil(duration * fps - 1e-6)))
+    track_fps = float(track.get("track_fps") or 10.0)
+    tw = int(track["source"]["width"])
+    th = int(track["source"]["height"])
+    track_id = pick_track(track["objects"], t_in, t_out, track_fps, tw, th, params.min_coverage, prefer)
+    if track_id is None:
+        return None, None
+    raw = centre_samples(track["objects"][track_id], t_in, t_out, track_fps, sw / tw)
+    smooth = smooth_centres(raw, 1.0 / track_fps, crop_w, sw, params)
+    return track_id, gaussian(resample(smooth, track_fps, fps, duration), params.smooth_sigma_s * fps)
+
+
+def _window_centres(t_in: float, t_out: float, sw: int, crop_w: int, fps: float, track: dict | None,
+                    params: ReframeParams, prefer: list[str] | None = None, fallback: dict | None = None,
+                    hold: float | None = None) -> tuple[str | None, list[float], str]:
+    """Picked track id, the smoothed crop centre per source frame over [t_in, t_out] and how it was found: "track"
+    (the followed track), else "person" (the `fallback` track's box: the head track lost the speaker, so the window
+    used to fall back to a centre crop), else "hold" (`hold`, the centre the camera was on before), else "centre"."""
+    n = max(1, int(math.ceil(max(1.0 / fps, t_out - t_in) * fps - 1e-6)))
+    track_id, cs = _follow(t_in, t_out, sw, crop_w, fps, track, params, prefer)
+    if cs is not None:
+        return track_id, cs, "track"
+    if fallback is not None and fallback is not track:
+        _, cs = _follow(t_in, t_out, sw, crop_w, fps, fallback, params)
+        if cs is not None:
+            return None, cs, "person"
+    if hold is not None:
+        return None, [min(sw - crop_w / 2, max(crop_w / 2, hold))] * n, "hold"
+    return None, [sw / 2] * n, "centre"
 
 
 def plan_segment(t_in: float, t_out: float, source: dict, track: dict | None, params: ReframeParams | None = None,
                  span_ids: list[str] | None = None, follow: list[dict] | None = None,
-                 aspect: tuple[int, int] = (9, 16)) -> SegmentPath:
+                 aspect: tuple[int, int] = (9, 16), fallback: dict | None = None,
+                 hold: float | None = None) -> SegmentPath:
     """Crop path for one rendered segment. `source` has width/height/fps; `track` is tracks.json's content
     (objects + track_fps + source size) or None for a centre crop. `follow` ([{t_in, t_out, speaker, ids}] covering
-    the segment in order, from the speaker map) steers each piece to its speaker's head. `aspect` is the output's."""
+    the segment in order, from the speaker map) steers each piece to its speaker's head. `aspect` is the output's.
+    A window the track does not cover follows the `fallback` track (the person boxes when the crop follows heads),
+    else holds the centre the camera was on (the piece before, else `hold`: the previous segment's last centre), and
+    only then the frame's centre; `fallbacks` on the path records each such window."""
     params = params or ReframeParams()
     sw, sh, fps = int(source["width"]), int(source["height"]), float(source["fps"])
     crop_w, crop_h = crop_size(sw, sh, aspect)
     pieces: list[dict] = []
+    fallbacks: list[dict] = []
     if follow and any(p.get("ids") for p in follow) and track and track.get("objects"):
         n = max(1, int(math.ceil(max(1.0 / fps, t_out - t_in) * fps - 1e-6)))
         tw, th = int(track["source"]["width"]), int(track["source"]["height"])
@@ -230,8 +277,11 @@ def plan_segment(t_in: float, t_out: float, source: dict, track: dict | None, pa
             if k1 <= k0:
                 continue
             a = t_in + k0 / fps
-            _, cs = _window_centres(a, t_in + k1 / fps, sw, crop_w, fps, track, params,
-                                    [p["track_id"]] if p["track_id"] else None)
+            _, cs, how = _window_centres(a, t_in + k1 / fps, sw, crop_w, fps, track, params,
+                                         [p["track_id"]] if p["track_id"] else None, fallback,
+                                         centres[-1] if centres else hold)
+            if how != "track":
+                fallbacks.append({"t_in": round(a, 4), "t_out": round(t_in + k1 / fps, 4), "by": how})
             centres += (cs + [cs[-1]] * (k1 - k0))[:k1 - k0]
             p["t_in"], p["t_out"] = round(a, 4), round(t_in + k1 / fps, 4)
         pieces = [p for p in pieces if p["t_out"] > p["t_in"]]
@@ -241,11 +291,13 @@ def plan_segment(t_in: float, t_out: float, source: dict, track: dict | None, pa
                 lengths[p["track_id"]] = lengths.get(p["track_id"], 0.0) + p["t_out"] - p["t_in"]
         track_id = max(lengths, key=lengths.get) if lengths else None
     else:
-        track_id, centres = _window_centres(t_in, t_out, sw, crop_w, fps, track, params)
-    xs = [int(round((c - crop_w / 2) / 2)) * 2 for c in centres]
+        track_id, centres, how = _window_centres(t_in, t_out, sw, crop_w, fps, track, params, fallback=fallback, hold=hold)
+        if how != "track":
+            fallbacks.append({"t_in": round(t_in, 4), "t_out": round(t_out, 4), "by": how})
+    xs = [int(round(c - crop_w / 2)) for c in centres]  # 1 px steps (the render crops with exact=1)
     xs = [min(sw - crop_w, max(0, x)) for x in xs]
     seg = SegmentPath(t_in=t_in, t_out=t_out, track_id=track_id, crop_w=crop_w, crop_h=crop_h, xs=xs, fps=fps,
-                      pieces=pieces, crop_y=crop_top(track, track_id, t_in, t_out, sh, crop_h))
+                      pieces=pieces, crop_y=crop_top(track, track_id, t_in, t_out, sh, crop_h), fallbacks=fallbacks)
     seg.keyframes = keyframes_for(xs, fps, t_in, params.keyframe_every_s, params.edge_px, span_ids or [])
     return seg
 

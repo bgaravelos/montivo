@@ -69,11 +69,11 @@ def test_pick_track_prefers_large_centred_and_covering():
 def test_plan_segment_follows_the_track():
     seg = plan_segment(2.0, 4.0, SRC, track({"1": recs(346, 0, 10)}), span_ids=["s1"])
     assert seg.track_id == "1" and seg.crop_w == 404 and seg.crop_h == 720
-    assert len(seg.xs) == 60 and all(x % 2 == 0 for x in seg.xs)
-    # proxy cx 346 -> source 461.3, minus half the crop = 259.3 -> even 260
-    assert seg.xs[0] == 260 and len(set(seg.xs)) == 1
-    assert seg.keyframes[0] == {"t": 2.0, "t_seg": 0.0, "x": 260, "spans": ["s1"]}
-    assert seg.sendcmd_text().startswith("0.0000 crop x 260;\n0.0167 crop x 260;")
+    assert len(seg.xs) == 60
+    # proxy cx 346 -> source 461.3, minus half the crop = 259.3 -> 259 (1 px steps, the render crops with exact=1)
+    assert seg.xs[0] == 259 and len(set(seg.xs)) == 1
+    assert seg.keyframes[0] == {"t": 2.0, "t_seg": 0.0, "x": 259, "spans": ["s1"]}
+    assert seg.sendcmd_text().startswith("0.0000 crop x 259;\n0.0167 crop x 259;")
 
 
 def test_plan_segment_falls_back_to_centre_crop():
@@ -109,4 +109,6 @@ def test_lean_is_followed_without_lag_at_1920():
         if c - 70 < x or c + 70 > x + seg.crop_w:
             clipped += 1
     assert clipped == 0
-    assert set(seg.xs[:50]) == {seg.xs[0]}  # still for the first 1.67 s (the resample eases in one track sample early)
+    # still for the first 1.3 s: the resample eases in one track sample early, the zero-phase Gaussian (sigma 0.13 s)
+    # a few frames more
+    assert set(seg.xs[:40]) == {seg.xs[0]}

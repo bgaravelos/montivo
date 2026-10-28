@@ -178,6 +178,21 @@ def load_reframe_track(run_dir: Path, edl: dict) -> tuple[str | None, dict | Non
     return None, None
 
 
+def load_fallback_track(run_dir: Path, edl: dict, concept: str | None) -> dict | None:
+    """The person track when the crop follows another concept (heads): where the head track loses the speaker, the
+    crop follows the person box instead of jumping to the centre (reframe.plan_segment)."""
+    if concept in (None, "person"):
+        return None
+    track = load_track(run_dir, edl, "person")
+    return track if track and track.get("objects") else None
+
+
+def reframe_inputs(run_dir: Path, edl: dict) -> tuple[str | None, dict | None, dict[str, list[str]], dict | None]:
+    """What plan_paths needs from a run folder: (concept, track, speaker ids, fallback track)."""
+    concept, track = load_reframe_track(run_dir, edl)
+    return concept, track, load_speaker_ids(run_dir, concept, edl), load_fallback_track(run_dir, edl, concept)
+
+
 def load_speaker_ids(run_dir: Path, concept: str | None, edl: dict | None = None) -> dict[str, list[str]]:
     """speaker -> head ids from run_dir/speakers.json (speakers.py); only meaningful when the crop follows heads.
     A human pin in the EDL, `reframe_speaker_ids` {"A": "3"} (Voice label -> head id), replaces the mapped ids of its
@@ -218,11 +233,11 @@ def segment_bias(spans: list[dict], span_ids: list[str]) -> int:
 
 
 def apply_bias(path: SegmentPath, bias_px: int, source_w: int) -> None:
-    """Shift a planned crop path by bias_px (kept even and inside the frame); the keyframes follow."""
+    """Shift a planned crop path by bias_px (kept inside the frame); the keyframes follow."""
     hi = source_w - path.crop_w
-    path.xs = [min(hi, max(0, x + bias_px // 2 * 2)) for x in path.xs]
+    path.xs = [min(hi, max(0, x + bias_px)) for x in path.xs]
     for kf in path.keyframes:
-        kf["x"] = min(hi, max(0, kf["x"] + bias_px // 2 * 2))
+        kf["x"] = min(hi, max(0, kf["x"] + bias_px))
         kf["bias_px"] = bias_px
 
 
@@ -344,7 +359,7 @@ def segment_encode(source: Path, seg: Segment, path: SegmentPath, render_dir: Pa
     # offset in the segment, rounded to the stream's time base, and back to 0 after the overlays)
     seek = max(0.0, seg.t_in + c0 - 0.5 / seg.fps)
     rebase = "setpts=PTS-STARTPTS" + (f"+{c0:.9f}/TB+0.5" if k0 else "")
-    vf = (f"{rebase},sendcmd=f={cmds.as_posix()},crop={path.crop_w}:{path.crop_h}:{path.xs[k0]}:{path.crop_y},"
+    vf = (f"{rebase},sendcmd=f={cmds.as_posix()},crop={path.crop_w}:{path.crop_h}:{path.xs[k0]}:{path.crop_y}:exact=1,"
           f"scale={frame.w}:{frame.h}:flags=lanczos:in_range={color['range']}:in_color_matrix={color['matrix']}:"
           f"out_range=tv:out_color_matrix=bt709,format=yuv420p,setsar=1"
           + (f",{zoom_filter(zoom, seg.fps, (frame.w, frame.h))}" if zoom else "") + f",{TAG_709}")
@@ -826,17 +841,21 @@ def mux(segment_files: list[Path], audio: Path, out: Path, render_dir: Path) -> 
 
 
 def plan_paths(edl: dict, track: dict | None, speaker_ids: dict[str, list[str]],
-               params: ReframeParams | None = None) -> tuple[list[Segment], list[SegmentPath]]:
+               params: ReframeParams | None = None, fallback: dict | None = None) -> tuple[list[Segment], list[SegmentPath]]:
     """The frame-aligned segments of the EDL and the crop path of each (one crop x per output frame), as the render
     burns them; the editor's preview still (look.py) and the review's head checks plan the same way. The crop's width
-    follows the EDL's aspect (frame.frame_for)."""
+    follows the EDL's aspect (frame.frame_for). `fallback` is the person track for windows the head track misses;
+    a window neither covers holds the previous segment's last centre."""
     segments = frame_align(merge_segments(edl["spans"]), float(edl["source"]["fps"]))
     aspect = frame_for(edl).ratio
     paths: list[SegmentPath] = []
+    hold = None
     for seg in segments:
         path = plan_segment(seg.t_in, seg.t_out, edl["source"], track, params, span_ids=seg.span_ids,
-                            follow=follow_pieces(seg, edl["spans"], speaker_ids), aspect=aspect)
+                            follow=follow_pieces(seg, edl["spans"], speaker_ids), aspect=aspect, fallback=fallback,
+                            hold=hold)
         path.xs = path.xs[:seg.frames] + [path.xs[-1]] * max(0, seg.frames - len(path.xs))
+        hold = path.xs[-1] + path.crop_w / 2
         bias = segment_bias(edl["spans"], seg.span_ids)
         if bias:
             apply_bias(path, bias, int(edl["source"]["width"]))
@@ -867,9 +886,8 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     ov_dir.mkdir()
     fps = float(edl["source"]["fps"])
     frame = frame_for(edl)
-    concept, track = load_reframe_track(run_dir, edl)
-    speaker_ids = load_speaker_ids(run_dir, concept, edl)
-    segments, paths = plan_paths(edl, track, speaker_ids, params)
+    concept, track, speaker_ids, fallback = reframe_inputs(run_dir, edl)
+    segments, paths = plan_paths(edl, track, speaker_ids, params, fallback)
     color = source_color(source)
     if cache is None:
         cache = os.environ.get("MONTIVO_SEGCACHE", "1") != "0"

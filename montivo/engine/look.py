@@ -21,7 +21,7 @@ from PIL import Image
 from .captions import OUT_H, OUT_W, build_overlays
 from .frame import frame_for
 from .graphics import _HEX, ACTIVE_MODES, CASES, FONTS, PRESET_NAMES, PRESETS, TOP_RANGE, Look, normalize_look, restyle
-from .render import load_reframe_track, load_speaker_ids, load_track, plan_paths
+from .render import load_track, plan_paths, reframe_inputs
 
 
 def source_of(run_dir: Path, edl: dict) -> Path:
@@ -60,8 +60,10 @@ def with_style(edl: dict, look: dict | None, callouts: dict[str, list[float] | N
 def frame_at(run_dir: Path, edl: dict, t: float, plan=None) -> Image.Image:
     """The frame (1080x1920, or the EDL's other aspect) at cut second t of `edl` without any graphics: the source
     cropped as the render crops it."""
-    concept, track = load_reframe_track(run_dir, edl)
-    segments, paths = plan or plan_paths(edl, track, load_speaker_ids(run_dir, concept, edl))
+    if plan is None:
+        _, track, speaker_ids, fallback = reframe_inputs(run_dir, edl)
+        plan = plan_paths(edl, track, speaker_ids, fallback=fallback)
+    segments, paths = plan
     title_s = float(((edl.get("render") or {}).get("title") or {}).get("seconds") or 0.0)
     start, i = title_s, len(segments) - 1
     for k, seg in enumerate(segments):
@@ -76,7 +78,7 @@ def frame_at(run_dir: Path, edl: dict, t: float, plan=None) -> Image.Image:
     k = min(len(path.xs) - 1, int(local * seg.fps))
     fr = frame_for(edl)
     return grab(source_of(run_dir, edl), seg.t_in + k / seg.fps,
-                f"crop={path.crop_w}:{path.crop_h}:{path.xs[k]}:{path.crop_y},scale={fr.w}:{fr.h}:flags=lanczos,setsar=1")
+                f"crop={path.crop_w}:{path.crop_h}:{path.xs[k]}:{path.crop_y}:exact=1,scale={fr.w}:{fr.h}:flags=lanczos,setsar=1")
 
 
 def backdrop(run_dir: Path, edl: dict, band: tuple[int, int], samples: int = 5) -> dict:
@@ -107,8 +109,8 @@ def preview(run_dir: Path, edl: dict, t: float, cut: Path | None = None) -> tupl
         vf = (f"scale={OUT_W}:{OUT_H}" if (fr.w, fr.h) == (OUT_W, OUT_H) else
               f"scale={fr.w}:{fr.h}:force_original_aspect_ratio=increase,crop={fr.w}:{fr.h}")
         return grab(cut, t, vf), {"captions": [], "callouts": [], "title": True}
-    concept, track = load_reframe_track(run_dir, edl)
-    segments, paths = plan_paths(edl, track, load_speaker_ids(run_dir, concept, edl))
+    _, track, speaker_ids, fallback = reframe_inputs(run_dir, edl)
+    segments, paths = plan_paths(edl, track, speaker_ids, fallback=fallback)
     vpath = run_dir / "voice" / "voice.json"
     words = json.loads(vpath.read_text())["words"] if vpath.is_file() else []
     tmp = Path(tempfile.mkdtemp(prefix="preview_", dir=run_dir / "ui" if (run_dir / "ui").is_dir() else None))
@@ -142,8 +144,8 @@ def preview(run_dir: Path, edl: dict, t: float, cut: Path | None = None) -> tupl
 def layout(run_dir: Path, edl: dict) -> dict:
     """The caption and callout entries a render of `edl` would write (boxes in its frame's pixels), without drawing or
     rendering anything: the Export page's pre-flight for a feed aspect."""
-    concept, track = load_reframe_track(run_dir, edl)
-    segments, paths = plan_paths(edl, track, load_speaker_ids(run_dir, concept, edl))
+    _, track, speaker_ids, fallback = reframe_inputs(run_dir, edl)
+    segments, paths = plan_paths(edl, track, speaker_ids, fallback=fallback)
     vpath = run_dir / "voice" / "voice.json"
     words = json.loads(vpath.read_text())["words"] if vpath.is_file() else []
     title_s = float(((edl.get("render") or {}).get("title") or {}).get("seconds") or 0.0)
