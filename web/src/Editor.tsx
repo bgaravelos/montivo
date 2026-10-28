@@ -180,6 +180,8 @@ export function Editor({ id, replay, go }: Props) {
         break;
       case "Escape": if (ctx) setCtx(null); else if (menu) setMenu(false); else if (wordSel) setWordSel(null); else setSelKey(null); break;
       case "g": case "G": nextGuide(); break;
+      case "m": case "M": p?.toggleMute(); break;
+      case "f": case "F": p?.fullscreen(); break;
       case "n": case "N": { // the next (Shift: previous) reviewer issue of this version
         const iss = [...(v?.review?.issues ?? [])].sort((a, b) => a.t_s - b.t_s);
         if (!iss.length) { flash(v?.review ? "The reviewer raised no issue on this version." : "This version has not been reviewed."); break; }
@@ -280,7 +282,8 @@ export function Editor({ id, replay, go }: Props) {
           <Assistant state={state} versions={visible} lines={lines} job={job} seen={seen} progress={progress} replay={replay} v={v}
             clip={block?.kind === "span" ? block.span!.id : null} getTime={getTime} focusNonce={askNonce}
             onSend={(text, chips, review, planner) => act("replan", { instruction: text, chips, from: v?.n, review, planner })}
-            onStop={() => act("stop", {})} />
+            onStop={() => act("stop", {})} onPick={pick} onSeek={(x) => { player.current?.pause(); seek(x); }}
+            onCompare={(a, b) => go(`${base}/compare?a=${a}&b=${b}${replay ? `&replay=${replay}` : ""}`)} />
         )}
         {panel === "media" && <MediaPanel state={state} />}
         {panel === "captions" && (
@@ -309,8 +312,8 @@ export function Editor({ id, replay, go }: Props) {
       </aside>
 
       <main className="viewer">
-        {v?.cut && (
-          <button className={`guide-btn ${guide !== "off" ? "on" : ""}`} onClick={nextGuide}
+        {v?.cut && guide !== "off" && (
+          <button className="guide-btn on" onClick={nextGuide}
             title="Safe-area guides: the margins Reels, TikTok and Shorts cover with their own UI (G cycles)">
             Safe area: {GUIDE_NAME[guide]}
           </button>
@@ -318,7 +321,7 @@ export function Editor({ id, replay, go }: Props) {
         {v?.cut ? (
           <Player ref={player} key={`${v.n}`} src={fileUrl(id, v.cut)} onTime={onTime} onPlaying={setPlaying}
             marks={blocks.filter((b) => b.kind !== "ghost").map((b) => b.t0)}
-            label={`v${v.n}`} overlay={<>
+            label={`v${v.n}`} safe={{ label: GUIDE_NAME[guide], on: guide !== "off", next: nextGuide }} overlay={<>
               {v && <StyleCanvas v={v} t={t} draft={styleDraft} setDraft={setStyleDraft} preview={stylePreview} busy={previewBusy}
                 show={styling && !playing} />}
               <SafeArea kind={guide} />
@@ -339,7 +342,7 @@ export function Editor({ id, replay, go }: Props) {
         <Timeline id={id} v={v} blocks={blocks} words={state.words} t={t} playing={playing} selected={selKey}
           zoom={zoom} setZoom={setZoom} mode={tlMode} setMode={setTlMode} canTrim={!canEdit}
           onSelect={select} onSeek={seek} onScrub={scrub} onMenu={setCtx} onTrim={askTrim} onMove={askMove}
-          wordSel={wordSel} onWordSel={pickWords} onCutWords={askCut} />
+          wordSel={wordSel} onWordSel={pickWords} onCutWords={askCut} onDelete={askDelete} onAsk={ask} />
       </footer>
 
       {ctx && (

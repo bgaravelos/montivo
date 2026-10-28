@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 import { crit, fileUrl, frameUrl, tc, usd } from "./api";
 import { chain, originLabel, parentOf, punchLabel, sevRank, type Block } from "./edit";
-import { Icon } from "./icons";
+import { CRIT_ICON, Icon } from "./icons";
 import type { Issue, PunchIn, Review, RunState, Version, Word } from "./types";
 
 export type PunchAsk = { on: boolean } | { skip: string };
@@ -24,10 +24,10 @@ export function Inspector({ id, state, versions, v, block, punch, next, words, b
     onReview={onReview} onPunch={onPunch} onHook={onHook} />;
 }
 
-function Head({ title, sub, onClear }: { title: string; sub?: string; onClear?: () => void }) {
+function Head({ icon, title, sub, onClear }: { icon?: string; title: string; sub?: string; onClear?: () => void }) {
   return (
     <div className="panel-head">
-      <span className="ph-title">{title}</span>{sub && <span className="ph-sub">{sub}</span>}
+      {icon && <Icon name={icon} size={15} className="ph-ico" />}<span className="ph-title">{title}</span>{sub && <span className="ph-sub">{sub}</span>}
       <span className="grow" />
       {onClear && <button className="icon-btn" onClick={onClear} title="Clear selection (Esc)"><Icon name="close" size={14} /></button>}
     </div>
@@ -48,7 +48,7 @@ function ClipInspector({ id, state, v, b, words, busy, canEdit, onSeek, onDelete
   const deleteBlocked = canEdit ?? (busy ? "an edit is running" : v.spans.length < 2 ? "the only clip" : null);
   return (
     <section className="inspector">
-      <Head title={`Clip ${sp.id}`} sub={sp.role} onClear={onClear} />
+      <Head icon="film" title={`Clip ${sp.id}`} sub={sp.role} onClear={onClear} />
       <div className="panel-body">
         <div className="insp-thumb-row">
           <button className="insp-thumb" onClick={() => onSeek(b.t0 + 0.02)} title="Go to the clip's start">
@@ -63,7 +63,7 @@ function ClipInspector({ id, state, v, b, words, busy, canEdit, onSeek, onDelete
           </dl>
         </div>
         <div className="insp-sec">
-          <div className="pn-k">What is said</div>
+          <div className="pn-k"><Icon name="transcript" size={12} />What is said</div>
           <p className="said">
             {b.before.map((w) => <s key={`b${w.i}`} className="w cut">{w.w} </s>)}
             {tw.slice(sp.word_from, sp.word_to + 1).map((w) => <span key={w.i}>{w.w} </span>)}
@@ -71,14 +71,14 @@ function ClipInspector({ id, state, v, b, words, busy, canEdit, onSeek, onDelete
           </p>
           {(b.before.length > 0 || b.after.length > 0) && <p className="mute small">Struck words were cut from Version {v.origin.from}.</p>}
         </div>
-        {sp.why && <div className="insp-sec"><div className="pn-k">Why the planner kept it</div><p>{sp.why}</p></div>}
-        {(call || sp.callout) && <div className="insp-sec"><div className="pn-k">Callout</div><p><b>{call?.text ?? sp.callout}</b>{call && <span className="mute"> · {tc(call.t_in)} – {tc(call.t_out)}</span>}</p></div>}
+        {sp.why && <div className="insp-sec"><div className="pn-k"><Icon name="spark" size={12} />Why the planner kept it</div><p>{sp.why}</p></div>}
+        {(call || sp.callout) && <div className="insp-sec"><div className="pn-k"><Icon name="callout" size={12} />Callout</div><p><b>{call?.text ?? sp.callout}</b>{call && <span className="mute"> · {tc(call.t_in)} – {tc(call.t_out)}</span>}</p></div>}
         <div className="insp-actions">
           <button className="btn quiet" onClick={() => onAsk(sp.id)} title="Ask Montivo about this clip"><Icon name="spark" /> Ask Montivo</button>
           <button className="btn danger-quiet" disabled={!!deleteBlocked} title={deleteBlocked ?? "Delete clip (⌫)"} onClick={() => onDelete(sp.id)}><Icon name="trash" /> Delete clip</button>
         </div>
         <div className="insp-sec">
-          <div className="pn-k">Review notes in this clip</div>
+          <div className="pn-k"><Icon name="eyeOff" size={12} />Review notes in this clip</div>
           {!v.review && <p className="mute small">Version {v.n} has not been reviewed.</p>}
           {v.review && !issues.length && <p className="mute small">The reviewer flagged nothing here.</p>}
           <div className="issues">{issues.map((i) => <IssueCard key={i.k} id={id} issue={i} v={v} all={state.versions} onSeek={onSeek} />)}</div>
@@ -91,10 +91,10 @@ function ClipInspector({ id, state, v, b, words, busy, canEdit, onSeek, onDelete
 function TitleInspector({ state, v, onClear }: { state: RunState; v: Version; onClear: () => void }) {
   return (
     <section className="inspector">
-      <Head title="Title card" sub={`${v.title_s.toFixed(1)} s`} onClear={onClear} />
+      <Head icon="text" title="Title card" sub={`${v.title_s.toFixed(1)} s`} onClear={onClear} />
       <div className="panel-body">
         {state.media.title_png && <img className="title-img" src={fileUrl(state.id, state.media.title_png)} alt="" />}
-        <div className="insp-sec"><div className="pn-k">Text</div><p><b>{v.title_card_text}</b></p></div>
+        <div className="insp-sec"><div className="pn-k"><Icon name="text" size={12} />Text</div><p><b>{v.title_card_text}</b></p></div>
         <p className="mute small">Background by Muse Image 1.0, text set by the renderer. It opens the cut for {v.title_s.toFixed(1)} s and fades out.</p>
       </div>
     </section>
@@ -109,7 +109,7 @@ function PunchInspector({ id, v, p, next, canEdit, onSeek, onPunch, onClear }: {
   const peak = p.kind === "emphasis" ? p.t_in + Math.min(0.3, (p.t_out - p.t_in) / 2) : p.t_in + 0.3;
   return (
     <section className="inspector">
-      <Head title="Punch-in" sub={p.kind === "jump_cut" ? "jump cut" : "emphasis"} onClear={onClear} />
+      <Head icon="punch" title="Punch-in" sub={p.kind === "jump_cut" ? "jump cut" : "emphasis"} onClear={onClear} />
       <div className="panel-body">
         <div className="insp-thumb-row">
           <button className="insp-thumb" onClick={play} title="Play the punch-in">
@@ -145,7 +145,7 @@ function PunchToggle({ v, next, canEdit, onPunch }: { v: Version; next: number; 
   return (
     <div className="punch-row">
       <div className="pr-text">
-        <span className="pr-title">Punch-ins</span>
+        <span className="pr-title"><Icon name="punch" size={14} />Punch-ins</span>
         <span className="mute small">{what}</span>
       </div>
       <button className={`switch ${v.punch ? "on" : ""}`} role="switch" aria-checked={v.punch} aria-label="Punch-ins" disabled={!!canEdit}
@@ -172,7 +172,7 @@ function HookTry({ state, versions, v, next, canEdit, onPick, onHook }: {
   return (
     <div className="hook-try">
       <div className="ht-text">
-        <span className="pr-title">Opening line</span>
+        <span className="pr-title"><Icon name="hook" size={14} />Opening line</span>
         <span className="ht-opener" title={opener}>“{opener.length > 70 ? `${opener.slice(0, 68).trim()}…` : opener}”</span>
         {tried.map((x) => {
           const r = x.origin.result;
@@ -203,7 +203,7 @@ function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onRe
   return (
     <section className="inspector">
       <div className="panel-head">
-        <span className="ph-title">Review</span>
+        <Icon name="eyeOff" size={15} className="ph-ico" /><span className="ph-title">Review</span>
         <span className="badge" title="The reviewer gets the rendered video, the brief, the rubric and three measured facts. Never the plan or the edit list.">blind</span>
         <span className="grow" />
         <span className="ph-sub">Version {v.n}</span>
@@ -245,7 +245,7 @@ function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onRe
                 const d = prevScores?.[k] != null ? s - prevScores[k] : 0;
                 return (
                   <div key={k} className="bar-row">
-                    <span className="bl">{crit(k)}</span>
+                    <span className="bl"><Icon name={CRIT_ICON[k] ?? "dot"} size={13} />{crit(k)}</span>
                     <span className="bar"><span className={`fill ${s <= 4 ? "low" : s <= 7 ? "mid" : ""}`} style={{ width: `${s * 10}%` }} /></span>
                     <span className="bn">{s}{d ? <i className={d > 0 ? "up" : "down"}>{d > 0 ? `+${d}` : d}</i> : null}</span>
                   </div>
@@ -260,7 +260,7 @@ function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onRe
               <span className="fact">loud cuts <b>{r.facts.loud_edges}</b> of {r.facts.cut_edges}</span>
               {r.gate && <span className="fact">measured faults <b>{r.gate.checks.length}</b></span>}
             </div>
-            <div className="pn-k">Notes</div>
+            <div className="pn-k"><Icon name="info" size={12} />Notes</div>
             <div className="issues">
               {[...r.issues].sort((a, b) => sevRank(a.severity) - sevRank(b.severity) || a.t_s - b.t_s).map((i) => (
                 <IssueCard key={i.k} id={id} issue={i} v={v} all={state.versions} onSeek={onSeek} />
@@ -268,7 +268,7 @@ function CutReview({ id, state, versions, v, next, canEdit, onSeek, onPick, onRe
               {!r.issues.length && <p className="mute small">No notes: {r.pass ? "the cut passes." : "nothing flagged."}</p>}
             </div>
             {!!r.gate?.issues.length && <>
-              <div className="pn-k" title="Faults the deterministic checks measured in the cut: each one holds the pass and becomes a fix, whatever the reviewer said">Measured checks</div>
+              <div className="pn-k" title="Faults the deterministic checks measured in the cut: each one holds the pass and becomes a fix, whatever the reviewer said"><Icon name="target" size={12} />Measured checks</div>
               <div className="issues">
                 {r.gate.issues.map((i) => <IssueCard key={i.k} id={id} issue={i} v={v} all={state.versions} onSeek={onSeek} />)}
               </div>

@@ -434,6 +434,17 @@ never close) and, with max_containers=1, the new version never starts: every req
 28/10. After every `modal deploy`: `modal container list`, then `modal container stop` the web container that started
 before the deploy. The judge copy on a sample now reads the body first and copies in a thread (a11fa77): the first
 edit used to fail with a 408 while the 13 s copy of 015 ran.
+Chat, transport, icons (28/10, $0, Billy's pick from the mockup in `docs/notes/ui-chat-transport-icons_2026-10-28.html`):
+the Assistant reads as a chat (`web/src/Assistant.tsx`: your bubbles right, Montivo / Reviewer avatars, tool lines folded
+into one "Applied 2 fixes" row, version cards with poster / Open / Compare, review cards with the score ring and the worst
+note as a seek link), the agent's live work in a tray glued above the input (step, clock vs expected, bar, steps done,
+Stop; idle = the pipeline checklist folded), one composer box (context pills, planner menu, Review toggle, send that turns
+into Stop, suggestions from the last review); ProgressCard is gone. Transport (`Player.tsx`): Inter tabular timecode
+`00:13.60`, click for frames `00:13:18` (localStorage), one icon family in a pill, right side speed 1/1.5/2/0.5, loop the
+cut, mute (M), safe area (the "Safe area" chip shows only while on), full screen (F). Icons: one stroke set
+(`icons.tsx`, `CRIT_ICON` per criterion), track headers, Timeline / Transcript tabs, clip tools (loop, Ask, Delete) in
+the timeline bar, inspector heads and sections. No eye / lock / split / snap: nothing in the engine backs them. Checked
+keyless on 015 and replay 4x; the composer and suggestions with a key not clicked yet.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

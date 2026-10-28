@@ -99,7 +99,7 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
     ["Space", "Play / pause"], ["J · K · L", "Shuttle back · stop · forward (press again for 2×, 4×)"],
     ["← →", "One frame back / forward"], ["⇧ ← →", "One second back / forward"], ["⌫ / Delete", "Delete the selected clip, or the selected transcript words"],
     ["⌘Z · ⇧⌘Z", "Previous version · next version"], ["⌘+ · ⌘−", "Zoom the timeline"], ["Esc", "Clear the selection"],
-    ["N · ⇧N", "Next · previous reviewer issue"], ["G", "Safe-area guides: Reels, TikTok, Shorts, off"],
+    ["N · ⇧N", "Next · previous reviewer issue"], ["G", "Safe-area guides: Reels, TikTok, Shorts, off"], ["M", "Mute the viewer"], ["F", "Full screen"],
   ];
   return (
     <Modal title="Keyboard shortcuts" onClose={onClose}>

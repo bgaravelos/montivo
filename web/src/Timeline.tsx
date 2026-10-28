@@ -21,6 +21,7 @@ type Props = {
   mode: "timeline" | "transcript"; setMode: (m: "timeline" | "transcript") => void; canTrim: boolean;
   onSelect: (key: string | null) => void; onSeek: (a: number, b?: number) => void; onScrub: (t: number) => void;
   onMenu: (m: ClipMenu) => void; onTrim: (t: TrimAsk) => void; onMove: (m: MoveAsk) => void;
+  onDelete: (span: string) => void; onAsk: (span: string) => void;
   wordSel: WordSel | null; onWordSel: (s: WordSel | null) => void; onCutWords: () => void;
 };
 
@@ -48,9 +49,21 @@ export function Timeline(p: Props) {
     <div className="timeline">
       <div className="tl-bar">
         <div className="seg-group">
-          <button className={`seg ${mode === "timeline" ? "on" : ""}`} onClick={() => setMode("timeline")}>Timeline</button>
-          <button className={`seg ${mode === "transcript" ? "on" : ""}`} onClick={() => setMode("transcript")}>Transcript</button>
+          <button className={`seg ${mode === "timeline" ? "on" : ""}`} onClick={() => setMode("timeline")}><Icon name="film" size={13} />Timeline</button>
+          <button className={`seg ${mode === "transcript" ? "on" : ""}`} onClick={() => setMode("transcript")}><Icon name="transcript" size={13} />Transcript</button>
         </div>
+        {v && mode === "timeline" && (() => {
+          const b = p.blocks.find((x) => x.key === p.selected && x.kind === "span");
+          const pick = b ? `clip ${b.span!.id}` : "Select a clip first";
+          const del = !b ? pick : !p.canTrim ? "Not while an edit runs or in replay" : v.spans.length < 2 ? "That is the only clip" : null;
+          return (
+            <span className="tl-tools">
+              <button className="icon-btn" disabled={!b} onClick={() => b && p.onSeek(b.t0, b.t1)} title={b ? `Play ${pick} on a loop` : pick}><Icon name="repeat" /></button>
+              <button className="icon-btn" disabled={!b} onClick={() => b && p.onAsk(b.span!.id)} title={b ? `Ask Montivo about ${pick}` : pick}><Icon name="spark" /></button>
+              <button className="icon-btn" disabled={!!del} onClick={() => b && p.onDelete(b.span!.id)} title={del ?? `Delete ${pick} (⌫)`}><Icon name="trash" /></button>
+            </span>
+          );
+        })()}
         {v && <span className="tl-info">Version {v.n} · {v.spans.length} clips · {tc(v.duration_s ?? v.runtime_s)}</span>}
         <span className="grow" />
         {mode === "timeline" && (
@@ -69,10 +82,10 @@ export function Timeline(p: Props) {
           <div className="tl-body">
             <div className="tl-heads">
               <div style={{ height: RULER_H }} />
-              <div className="tl-head" style={{ height: TRACK_H.text }}>Text</div>
-              <div className="tl-head" style={{ height: TRACK_H.captions }}>Captions</div>
-              <div className="tl-head video" style={{ height: TRACK_H.video }}>Video</div>
-              <div className="tl-head" style={{ height: TRACK_H.audio }}>Audio</div>
+              <div className="tl-head" style={{ height: TRACK_H.text }}><Icon name="text" size={13} />Text</div>
+              <div className="tl-head" style={{ height: TRACK_H.captions }}><Icon name="captions" size={13} />Captions</div>
+              <div className="tl-head video" style={{ height: TRACK_H.video }}><Icon name="film" size={13} />Video</div>
+              <div className="tl-head" style={{ height: TRACK_H.audio }}><Icon name="wave" size={13} />Audio</div>
             </div>
             <div className="tl-scroll" ref={scroller}>
               <Canvas {...p} v={v} pps={pps} dur={dur} scroller={scroller} />

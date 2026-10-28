@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { tc } from "./api";
-import { Icon } from "./icons";
 import type { Progress } from "./types";
 
 /** Re-render every `ms` while `on`, so the clocks and the time-driven bar move between two log lines. */
@@ -28,7 +27,7 @@ export function measure(p: Progress, now = performance.now()) {
 }
 
 const clock = (s: number) => tc(Math.max(s, 0), 0);
-const expTip = (p: Progress) => p.expected_s == null ? "No earlier call of this step to estimate from"
+export const expTip = (p: Progress) => p.expected_s == null ? "No earlier call of this step to estimate from"
   : p.expected_from === "ledger" ? "Expected from this project's earlier calls of the same step (ledger.json)"
   : "Expected from the measured runs (the server's hints)";
 
@@ -55,34 +54,6 @@ export function ProgressInline({ p }: { p: Progress }) {
       <span className="prog-step">{stepText(p)}</span>
       <Bar key={p.title} frac={m.frac} small />
     </span>
-  );
-}
-
-/** The Assistant: the running job with the step it is on, its clock against the expected time, and the steps done. */
-export function ProgressCard({ p, onStop }: { p: Progress; onStop?: () => void }) {
-  useTick(p.active);
-  const m = measure(p);
-  return (
-    <div className="prog-card">
-      <div className="pc-head">
-        <span className="pulse" /> <b>{p.label}</b>
-        <span className="mono mute">{clock(m.job)}</span>
-        <span className="grow" />
-        {p.replay ? <span className="mute">replay</span> : onStop && <button className="link" onClick={onStop}>Stop</button>}
-      </div>
-      {p.steps.slice(-4).map((s, k) => (
-        <div key={k} className="pc-done"><Icon name="check" size={11} /><span>{s.title}</span><span className="mono mute">{s.seconds.toFixed(0)} s</span></div>
-      ))}
-      <div className="pc-now">
-        <span className="pc-title">{p.title}</span>
-        {p.detail && <span className="pc-detail">{p.detail}</span>}
-      </div>
-      <Bar key={p.title} frac={m.frac} />
-      <div className="pc-time mono" title={expTip(p)}>
-        <span>{clock(m.stage)}{p.expected_s ? ` of ~${clock(p.expected_s)}` : ""}</span>
-        <span className="mute">{m.frac == null ? "no estimate" : `${Math.round(m.frac * 100)}%`}</span>
-      </div>
-    </div>
   );
 }
 

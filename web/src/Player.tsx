@@ -4,9 +4,23 @@ import { Icon } from "./icons";
 
 export const FPS = 30;
 
+/** The viewer's clock: mm:ss.cc (seconds) or mm:ss:ff (frames at FPS); both pad the minutes so the width never jumps. */
+export function timecode(s: number, mode: "sec" | "frames"): string {
+  const t = Math.max(0, s || 0);
+  if (mode === "frames") {
+    const f = Math.round(t * FPS);
+    const sec = Math.floor(f / FPS);
+    return `${String(Math.floor(sec / 60)).padStart(2, "0")}:${String(sec % 60).padStart(2, "0")}:${String(f % FPS).padStart(2, "0")}`;
+  }
+  const cs = Math.round(t * 100); // hundredths, so 59.996 s reads 01:00.00 and not 00:60.00
+  return `${String(Math.floor(cs / 6000)).padStart(2, "0")}:${(((cs % 6000) / 100).toFixed(2)).padStart(5, "0")}`;
+}
+const RATES = [1, 1.5, 2, 0.5];
+
 export type PlayerHandle = {
   seek: (a: number, b?: number) => void; play: () => void; pause: () => void; toggle: () => void;
   step: (dt: number) => void; shuttle: (dir: -1 | 0 | 1) => void; el: () => HTMLVideoElement | null;
+  toggleMute: () => void; fullscreen: () => void;
 };
 type Band = { a: number; b: number; sev: string };
 
@@ -16,7 +30,8 @@ type Band = { a: number; b: number; sev: string };
 export const Player = forwardRef<PlayerHandle, {
   src: string; onTime?: (t: number) => void; bands?: Band[]; marks?: number[]; compact?: boolean; muted?: boolean;
   label?: string; scrub?: boolean; overlay?: React.ReactNode; onPlaying?: (playing: boolean) => void;
-}>(function Player({ src, onTime, bands = [], marks = [], compact, muted, label, scrub, overlay, onPlaying }, ref) {
+  safe?: { label: string; on: boolean; next: () => void }; // the safe-area guides' switch, on the transport's right
+}>(function Player({ src, onTime, bands = [], marks = [], compact, muted, label, scrub, overlay, onPlaying, safe }, ref) {
   const video = useRef<HTMLVideoElement>(null);
   const loop = useRef<[number, number] | null>(null);
   const back = useRef(0); // reverse shuttle speed, 0 = off
@@ -26,7 +41,18 @@ export const Player = forwardRef<PlayerHandle, {
   const [playing, setPlaying] = useState(false);
   const [looping, setLooping] = useState(false);
   const [rate, setRate] = useState(1); // signed: -4..4, shown when not 1
+  const [mute, setMute] = useState(!!muted);
+  const [whole, setWhole] = useState(false); // loop the whole cut
+  const [mode, setMode] = useState<"sec" | "frames">(() => {
+    try { return localStorage.getItem("montivo.viewer.tc") === "frames" ? "frames" : "sec"; } catch { return "sec"; }
+  });
+  const frame = useRef<HTMLDivElement>(null);
 
+  const calm = () => { // a shuttle speed (J/L) ends with the play or pause; a speed picked on the transport stays
+    if (rate > 0 && RATES.includes(rate)) return;
+    if (video.current) video.current.playbackRate = 1;
+    setRate(1);
+  };
   const clearLoop = () => { loop.current = null; setLooping(false); };
   const stopBack = () => { back.current = 0; };
   const api: PlayerHandle = {
@@ -40,12 +66,12 @@ export const Player = forwardRef<PlayerHandle, {
       if (b != null) el.play().catch(() => {});
     },
     play: () => { stopBack(); video.current?.play().catch(() => {}); },
-    pause: () => { stopBack(); setRate(1); if (video.current) { video.current.pause(); video.current.playbackRate = 1; } },
+    pause: () => { stopBack(); calm(); video.current?.pause(); },
     toggle() {
       const el = video.current;
       if (!el) return;
       if (back.current) { stopBack(); setRate(1); return; }
-      el.playbackRate = 1; setRate(1);
+      calm();
       if (el.paused) el.play().catch(() => {}); else el.pause();
     },
     step(dt) {
@@ -70,6 +96,13 @@ export const Player = forwardRef<PlayerHandle, {
       }
     },
     el: () => video.current,
+    toggleMute: () => setMute((m) => !m),
+    fullscreen() {
+      const f = frame.current;
+      if (!f) return;
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      else f.requestFullscreen().catch(() => {});
+    },
   };
   useImperativeHandle(ref, () => api);
 
@@ -105,6 +138,24 @@ export const Player = forwardRef<PlayerHandle, {
     const to = dir > 0 ? edges.find((m) => m > el.currentTime + 0.05) : [...edges].reverse().find((m) => m < el.currentTime - 0.25);
     api.seek(to ?? (dir > 0 ? d : 0));
   };
+  const nextRate = () => { // 1 -> 1.5 -> 2 -> 0.5 -> 1; a running shuttle drops back to 1
+    const el = video.current;
+    if (!el) return;
+    stopBack();
+    const r = rate < 0 || !RATES.includes(rate) ? 1 : RATES[(RATES.indexOf(rate) + 1) % RATES.length];
+    el.playbackRate = r; setRate(r);
+  };
+  const flipMode = () => {
+    const m = mode === "sec" ? "frames" : "sec";
+    setMode(m);
+    try { localStorage.setItem("montivo.viewer.tc", m); } catch { /* this tab only */ }
+  };
+  const loopBtn = () => {
+    if (looping) return clearLoop();
+    const el = video.current;
+    if (el) el.loop = !whole;
+    setWhole(!whole);
+  };
   const scrubTo = (e: React.MouseEvent<HTMLDivElement>) => {
     const el = video.current;
     if (!el || !d) return;
@@ -115,8 +166,8 @@ export const Player = forwardRef<PlayerHandle, {
 
   return (
     <div className={`player ${compact ? "compact" : ""}`}>
-      <div className="frame916" onClick={api.toggle}>
-        <video ref={video} src={src} preload="auto" playsInline muted={muted}
+      <div className="frame916" ref={frame} onClick={api.toggle}>
+        <video ref={video} src={src} preload="auto" playsInline muted={mute}
           onLoadedMetadata={(e) => setD(e.currentTarget.duration)} onPlay={() => { setPlaying(true); onPlaying?.(true); }} onPause={() => { setPlaying(false); onPlaying?.(false); }} />
         {label && <span className="vlabel">{label}</span>}
         {overlay}
@@ -140,17 +191,22 @@ export const Player = forwardRef<PlayerHandle, {
         </>
       ) : (
         <div className="transport">
-          <span className="tp-tc"><b>{tc(t, 2)}</b> <span className="mute">/ {tc(d, 2)}</span></span>
+          <button className="tp-tc" onClick={flipMode} title={mode === "sec" ? "Minutes, seconds and hundredths (click: frames)" : `Minutes, seconds and frames at ${FPS} fps (click: seconds)`}>
+            <b>{timecode(t, mode)}</b><span>/ {timecode(d, mode)}</span>{mode === "frames" && <i>fr</i>}
+          </button>
           <span className="tp-mid">
-            <button className="tp-icon" onClick={() => skip(-1)} title="Previous clip"><Icon name="skipBack" /></button>
+            <button className="tp-icon" onClick={() => skip(-1)} title="Previous cut"><Icon name="skipBack" /></button>
             <button className="tp-icon" onClick={() => api.step(-1 / FPS)} title="Back one frame (←)"><Icon name="frameBack" /></button>
-            <button className="tp-play" onClick={api.toggle} title="Play / pause (Space)"><Icon name={playing || rate < 0 ? "pause" : "play"} size={18} /></button>
+            <button className="tp-play" onClick={api.toggle} title="Play / pause (Space)"><Icon name={playing || rate < 0 ? "pause" : "play"} /></button>
             <button className="tp-icon" onClick={() => api.step(1 / FPS)} title="Forward one frame (→)"><Icon name="frameFwd" /></button>
-            <button className="tp-icon" onClick={() => skip(1)} title="Next clip"><Icon name="skipFwd" /></button>
+            <button className="tp-icon" onClick={() => skip(1)} title="Next cut"><Icon name="skipFwd" /></button>
           </span>
           <span className="tp-right">
-            {rate !== 1 && <span className="tp-rate">{rate > 0 ? `${rate}×` : `◀ ${-rate}×`}</span>}
-            {looping && <button className="tp-loop" onClick={clearLoop} title="Stop looping">Loop ✕</button>}
+            <button className={`tp-tool tp-rate ${rate !== 1 ? "on" : ""}`} onClick={nextRate} title="Playback speed (J · K · L shuttle)">{rate < 0 ? `◀ ${-rate}×` : `${rate}×`}</button>
+            <button className={`tp-tool ${looping || whole ? "on" : ""}`} onClick={loopBtn} title={looping ? "Stop looping the clip" : whole ? "Stop looping the cut" : "Loop the cut"}><Icon name="repeat" /></button>
+            <button className={`tp-tool ${mute ? "on" : ""}`} onClick={() => setMute(!mute)} title={mute ? "Unmute (M)" : "Mute (M)"}><Icon name={mute ? "mute" : "volume"} /></button>
+            {safe && <button className={`tp-tool ${safe.on ? "on" : ""}`} onClick={safe.next} title={`Safe-area guides: ${safe.label} (G cycles Reels, TikTok, Shorts, off)`}><Icon name="safe" /></button>}
+            <button className="tp-tool" onClick={api.fullscreen} title="Full screen (F)"><Icon name="fit" /></button>
           </span>
         </div>
       )}
