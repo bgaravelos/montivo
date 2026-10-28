@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..config import OPEN_MODEL
+from ..engine.api import dump_json as write_json
 from . import hosted, media
 from .runs import fingerprint, heads, list_runs, parse_log, progress, read_json, replay_script, run_state
 
@@ -148,6 +149,14 @@ def chat_append(run_dir: Path, entry: dict) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a") as fh:
         fh.write(json.dumps({"t": time.time(), **entry}) + "\n")
+
+
+def free_name(folder: Path, name: str) -> Path:
+    """name, or name-2, name-3, ... (before the extension): the first that is not taken in folder."""
+    p, stem, k = folder / name, Path(name).stem[:72], 2
+    while p.exists():
+        p, k = folder / f"{stem}-{k}{Path(name).suffix}", k + 1
+    return p
 
 
 def latest_version(run_dir: Path) -> int:
@@ -499,44 +508,62 @@ def create_app(root: Path) -> FastAPI:
             hit = durations[p.name] = (key, media.probe_duration(p))
         return round(hit[1], 1) or None
 
+    owners_file = st.footage / ".owners.json"  # hosted demo: uploaded clip -> the judge who uploaded it
+
+    def visible(p: Path, request: Request) -> bool:
+        """On the hosted demo a judge sees the seeded clips (no owner) and their own uploads, never another judge's."""
+        if budget is None:
+            return True
+        o = (read_json(owners_file) or {}).get(p.name)
+        return o is None or o == judge_of(request)
+
     @app.get("/api/footage")
-    def footage():
+    def footage(request: Request):
         st.footage.mkdir(exist_ok=True)
         files = [{"path": f"footage/{p.name}", "name": p.name, "mb": round(p.stat().st_size / 1e6, 1),
                   "duration_s": footage_duration(p)}
-                 for p in sorted(st.footage.iterdir()) if p.suffix.lower() in VIDEO_EXT]
+                 for p in sorted(st.footage.iterdir()) if p.suffix.lower() in VIDEO_EXT and visible(p, request)]
         return {"files": files}
 
     @app.get("/api/footage/{name}")
-    def footage_file(name: str):
+    def footage_file(name: str, request: Request):
         """A clip in footage/ for the New project preview (FileResponse answers Range requests)."""
         p = st.footage / name
-        if not SAFE_NAME.match(name) or p.suffix.lower() not in VIDEO_EXT or not p.is_file():
+        if not SAFE_NAME.match(name) or p.suffix.lower() not in VIDEO_EXT or not p.is_file() or not visible(p, request):
             raise HTTPException(404, "no such clip in footage/")
         return FileResponse(p)
 
     @app.put("/api/footage/{name}")
     async def upload(name: str, request: Request):
+        """An upload never replaces a clip: earlier runs render from footage/ by name, so the file lands under the
+        first free name (clip.mp4, clip-2.mp4, ...) once it is complete and within the size limit."""
         if not SAFE_NAME.match(name) or Path(name).suffix.lower() not in VIDEO_EXT:
             raise HTTPException(400, "name: letters, digits, . _ - and a video extension")
         st.footage.mkdir(exist_ok=True)
-        out = st.footage / name
+        part = st.footage / f".upload-{os.urandom(6).hex()}.part"
         size, limit = 0, (max_upload_mb or 0) * 1e6
-        with out.open("wb") as fh:
-            async for chunk in request.stream():
-                size += len(chunk)
-                if limit and size > limit:
-                    fh.close()
-                    out.unlink(missing_ok=True)
-                    raise HTTPException(413, f"the demo server takes uploads up to {max_upload_mb:.0f} MB")
-                fh.write(chunk)
-        return {"path": f"footage/{name}", "mb": round(out.stat().st_size / 1e6, 1)}
+        try:
+            with part.open("wb") as fh:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if limit and size > limit:
+                        raise HTTPException(413, f"the demo server takes uploads up to {max_upload_mb:.0f} MB")
+                    fh.write(chunk)
+            out = free_name(st.footage, name)  # no await from here on: two uploads cannot take the same name
+            part.rename(out)
+        finally:
+            part.unlink(missing_ok=True)
+        if budget is not None:
+            owners = read_json(owners_file) or {}
+            owners[out.name] = judge_of(request)
+            write_json(owners_file, owners)
+        return {"path": f"footage/{out.name}", "name": out.name, "mb": round(out.stat().st_size / 1e6, 1)}
 
     @app.post("/api/runs")
     async def new_run(request: Request):
         b = await request.json()
         src = (st.root / b.get("footage", "")).resolve()
-        if st.footage.resolve() not in src.parents or not src.is_file():
+        if st.footage.resolve() not in src.parents or not src.is_file() or not visible(src, request):
             raise HTTPException(400, "pick a file in footage/")
         dur = footage_duration(src) or 0.0
         if max_footage_s and dur > max_footage_s:
@@ -547,7 +574,7 @@ def create_app(root: Path) -> FastAPI:
         brief = (b.get("brief") or "").strip()
         if not brief:
             raise HTTPException(400, "the brief is empty")
-        rid = b.get("id") or time.strftime("ui-%m%d-%H%M")
+        rid = b.get("id") or free_name(st.runs, time.strftime("ui-%m%d-%H%M")).name  # two judges in one minute
         if not SAFE_NAME.match(rid) or (st.runs / rid / "run.json").exists():
             raise HTTPException(400, f"run id {rid!r} is taken or not a folder name")
         target = float(b.get("target") or 40)

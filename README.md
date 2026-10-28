@@ -10,7 +10,8 @@
 
 An agent-first video editor built on Meta's models. You hand it raw footage and a one-line brief; the agents
 watch it, pick the lines, cut on word boundaries, keep the speaker in a 9:16 frame, render, then review their own
-cut against a rubric and re-cut until it passes.
+cut against a rubric and re-cut until the cut passes or a guard (budget, passes, a regression, a repeated fix) stops
+the loop.
 
 | Role | Model | What it does |
 |---|---|---|
@@ -25,7 +26,7 @@ ledger of tokens, dollars and seconds per stage.
 
 ## Why it is different
 
-AI editors stop at the first cut. Montivo watches its own render the way a viewer would, finds what is wrong, fixes the
+The AI editors we looked at (16 of them, 27/10) stop at the first cut. Montivo watches its own render the way a viewer would, finds what is wrong, fixes the
 edit and renders again:
 
 - **A blind reviewer.** Spark 1.3 gets the rendered vertical cut (with a clock burned in, because it sees about one
@@ -33,6 +34,11 @@ edit and renders again:
   every caption sits against the speaker's head box, the source audio level at both edges of every cut (a model
   does not hear a clipped syllable; the waveform does) and the caption timeline (a line up under a second can fall
   between the frames it sees). It never sees the plan or the edit list.
+- **A pass the reviewer cannot give alone.** Muse Voice re-transcribes every cut and two measured checks run on it:
+  a kept word at a cut edge that the cut no longer says, and the speaker's head outside the 9:16 frame for 0.5 s. A
+  loud cut edge, a caption forced over the head, either check, or a reviewer blocker or major still open holds the
+  pass, and each measured fault becomes a fix of its own. The loop keeps a version that passes over a higher score
+  that does not.
 - **Fix operations, not prose.** Every issue comes back with a time in the cut and one of nine fix ops (`move_cut`,
   `drop_span`, `extend_span`, `swap_hook`, `reorder`, `caption_fix`, `retime_callout`, `reframe_bias`, `none`). The
   patcher maps the time to a span, a cut, a caption line or a callout and writes the next `edl_vN.json` with a
@@ -75,9 +81,13 @@ flowchart LR
 | Billy's own talking head, 125 s, a lean on camera, ums, a repeated take (run 012) | the full run in 242 s wall; the review loop took v1 from 76 to 100 and passed | $0.50 for the run, $0.06 for the loop |
 | The same clip with a deliberately broken v1: a cut inside a word, a caption over the face, a weak hook | the blind reviewer caught all three faults with a timestamp in 3 runs out of 3; the loop took it from 65 to 85 and passed | $0.08 for the test, $0.06 for the loop |
 | A public-domain USGS interview, 166 s, a noisy atrium, a second speaker, passers-by (run 013) | 62 to 68 to 72, no pass; it exposed three bugs the first clip never hit, all fixed (captions avoided every passer-by's head, a flagged title card stayed, a fast speaker's clipped words) | $0.78 |
+| Reviewer benchmark (27/10 night, today's reviewer with the measured checks and the pass gate): four fault types (a weak hook, a cut inside a word, a wrong caption, the head out of frame) planted in three finished cuts, 28 blind reviews | 91 % of the planted faults caught as blocker or major; 2 of 22 faulty cuts still passed (9 %); 3 of 4 reviews of clean cuts passed (75 %); the same cut reviewed twice differs by 4.3 points (SD) | $0.80 |
+| A TEDx clip uploaded through the hosted demo, 84 s, multi-camera, the speaker small in the wide shots | upload, run and loop in the container in 209 s: 72 to 76, no pass ($0.32); after a caption fix, a re-review (74) let the loop try the reviewer's swap_hook: that version scored 48 and the regression guard kept v2 ($0.07) | $0.39 |
 
-A 150 s source comes to about $0.48 with the review loop. Every number above is in the run's `ledger.json`; how each
-one was measured is under "Measured behaviour" below.
+The first two rows were scored by the reviewer of 26/10, before the measured checks and the pass gate (27/10), and are
+not re-scored here. The benchmark is a small sample (`tools/reviewer_bench.py`, `runs/bench/results.md`): it says
+what the reviewer catches on these cuts, not a general error rate. A 150 s source comes to about $0.48 with the review
+loop. Every number above is in the run's `ledger.json`; how each one was measured is under "Measured behaviour" below.
 
 ## Try it
 
@@ -219,7 +229,9 @@ span, a cut point, a caption line or a callout and turns blocker and major issue
 reviewer flags is dropped with `title_card: false`). Guards: at most 3 reviews, a dollar budget checked before each review
 (`--budget`, default $0.30), at most 4 fixes per pass, the same fix proposed twice stops the loop, a pass that scores
 below the best so far stops it, the hook span is never dropped whole, and a drop over part of a span trims only the words
-in the reviewer's window at that end. Word-level edits land on a sentence end when one is a word away and then settle on
+in the reviewer's window at that end. The fixes of one pass are applied in turn and each is checked against the EDL the
+earlier ones made (a move next to a span another fix dropped, or a drop that would leave one span, is skipped and
+recorded), and a new version always takes the next free number, so reviewing an old version never overwrites a later one. Word-level edits land on a sentence end when one is a word away and then settle on
 the quietest 40 ms of the source audio within 0.3 s (Voice words abut, so only the audio shows the gap) and are then
 tightened to the speech like v1; a clipped word is fixed by moving its edge to that quiet point, never by removing words.
 
@@ -292,8 +304,9 @@ every review still needed before the first one, a challenger already compared ag
 and nothing is overwritten. The reviewer varies by about 10 points on an identical cut, so the record says whether the
 margin reaches that (`decisive`). Both versions, the challenger and why, both scores with the hook criterion, the
 winner and the reason go into `review/hook_ab_vA_vB.json` and into B's patch entry (`source: hook_ab`, `result`); the
-editor labels B "hook A/B" and the Assistant says which version was kept. Offline so far (the review call replaced in
-the tests, the render real on a synthetic run); the first real A/B is `montivo hook runs/012`.
+editor labels B "hook A/B" and the Assistant says which version was kept. Real runs so far: on run 012-open the
+challenger (the payoff as a cold open) scored 81 against A's 88 (hook 3 against 10), on run 015 69 against 82; both
+times A was kept.
 
 Speaker to head mapping (`engine/speakers.py`, run step and `montivo speakers runs/001`): with two or more voices and two
 or more heads, the microphone comes first. When watch saw one, the run tracks it with SAM on the head track's frames
@@ -333,9 +346,9 @@ or `jump_cut:s4` that names it across versions). `python -m montivo.human punch 
 version with the punch-ins on or off, `--skip KEY` the next version without that one: the key goes into the EDL's
 `punch_skip`, which the review loop, trims, drops and re-plans carry forward, and a skipped punch-in keeps its place
 (its slot in the one-per-6 s budget and the 4 s spacing, its turn in the jump-cut alternation), so removing one never
-makes another appear elsewhere. Offline so far: synthetic frames, a smoke render, and the editor driven in Chromium
-on a synthetic run folder (remove one, then off: v1 two punch-ins, v2 one, v3 none, $0); the first look on real
-footage is `montivo render runs/012 --punch --out cut_v2_punch.mp4`.
+makes another appear elsewhere. First real use (27/10, run 012-open): 9 punch-ins (7 on emphasis, 2 on jump cuts),
+the head stayed in frame and the captions did not zoom in the frames checked, the blind review 88 and a pass as
+without them; in the editor, Remove and then the switch off made v6 with 8 and v7 with none.
 Captions use `MONTIVO_FONT` when set, else the bundled `montivo/fonts/InterTight-800.ttf` (Inter Tight, SIL OFL 1.1, a
 static wght 800 instance of the Google Fonts variable font), so line breaks and pixels match on every machine; Arial
 Black, Arial Bold and DejaVu Sans Bold are fallbacks only (the path is recorded in the EDL's `caption_style.font_path`).

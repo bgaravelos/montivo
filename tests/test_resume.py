@@ -101,3 +101,14 @@ def test_new_voice_or_watch_means_a_new_plan():
     assert R.plan_reuse(opts, made, False, True) == (False, "no plan.json yet: a new plan")
     opts.resume = False
     assert R.plan_reuse(opts, made, True, True) == (False, "a new plan")
+
+
+def test_resume_refuses_other_footage_or_another_hflip(tmp_path, plans):
+    # Codex F06: ingest.json wins on resume, so a different clip or mirror setting would quietly reuse the old analysis
+    out = folder(tmp_path)
+    with pytest.raises(SystemExit, match="was ingested from"):
+        R.run(R.RunOptions(footage=tmp_path / "other.mp4", brief=BRIEF, out=out, resume=True, skip_track=True,
+                           render=False))
+    with pytest.raises(SystemExit, match="with --hflip"):
+        go(out, tmp_path, hflip=True)
+    assert plans == []

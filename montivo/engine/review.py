@@ -1109,6 +1109,24 @@ def plan_fixes(review: dict, edl: dict, words: Words, audio: Audio | None = None
 STRUCTURAL = ("drop_span", "swap_hook", "reorder")
 
 
+def conflict(edl: dict, f: Fix) -> str:
+    """Why a structural fix no longer fits the EDL the earlier fixes of the same pass made, "" when it does: each was
+    resolved against the reviewed EDL (Codex review F05: drop s2 then "move s3 before s2", or two drops leaving only
+    the hook)."""
+    if f.op not in STRUCTURAL:
+        return ""
+    ids = {x["id"]: x for x in edl["spans"]}
+    if f.target not in ids:
+        return f"{f.target} was dropped by an earlier fix in this pass"
+    if f.op == "reorder" and f.args.get("before") and f.args["before"] not in ids:
+        return f"{f.args['before']} was dropped by an earlier fix in this pass"
+    if f.op == "drop_span" and len(ids) <= 2:
+        return "would leave fewer than 2 spans"
+    if f.op == "drop_span" and ids[f.target]["role"] == "hook":
+        return "the hook span is never dropped whole"
+    return ""
+
+
 def settle(span: dict, words: Words, edge: str, audio: Audio | None, blocked: set[int]) -> str:
     """After a word-level edit the new edge sits on a Voice word boundary, which can be up to 0.3 s inside speech (run
     012: the trim to "Hi. I'm Billy." ended at -25.1 dB). Move it to the quietest point nearby when that is clearly
@@ -1138,6 +1156,9 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
     for f in sorted(fixes, key=lambda f: f.op in STRUCTURAL):
         s = by_id.get(f.target)
         note = ""
+        if why := conflict(new, f):
+            log.append({**asdict(f), "fingerprint": f.fingerprint, "note": f"not applied: {why}", "skipped": True})
+            continue
         if f.op == "drop_title":
             new["title_card"] = False
             note = "title card dropped"
@@ -1318,10 +1339,11 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
 
 # --------------------------------------------------------------------------- the loop
 
-def rank(h: dict) -> tuple[bool, float]:
-    """How the loop compares versions: one no measured check blocks beats one a check blocks, then the reviewer's
-    score (an open reviewer major already costs score, so it does not rank twice; old loop.json has no `checks`)."""
-    return (not h.get("checks", h.get("gate")), h["overall"])
+def rank(h: dict) -> tuple[bool, bool, float]:
+    """How the loop compares versions: a version that passes beats one that does not (the loop never stops on a pass
+    and keeps a failed version), then one no measured check blocks beats one a check blocks, then the reviewer's score
+    (an open reviewer major already costs score, so it does not rank twice; old loop.json has no `checks`)."""
+    return (bool(h.get("pass")), not h.get("checks", h.get("gate")), h["overall"])
 
 
 def edl_version(path: Path, edl: dict) -> int:
@@ -1334,6 +1356,7 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
                 render_fn=None, review_fn=None) -> dict:
     """review cut_vN -> patch -> edl_vN+1 -> render cut_vN+1 -> review ..., until the cut passes, `passes` reviews are
     done, the budget would be exceeded, no fix applies, or a fix repeats. Writes review/loop.json."""
+    from ..human import next_version  # human.py imports the engine; this one only reads file names
     from ..run import render_run  # run.py imports the engine; the loop needs its render entry point
     from .spark import Spark
     edl_path = edl_path or run_dir / "edl_v1.json"
@@ -1395,14 +1418,19 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
         if again:
             stop = f"same fix twice: {', '.join(again)} (first applied in v{seen[again[0]]})"
             break
-        for f in fixes:
-            seen[f.fingerprint] = n
         new, patch_log = apply_fixes(edl, fixes, words, audio)
-        new.setdefault("patches", []).append({"from": n, "review": rv["name"], "fixes": patch_log})
+        if all(p.get("skipped") for p in patch_log):
+            stop = "no applicable fix"
+            break
         for p in patch_log:
-            log(f"patch v{n} -> v{n + 1}: {p['op']} {p['target']}: {p['note']}")
+            if not p.get("skipped"):
+                seen[p["fingerprint"]] = n
+        new.setdefault("patches", []).append({"from": n, "review": rv["name"], "fixes": patch_log})
+        nxt = next_version(run_dir)  # past every version in the folder: reviewing v1 of v1-v5 makes v6, never a new v2
+        for p in patch_log:
+            log(f"patch v{n} -> v{nxt}: {p['op']} {p['target']}: {p['note']}")
         entry["applied"] = patch_log
-        n += 1
+        n = nxt
         edl_path = run_dir / f"edl_v{n}.json"
         dump_json(edl_path, new)
         edl = new

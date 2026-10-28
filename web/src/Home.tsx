@@ -94,10 +94,12 @@ export function Home({ go }: { go: (h: string) => void }) {
 
   const put = async (file: File) => {
     setUpload(`uploading ${file.name}…`);
-    const name = file.name.replace(/[^A-Za-z0-9._-]/g, "_");
+    const safe = file.name.replace(/[^A-Za-z0-9._-]/g, "_").slice(-80);
+    const name = /^[A-Za-z0-9]/.test(safe) ? safe : `clip${safe}`;
     const res = await fetch(`/api/footage/${name}`, { method: "PUT", body: file });
     setUpload(res.ok ? null : `upload failed (${res.status})`);
-    if (res.ok) { setF(`footage/${name}`); load(); }
+    // the server picks a free name (clip-2.mp4 when clip.mp4 exists): earlier projects keep their source
+    if (res.ok) { setF((await res.json()).path); load(); }
   };
   const start = async () => {
     setErr(null);

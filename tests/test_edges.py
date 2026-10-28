@@ -248,3 +248,23 @@ def test_reset_edges_lets_today_s_rules_redo_an_old_pass():
     s1 = span("s1", 0, 2, 5)
     s1.update(t_in=10.7, edges={"in": {"from": 11.0, "to": 10.6, "widened": True}})
     assert E.reset_edges(edl_of(s1), WORDS) == set() and s1["t_in"] == 10.7
+
+
+def test_a_short_first_word_said_where_voice_put_it_stays():
+    # Codex F03: word 1 is dropped but said in its own Voice window (10.5-10.9); s1's own first word sounds
+    # 11.00-11.48, a pause, then its next word at 11.9: that first word is not the dropped word's sound
+    audio = SynthAudio([(10.5, 10.9), (11.0, 11.48), (11.9, 12.8)])
+    edl = edl_of(span("s1", 0, 2, 5))
+    E.tighten_edges(edl, WORDS, audio)
+    assert edl["spans"][0]["t_in"] <= 11.0
+
+
+def test_an_edge_never_widens_past_the_ends_of_the_source():
+    # Codex F09: speech from source time 0 with the first span's edge inside it: the outward search stops at 0
+    words = E.Words([{"w": f"w{i}", "t_start": 0.1 + 0.5 * i, "t_end": 0.6 + 0.5 * i, "turn_id": 0, "i": i,
+                      "speaker": "A"} for i in range(6)])
+    audio = SynthAudio([(0.0, 2.9)])
+    s1 = {"id": "s1", "turn_id": 0, "word_from": 0, "word_to": 3, "t_in": 0.1, "t_out": 2.1, "duration": 2.0}
+    E.tighten_edges(edl_of(s1), words, audio)
+    assert s1["t_in"] >= 0.0
+    assert audio.quietest(-0.4, 0.2)[0] >= 0.0 and audio.quietest(39.9, 40.5)[0] <= 40.0

@@ -170,3 +170,38 @@ def test_sign_in_gives_each_browser_a_judge_id(tmp_path, hosted_env):
     old = TestClient(A.create_app(tmp_path))  # signed in before the judge cookie existed
     old.cookies.set(H.COOKIE, H.token("pw"))
     assert old.get("/api/runs").cookies.get(H.JUDGE)
+
+
+def test_an_upload_never_replaces_a_clip(tmp_path, hosted_env):
+    (tmp_path / "footage").mkdir()
+    (tmp_path / "footage" / "c.mp4").write_bytes(b"first")
+    hosted_env.setenv("MONTIVO_MAX_UPLOAD_MB", "0.001")
+    c = TestClient(A.create_app(tmp_path))
+    r = c.put("/api/footage/c.mp4", content=b"second")
+    assert r.status_code == 200 and r.json()["path"] == "footage/c-2.mp4"
+    assert (tmp_path / "footage" / "c.mp4").read_bytes() == b"first"
+    assert (tmp_path / "footage" / "c-2.mp4").read_bytes() == b"second"
+    # too big: rejected without touching the clip of the same name and without a half file left behind
+    assert c.put("/api/footage/c.mp4", content=b"x" * 5000).status_code == 413
+    assert (tmp_path / "footage" / "c.mp4").read_bytes() == b"first"
+    assert sorted(p.name for p in (tmp_path / "footage").iterdir()) == ["c-2.mp4", "c.mp4"]
+
+
+def test_each_judge_sees_the_seeded_clips_and_their_own_uploads(tmp_path, hosted_env):
+    (tmp_path / "footage").mkdir()
+    _clip(tmp_path / "footage" / "seed.mp4", size="320x240", seconds=1.0)
+    hosted_env.setenv("MONTIVO_BUDGET_USD", "15")
+    fake_jobs(hosted_env)
+    a, b = TestClient(A.create_app(tmp_path)), TestClient(A.create_app(tmp_path))
+    a.cookies.set(H.JUDGE, "aaaa")
+    b.cookies.set(H.JUDGE, "bbbb")
+    assert a.put("/api/footage/mine.mp4", content=(tmp_path / "footage" / "seed.mp4").read_bytes()).status_code == 200
+    assert [f["name"] for f in a.get("/api/footage").json()["files"]] == ["mine.mp4", "seed.mp4"]
+    assert [f["name"] for f in b.get("/api/footage").json()["files"]] == ["seed.mp4"]
+    assert b.get("/api/footage/mine.mp4").status_code == 404 and a.get("/api/footage/mine.mp4").status_code == 200
+    r = b.post("/api/runs", json={"footage": "footage/mine.mp4", "brief": "b", "id": "n1"})
+    assert r.status_code == 400
+    r1 = b.post("/api/runs", json={"footage": "footage/seed.mp4", "brief": "b"}).json()
+    (tmp_path / "runs" / r1["id"] / "run.json").write_text("{}")  # the job would write it
+    r2 = a.post("/api/runs", json={"footage": "footage/mine.mp4", "brief": "b"}).json()
+    assert r2["id"] != r1["id"]  # two judges in the same minute get two run ids

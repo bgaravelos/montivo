@@ -135,11 +135,11 @@ def fold_events(events: list[dict], offset_ms: int = 0, turn_offset: int = 0) ->
 
     turns: list[Turn] = []
     words: list[Word] = []
-    for n, tid in enumerate(order):
+    for tid in order:
         b = builders[tid]
         if b.end_ms is None:
             b.end_ms = max([b.start_ms] + [ms for ms, _ in b.deltas])
-        new_id = turn_offset + n
+        new_id = turn_offset + len(turns)  # after the dropped noise turns: ids stay unique across chunks (Codex F07)
         speaker = b.speaker or "?"
         tw = _words_from_deltas(b, new_id, speaker, offset_ms)
         if not tw:

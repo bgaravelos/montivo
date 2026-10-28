@@ -49,3 +49,19 @@ def test_plan_chunks_prefers_silence():
 
 def test_plan_chunks_short_file_untouched():
     assert plan_chunks(150.0, []) == [(0.0, 150.0)]
+
+
+def test_turn_ids_stay_unique_when_a_chunk_drops_a_noise_turn():
+    # Codex F07: chunk 1 = a turn with no words (music, breath) then speech; chunk 2 = speech
+    def chunk(*turns):
+        ev = []
+        for tid, (ms, text) in enumerate(turns):
+            ev += [{"type": "speechStart", "turnId": tid, "audioProcessedMs": ms}]
+            ev += [{"type": "transcript", "audioProcessedMs": ms + 400, "transcript": text}] if text else []
+            ev += [{"type": "speechEnd", "turnId": tid, "audioProcessedMs": ms + 800}]
+        return ev
+
+    t1, _ = fold_events(chunk((0, ""), (1000, "first")))
+    t2, w2 = fold_events(chunk((0, "second")), offset_ms=480_000, turn_offset=len(t1))
+    assert [(t.turnId, t.transcript) for t in t1 + t2] == [(0, "first"), (1, "second")]
+    assert {w.turn_id for w in w2} == {1}

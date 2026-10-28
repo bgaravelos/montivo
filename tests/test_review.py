@@ -268,6 +268,54 @@ def test_loop_stops_when_the_same_fix_comes_back(tmp_path):
     assert json.loads((tmp_path / "review" / "loop.json").read_text())["stop"] == "max passes (1)"
 
 
+def _loop_folder(tmp_path):
+    edl, _ = make_edl()
+    (tmp_path / "voice").mkdir()
+    (tmp_path / "voice" / "voice.json").write_text(json.dumps({"words": voice_words()}))
+    (tmp_path / "edl_v1.json").write_text(json.dumps(edl))
+
+    def render_fn(ep, name):
+        e = json.loads(ep.read_text())
+        e["render"] = {"title": None, "duration_s": e["runtime_s"], "output": f"{tmp_path}/{name}"}
+        ep.write_text(json.dumps(e))
+        (tmp_path / name).write_bytes(b"")
+    return render_fn
+
+
+def test_reviewing_an_old_version_never_overwrites_a_later_one(tmp_path):
+    render_fn = _loop_folder(tmp_path)
+    for n in range(2, 6):  # v2-v5 made by later edits
+        (tmp_path / f"edl_v{n}.json").write_text(json.dumps({"later": n}))
+        (tmp_path / f"cut_v{n}.mp4").write_bytes(b"later")
+
+    def review_fn(e, cut, n):
+        return {"name": f"review_v{n}", "cost_usd": 0.04, "review": {
+            "pass": n > 1, "overall": 70 + n, "scores": {},
+            "issues": [issue(R.cut_map(e)[0].cut_in + 0.1, "extend_span", edge="out", seconds=0.3)]}}
+
+    out = R.review_loop(tmp_path, passes=3, budget_usd=1.0, log=lambda m: None, render_fn=render_fn, review_fn=review_fn,
+                        ledger=R.Ledger(tmp_path / "ledger.json"))
+    assert [h["version"] for h in out["passes"]] == [1, 6] and out["last_edl"] == "edl_v6.json"
+    assert json.loads((tmp_path / "edl_v6.json").read_text())["patches"][0]["from"] == 1
+    for n in range(2, 6):
+        assert json.loads((tmp_path / f"edl_v{n}.json").read_text()) == {"later": n}
+        assert (tmp_path / f"cut_v{n}.mp4").read_bytes() == b"later"
+
+
+def test_a_loop_that_stops_on_a_pass_keeps_the_version_that_passed(tmp_path):
+    # Codex F04: v1 95 with an open reviewer major (no pass, no measured check), v2 85 passes
+    render_fn = _loop_folder(tmp_path)
+
+    def review_fn(e, cut, n):
+        return {"name": f"review_v{n}", "cost_usd": 0.04, "review": {
+            "pass": n == 2, "overall": 95 if n == 1 else 85, "scores": {},
+            "issues": [issue(R.cut_map(e)[0].cut_in + 0.1, "extend_span", edge="out", seconds=0.3)] if n == 1 else []}}
+
+    out = R.review_loop(tmp_path, passes=3, budget_usd=1.0, log=lambda m: None, render_fn=render_fn, review_fn=review_fn,
+                        ledger=R.Ledger(tmp_path / "ledger.json"))
+    assert out["stop"] == "pass" and out["best"]["version"] == 2
+
+
 def test_loop_budget_guard(tmp_path):
     edl, _ = make_edl()
     edl["render"]["output"] = str(tmp_path / "cut_v1.mp4")
@@ -431,3 +479,18 @@ def test_dedupe_heard_drops_voice_doubles_only():
     w = lambda x, a, b: {"w": x, "t_start": a, "t_end": b}  # noqa: E731
     words = [w("I", 0.0, 0.2), w("run", 0.2, 0.5), w("run", 0.55, 0.8), w("a", 0.8, 0.9), w("a", 1.5, 1.6)]
     assert [x["w"] for x in dedupe_heard(words)] == ["I", "run", "a", "a"]  # a real repeat after a pause stays
+
+
+def test_fixes_of_one_pass_are_checked_against_the_edl_the_earlier_ones_made():
+    # Codex F05: each fix was resolved against the reviewed EDL; applied together they must still fit
+    edl, words = make_edl()
+    fx = lambda op, target, **args: R.Fix(op=op, target=target, issue=0, severity="major", t_s=0.0, args=args)
+    new, log = R.apply_fixes(edl, [fx("drop_span", "s2"), fx("reorder", "s3", before="s2")], words)
+    assert [s["id"] for s in new["spans"]] == ["s1", "s3"]  # no StopIteration: the move had nowhere to go
+    assert [p.get("skipped", False) for p in log] == [False, True] and "dropped by an earlier fix" in log[1]["note"]
+    new, log = R.apply_fixes(edl, [fx("drop_span", "s2"), fx("drop_span", "s3")], words)
+    assert [s["id"] for s in new["spans"]] == ["s1", "s3"] and "fewer than 2" in log[1]["note"]
+    new, log = R.apply_fixes(edl, [fx("drop_span", "s3"), fx("swap_hook", "s3")], words)
+    assert [s["id"] for s in new["spans"]] == ["s1", "s2"]  # a dropped span is never brought back as the hook
+    new, log = R.apply_fixes(edl, [fx("swap_hook", "s3"), fx("drop_span", "s3")], words)
+    assert [s["id"] for s in new["spans"]] == ["s3", "s1", "s2"] and "never dropped" in log[1]["note"]

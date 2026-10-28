@@ -24,6 +24,7 @@ class Probe:
     bytes: int
     has_audio: bool
     codec: str
+    rotation: int = 0  # display rotation in degrees (phone clips: frames stored landscape, shown portrait)
 
 
 @dataclass
@@ -45,7 +46,8 @@ class Ingested:
 def ffprobe(path: Path) -> Probe:
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries",
-         "stream=index,codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate:format=duration,size",
+         "stream=index,codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate:stream_tags=rotate"
+         ":stream_side_data=rotation:format=duration,size",
          "-of", "json", str(path)], check=True, capture_output=True, text=True).stdout
     data = json.loads(out)
     video = next((s for s in data["streams"] if s.get("codec_type") == "video"), None)
@@ -57,9 +59,11 @@ def ffprobe(path: Path) -> Probe:
         rate = video.get("r_frame_rate") or "30/1"
     num, den = (rate.split("/") + ["1"])[:2]
     fps = float(num) / float(den) if float(den) else float(num)
+    rot = next((sd["rotation"] for sd in video.get("side_data_list") or [] if "rotation" in sd),
+               (video.get("tags") or {}).get("rotate", 0))
     return Probe(width=int(video["width"]), height=int(video["height"]), fps=round(fps, 3),
                  duration=float(data["format"]["duration"]), bytes=int(data["format"]["size"]),
-                 has_audio=has_audio, codec=video.get("codec_name", "?"))
+                 has_audio=has_audio, codec=video.get("codec_name", "?"), rotation=int(round(float(rot))) % 360)
 
 
 def even(n: float) -> int:
@@ -96,11 +100,13 @@ def make_wav(src: Path, dst: Path, rate: int = 24000, start: float | None = None
     return dst
 
 
-def make_hflip(src: Path, dst: Path) -> Probe:
-    """Mirror the footage once (selfie / mirror-mode clips where on-screen text reads backwards): libx264 crf 18 at the
-    source size and fps, audio copied untouched so the Voice clock is unchanged. Everything downstream (proxy, wav, SAM,
-    render) reads this file, so boxes and crops never have to be flipped."""
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?", "-vf", "hflip",
+def make_upright(src: Path, dst: Path, hflip: bool = False) -> Probe:
+    """Re-encode the footage once, upright (the decoder applies the display rotation) and mirrored when hflip
+    (selfie / mirror-mode clips where on-screen text reads backwards): libx264 crf 18 at the source fps, audio copied
+    untouched so the Voice clock is unchanged. Everything downstream (proxy, wav, SAM, render) reads this file, so
+    boxes, crops and the probed size all describe the frame as it is shown."""
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?",
+                    *(["-vf", "hflip"] if hflip else []),
                     "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "copy",
                     "-movflags", "+faststart", str(dst)], check=True)
     return ffprobe(dst)
@@ -113,15 +119,17 @@ def ingest(source: Path, out: Path, ledger: Ledger, log=print, hflip: bool = Fal
     log(f"ingest: {source.name} {probe.width}x{probe.height} {probe.fps:g} fps {probe.duration:.1f} s audio={probe.has_audio}")
     if not probe.has_audio:
         raise SystemExit("Montivo needs footage with an audio track (Voice is the clock).")
-    if hflip:
-        flipped = out / "source_hflip.mp4"
+    rotation = probe.rotation
+    if hflip or rotation:  # a rotated clip's stored size is not the shown size the crop and the boxes need
+        upright = out / ("source_hflip.mp4" if hflip else "source_upright.mp4")
+        what = " and ".join(x for x in ("mirrored" if hflip else "", f"rotation {rotation} baked" if rotation else "") if x)
         with Timer() as t_flip:
-            probe = make_hflip(source, flipped)
-        ledger.add(Entry(stage="ingest.hflip", model="ffmpeg", seconds=t_flip.seconds, cost_usd=0.0,
-                         note=f"mirrored {source.name} -> {flipped.name} ({flipped.stat().st_size / 1e6:.1f} MB)"))
-        log(f"ingest: mirrored (hflip) to {flipped.name} ({flipped.stat().st_size / 1e6:.1f} MB) in {t_flip.seconds}s; "
-            "it is the source from here on")
-        source = flipped
+            probe = make_upright(source, upright, hflip)
+        ledger.add(Entry(stage="ingest.hflip" if hflip else "ingest.upright", model="ffmpeg", seconds=t_flip.seconds,
+                         cost_usd=0.0, note=f"{what}: {source.name} -> {upright.name} ({upright.stat().st_size / 1e6:.1f} MB)"))
+        log(f"ingest: {what} to {upright.name} {probe.width}x{probe.height} ({upright.stat().st_size / 1e6:.1f} MB) "
+            f"in {t_flip.seconds}s; it is the source from here on")
+        source = upright
 
     proxy = out / "proxy.mp4"
     wav = out / "audio.wav"
@@ -139,6 +147,6 @@ def ingest(source: Path, out: Path, ledger: Ledger, log=print, hflip: bool = Fal
 
     ing = Ingested(source=source, probe=probe, proxy=proxy, proxy_probe=pp, wav=wav,
                    file_id=up["id"], upload_seconds=up["upload_seconds"])
-    dump_json(out / "ingest.json", {**ing.to_json(), "hflip": hflip, "original_source": str(original),
+    dump_json(out / "ingest.json", {**ing.to_json(), "hflip": hflip, "rotation": rotation, "original_source": str(original),
                                     "upload": {k: v for k, v in up.items() if k != "upload_seconds"}})
     return ing

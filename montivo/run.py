@@ -144,6 +144,10 @@ def run(opts: RunOptions) -> dict:
     # 1. ingest: proxy + wav + one upload for Spark
     if have("ingest.json"):
         d = json.loads((out / "ingest.json").read_text())
+        was = Path(d.get("original_source") or d["source"])
+        if was.resolve() != opts.footage.resolve() or bool(d.get("hflip")) != opts.hflip:
+            raise SystemExit(f"resume: {out} was ingested from {was}{' with --hflip' if d.get('hflip') else ''}, not "
+                             f"{opts.footage}{' with --hflip' if opts.hflip else ''}; use a new --out for other footage")
         ing = Ingested(source=Path(d["source"]), probe=Probe(**d["probe"]), proxy=Path(d["proxy"]), proxy_probe=Probe(**d["proxy_probe"]),
                        wav=Path(d["wav"]), file_id=d["file_id"], upload_seconds=d["upload_seconds"])
         log(f"resume: ingest from ingest.json (file_id {ing.file_id}{', hflip' if d.get('hflip') else ''})")
@@ -192,6 +196,10 @@ def run(opts: RunOptions) -> dict:
             return {}
         if opts.resume and list((out / "track").glob("*/tracks.json")):
             loaded = track_mod.load_all(out / "track")
+            missing = [c for c in [*opts.concepts, opts.reframe_concept] if c and c not in loaded]
+            if missing:
+                raise SystemExit(f"resume: track/ has {', '.join(loaded)} but this run asks for {', '.join(missing)}; "
+                                 "use a new --out (or remove track/ to track again)")
             log(f"resume: tracks from track/*/tracks.json ({', '.join(loaded)})")
             return loaded
         src = track_mod.prepare_source(ing.proxy, ing.proxy_probe, ing.file_id, out / "track", ledger, fps=opts.track_fps, log=log)

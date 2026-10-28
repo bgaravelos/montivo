@@ -184,3 +184,5 @@ def test_the_loop_ranks_by_measured_checks_not_by_open_reviewer_majors():
     b = {"overall": 84, "gate": [], "checks": []}
     c = {"overall": 95, "gate": ["head out of frame"]}  # old loop.json: gate reasons were all checks
     assert max([a, b, c], key=R.rank) is a and R.rank(c) < R.rank(b)
+    passed = {"overall": 80, "pass": True, "gate": [], "checks": []}  # a pass outranks every version that did not pass
+    assert max([a, b, c, passed], key=R.rank) is passed

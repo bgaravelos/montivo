@@ -44,6 +44,8 @@ FRAGMENT_MAX_S = 0.35  # a neighbour's sound still going at the edge, at most th
 FRAGMENT_GAP_S = 0.30  # ... and separated from the span's own speech by a pause at least this long
 DROPPED_WORD_MAX_S = 0.6  # the fragment may be this long when the word past the edge is not in the cut (a short word)
 FAINT_DB = 3.0  # with a dropped neighbour, runs this close to the threshold (breaths) do not count as speech
+DROPPED_HEARD = 0.5  # a dropped word whose own Voice window is this much speech was said there: the sound at the edge
+                     # is not that word (the span's own short first or last word, Codex review F03, 28/10)
 MIN_MOVE_S = 0.03  # smaller moves are left alone (a frame at 30 fps)
 WIDEN_S = 0.4  # a clipped edge looks this far outward for the gap after (before) the word it cuts
 JOIN_GAP_S = 0.05  # render.CONTIGUOUS_GAP_S: spans of one turn closer than this render as one segment
@@ -87,8 +89,17 @@ class Audio:
     def level(self, t0: float, t1: float) -> float:
         return level_db(self.pcm, self.rate, t0, t1)
 
+    @property
+    def duration(self) -> float:
+        return len(self.pcm) / self.rate
+
+    def inside(self, t: float) -> bool:
+        """t is a time of the source: past either end a window reads as -120 dB, the quietest place of all."""
+        return 0.0 <= t <= self.duration
+
     def quietest(self, lo: float, hi: float, half: float = 0.02, step: float = 0.02) -> tuple[float, float]:
-        """(time, dB) of the quietest 2*half window centred between lo and hi."""
+        """(time, dB) of the quietest 2*half window centred between lo and hi, both kept inside the source."""
+        lo, hi = max(0.0, lo), min(self.duration, hi)
         best = (lo, 1e9)
         k = 0
         while lo + k * step <= hi + 1e-9:
@@ -151,6 +162,14 @@ def loud(audio: Audio, runs: list[tuple[float, float]]) -> list[tuple[float, flo
     return [r for r in runs if audio.level(*r) > thr]
 
 
+def displaced(audio: Audio, w: dict) -> bool:
+    """A dropped neighbour may own the sound at the edge only when its own Voice window is mostly quiet, i.e. Voice put
+    the word somewhere it was not said (run 015: "Okay." 0.8 s early, its window 8 % speech)."""
+    a, b = w["t_start"], w["t_end"]
+    heard = sum(max(0.0, min(y, b) - max(x, a)) for x, y in audio.speech_runs(a - 0.1, b + 0.1))
+    return heard < DROPPED_HEARD * max(1e-6, b - a)
+
+
 def onset(span: dict, words: Words, audio: Audio, bound: float | None = None,
           dropped: bool = False) -> tuple[float | None, bool]:
     """Where the span's own speech starts, searched up to `bound` (default the middle of the span): (time or None,
@@ -203,11 +222,11 @@ def widen(span: dict, words: Words, edge: str, audio: Audio, blocked: set[int]) 
     if edge == "out":
         stop = min([w["t_start"] for w in tw[span["word_to"] + 1:] if w["i"] in blocked], default=math.inf)
         xs = [round(t + k * FRAME_S, 3) for k in range(1, int(round(WIDEN_S / FRAME_S)) + 1)]
-        xs = [x for x in xs if x <= stop - 0.02]
+        xs = [x for x in xs if x <= stop - 0.02 and audio.inside(x)]
     else:
         stop = max([w["t_end"] for w in tw[:span["word_from"]] if w["i"] in blocked], default=-math.inf)
         xs = [round(t - k * FRAME_S, 3) for k in range(1, int(round(WIDEN_S / FRAME_S)) + 1)]
-        xs = [x for x in xs if x >= stop + 0.02]
+        xs = [x for x in xs if x >= stop + 0.02 and audio.inside(x)]
     quiet: list[tuple[float, float]] = []
     for x in xs:  # walking outward from the edge
         db = audio.level(x - 0.02, x + 0.02)
@@ -232,7 +251,8 @@ def tighten_edge(span: dict, words: Words, edge: str, audio: Audio, tail: float 
     widened = False
     kept = (blocked or set()) if kept is None else kept
     nb = span["word_from"] - 1 if edge == "in" else span["word_to"] + 1
-    dropped = 0 <= nb < len(words.turn(span["turn_id"])) and nb not in kept
+    tw = words.turn(span["turn_id"])
+    dropped = 0 <= nb < len(tw) and nb not in kept and displaced(audio, tw[nb])
     if edge == "in":
         at, frag = onset(span, words, audio, bound, dropped)
         new = None if at is None else round(max(before, at - LEAD_S), 3)
