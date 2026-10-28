@@ -552,9 +552,13 @@ links on a hit, LRU of about 4 renders, `MONTIVO_SEGCACHE=0` turns it off; segme
 punch-in segments), parallel encodes (4 workers on the Mac, 2 on Modal, x264 threads fixed per machine and in the key),
 audio in its own thread and cached; `-movie_timescale 90000` fixes a sub-ms shift at every concat edge. 015 v5 on the
 Mac: cold 8.8 s, unchanged 0.85 s, one caption edit 2.4-2.7 s (was ~10 s); cached = uncached byte for byte.
-B1, B4, batch 2 and batch 3 are on main, NOT deployed: the auto-mode classifier refused `modal deploy` (28/10 16:30), it
-needs Billy's explicit go; deploy from a clean worktree of main (the checkout had another session's uncommitted
-`export.py` change). Next batches: `docs/notes/next-batches_2026-10-28.md` (C chat, D add back / pauses / overlays,
+Export cover fix (28/10, commit `de893e3`, made in the day-three video session, committed on Billy's deploy go): the
+cover CLI branches send the run log to stderr, so stdout is the one JSON record the server parses ("Design it with Muse
+Spark" answered 500 although the cover was made). B1, B4, batch 2, batch 3 and this fix deployed to Modal 28/10 16:33
+on Billy's explicit go (the auto-mode classifier refuses `modal deploy` without it), from a clean worktree of main at
+de893e3 (the checkout had uncommitted work of another session); no job was running (last run.log 16:21), the 16:00 web
+container stopped; /s/nope 404 and /api/runs 401 live; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 9.0 s
+cold on Modal (was 17.2 s), 16.7 MB. Next batches: `docs/notes/next-batches_2026-10-28.md` (C chat, D add back / pauses / overlays,
 E publish pack, F quality).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
