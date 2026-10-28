@@ -199,12 +199,16 @@ def cut_edge_levels(edl: dict, audio: "Audio") -> list[dict]:
         e = edl["spans"][before.index]["t_out"]
         end_db = audio.level(e - EDGE_HALF_S, e + EDGE_HALF_S)
         start_db = None
+        continuous = False
         if after is not None:
             i = edl["spans"][after.index]["t_in"]
             start_db = audio.level(i - EDGE_HALF_S, i + EDGE_HALF_S)
-        loud = max(end_db, start_db if start_db is not None else -120.0) > loud_db
+            # one speaker's turn running straight into the next (NASA "sardines | Brussels sprouts" at 57.1 s): the two
+            # segments meet on the same source second, so the sound goes on unbroken and nothing is cut inside a word
+            continuous = abs(e - i) < 1.0 / float((edl.get("source") or {}).get("fps") or 30.0)
+        loud = not continuous and max(end_db, start_db if start_db is not None else -120.0) > loud_db
         out.append({"t": round(t, 2), "end_db": end_db, "start_db": start_db, "end": after is None, "loud": loud,
-                    "loud_db": loud_db})
+                    "loud_db": loud_db, **({"continuous": True} if continuous else {})})
     return out
 
 
@@ -241,6 +245,9 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
             def edge(e: dict) -> str:
                 if e["end"]:
                     return f"{e['t']:.2f} s (the end) {e['end_db']:.1f} dB"
+                if e.get("continuous"):
+                    return (f"{e['t']:.2f} s: no cut in the sound, the next speaker's passage follows on the same "
+                            "second of the recording")
                 return f"{e['t']:.2f} s: passage end {e['end_db']:.1f} dB, next start {e['start_db']:.1f} dB"
             loud = [e for e in edges if e["loud"]]
             line = ("3. Speech level of the original recording exactly at each cut, on both sides of the join: "

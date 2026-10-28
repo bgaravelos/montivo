@@ -210,21 +210,26 @@ def offset(span: dict, words: Words, audio: Audio, bound: float | None = None,
     return runs[-1][1], skipped
 
 
-def widen(span: dict, words: Words, edge: str, audio: Audio, blocked: set[int]) -> float | None:
+def widen(span: dict, words: Words, edge: str, audio: Audio, blocked: set[int],
+          fence: list[tuple[float, float]] | None = None) -> float | None:
     """A clipped edge (the 40 ms around it over the speech threshold): the quietest point of the first quiet stretch
     (two or more 40 ms windows under the threshold, 10 ms apart) within WIDEN_S outward, stopping at the first word
-    another span keeps. None when the edge is not clipped or no quiet stretch is in reach."""
+    another span keeps and at the source time of every other span (`fence`, any turn: on run d1-nasa one speaker's
+    edge widened into the next speaker's kept turn and 0.2-0.44 s played twice). None when the edge is not clipped or
+    no quiet stretch is in reach."""
     tw = words.turn(span["turn_id"])
     thr = audio.threshold_db()
     t = span["t_out"] if edge == "out" else span["t_in"]
     if audio.level(t - 0.02, t + 0.02) <= thr:
         return None
     if edge == "out":
-        stop = min([w["t_start"] for w in tw[span["word_to"] + 1:] if w["i"] in blocked], default=math.inf)
+        stop = min([w["t_start"] for w in tw[span["word_to"] + 1:] if w["i"] in blocked]
+                   + [a + 0.02 for a, b in fence or [] if a >= t - 0.005], default=math.inf)
         xs = [round(t + k * FRAME_S, 3) for k in range(1, int(round(WIDEN_S / FRAME_S)) + 1)]
         xs = [x for x in xs if x <= stop - 0.02 and audio.inside(x)]
     else:
-        stop = max([w["t_end"] for w in tw[:span["word_from"]] if w["i"] in blocked], default=-math.inf)
+        stop = max([w["t_end"] for w in tw[:span["word_from"]] if w["i"] in blocked]
+                   + [b - 0.02 for a, b in fence or [] if b <= t + 0.005], default=-math.inf)
         xs = [round(t - k * FRAME_S, 3) for k in range(1, int(round(WIDEN_S / FRAME_S)) + 1)]
         xs = [x for x in xs if x >= stop + 0.02 and audio.inside(x)]
     quiet: list[tuple[float, float]] = []
@@ -241,7 +246,7 @@ def widen(span: dict, words: Words, edge: str, audio: Audio, blocked: set[int]) 
 
 def tighten_edge(span: dict, words: Words, edge: str, audio: Audio, tail: float = TAIL_S,
                  bound: float | None = None, blocked: set[int] | None = None,
-                 kept: set[int] | None = None) -> dict | None:
+                 kept: set[int] | None = None, fence: list[tuple[float, float]] | None = None) -> dict | None:
     """Move one edge of the span to the speech onset - LEAD_S (in) or the speech offset + tail (out), inward and never
     past `bound` (the middle of the segment the span opens or closes); a clipped edge instead moves outward to the
     first quiet stretch (widen). `kept`: the turn's words other spans keep (default `blocked`); a neighbour word
@@ -262,7 +267,7 @@ def tighten_edge(span: dict, words: Words, edge: str, audio: Audio, tail: float 
         new = None if at is None else round(min(before, at + tail), 3)
         moved = new is not None and before - new >= MIN_MOVE_S
     if not moved and at is None and not frag:
-        x = widen(span, words, edge, audio, blocked or set())
+        x = widen(span, words, edge, audio, blocked or set(), fence)
         new, widened = x, x is not None
         moved = widened and abs(x - before) >= MIN_MOVE_S
     if not moved:
@@ -326,7 +331,8 @@ def tighten_edges(edl: dict, words: Words, audio: Audio, only: set[tuple[str, st
         kept = {i for o in spans if o is not s and o["turn_id"] == s["turn_id"]
                 for i in range(o["word_from"], o["word_to"] + 1)}
         blocked = kept | (keep_out or {}).get(s["turn_id"], set())
-        rec = tighten_edge(s, words, edge, audio, tail=tail, bound=bound, blocked=blocked, kept=kept)
+        fence = [(o["t_in"], o["t_out"]) for o in spans if o is not s]
+        rec = tighten_edge(s, words, edge, audio, tail=tail, bound=bound, blocked=blocked, kept=kept, fence=fence)
         if rec:
             moves.append({"span": s["id"], "edge": edge, **rec})
     edl["runtime_s"] = round(sum(s["t_out"] - s["t_in"] for s in spans), 2)

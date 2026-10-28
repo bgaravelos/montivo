@@ -268,3 +268,32 @@ def test_an_edge_never_widens_past_the_ends_of_the_source():
     E.tighten_edges(edl_of(s1), words, audio)
     assert s1["t_in"] >= 0.0
     assert audio.quietest(-0.4, 0.2)[0] >= 0.0 and audio.quietest(39.9, 40.5)[0] <= 40.0
+
+
+def test_a_clipped_edge_never_widens_into_another_speakers_kept_turn():
+    # real run d1-nasa (debugging day 1): turn 6 "smoked turkey" runs straight into turn 7 "and and smoked turkey";
+    # both were kept, each loud edge widened into the other's audio and 0.2-0.44 s played twice
+    ws = [{"w": f"a{i}", "t_start": 10.0 + 0.5 * i, "t_end": 10.5 + 0.5 * i, "turn_id": 0, "i": i, "speaker": "A"}
+          for i in range(4)] + \
+         [{"w": f"b{i}", "t_start": 12.0 + 0.5 * i, "t_end": 12.5 + 0.5 * i, "turn_id": 1, "i": i, "speaker": "B"}
+          for i in range(4)] + [{"w": "c0", "t_start": 30.0, "t_end": 30.5, "turn_id": 5, "i": 0, "speaker": "C"}]
+    audio = SynthAudio([(10.0, 12.2), (12.35, 14.0)])  # no pause at the turn change; the first one 0.2 s into B
+    a = {"id": "s1", "turn_id": 0, "word_from": 0, "word_to": 3, "t_in": 10.0, "t_out": 12.0, "duration": 2.0}
+    b = {"id": "s2", "turn_id": 1, "word_from": 0, "word_to": 3, "t_in": 12.0, "t_out": 14.0, "duration": 2.0}
+    mid = {"id": "s9", "turn_id": 5, "word_from": 0, "word_to": 0, "t_in": 30.0, "t_out": 30.5, "duration": 0.5}
+    edl = edl_of(a, mid, b)  # a clip between them: both edges are cuts
+    E.tighten_edges(edl, E.Words(ws), audio)
+    s1, s2 = edl["spans"][0], edl["spans"][2]
+    assert s1["t_out"] <= s2["t_in"] + 1e-6  # was 12.27: B's first word played after A and again at B's start
+
+
+def test_a_join_on_the_same_source_second_is_not_a_cut_inside_speech():
+    # d1-nasa: "sardines" (turn 4) | "Brussels sprouts" (turn 5) meet at 57.1 s of the source; two segments, but the
+    # sound runs on unbroken, and the gate held the pass on "a cut inside speech" there
+    audio = SynthAudio([(10.0, 14.0)])
+    a = {"id": "s1", "turn_id": 0, "word_from": 0, "word_to": 3, "t_in": 10.0, "t_out": 12.0, "duration": 2.0, "role": "hook"}
+    b = {"id": "s2", "turn_id": 1, "word_from": 0, "word_to": 3, "t_in": 12.0, "t_out": 14.0, "duration": 2.0, "role": "body"}
+    edges = R.cut_edge_levels(edl_of(a, b), audio)
+    assert edges[0]["continuous"] and not edges[0]["loud"]
+    b2 = dict(b, t_in=12.4)  # 0.4 s left out: a real cut, inside speech
+    assert R.cut_edge_levels(edl_of(a, b2), audio)[0]["loud"]
