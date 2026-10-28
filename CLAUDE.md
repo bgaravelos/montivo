@@ -603,6 +603,26 @@ E8 changes 368 of 1138 frames (the pans), E10 / E11 change nothing on any local 
 28/10 17:51 on Billy's go, from a clean worktree of main at 8a69087 (the last job, ui-1028-1227's review loop, ended
 17:42; the 17:18 container stopped); the image HAS zscale (HDR HLG / PQ tone-mapped live); smoke drop on 015: 34.3 s,
 -14.0 LUFS / -1.7 dBTP, render 8.6 s; /s/nope 404, /api/runs 401, /api/health 200.
+Debugging day 1 (run 28/10 evening, $1.67, commits 7245d63 2203aac 91b7a1a 1d82215 7a45609 2a90982, findings in
+`docs/notes/debugging-day1_2026-10-29.md`): `tools/combo_check.py` ($0) runs chains of human edits through the CLI on
+an APFS clone of `runs/016` and checks every version (edl + cut, duration within 2 frames a segment, -14 LUFS / TP <= -1,
+every word once and none deleted coming back, untouched fields, segment cache = `MONTIVO_SEGCACHE=0`, exports 9:16 / 4:5
+/ 1:1 with music and a placeholder B-roll): 6 chains, 44 versions, 0 failures after the fixes, cache byte-identical everywhere. Fixed with tests (384 -> 409):
+a stopped or failed job's unrendered edl_vN moves to `stopped/` (server `set_aside_unrendered`; `human._finish` and the
+review loop drop an EDL whose render failed); a re-plan keeps a carried caption text when its line starts a word later
+(anchor in the middle of what the new plan keeps, splice into a longer line: 015-demo v7 reads "Four Meta models do all"
+again) and keeps an old EDL's greedy line breaks; insert never widens into unselected words; split keeps an override by
+its word; cut refuses a refused drop; Apply refuses a proposal made on an older version; a look from words goes first
+in an Ask Montivo chain; the signed judge cookie (`<id>.<HMAC>`), archived ledgers keyed `_archive/<id>` (a second copy
+after archiving the first spent uncounted), Try again priced by its args, paid calls in requests one at a time, no job
+while an export renders; segment audio padded to its exact length (`apad`, normal renders md5-identical); camera PCM to
+ALAC in the upright copy; E11 also takes a cut over 5 and 25x the clip's own p95 (the TEDx stage scored 7.5-8.9); edges
+never widen or settle into another span's source time in any turn (NASA turns played 0.2-0.44 s twice, 014 too) and a
+join on the same source second is not a gate cut. Real runs (today's code, `runs/d1-nasa`, `d1-usgs`, `d1-tedx`; TEDx
+clip pulled from the Volume): no pass (NASA 58 -> 66, after the fixes 62: the astronauts talk over each other at turn
+changes, not a sample for run 017; USGS 68; TEDx 62 -> 70). Open for day 3: the clean export's punch-ins and pip, an
+upload quota per judge (needs Billy's number); Nice ones on the Board. The judge cookie change needs the deploy; the
+iPhone HDR clip was not in ~/Downloads (day 2).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
