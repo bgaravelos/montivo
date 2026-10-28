@@ -16,6 +16,7 @@ the loop.
 | Role | Model | What it does |
 |---|---|---|
 | Eyes and judgement | **Muse Spark 1.3** | shot log and speaker map (`watch`), paper edit by turn id with verbatim words (`plan`), rubric review with fix ops (`review`) |
+| Open-weight planner | **Muse Spark Open** (on Baseten) | the paper edit (`plan`) when you pick it, in place of Spark 1.3: see [Open weight](#open-weight-muse-spark-open) |
 | Ears and clock | **Muse Voice Transcribe 1.0** | one streaming diarization call per clip: turns, speakers and word-level timings from the delta stream |
 | Camera operator | **SAM 3.1** | tracks the speaker's head (5 fps) for the 9:16 reframe and the person plus any callout concept per frame over raw SSE |
 | Art department | **Muse Image 1.0** | title card and thumbnail |
@@ -23,6 +24,37 @@ the loop.
 
 Every runtime model is a Meta model. Every call's request and response JSON lands in the run folder next to a
 ledger of tokens, dollars and seconds per stage.
+
+## Open weight: Muse Spark Open
+
+**Where it runs.** One stage runs on Meta's open-weight model: the **plan**, the paper edit that picks the lines, their
+order, the hook and the callouts. Choose "Spark Open" in the planner menu on New project or in Ask Montivo (the hosted
+demo has it), or `--planner open` on `montivo run` / `montivo plan`. The call goes to Muse Spark Open
+(`meta-models/muse-spark-open-1026`) on Baseten Model APIs (`https://inference.baseten.co/v1`) as an OpenAI-compatible
+chat completion with the same prompt and the same strict JSON schema Spark 1.3 gets; its answer is logged in the
+run's ledger like any other call. Everything downstream (the EDL on Voice's word boundaries, the render, the blind
+review loop, the editor) is the same code for both planners.
+
+**Why that stage.** The plan is the one model call that needs no picture and no sound: it reads Muse Voice's turns and
+word timings and the shot log as text and answers in JSON. Watch and review stay on Spark 1.3 because they must see
+and hear the footage. We measured that too: in the reviewer benchmark (27/10, `tools/reviewer_bench.py`) Spark Open
+read the cut's frames but heard nothing, caught the planted faults as often as Spark 1.3 (82 %), but scored clean cuts
+15 to 20 points lower and never passed one, so it does not judge the cuts.
+
+**Measured A/B, same footage, same brief** (run 012, Billy's 125 s talking head, `plan_compare_v1_v3.json`):
+
+| | Spark 1.3 | Spark Open |
+|---|---|---|
+| Spans, length (target 45 s) | 9, 44.6 s | 9, 45.3 s |
+| Words quoted verbatim, passages left unplaced | 100 %, 0 | 100 %, 0 |
+| Hook | "Hi. I'm Billy. I run a small digital marketing agency in Athens" | the same line |
+| Plan call cost and time | $0.050, 35.3 s | $0.012, 6.8 s |
+
+Same hook and ending and 8 of 9 passages in common; Spark Open opened the body on "for the Meta Hackathon we are
+building Montivo" where Spark 1.3 kept a stumbling take. Its first cut then went through the same blind review and
+passed (88, 27/10). A second run, an Ask Montivo re-plan of run 015 to "about 30 seconds" on Spark Open,
+came back in 14 s for $0.011 and kept both callouts. Two runs are not a benchmark, but on this stage the open model
+plans as well as Spark 1.3 at about a quarter of the cost and five times the speed.
 
 ## Why it is different
 
@@ -658,4 +690,6 @@ during the event, on top of `montivo` (it plants three faults in a run's EDL and
 
 ## Licence
 
-MIT. Built by Vasileios (Billy) Gkaravelos, Athens. The music beds in `montivo/music/` are CC0 (see the README there).
+MIT, see [LICENSE](LICENSE). Built by Vasileios (Billy) Gkaravelos, Athens. Bundled third-party files keep their own
+licences: the caption fonts in `montivo/fonts/` are SIL Open Font License 1.1 (texts in `montivo/fonts/licenses/`) and
+the music beds in `montivo/music/` are CC0 (see the README there).

@@ -18,7 +18,11 @@ count, build-in-public posts are fine, it can go up any time during the event); 
 Submit until Wed 4/11 9:00 PM ET, early submission gives no edge. Kai | CV (organizer, 28/10): "once submissions are due, no
 further edits are allowed" (so nothing pushed after the deadline counts: the repo is final by Thu 5/11 04:00 Athens);
 the demo video should be 3:00, a few seconds over is not disqualified but they stop watching at 3:00; sped-up runs are
-fine for the demo. Still open: Open Weight with one Spark Open stage.
+fine for the demo. Open Weight (Cerebral Valley bot, 28/10): hosted Muse models plus Muse Spark Open qualify for Best
+Build on Meta Open Weight Models (mixing is encouraged), served on own hardware or partner inference like Baseten
+(`meta-models/muse-spark-open-1026`, `https://inference.baseten.co/v1`); the demo and README must say which stage runs
+on Spark Open and why (README "Open weight: Muse Spark Open", 28/10); the infrastructure partner verifies it in round 1.
+OSS license is in the rules (a builder on Discord, 28/10): MIT in `LICENSE` (Vasileios Gkaravelos), fonts OFL, music CC0.
 Track decision (Billy, 28/10, FINAL): Indie, as Billy's own entry as an individual. Nocta Digital is a Greek OE
 (general partnership, can employ people), so by the bot's rule the agency would fit Startup: every public credit
 (team name "Montivo", README, brand title/end cards, demo end card, submission drafts, X post) must name Vasileios Gkaravelos (Billy's official name), not
