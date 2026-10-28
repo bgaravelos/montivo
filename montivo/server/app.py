@@ -435,7 +435,9 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/api/health")
     def health():
-        return {"ok": True, "root": str(st.root), **key_info(), "costs": COST}
+        # open without the sign-in on the host: no server path there
+        where = {} if os.environ.get("MONTIVO_PASSWORD") or budget is not None else {"root": str(st.root)}
+        return {"ok": True, **where, **key_info(), "costs": COST}
 
     @app.get("/api/runs")
     def runs(request: Request):
@@ -967,6 +969,12 @@ def create_app(root: Path) -> FastAPI:
                     if limit and size > limit:
                         raise HTTPException(413, f"the demo server takes uploads up to {max_upload_mb:.0f} MB")
                     fh.write(chunk)
+            # a clip New project would refuse never lands (nor counts in the quota): the browser checks first, this
+            # is for the one whose length it could not read
+            dur = media.probe_duration(part) if max_footage_s else 0.0
+            if max_footage_s and dur > max_footage_s:
+                raise HTTPException(400, f"this clip is {dur:.0f} s: the demo server takes clips up to "
+                                         f"{max_footage_s:.0f} s")
             check_quota()
             out = free_name(st.footage, name)  # no await from here on: two uploads cannot take the same name
             part.rename(out)

@@ -410,3 +410,26 @@ def test_an_upload_over_the_limit_is_refused_before_its_body_and_the_limits_are_
     r = c.put("/api/footage/big.mov", content=body(), headers={"content-length": str(2_000_000)})
     assert r.status_code == 413 and "1 MB" in r.json()["error"] and read == []
     assert c.get("/api/health").json()["limits"]["upload_mb"] == 1.0
+
+
+def test_a_clip_over_the_length_limit_is_refused_at_upload_and_not_counted(tmp_path, hosted_env):
+    # bug bash day 2: a 135 s clip went up, counted in the judge's 5 uploads, and only Create project said it was
+    # too long; the server now probes the upload and keeps none it would refuse to run
+    _clip(tmp_path / "long.mp4", size="160x120", seconds=3.0)
+    hosted_env.setenv("MONTIVO_BUDGET_USD", "15")
+    hosted_env.setenv("MONTIVO_MAX_UPLOADS", "1")
+    hosted_env.setenv("MONTIVO_MAX_FOOTAGE_S", "2")
+    c = TestClient(A.create_app(tmp_path))
+    c.cookies.set(H.JUDGE, "aaaa")
+    r = c.put("/api/footage/long.mp4", content=(tmp_path / "long.mp4").read_bytes())
+    assert r.status_code == 400 and "is 3 s" in r.json()["error"] and "up to 2 s" in r.json()["error"]
+    assert sorted(p.name for p in (tmp_path / "footage").iterdir()) == []  # no clip, no .part, no owner entry
+    _clip(tmp_path / "short.mp4", size="160x120", seconds=1.0)
+    assert c.put("/api/footage/short.mp4", content=(tmp_path / "short.mp4").read_bytes()).status_code == 200
+
+
+def test_health_names_no_server_path_on_the_host(tmp_path, hosted_env):
+    assert "root" in TestClient(A.create_app(tmp_path)).get("/api/health").json()  # local: the path helps
+    hosted_env.setenv("MONTIVO_PASSWORD", "pw")
+    r = TestClient(A.create_app(tmp_path)).get("/api/health")
+    assert r.status_code == 200 and r.json()["ok"] is True and "root" not in r.json()
