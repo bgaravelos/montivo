@@ -1718,7 +1718,7 @@ def create_app(root: Path) -> FastAPI:
     async def http_error(_req, exc: HTTPException):
         return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
 
-    share.install(app, st)  # /s/<token>: a read-only page per shared version, open without the sign-in
+    share.install(app, st, protected=is_sample)  # /s/<token>: a read-only page per shared version, open without the sign-in
 
     if STATIC.is_dir():
         app.mount("/", WebFiles(directory=STATIC, html=True), name="web")

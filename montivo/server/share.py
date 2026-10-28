@@ -139,7 +139,9 @@ runs the camera, and a blind Muse Spark review scores the render before it ships
 </body></html>"""
 
 
-def install(app, st) -> None:
+def install(app, st, protected=lambda d: False) -> None:
+    """`protected(run_dir)`: a run whose links nobody may remove (the hosted demo's samples, shared by every judge: a
+    link to one may be in a public post)."""
     shares = Shares(st.root)
 
     def resolve(tok: str) -> tuple[Path, dict, dict, list[dict]]:
@@ -174,7 +176,8 @@ def install(app, st) -> None:
     @app.delete("/api/runs/{run_id}/share/{tok}")
     def unshare(run_id: str, tok: str):
         """Unshare: the link stops working at once (its page, video and poster); the version and its cut stay."""
-        st.run_dir(run_id)
+        if protected(st.run_dir(run_id)):
+            raise HTTPException(403, "A sample's links stay: one may already be in a post. Share your own copy instead.")
         if not shares.delete(run_id, tok):
             raise HTTPException(404, "no such link on this run")
         return {"removed": tok, "shares": shares.of_run(run_id)}

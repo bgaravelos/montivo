@@ -22,3 +22,24 @@ def test_the_page_escapes_what_it_shows_and_points_only_at_its_token():
 def test_share_paths_are_open_on_the_hosted_demo_and_the_poster_sits_after_the_title():
     assert "/s/x".startswith(hosted.OPEN_PATHS) and not "/api/runs".startswith(hosted.OPEN_PATHS)
     assert poster_time({"duration_s": 31.5, "title_s": 1.5}) == 11.5
+
+
+def test_a_protected_runs_links_cannot_be_removed(tmp_path):
+    """The hosted demo's samples are shared by every judge, and a link to one may be in a public post."""
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from montivo.server import share
+    runs = tmp_path / "runs"
+    for r in ("015", "mine"):
+        (runs / r).mkdir(parents=True)
+    st = SimpleNamespace(root=tmp_path, runs=runs, run_dir=lambda rid: runs / rid)
+    app = FastAPI()
+    share.install(app, st, protected=lambda d: d.name == "015")
+    s = share.Shares(tmp_path)
+    a, b = s.create("015", 5), s.create("mine", 1)
+    c = TestClient(app)
+    assert c.delete(f"/api/runs/015/share/{a}").status_code == 403 and s.get(a)["run"] == "015"
+    assert c.delete(f"/api/runs/mine/share/{b}").status_code == 200
