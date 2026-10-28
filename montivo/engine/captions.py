@@ -15,6 +15,10 @@ Pipeline, all offline:
    segment's crop path into output pixels) over each line's interval, the caption pushed below or above the head when
    the lower-third default would touch it; the plan's per-span callouts anchored to the SAM person box. Returns the
    EDL `captions` / `callouts` entries and, per segment, the PNG overlays the render burns in.
+
+The positions below are in the 1080x1920 frame; a feed aspect (frame.py, the EDL's `target.aspect`) scales every y by
+its height / 1920 (the default top, a fixed look top, a forced top, a pinned callout), keeps x, and has its own safe
+band (Frame.band: no app UI over a feed post).
 """
 from __future__ import annotations
 
@@ -25,10 +29,11 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .edl import norm
+from .frame import FRAME_916, Frame, frame_for
 from .graphics import CaptionStyle, Look, callout_size, draw_callout, draw_caption, font_path, line_width, normalize_look
 from .reframe import id_at
 
-OUT_W, OUT_H = 1080, 1920
+OUT_W, OUT_H = FRAME_916.w, FRAME_916.h
 CAPTION_TOP = 1300  # default caption top in the 1080x1920 frame (lower third, above the Reels/TikTok UI)
 SAFE_TOP = 220  # platform UI at the top
 SAFE_BOTTOM = 1620  # platform UI (caption, buttons) at the bottom
@@ -279,10 +284,10 @@ def largest_at(track: dict | None, t: float) -> list[list[float]]:
     return [max(bs, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))] if bs else []
 
 
-def clamp_frame(box: list[float] | None) -> list[float] | None:
+def clamp_frame(box: list[float] | None, frame: Frame = FRAME_916) -> list[float] | None:
     if box is None:
         return None
-    return [max(0.0, box[0]), max(0.0, box[1]), min(float(OUT_W), box[2]), min(float(OUT_H), box[3])]
+    return [max(0.0, box[0]), max(0.0, box[1]), min(float(frame.w), box[2]), min(float(frame.h), box[3])]
 
 
 def boxes_at(track: dict | None, t: float) -> list[list[float]]:
@@ -292,9 +297,10 @@ def boxes_at(track: dict | None, t: float) -> list[list[float]]:
     return [b for b in (interp_box(recs, t) for recs in track["objects"].values()) if b is not None]
 
 
-def to_output(box: list[float], crop_x: float, crop_w: int, crop_h: int) -> list[float]:
-    sx, sy = OUT_W / crop_w, OUT_H / crop_h
-    return [(box[0] - crop_x) * sx, box[1] * sy, (box[2] - crop_x) * sx, box[3] * sy]
+def to_output(box: list[float], crop_x: float, crop_w: int, crop_h: int, crop_y: float = 0,
+              frame: Frame = FRAME_916) -> list[float]:
+    sx, sy = frame.w / crop_w, frame.h / crop_h
+    return [(box[0] - crop_x) * sx, (box[1] - crop_y) * sy, (box[2] - crop_x) * sx, (box[3] - crop_y) * sy]
 
 
 def union(boxes: list[list[float]]) -> list[float] | None:
@@ -309,11 +315,15 @@ def overlaps(a: list[float], b: list[float] | None, margin: float = 0.0) -> bool
     return a[0] < b[2] + margin and b[0] - margin < a[2] and a[1] < b[3] + margin and b[1] - margin < a[3]
 
 
-def place_caption(w: int, h: int, head: list[float] | None, top: int = CAPTION_TOP) -> tuple[int, str]:
+def place_caption(w: int, h: int, head: list[float] | None, top: int | None = None,
+                  frame: Frame = FRAME_916) -> tuple[int, str]:
     """Top y of a centred caption box: the lower-third default unless it touches the head (plus margin); then just
     below the head when that still clears the bottom UI, else just above it, else as low as the bottom UI allows,
-    flagged as overlap (a face that fills the frame, run 013: the mouth sits above the default, the chin at it)."""
-    x0 = (OUT_W - w) / 2
+    flagged as overlap (a face that fills the frame, run 013: the mouth sits above the default, the chin at it).
+    `top` is in `frame` pixels (default CAPTION_TOP scaled to it)."""
+    top = frame.y(CAPTION_TOP) if top is None else top
+    safe_top, safe_bottom = frame.band(SAFE_TOP, SAFE_BOTTOM)
+    x0 = (frame.w - w) / 2
 
     def clear(y: float) -> bool:
         return not overlaps([x0, y, x0 + w, y + h], head, HEAD_MARGIN)
@@ -321,12 +331,12 @@ def place_caption(w: int, h: int, head: list[float] | None, top: int = CAPTION_T
     if clear(top):
         return top, "lower_third"
     below = int(head[3] + HEAD_MARGIN + 1)
-    if below + h <= SAFE_BOTTOM and clear(below):
+    if below + h <= safe_bottom and clear(below):
         return below, "below_head"
     above = int(head[1] - HEAD_MARGIN - h - 1)
-    if above >= SAFE_TOP and clear(above):
+    if above >= safe_top and clear(above):
         return above, "above_head"
-    return max(top, SAFE_BOTTOM - h), "over_head"
+    return max(top, safe_bottom - h), "over_head"
 
 
 def fit_line(texts: list[str], style: CaptionStyle) -> CaptionStyle:
@@ -345,31 +355,35 @@ def fit_line(texts: list[str], style: CaptionStyle) -> CaptionStyle:
     return st
 
 
-def pin_callout(w: int, h: int, xy: list) -> tuple[int, int]:
-    """A callout a person placed: its top-left at xy, kept whole inside the frame."""
-    return int(min(OUT_W - w, max(0, float(xy[0])))), int(min(OUT_H - h, max(0, float(xy[1]))))
+def pin_callout(w: int, h: int, xy: list, frame: Frame = FRAME_916) -> tuple[int, int]:
+    """A callout a person placed: its top-left at xy (1080x1920 frame, y scaled to `frame`), kept whole inside it."""
+    return int(min(frame.w - w, max(0, float(xy[0])))), int(min(frame.h - h, max(0, frame.y(xy[1]))))
 
 
 def place_callout(w: int, h: int, person: list[float] | None, head: list[float] | None,
-                  avoid: list[list[float]]) -> tuple[int, int, str]:
+                  avoid: list[list[float]], frame: Frame = FRAME_916) -> tuple[int, int, str]:
     """A callout pill anchored to the person box: centred on it horizontally, sitting on top of the box when there is
     room under the top UI, else inside the box just under the head; never over the head, never over a caption."""
+    safe_top, safe_bottom = frame.band(SAFE_TOP, SAFE_BOTTOM)
     if person is None:
-        return (OUT_W - w) // 2, SAFE_TOP, "no_box"
+        return (frame.w - w) // 2, safe_top, "no_box"
     cx = (person[0] + person[2]) / 2
-    x = int(min(OUT_W - 24 - w, max(24, cx - w / 2)))
+    x = int(min(frame.w - 24 - w, max(24, cx - w / 2)))
     cands = [(int(person[1] - 16 - h), "box_top")]
     if head is not None:
         cands.append((int(head[3] + HEAD_MARGIN), "box_below_head"))
     cands.append((int(person[1] + 24), "box_inside_top"))
+    if head is not None and frame != FRAME_916:
+        # a feed frame has room above the head that the 9:16 top UI takes (run 015: both callouts on the head in 4:5)
+        cands.append((int(head[1] - HEAD_MARGIN - h - 1), "above_head"))
     for y, where in cands:
         r = [x, y, x + w, y + h]
-        if y < SAFE_TOP or y + h > SAFE_BOTTOM:
+        if y < safe_top or y + h > safe_bottom:
             continue
         if overlaps(r, head, HEAD_MARGIN / 2) or any(overlaps(r, a, 12) for a in avoid):
             continue
         return x, y, where
-    return x, max(SAFE_TOP, cands[-1][0]), "overlap"
+    return x, max(safe_top, cands[-1][0]), "overlap"
 
 
 # --------------------------------------------------------------------------- review patches
@@ -473,7 +487,10 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
     keeps every line off the head from the look's `top`, fixed puts every line at `top` (placement "fixed", a person's
     choice: the review loop does not move it). A span's `callout_xy` [x, y] pins its callout there (placement
     "pinned"). `draw_at` (cut seconds) draws only the PNGs on screen at that time, for the editor's preview still.
+    The frame is the EDL's aspect (frame.frame_for): the look's top, a forced top and a pinned callout are 1920-frame
+    y's, scaled to it; the boxes in the returned entries are in its pixels.
     """
+    frame = frame_for(edl)
     look = (style.look if style and style.look else None) or normalize_look(edl.get("look"))
     style = style or CaptionStyle.from_look(look)
     highlight_words = (HIGHLIGHT | set(look.highlight_add)) - set(look.highlight_off)
@@ -506,7 +523,8 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
         k1 = min(len(path.xs) - 1, int(b * seg.fps))
         out = []
         for k in range(k0, k1 + 1, 3):
-            out += [to_output(bx, path.xs[k], path.crop_w, path.crop_h) for bx in pick(track, seg.t_in + k / seg.fps)]
+            out += [to_output(bx, path.xs[k], path.crop_w, path.crop_h, getattr(path, "crop_y", 0), frame)
+                    for bx in pick(track, seg.t_in + k / seg.fps)]
         return union(out)
 
     def subject_head(i: int):
@@ -567,12 +585,13 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                 lstyle = fit_line(texts, style)
                 w_px, h_px = line_width(texts, lstyle), lstyle.height()
                 if look.position == "fixed":
-                    y, where = min(look.top, OUT_H - h_px), "fixed"
+                    y, where = min(frame.y(look.top), frame.h - h_px), "fixed"
                 else:
-                    y, where = place_caption(w_px, h_px, head, top=min(look.top, SAFE_BOTTOM - h_px))
+                    y, where = place_caption(w_px, h_px, head, top=min(frame.y(look.top), frame.band(SAFE_TOP, SAFE_BOTTOM)[1] - h_px),
+                                             frame=frame)
                 if k in forced:
-                    y, where = int(forced[k]["top"]), "forced"
-                x = (OUT_W - w_px) // 2
+                    y, where = frame.y(forced[k]["top"]), "forced"
+                x = (frame.w - w_px) // 2
                 caption_rects[i].append((la, lb, [x, y, x + w_px, y + h_px]))
                 for k in range(len(texts)):
                     png = out_dir / f"cap_{n_line:03d}_{k + 1}.png"
@@ -607,13 +626,13 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
             b = min(seg.duration, a + dur)
             if b - a < 0.5:
                 continue
-            person = clamp_frame(union_out(person_src, i, a, b, largest_at))
+            person = clamp_frame(union_out(person_src, i, a, b, largest_at), frame)
             head = union_out(head_src, i, a, b, subject_head(i))
             avoid = [r for (ra, rb, r) in caption_rects[i] if ra < b and rb > a]
             w_px, h_px = callout_size(text, key=look.font)
-            x, y, where = place_callout(w_px, h_px, person, head, avoid)
+            x, y, where = place_callout(w_px, h_px, person, head, avoid, frame)
             if s.get("callout_xy"):
-                x, y, where = pin_callout(w_px, h_px, s["callout_xy"]) + ("pinned",)
+                x, y, where = pin_callout(w_px, h_px, s["callout_xy"], frame) + ("pinned",)
             png = out_dir / f"callout_{s['id']}.png"
             if on_screen(seg_cut[i] + a, seg_cut[i] + b):
                 draw_callout(text, png, look=look)

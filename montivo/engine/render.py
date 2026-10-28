@@ -6,7 +6,7 @@ is snapped to whole source frames: t_in to the frame grid, duration to a frame c
 segment are exactly as long as each other and no drift builds up across cuts.
 
 Video: per segment, accurate input seek on the source, crop x driven per frame by a sendcmd file from the reframe
-path, full-height crop scaled to 1080x1920, libx264 crf 18, no audio; then the concat demuxer joins the segments
+path, full-height crop scaled to 1080x1920 (or the EDL's other aspect, frame.py), libx264 crf 18, no audio; then the concat demuxer joins the segments
 with stream copy. Audio: atrim per segment over the source, a 20 ms fade in and out against clicks, the concat filter,
 then loudness in two passes: loudnorm measures the joined audio first, the second pass applies one fixed gain to
 -14 LUFS (loudnorm linear mode with the measured values), so room tone stays as far under speech as in the source
@@ -34,11 +34,12 @@ from ..ledger import Entry, Ledger, Timer
 from .api import dump_json
 from .captions import Overlay, build_overlays
 from .edges import Audio
+from .frame import FRAME_916, Frame, frame_for
 from .punch import plan_punches, zoom_filter
 from .reframe import ReframeParams, SegmentPath, plan_segment
 from .speakers import follow_ids
 
-OUT_W, OUT_H = 1080, 1920
+OUT_W, OUT_H = FRAME_916.w, FRAME_916.h
 AUDIO_RATE = 48000
 AUDIO_FADE_S = 0.02
 CONTIGUOUS_GAP_S = 0.05
@@ -206,14 +207,14 @@ def _overlay_graph(base: str, overlays: list[Overlay], first_input: int) -> tupl
 
 
 def render_segment_video(source: Path, seg: Segment, path: SegmentPath, render_dir: Path,
-                         overlays: list[Overlay] | None = None, zoom: dict | None = None) -> Path:
+                         overlays: list[Overlay] | None = None, zoom: dict | None = None, frame: Frame = FRAME_916) -> Path:
     cmds = render_dir / f"seg_{seg.index + 1:02d}_crop.cmd"
     cmds.write_text(path.sendcmd_text())
     out = render_dir / f"seg_{seg.index + 1:02d}.mp4"
     # seek half a frame early so the frame on the grid is never lost to rounding, then rebase pts to 0
     seek = max(0.0, seg.t_in - 0.5 / seg.fps)
-    vf = (f"setpts=PTS-STARTPTS,sendcmd=f={cmds.as_posix()},crop={path.crop_w}:{path.crop_h}:{path.xs[0]}:0,"
-          f"scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1" + (f",{zoom_filter(zoom, seg.fps)}" if zoom else ""))
+    vf = (f"setpts=PTS-STARTPTS,sendcmd=f={cmds.as_posix()},crop={path.crop_w}:{path.crop_h}:{path.xs[0]}:{path.crop_y},"
+          f"scale={frame.w}:{frame.h}:flags=lanczos,setsar=1" + (f",{zoom_filter(zoom, seg.fps, (frame.w, frame.h))}" if zoom else ""))
     ov_args, ov_graph = _overlay_graph("[base]", overlays or [], 1)
     graph = f"[0:v]{vf}[base];{ov_graph}"
     _ffmpeg(["-ss", f"{seek:.6f}", "-t", f"{(seg.frames + 2) / seg.fps:.6f}", "-i", str(source), *ov_args,
@@ -222,12 +223,14 @@ def render_segment_video(source: Path, seg: Segment, path: SegmentPath, render_d
     return out
 
 
-def render_title_video(png: Path, fps: float, render_dir: Path, seconds: float = TITLE_S, fade_s: float = TITLE_FADE_S) -> tuple[Path, int]:
-    """The title card as a segment of whole frames: scaled to cover 1080x1920, fade to black over the last fade_s."""
+def render_title_video(png: Path, fps: float, render_dir: Path, seconds: float = TITLE_S, fade_s: float = TITLE_FADE_S,
+                       frame: Frame = FRAME_916) -> tuple[Path, int]:
+    """The title card as a segment of whole frames: scaled to cover the frame (1080x1920; the 9:16 card's middle in a
+    feed aspect), fade to black over the last fade_s."""
     frames = int(round(seconds * fps))
     out = render_dir / "seg_00_title.mp4"
     d = frames / fps
-    vf = (f"scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase:flags=lanczos,crop={OUT_W}:{OUT_H},setsar=1,"
+    vf = (f"scale={frame.w}:{frame.h}:force_original_aspect_ratio=increase:flags=lanczos,crop={frame.w}:{frame.h},setsar=1,"
           f"fade=t=out:st={d - fade_s:.4f}:d={fade_s},format=yuv420p")
     _ffmpeg(["-loop", "1", "-framerate", f"{fps:g}", "-t", f"{d + 1 / fps:.6f}", "-i", str(png), "-vf", vf,
              "-frames:v", str(frames), "-r", f"{fps:g}", "-fps_mode", "cfr", *X264, str(out)])
@@ -388,12 +391,14 @@ def mux(segment_files: list[Path], audio: Path, out: Path, render_dir: Path) -> 
 def plan_paths(edl: dict, track: dict | None, speaker_ids: dict[str, list[str]],
                params: ReframeParams | None = None) -> tuple[list[Segment], list[SegmentPath]]:
     """The frame-aligned segments of the EDL and the crop path of each (one crop x per output frame), as the render
-    burns them; the editor's preview still (look.py) plans the same way."""
+    burns them; the editor's preview still (look.py) and the review's head checks plan the same way. The crop's width
+    follows the EDL's aspect (frame.frame_for)."""
     segments = frame_align(merge_segments(edl["spans"]), float(edl["source"]["fps"]))
+    aspect = frame_for(edl).ratio
     paths: list[SegmentPath] = []
     for seg in segments:
         path = plan_segment(seg.t_in, seg.t_out, edl["source"], track, params, span_ids=seg.span_ids,
-                            follow=follow_pieces(seg, edl["spans"], speaker_ids))
+                            follow=follow_pieces(seg, edl["spans"], speaker_ids), aspect=aspect)
         path.xs = path.xs[:seg.frames] + [path.xs[-1]] * max(0, seg.frames - len(path.xs))
         bias = segment_bias(edl["spans"], seg.span_ids)
         if bias:
@@ -423,11 +428,12 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     shutil.rmtree(ov_dir, ignore_errors=True)
     ov_dir.mkdir()
     fps = float(edl["source"]["fps"])
+    frame = frame_for(edl)
     concept, track = load_reframe_track(run_dir, edl)
     speaker_ids = load_speaker_ids(run_dir, concept, edl)
     segments, paths = plan_paths(edl, track, speaker_ids, params)
     log(f"render: {len(edl['spans'])} spans -> {len(segments)} segments ({sum(s.frames for s in segments)} frames), "
-        f"source {source.name}, track {concept or 'none (centre crop)'}"
+        f"source {source.name}, {frame.w}x{frame.h} ({frame.aspect}), track {concept or 'none (centre crop)'}"
         + (f", following speakers {', '.join(f'{k}->{'/'.join(v)}' for k, v in speaker_ids.items())}" if speaker_ids else ""))
 
     keyframes: list[dict] = []
@@ -462,17 +468,18 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
             log(f"render: {len(edl['punch_ins'])} punch-ins: " + "; ".join(
                 f"{e['t_in']:.1f}s {e.get('word') or 'jump cut'} x{e['zoom']}" for e in edl["punch_ins"]))
         if title_png is not None:
-            tfile, _ = render_title_video(title_png, fps, render_dir)
+            tfile, _ = render_title_video(title_png, fps, render_dir, frame=frame)
             files.append(tfile)
             log(f"render: title card {title_png.name} {title_s:.2f}s ({title_frames} frames, fade {TITLE_FADE_S}s)")
         for seg, path in zip(segments, paths):
             ovs = overlays.get(seg.index, [])
-            f = render_segment_video(source, seg, path, render_dir, ovs, zooms.get(seg.index))
+            f = render_segment_video(source, seg, path, render_dir, ovs, zooms.get(seg.index), frame)
             files.append(f)
             keyframes.extend(path.keyframes)
             moving = sum(1 for a, b in zip(path.xs, path.xs[1:]) if a != b)
             seg_info.append({"index": seg.index, "t_in": seg.t_in, "t_out": seg.t_out, "duration": seg.duration, "frames": seg.frames,
                              "spans": seg.span_ids, "track_concept": concept, "track_id": path.track_id, "crop": [path.crop_w, path.crop_h],
+                             **({"crop_y": path.crop_y} if path.crop_y else {}),
                              "x_first": path.xs[0], "x_min": min(path.xs), "x_max": max(path.xs),
                              "frames_moving": moving, "overlays": len(ovs), "file": f.as_posix(),
                              **({"pieces": path.pieces} if path.pieces else {}),
@@ -486,7 +493,7 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     size_mb = out.stat().st_size / 1e6
     total = round(title_s + sum(s.duration for s in segments), 3)
     edl["reframe"] = keyframes
-    edl["render"] = {"output": out.as_posix(), "width": OUT_W, "height": OUT_H, "duration_s": total, "segments": seg_info,
+    edl["render"] = {"output": out.as_posix(), "aspect": frame.aspect, "width": frame.w, "height": frame.h, "duration_s": total, "segments": seg_info,
                      "title": {"png": title_png.as_posix(), "seconds": round(title_s, 4), "frames": title_frames,
                                "fade_out_s": TITLE_FADE_S, "text": edl.get("title_card_text", "")} if title_png else None,
                      "loudnorm": loud, "loudness_ebur128": measured,

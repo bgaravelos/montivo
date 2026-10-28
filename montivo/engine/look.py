@@ -19,6 +19,7 @@ from pathlib import Path
 from PIL import Image
 
 from .captions import OUT_H, OUT_W, build_overlays
+from .frame import frame_for
 from .graphics import _HEX, ACTIVE_MODES, CASES, FONTS, PRESET_NAMES, PRESETS, TOP_RANGE, Look, normalize_look
 from .render import load_reframe_track, load_speaker_ids, load_track, plan_paths
 
@@ -57,7 +58,8 @@ def with_style(edl: dict, look: dict | None, callouts: dict[str, list[float] | N
 
 
 def frame_at(run_dir: Path, edl: dict, t: float, plan=None) -> Image.Image:
-    """The 1080x1920 frame at cut second t of `edl` without any graphics: the source cropped as the render crops it."""
+    """The frame (1080x1920, or the EDL's other aspect) at cut second t of `edl` without any graphics: the source
+    cropped as the render crops it."""
     concept, track = load_reframe_track(run_dir, edl)
     segments, paths = plan or plan_paths(edl, track, load_speaker_ids(run_dir, concept, edl))
     title_s = float(((edl.get("render") or {}).get("title") or {}).get("seconds") or 0.0)
@@ -72,8 +74,9 @@ def frame_at(run_dir: Path, edl: dict, t: float, plan=None) -> Image.Image:
     seg, path = segments[i], paths[i]
     local = min(max(0.0, t - start), seg.duration - 1e-3)
     k = min(len(path.xs) - 1, int(local * seg.fps))
+    fr = frame_for(edl)
     return grab(source_of(run_dir, edl), seg.t_in + k / seg.fps,
-                f"crop={path.crop_w}:{path.crop_h}:{path.xs[k]}:0,scale={OUT_W}:{OUT_H}:flags=lanczos,setsar=1")
+                f"crop={path.crop_w}:{path.crop_h}:{path.xs[k]}:{path.crop_y},scale={fr.w}:{fr.h}:flags=lanczos,setsar=1")
 
 
 def backdrop(run_dir: Path, edl: dict, band: tuple[int, int], samples: int = 5) -> dict:
@@ -94,12 +97,16 @@ def backdrop(run_dir: Path, edl: dict, band: tuple[int, int], samples: int = 5) 
 
 
 def preview(run_dir: Path, edl: dict, t: float, cut: Path | None = None) -> tuple[Image.Image, dict]:
-    """The 1080x1920 frame at cut second t of `edl` (its spans, crop and look) and the caption and callout entries on
-    screen then (their boxes in output pixels, for the editor's handles)."""
+    """The frame at cut second t of `edl` (its spans, crop, look and aspect) and the caption and callout entries on
+    screen then (their boxes in output pixels, for the editor's handles). On the title card it is the card from `cut`
+    (the 9:16 cut: its middle for a feed aspect, as the render crops the card)."""
     render = edl.get("render") or {}
     title_s = float((render.get("title") or {}).get("seconds") or 0.0)
     if t < title_s and cut is not None and cut.is_file():
-        return grab(cut, t, f"scale={OUT_W}:{OUT_H}"), {"captions": [], "callouts": [], "title": True}
+        fr = frame_for(edl)
+        vf = (f"scale={OUT_W}:{OUT_H}" if (fr.w, fr.h) == (OUT_W, OUT_H) else
+              f"scale={fr.w}:{fr.h}:force_original_aspect_ratio=increase,crop={fr.w}:{fr.h}")
+        return grab(cut, t, vf), {"captions": [], "callouts": [], "title": True}
     concept, track = load_reframe_track(run_dir, edl)
     segments, paths = plan_paths(edl, track, load_speaker_ids(run_dir, concept, edl))
     vpath = run_dir / "voice" / "voice.json"
@@ -130,6 +137,20 @@ def preview(run_dir: Path, edl: dict, t: float, cut: Path | None = None) -> tupl
     on = lambda e: e["t_in"] <= t < e["t_out"]  # noqa: E731
     return img, {"captions": [c for c in fields["captions"] if on(c)], "callouts": [c for c in fields["callouts"] if on(c)],
                  "look": fields["caption_style"]["look"], "title": False}
+
+
+def layout(run_dir: Path, edl: dict) -> dict:
+    """The caption and callout entries a render of `edl` would write (boxes in its frame's pixels), without drawing or
+    rendering anything: the Export page's pre-flight for a feed aspect."""
+    concept, track = load_reframe_track(run_dir, edl)
+    segments, paths = plan_paths(edl, track, load_speaker_ids(run_dir, concept, edl))
+    vpath = run_dir / "voice" / "voice.json"
+    words = json.loads(vpath.read_text())["words"] if vpath.is_file() else []
+    title_s = float(((edl.get("render") or {}).get("title") or {}).get("seconds") or 0.0)
+    fields, _ = build_overlays(edl, words, segments, paths, load_track(run_dir, edl, "head"), load_track(run_dir, edl, "person"),
+                               run_dir / "ui" / "cache" / "layout", title_s=title_s, captions=bool(words),
+                               reframe_concept=concept, draw_at=-1.0)
+    return fields
 
 
 # --------------------------------------------------------------------------- the look from a sentence

@@ -1,7 +1,7 @@
 """Export bundle of one version, as an engine entry point the UI server runs as a subprocess:
 
     python -m montivo.export runs/015 --version 5 --out runs/015/ui/cache/exports/abc --name montivo-015-v5 \
-        --include video,clean,srt,vtt,cover,audio,transcript [--preset 720] [--cover-t 12.3]
+        --include video,clean,srt,vtt,cover,audio,transcript [--preset 720] [--cover-t 12.3] [--aspect 4:5]
 
 Writes the chosen files into --out and, when there is more than one, a zip of them; prints a JSON record of what it
 wrote. $0, ffmpeg only, and nothing in the run folder changes: `video` is cut_vN.mp4 itself (or its 720x1280 copy),
@@ -9,6 +9,12 @@ wrote. $0, ffmpeg only, and nothing in the run folder changes: `video` is cut_vN
 render; callouts and the title card stay), `srt` / `vtt` are the caption lines in cut time, `cover` the frame at
 --cover-t (1080x1920, plus a 1080x1440 crop for the Instagram profile grid), `audio` the cut's loudness-normalised
 sound as WAV, `transcript` the caption lines as text with their times.
+
+`--aspect 4:5` (1080x1350, the Instagram / Facebook feed and LinkedIn) or `1:1` (1080x1080) renders `video` and
+`clean` again in that frame from a copy of the EDL, the way `clean` does (engine/frame.py: the crop narrows and still
+follows the head, captions and callouts are laid out again in the frame); the cover is that frame's still (engine/
+look.py, the render's own pixels without the punch-in zoom) and its grid crop the 3:4 middle of it. The SRT, VTT, WAV
+and transcript are the same in every aspect.
 """
 from __future__ import annotations
 
@@ -21,11 +27,21 @@ import sys
 import zipfile
 from pathlib import Path
 
+from .engine.frame import FRAME_916, Frame, frame_of, with_aspect
 from .ledger import Ledger
 from .run import render_run
 
 KINDS = ("video", "clean", "srt", "vtt", "cover", "audio", "transcript")
-GRID_H = 1440  # the Instagram profile grid shows a 3:4 crop of a 9:16 cover
+
+
+def grid_crop(w: int, h: int) -> str:
+    """The ffmpeg crop of the Instagram profile grid's 3:4 window, the middle of a cover of any aspect (1080x1440 of 9:16,
+    1012x1350 of 4:5, 810x1080 of 1:1)."""
+    if w * 4 <= h * 3:
+        gh = w * 4 // 3 // 2 * 2
+        return f"crop={w}:{gh}:0:(ih-{gh})/2"
+    gw = h * 3 // 4 // 2 * 2
+    return f"crop={gw}:{h}:(iw-{gw})/2:0"
 
 
 def stamp(t: float, sep: str) -> str:
@@ -59,7 +75,8 @@ def ffmpeg(*args: str) -> None:
 
 
 def small(src: Path, out: Path) -> Path:
-    ffmpeg("-i", str(src), "-vf", "scale=720:1280", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+    """A 720 px wide copy (720x1280 of the 9:16 cut)."""
+    ffmpeg("-i", str(src), "-vf", "scale=720:-2", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
            "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", str(out))
     return out
 
@@ -74,21 +91,30 @@ def title_ready(run_dir: Path, edl: dict) -> bool:
         f'"{edl["title_card_text"]}"' in json.loads(req.read_text()).get("prompt", "")
 
 
-def clean_render(run_dir: Path, edl: dict, out: Path) -> Path:
-    """The version again without captions, from a copy of its EDL, its ledger and log kept apart from the run's."""
-    work = out.parent / "clean_work"
+def render_copy(run_dir: Path, edl: dict, out: Path, captions: bool = True, frame: Frame = FRAME_916) -> Path:
+    """The version again (without captions, or in another frame) from a copy of its EDL, its ledger and log kept
+    apart from the run's."""
+    work = out.parent / "render_work"
     work.mkdir(parents=True, exist_ok=True)
     tmp = work / "edl.json"
-    tmp.write_text(json.dumps(copy.deepcopy(edl)))
+    tmp.write_text(json.dumps(with_aspect(copy.deepcopy(edl), frame.aspect)))
     rel = out.resolve().relative_to(run_dir.resolve())
-    render_run(run_dir, edl_path=tmp, out_name=str(rel), captions=False, ledger=Ledger(work / "ledger.json"),
+    render_run(run_dir, edl_path=tmp, out_name=str(rel), captions=captions, ledger=Ledger(work / "ledger.json"),
                log=lambda *a, **k: None, title=title_ready(run_dir, edl))
     shutil.rmtree(work, ignore_errors=True)
     return out
 
 
+def cover_still(run_dir: Path, edl: dict, t: float, cut: Path, frame: Frame, dst: Path) -> Path:
+    """The cover of a feed aspect: the frame at cut second t laid out as that aspect's render would burn it."""
+    from .engine.look import preview
+    img, _ = preview(run_dir, with_aspect(copy.deepcopy(edl), frame.aspect), t, cut)
+    img.convert("RGB").save(dst, quality=95)
+    return dst
+
+
 def export(run_dir: Path, n: int, out: Path, name: str, include: list[str], preset: str = "full",
-           cover_t: float | None = None) -> dict:
+           cover_t: float | None = None, aspect: str = "9:16") -> dict:
     edl_path, cut = run_dir / f"edl_v{n}.json", run_dir / f"cut_v{n}.mp4"
     if not edl_path.is_file() or not cut.is_file():
         raise SystemExit(f"version {n} has no edl_v{n}.json and cut_v{n}.mp4 in {run_dir}")
@@ -97,20 +123,28 @@ def export(run_dir: Path, n: int, out: Path, name: str, include: list[str], pres
         raise SystemExit(f"--include: one or more of {', '.join(KINDS)}")
     if preset not in ("full", "720"):
         raise SystemExit("--preset: full or 720")
+    try:
+        frame = frame_of(aspect)
+    except ValueError as e:
+        raise SystemExit(f"--aspect: {e}")
+    feed = frame != FRAME_916
+    tag = f"-{frame.tag}" if feed else ""
     edl = json.loads(edl_path.read_text())
     out.mkdir(parents=True, exist_ok=True)
     cues = caption_cues(edl)
     files: list[Path] = []
     p720 = preset == "720"
-    if "video" in include:
+    if "video" in include and not feed:
         dst = out / f"{name}{'-720p' if p720 else ''}.mp4"
         small(cut, dst) if p720 else shutil.copyfile(cut, dst)
         files.append(dst)
-    if "clean" in include:
-        full = out / f"{name}-no-captions{'-full' if p720 else ''}.mp4"
-        clean_render(run_dir, edl, full)
+    for kind, captions, stem in (("video", True, f"{name}{tag}"), ("clean", False, f"{name}{tag}-no-captions")):
+        if kind not in include or (kind == "video" and not feed):
+            continue
+        full = out / f"{stem}{'-full' if p720 else ''}.mp4"
+        render_copy(run_dir, edl, full, captions=captions, frame=frame)
         if p720:
-            files.append(small(full, out / f"{name}-no-captions-720p.mp4"))
+            files.append(small(full, out / f"{stem}-720p.mp4"))
             full.unlink()
         else:
             files.append(full)
@@ -126,18 +160,21 @@ def export(run_dir: Path, n: int, out: Path, name: str, include: list[str], pres
     if "cover" in include:
         dur = float((edl.get("render") or {}).get("duration_s") or edl.get("runtime_s") or 1.0)
         t = min(max(0.0, cover_t if cover_t is not None else dur / 3), max(0.0, dur - 0.05))
-        dst = out / f"{name}-cover.jpg"
-        ffmpeg("-ss", f"{t:.3f}", "-i", str(cut), "-frames:v", "1", "-q:v", "2", str(dst))
-        grid = out / f"{name}-cover-grid.jpg"
-        ffmpeg("-i", str(dst), "-vf", f"crop=1080:{GRID_H}:0:(ih-{GRID_H})/2", "-q:v", "2", str(grid))
+        dst = out / f"{name}{tag}-cover.jpg"
+        if feed:
+            cover_still(run_dir, edl, t, cut, frame, dst)
+        else:
+            ffmpeg("-ss", f"{t:.3f}", "-i", str(cut), "-frames:v", "1", "-q:v", "2", str(dst))
+        grid = out / f"{name}{tag}-cover-grid.jpg"
+        ffmpeg("-i", str(dst), "-vf", grid_crop(frame.w, frame.h), "-q:v", "2", str(grid))
         files += [dst, grid]
     if "audio" in include:
         dst = out / f"{name}.wav"
         ffmpeg("-i", str(cut), "-vn", "-c:a", "pcm_s16le", "-ar", "48000", str(dst))
         files.append(dst)
-    record = {"version": n, "files": [{"name": f.name, "bytes": f.stat().st_size} for f in files], "zip": None}
+    record = {"version": n, "aspect": frame.aspect, "files": [{"name": f.name, "bytes": f.stat().st_size} for f in files], "zip": None}
     if len(files) > 1:
-        z = out / f"{name}.zip"
+        z = out / f"{name}{tag}.zip"
         with zipfile.ZipFile(z, "w", zipfile.ZIP_STORED) as zf:  # mp4 / jpg / wav do not compress further
             for f in files:
                 zf.write(f, f.name)
@@ -153,6 +190,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--name", default=None, help="file name stem (default montivo-<run>-v<N>)")
     ap.add_argument("--include", default="video", help=f"comma list of {', '.join(KINDS)}")
     ap.add_argument("--preset", default="full", choices=("full", "720"))
+    ap.add_argument("--aspect", default="9:16", choices=("9:16", "4:5", "1:1"),
+                    help="the frame: 9:16 as rendered, or 4:5 / 1:1 rendered again for feed posts")
     ap.add_argument("--cover-t", type=float, default=None, help="cut second of the cover frame (default a third in)")
     ap.add_argument("--suggest-cover", action="store_true",
                     help="only ask Muse Spark for the best cover moments (one call, about $0.03) -> cover_vN.json")
@@ -168,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         ap.error("--out is needed for an export")
     name = a.name or f"montivo-{a.run_dir.name}-v{a.version}"
     rec = export(a.run_dir, a.version, a.out, name, [k.strip() for k in a.include.split(",") if k.strip()], a.preset,
-                 a.cover_t)
+                 a.cover_t, a.aspect)
     print(json.dumps(rec, indent=2))
     return 0
 

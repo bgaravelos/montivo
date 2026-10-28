@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..config import OPEN_MODEL
 from ..engine.api import dump_json as write_json
+from ..engine.frame import ASPECTS
 from ..engine.graphics import FONTS, PRESET_NAMES, PRESETS, normalize_look
 from . import hosted, media, preflight
 from .runs import fingerprint, heads, list_runs, parse_log, progress, read_json, replay_script, run_state
@@ -396,10 +397,13 @@ def create_app(root: Path) -> FastAPI:
         return FileResponse(out, media_type="video/mp4", filename=f"montivo-{run_id}-v{v}-720p.mp4")
 
     @app.get("/api/runs/{run_id}/export/check")
-    def export_check(run_id: str, v: int):
-        """The Export page's pre-flight for version v (preflight.py): review, loudness, format, length, safe areas."""
+    def export_check(run_id: str, v: int, aspect: str = "9:16"):
+        """The Export page's pre-flight for version v (preflight.py): review, loudness, format, length, safe areas;
+        aspect=4:5 or 1:1 checks the feed frame the export renders."""
         d, _ = cut_of(run_id, v)
-        return {"checks": preflight.checks(d, v)}
+        if aspect not in ASPECTS:
+            raise HTTPException(400, f"aspect: one of {', '.join(ASPECTS)}")
+        return {"checks": preflight.checks(d, v, aspect)}
 
     export_lock = threading.Lock()
 
@@ -427,9 +431,10 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/runs/{run_id}/export/bundle")
     def export_bundle(run_id: str, b: dict):
-        """{"v": N, "include": ["video", "clean", "srt", ...], "preset": "full" | "720", "name": stem, "cover_t": s}:
-        the files (python -m montivo.export, $0) under ui/cache/exports/<key>/, made once per choice; returns their
-        download URLs and the zip's when there is more than one. "clean" renders again, about as long as a render."""
+        """{"v": N, "include": ["video", "clean", "srt", ...], "preset": "full" | "720", "name": stem, "cover_t": s,
+        "aspect": "9:16" | "4:5" | "1:1"}: the files (python -m montivo.export, $0) under ui/cache/exports/<key>/, made
+        once per choice; returns their download URLs and the zip's when there is more than one. "clean", and "video" in
+        a feed aspect, render again, about as long as a render."""
         from ..export import KINDS
         d, _ = cut_of(run_id, int(b.get("v") or 0))
         v = int(b["v"])
@@ -437,15 +442,21 @@ def create_app(root: Path) -> FastAPI:
         preset = b.get("preset") or "full"
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", str(b.get("name") or f"montivo-{run_id}-v{v}")).strip("-.")[:80] or f"montivo-{run_id}-v{v}"
         cover = b.get("cover_t")
-        if not inc or preset not in ("full", "720") or (cover is not None and not isinstance(cover, (int, float))):
-            raise HTTPException(400, f"include: some of {', '.join(KINDS)}; preset: full or 720; cover_t: seconds")
-        if "clean" in inc and st.busy(run_id):
-            raise HTTPException(409, f"{st.jobs[run_id].label} is running: the copy without captions renders after it")
+        aspect = b.get("aspect") or "9:16"
+        if not inc or preset not in ("full", "720") or (cover is not None and not isinstance(cover, (int, float))) \
+                or aspect not in ASPECTS:
+            raise HTTPException(400, f"include: some of {', '.join(KINDS)}; preset: full or 720; cover_t: seconds; "
+                                     f"aspect: one of {', '.join(ASPECTS)}")
+        renders = "clean" in inc or (aspect != "9:16" and "video" in inc)
+        if renders and st.busy(run_id):
+            raise HTTPException(409, f"{st.jobs[run_id].label} is running: the "
+                                     f"{'copy without captions' if 'clean' in inc else aspect + ' video'} renders after it")
         edl = d / f"edl_v{v}.json"
-        key = hashlib.sha1(json.dumps([v, inc, preset, name, cover, edl.stat().st_mtime_ns]).encode()).hexdigest()[:12]
+        key_in = [v, inc, preset, name, cover, edl.stat().st_mtime_ns] + ([aspect] if aspect != "9:16" else [])
+        key = hashlib.sha1(json.dumps(key_in).encode()).hexdigest()[:12]
         out = d / "ui" / "cache" / "exports" / key
         rec_p = out / "export.json"
-        with export_lock:  # one export at a time: "clean" uses the run's render/ scratch folder
+        with export_lock:  # one export at a time: a render ("clean", a feed aspect) uses the run's render/ scratch folder
             if not rec_p.is_file():
                 shutil.rmtree(out, ignore_errors=True)
                 old = sorted((x for x in out.parent.glob("*") if x.is_dir()), key=lambda x: x.stat().st_mtime) if out.parent.is_dir() else []
@@ -453,7 +464,8 @@ def create_app(root: Path) -> FastAPI:
                     shutil.rmtree(x, ignore_errors=True)
                 args = [sys.executable, "-m", "montivo.export", str(d.relative_to(st.root)) if d.is_relative_to(st.root) else str(d),
                         "--version", str(v), "--out", str(out), "--name", name, "--include", ",".join(inc), "--preset", preset,
-                        *(["--cover-t", f"{float(cover):.2f}"] if cover is not None else [])]
+                        *(["--cover-t", f"{float(cover):.2f}"] if cover is not None else []),
+                        *(["--aspect", aspect] if aspect != "9:16" else [])]
                 proc = subprocess.run(args, cwd=st.root, capture_output=True, text=True)
                 if proc.returncode != 0:
                     raise HTTPException(500, f"export failed: {(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")
@@ -885,7 +897,9 @@ def create_app(root: Path) -> FastAPI:
     def preview(run_id: str, b: dict):
         """The Style panel's still ({"v": N, "t": cut second, "look": {...}, "callouts": {span: [x, y] | null}}): the
         frame of version N at t as a new version with that look would burn it (engine/look.py), saved under
-        ui/cache/preview/, and the caption and callout boxes on screen then. $0, about 0.4 s."""
+        ui/cache/preview/, and the caption and callout boxes on screen then. "aspect" 4:5 or 1:1 lays it out in that
+        frame (the Export page's feed cover). $0, about 0.4 s."""
+        from ..engine.frame import with_aspect
         from ..engine.look import preview as still, with_style
         d = st.run_dir(run_id)
         try:
@@ -893,15 +907,19 @@ def create_app(root: Path) -> FastAPI:
         except (TypeError, ValueError):
             raise HTTPException(400, "v: a version, t: a cut second")
         look, places = style_body(b)
+        aspect = b.get("aspect") or "9:16"
+        if aspect not in ASPECTS:
+            raise HTTPException(400, f"aspect: one of {', '.join(ASPECTS)}")
         edl_path = d / f"edl_v{v}.json"
         if not edl_path.is_file():
             raise HTTPException(404, f"no edl_v{v}.json")
-        key = hashlib.sha1(json.dumps([v, t, look, places, edl_path.stat().st_mtime_ns], sort_keys=True).encode()).hexdigest()[:16]
+        key_in = [v, t, look, places, edl_path.stat().st_mtime_ns] + ([aspect] if aspect != "9:16" else [])
+        key = hashlib.sha1(json.dumps(key_in, sort_keys=True).encode()).hexdigest()[:16]
         out = d / "ui" / "cache" / "preview" / f"{key}.jpg"
         meta = out.with_suffix(".json")
         if not (out.is_file() and meta.is_file()):
             try:
-                img, info = still(d, with_style(read_json(edl_path), look, places), t, d / f"cut_v{v}.mp4")
+                img, info = still(d, with_aspect(with_style(read_json(edl_path), look, places), aspect), t, d / f"cut_v{v}.mp4")
             except (FileNotFoundError, subprocess.CalledProcessError) as e:
                 raise HTTPException(500, f"preview failed: {e}")
             out.parent.mkdir(parents=True, exist_ok=True)

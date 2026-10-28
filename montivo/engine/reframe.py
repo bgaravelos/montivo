@@ -7,6 +7,9 @@ object whose box is largest and most centred inside that window, map its centre 
 gaps, then run a camera-operator smoother: dead zone of +-8 % of the crop width (the camera does not chase small head
 moves), EMA toward the target when it leaves the dead zone (tau 0.25 s), pan speed clamped (450 px/s on a 1280 px
 source, 675 at 1920: a 340 px lean in 0.6 s is followed without lag), x clamped inside the frame. The crop is full height, width = even(h * 9/16).
+Other output aspects (frame.py: 4:5, 1:1) only change that width. A source narrower than the aspect (a phone clip cut
+to 4:5) keeps its full width and the height is cut instead, at one y per segment that puts the followed head's centre
+HEAD_Y_FRAC down the crop.
 
 With a speaker map (speakers.py) a segment is planned in pieces, one per run of spans by the same speaker: each piece
 follows that speaker's head ids when one of them covers it, else the rule above; neighbouring pieces that land on the
@@ -42,6 +45,7 @@ class SegmentPath:
     fps: float
     keyframes: list[dict] = field(default_factory=list)
     pieces: list[dict] = field(default_factory=list)  # [{t_in, t_out, speaker, track_id}] when a speaker map steered it
+    crop_y: int = 0  # top of the crop, 0 unless the source is narrower than the aspect
 
     def sendcmd_text(self) -> str:
         """One line per source frame. Command k fires half a frame before frame k so rounding never skips it."""
@@ -52,9 +56,31 @@ class SegmentPath:
         return "\n".join(lines) + "\n"
 
 
+HEAD_Y_FRAC = 0.4
+
+
 def crop_size(source_w: int, source_h: int, aspect: tuple[int, int] = (9, 16)) -> tuple[int, int]:
+    """The crop: full height and the aspect's width, or, on a source narrower than the aspect, full width and the
+    aspect's height."""
     w = int(round(source_h * aspect[0] / aspect[1] / 2)) * 2
-    return min(w, source_w - source_w % 2), source_h - source_h % 2
+    if w <= source_w - source_w % 2:
+        return w, source_h - source_h % 2
+    w = source_w - source_w % 2
+    return w, min(source_h - source_h % 2, int(round(w * aspect[1] / aspect[0] / 2)) * 2)
+
+
+def crop_top(track: dict | None, track_id: str | None, t_in: float, t_out: float, sh: int, crop_h: int) -> int:
+    """The crop's y when it is shorter than the source: the followed box's median centre HEAD_Y_FRAC down the crop
+    over the window, else the middle; even and inside the frame."""
+    if crop_h >= sh:
+        return 0
+    y = (sh - crop_h) / 2
+    if track and track_id and track_id in (track.get("objects") or {}):
+        fy = sh / float(track["source"]["height"])
+        cs = sorted((r["box"][1] + r["box"][3]) / 2 * fy for r in track["objects"][track_id] if t_in <= r["t"] <= t_out)
+        if cs:
+            y = cs[len(cs) // 2] - HEAD_Y_FRAC * crop_h
+    return int(round(min(sh - crop_h, max(0.0, y)) / 2)) * 2
 
 
 def pick_track(objects: dict[str, list[dict]], t_in: float, t_out: float, track_fps: float, frame_w: int,
@@ -177,13 +203,14 @@ def _window_centres(t_in: float, t_out: float, sw: int, crop_w: int, fps: float,
 
 
 def plan_segment(t_in: float, t_out: float, source: dict, track: dict | None, params: ReframeParams | None = None,
-                 span_ids: list[str] | None = None, follow: list[dict] | None = None) -> SegmentPath:
+                 span_ids: list[str] | None = None, follow: list[dict] | None = None,
+                 aspect: tuple[int, int] = (9, 16)) -> SegmentPath:
     """Crop path for one rendered segment. `source` has width/height/fps; `track` is tracks.json's content
     (objects + track_fps + source size) or None for a centre crop. `follow` ([{t_in, t_out, speaker, ids}] covering
-    the segment in order, from the speaker map) steers each piece to its speaker's head."""
+    the segment in order, from the speaker map) steers each piece to its speaker's head. `aspect` is the output's."""
     params = params or ReframeParams()
     sw, sh, fps = int(source["width"]), int(source["height"]), float(source["fps"])
-    crop_w, crop_h = crop_size(sw, sh)
+    crop_w, crop_h = crop_size(sw, sh, aspect)
     pieces: list[dict] = []
     if follow and any(p.get("ids") for p in follow) and track and track.get("objects"):
         n = max(1, int(math.ceil(max(1.0 / fps, t_out - t_in) * fps - 1e-6)))
@@ -218,7 +245,7 @@ def plan_segment(t_in: float, t_out: float, source: dict, track: dict | None, pa
     xs = [int(round((c - crop_w / 2) / 2)) * 2 for c in centres]
     xs = [min(sw - crop_w, max(0, x)) for x in xs]
     seg = SegmentPath(t_in=t_in, t_out=t_out, track_id=track_id, crop_w=crop_w, crop_h=crop_h, xs=xs, fps=fps,
-                      pieces=pieces)
+                      pieces=pieces, crop_y=crop_top(track, track_id, t_in, t_out, sh, crop_h))
     seg.keyframes = keyframes_for(xs, fps, t_in, params.keyframe_every_s, params.edge_px, span_ids or [])
     return seg
 

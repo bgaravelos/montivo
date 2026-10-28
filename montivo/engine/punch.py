@@ -26,8 +26,9 @@ from __future__ import annotations
 import statistics
 from fractions import Fraction
 
-from .captions import HEAD_MARGIN, HIGHLIGHT, OUT_H, OUT_W, dedupe_words, interp_box, largest_at, norm, overlaps, \
-    span_words, to_output
+from .captions import HEAD_MARGIN, HIGHLIGHT, dedupe_words, interp_box, largest_at, norm, overlaps, span_words, \
+    to_output
+from .frame import FRAME_916, Frame, frame_for
 from .reframe import id_at
 
 PUNCH_Z = 1.12
@@ -52,7 +53,7 @@ def source_px(track: dict | None, sw: float, sh: float) -> dict | None:
                               for r in recs] for oid, recs in track["objects"].items()}}
 
 
-def head_out(head: dict | None, seg, path, k: int) -> list[float] | None:
+def head_out(head: dict | None, seg, path, k: int, frame: Frame = FRAME_916) -> list[float] | None:
     """The followed head at segment frame k, in output pixels (the largest head when the followed id has no box)."""
     if head is None:
         return None
@@ -65,7 +66,7 @@ def head_out(head: dict | None, seg, path, k: int) -> list[float] | None:
     if box is None:
         return None
     x = path.xs[min(k, len(path.xs) - 1)]
-    return to_output(box, x, path.crop_w, path.crop_h)
+    return to_output(box, x, path.crop_w, path.crop_h, getattr(path, "crop_y", 0), frame)
 
 
 def zoomed(box: list[float], anchor: tuple[float, float], z: float) -> list[float]:
@@ -138,6 +139,7 @@ def plan_punches(edl: dict, segments: list, paths: list, words: list[dict], audi
     head = source_px(head_track, float(edl["source"]["width"]), float(edl["source"]["height"]))
     if head is None:
         return {}, []
+    frame = frame_for(edl)
     cut0, t = [], title_s
     for seg in segments:
         cut0.append(t)
@@ -147,7 +149,7 @@ def plan_punches(edl: dict, segments: list, paths: list, words: list[dict], audi
     heads: dict[int, list[tuple[float, list[float]]]] = {}
     plan: dict[int, dict] = {}
     for i, (seg, path) in enumerate(zip(segments, paths)):
-        hs = [(k / seg.fps, b) for k in range(0, max(1, seg.frames), 3) if (b := head_out(head, seg, path, k))]
+        hs = [(k / seg.fps, b) for k in range(0, max(1, seg.frames), 3) if (b := head_out(head, seg, path, k, frame))]
         heads[i] = hs
         if hs:
             plan[i] = {"base": 1.0, "events": [],
@@ -231,9 +233,9 @@ def plan_punches(edl: dict, segments: list, paths: list, words: list[dict], audi
     return plan, sorted(entries, key=lambda e: e["t_in"])
 
 
-def zoom_filter(p: dict, fps: float) -> str:
+def zoom_filter(p: dict, fps: float, size: tuple[int, int] = (FRAME_916.w, FRAME_916.h)) -> str:
     """The zoompan filter for one segment: the base scale times 1 + (z - 1) * a trapezoid per event over the
-    output frame number `on`, about the segment's anchor, at the output size and the segment's exact rate."""
+    output frame number `on`, about the segment's anchor, at the output size (w, h) and the segment's exact rate."""
     def f(t: float) -> int:
         return int(round(t * fps))
 
@@ -246,7 +248,7 @@ def zoom_filter(p: dict, fps: float) -> str:
     z = f"{p['base']:.4f}*(1+{'+'.join(terms)})" if terms else f"{p['base']:.4f}"
     ax, ay = p["anchor"]
     rate = Fraction(fps).limit_denominator(1001)
-    return (f"zoompan=z='{z}':x='{ax:.1f}-{ax:.1f}/zoom':y='{ay:.1f}-{ay:.1f}/zoom':d=1:s={OUT_W}x{OUT_H}"
+    return (f"zoompan=z='{z}':x='{ax:.1f}-{ax:.1f}/zoom':y='{ay:.1f}-{ay:.1f}/zoom':d=1:s={size[0]}x{size[1]}"
             f":fps={rate.numerator}/{rate.denominator}")
 
 

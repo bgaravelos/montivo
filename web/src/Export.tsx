@@ -5,19 +5,29 @@ import type { Version } from "./types";
 
 // The Export page: a cover and a file name on the left, the destination, what goes in the bundle and the pre-flight on
 // the right (as CapCut and Descript split it). Nothing here re-encodes for its own sake: the platforms re-encode, so the
-// only presets are the cut as rendered and a small 720p copy. The files come from POST /export/bundle
-// (python -m montivo.export, $0); more than one file downloads as a zip.
+// only presets are the cut as rendered and a small 720p copy. Feed 4:5 and Square 1:1 render the version again in that
+// frame (the crop narrows and follows the head, the captions are laid out again); their cover is that frame's still
+// (POST /preview with the aspect) and their pre-flight says the app safe areas are a 9:16 matter. The files come from
+// POST /export/bundle (python -m montivo.export, $0); more than one file downloads as a zip.
 
 type Check = { id: string; label: string; status: "ok" | "warn" | "fail" | "info"; detail: string };
 type Kind = "video" | "clean" | "srt" | "vtt" | "cover" | "audio" | "transcript";
-type Saved = { include: Kind[]; preset: "full" | "720"; grid: boolean };
+type Aspect = "9:16" | "4:5" | "1:1";
+type Saved = { include: Kind[]; preset: "full" | "720"; grid: boolean; aspect?: Aspect };
+
+const SIZE: Record<Aspect, [number, number]> = { "9:16": [1080, 1920], "4:5": [1080, 1350], "1:1": [1080, 1080] };
+// the Instagram profile grid's 3:4 window in the middle of a cover: bands top and bottom on 9:16, at the sides on a feed frame
+function gridBands(a: Aspect): { side: boolean; pct: number } {
+  const [w, h] = SIZE[a];
+  return w * 4 <= h * 3 ? { side: false, pct: (1 - (w * 4) / 3 / h) / 2 * 100 } : { side: true, pct: (1 - (h * 3) / 4 / w) / 2 * 100 };
+}
 
 const KINDS: { k: Kind; label: string; note: string }[] = [
   { k: "video", label: "Video", note: "MP4 with the captions burned in" },
-  { k: "clean", label: "Video without captions", note: "MP4 for the app's own captions · renders again, about 20 s" },
+  { k: "clean", label: "Video without captions", note: "MP4 for the app's own captions · renders again, about 30 s" },
   { k: "srt", label: "Captions file", note: "SRT, the lines as burned in" },
   { k: "vtt", label: "Web captions", note: "WebVTT" },
-  { k: "cover", label: "Cover", note: "JPG 1080 × 1920 and the 3:4 profile-grid crop" },
+  { k: "cover", label: "Cover", note: "JPG of the frame and the 3:4 profile-grid crop" },
   { k: "audio", label: "Audio", note: "WAV, loudness as in the cut" },
   { k: "transcript", label: "Transcript", note: "TXT with times" },
 ];
@@ -64,9 +74,24 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
   };
   useEffect(() => { try { localStorage.setItem("montivo.export", JSON.stringify(saved)); } catch { /* this tab only */ } }, [saved]);
   useEffect(() => { setName((x) => x.replace(/-v\d+$/, `-v${n}`)); setChecks(null); setDone(null); setErr(null);
-    api<{ checks: Check[] }>(`/api/runs/${id}/export/check?v=${n}`).then((r) => setChecks(r.checks))
-      .catch((e) => setChecks([{ id: "err", label: "Pre-flight", status: "info", detail: `could not be read (${(e as Error).message})` }])); }, [id, n]);
+    api<{ checks: Check[] }>(`/api/runs/${id}/export/check?v=${n}&aspect=${encodeURIComponent(saved.aspect ?? "9:16")}`).then((r) => setChecks(r.checks))
+      .catch((e) => setChecks([{ id: "err", label: "Pre-flight", status: "info", detail: `could not be read (${(e as Error).message})` }])); }, [id, n, saved.aspect]);
   useEffect(() => setDone(null), [saved, coverT, name]);
+  const aspect: Aspect = saved.aspect ?? "9:16";
+  const feed = aspect !== "9:16";
+  const [W, H] = SIZE[aspect];
+  const bands = gridBands(aspect);
+  const [feedCover, setFeedCover] = useState<string | null>(null);
+  useEffect(() => {
+    setFeedCover(null);
+    if (!feed || !v) return;
+    let live = true;
+    const tm = setTimeout(() => {
+      api<{ image: string }>(`/api/runs/${id}/preview`, { v: v.n, t: coverT, aspect })
+        .then((r) => { if (live) setFeedCover(r.image); }).catch(() => {});
+    }, 250);
+    return () => { live = false; clearTimeout(tm); };
+  }, [id, v, coverT, aspect, feed]);
   const inc = saved.include;
   const toggle = (k: Kind) => setSaved({ ...saved, include: inc.includes(k) ? inc.filter((x) => x !== k) : [...inc, k] });
   const p720 = saved.preset === "720";
@@ -82,7 +107,7 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
     setBusy(true); setErr(null);
     try {
       const r = await api<{ files: { name: string; url: string; bytes: number }[]; zip: { name: string; url: string; bytes: number } | null }>(
-        `/api/runs/${id}/export/bundle`, { v: v.n, include: inc, preset: saved.preset, name, cover_t: inc.includes("cover") ? coverT : null });
+        `/api/runs/${id}/export/bundle`, { v: v.n, include: inc, preset: saved.preset, name, cover_t: inc.includes("cover") ? coverT : null, aspect });
       const one = r.zip ?? r.files[0];
       download(one.url, one.name);
       setDone(r.zip ? [r.zip, ...r.files] : r.files);
@@ -95,9 +120,13 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
         <div className="modal-head"><span className="mh-title">Export</span><button className="icon-btn" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button></div>
         <div className="ex-grid">
           <div className="ex-left">
-            <div className={`ex-cover ${saved.grid ? "grid" : ""}`}>
-              {v && <img src={frameUrl(id, v.n, coverT, true)} alt="Cover frame" />}
-              {saved.grid && <><i className="ex-grid-top" /><i className="ex-grid-bot" /><span className="ex-grid-tag">profile grid 3:4</span></>}
+            <div className={`ex-cover ${saved.grid ? "grid" : ""}`} style={{ aspectRatio: `${W} / ${H}` }}>
+              {v && (feed ? (feedCover ? <img src={feedCover} alt={`Cover frame, ${aspect}`} /> : <span className="ex-cover-wait"><span className="pulse" /> laying out {aspect}…</span>)
+                : <img src={frameUrl(id, v.n, coverT, true)} alt="Cover frame" />)}
+              {saved.grid && (bands.side
+                ? <><i className="ex-grid-l" style={{ width: `${bands.pct}%` }} /><i className="ex-grid-r" style={{ width: `${bands.pct}%` }} /></>
+                : <><i className="ex-grid-top" /><i className="ex-grid-bot" /></>)}
+              {saved.grid && <span className="ex-grid-tag" style={bands.side ? { top: 8, left: `calc(${bands.pct}% + 8px)` } : undefined}>profile grid 3:4</span>}
             </div>
             <label className="field">Cover frame <span className="mono mute">{tc(coverT)}</span>
               <input type="range" min={0} max={Math.max(0.1, total - 0.1)} step={0.1} value={coverT} onChange={(e) => setCoverT(Number(e.target.value))} />
@@ -126,9 +155,13 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
             </label>
             <div className="pn-k">Destination</div>
             <div className="ex-dest">
-              <button className={`ex-card ${!p720 ? "on" : ""}`} onClick={() => setSaved({ ...saved, preset: "full" })}>
-                <b>Reels · TikTok · Shorts</b><span>1080 × 1920 · H.264 · as rendered</span></button>
-              <button className={`ex-card ${p720 ? "on" : ""}`} onClick={() => setSaved({ ...saved, preset: "720" })}>
+              <button className={`ex-card ${!p720 && !feed ? "on" : ""}`} onClick={() => setSaved({ ...saved, preset: "full", aspect: "9:16" })}>
+                <b>Reels · TikTok · Shorts</b><span>1080 × 1920 · 9:16 · as rendered</span></button>
+              <button className={`ex-card ${aspect === "4:5" ? "on" : ""}`} onClick={() => setSaved({ ...saved, preset: "full", aspect: "4:5" })}>
+                <b>Feed 4:5</b><span>1080 × 1350 · Instagram, Facebook, LinkedIn · renders again</span></button>
+              <button className={`ex-card ${aspect === "1:1" ? "on" : ""}`} onClick={() => setSaved({ ...saved, preset: "full", aspect: "1:1" })}>
+                <b>Square 1:1</b><span>1080 × 1080 · any feed · renders again</span></button>
+              <button className={`ex-card ${p720 && !feed ? "on" : ""}`} onClick={() => setSaved({ ...saved, preset: "720", aspect: "9:16" })}>
                 <b>Small</b><span>720 × 1280 · for messages and review links</span></button>
             </div>
             <div className="pn-k">Include</div>
@@ -136,7 +169,8 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
               {KINDS.map(({ k, label, note }) => (
                 <label key={k} className={`ex-kind ${inc.includes(k) ? "on" : ""}`}>
                   <input type="checkbox" checked={inc.includes(k)} onChange={() => toggle(k)} />
-                  <span><b>{label}</b><span className="mute small">{note}</span></span>
+                  <span><b>{label}</b><span className="mute small">{k === "video" && feed ? `MP4 ${W} × ${H} with the captions laid out again · renders, about 30 s`
+                    : k === "cover" ? `JPG ${W} × ${H} and the 3:4 profile-grid crop` : note}</span></span>
                 </label>
               ))}
             </div>
@@ -160,7 +194,8 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
           <span className="grow" />
           <button className="btn quiet" onClick={onClose}>Close</button>
           <button className="btn" disabled={!v || !inc.length || busy} onClick={go}>
-            {busy ? <><span className="pulse" /> {inc.includes("clean") ? "Rendering the copy without captions…" : "Preparing…"}</> : <><Icon name="export" /> Download</>}
+            {busy ? <><span className="pulse" /> {feed && (inc.includes("video") || inc.includes("clean")) ? `Rendering the ${aspect} version…`
+              : inc.includes("clean") ? "Rendering the copy without captions…" : "Preparing…"}</> : <><Icon name="export" /> Download</>}
           </button>
         </div>
       </div>

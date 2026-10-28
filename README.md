@@ -151,13 +151,24 @@ on Muse Spark Open, review 26 s) and a bar that moves by time but never past the
 and previous reviewer issue, and Versions marks the version the project opens on apart from the loop's best. Export is
 a page of its own: a cover frame (scrub to pick it, with the Instagram profile grid's 3:4 crop shown, or "Let Muse Spark
 pick": one call on the version's review copy, the blind review's upload reused, names three moments with a reason each,
-and each lands on the sharpest frame within 0.25 s; $0.018 on run 015 v5) and the file name; the destination (1080 x 1920 as rendered, or a 720 x 1280 copy for messages; no bitrate knobs, the apps
-re-encode anyway); what goes in the bundle (the video, the video without burned-in captions, rendered again from a
+and each lands on the sharpest frame within 0.25 s; $0.018 on run 015 v5) and the file name; the destination (1080 x 1920 as rendered, Feed 4:5 at 1080 x 1350 for the Instagram and Facebook
+feed and LinkedIn, Square 1:1 at 1080 x 1080, or a 720 x 1280 copy for messages; no bitrate knobs, the apps re-encode
+anyway); what goes in the bundle (the video, the video without burned-in captions, rendered again from a
 copy of the EDL so the run folder never changes, SRT, WebVTT, the cover and its grid crop, WAV, a transcript; more
 than one file comes as a zip, `python -m montivo.export`, $0); and a pre-flight read from the EDL and the review:
 the gated blind review, -14 LUFS and the peak, the format, the length against Reels, TikTok and Shorts, and how many
 caption lines and callouts reach into each app's own UI (the viewer's safe-area guides; on run 015 v5, 25 of 28
-lines sit low enough to meet TikTok's caption, which the Style panel's fixed position fixes). The Text panel rewrites, adds or removes callouts and turns
+lines sit low enough to meet TikTok's caption, which the Style panel's fixed position fixes). Feed 4:5 and Square 1:1
+render the version again from a copy of its EDL (EDL `target.aspect`, `engine/frame.py`, `python -m montivo.export ...
+--aspect 4:5`, $0, about 12-30 s): the crop is still the full source height, only narrower (864 px of a 1080 p source
+for 4:5), and still follows the head; every height the EDL holds (the caption top, a fixed position, a pinned callout)
+is a 1920-frame y scaled by the frame's height, so it keeps its place against the face, and a feed frame keeps only a
+6 % margin instead of the Reels / TikTok UI band, since a feed post has its buttons outside the picture (with the 9:16
+band every 4:5 caption of run 015 v5 went above the head; with this one all 28 sit on the chest, and the callouts that
+sat on the head in 9:16 sit above it). A phone clip narrower than the aspect keeps its width and loses height around
+the head. The cover is that frame's still and its grid crop the 3:4 middle; the pre-flight lays the captions out in
+that frame without rendering and says the app safe areas are a 9:16 matter. The 9:16 render is unchanged to the bit
+(every decoded frame and the audio of run 015 v5 compared before and after). The Text panel rewrites, adds or removes callouts and turns
 the title card off or on ($0) or gives it new words (one Muse Image call, $0.01), staged into one version like
 captions; dragging a clip's body on the video track moves it (the reviewer's reorder op, the cuts that now meet
 tightened again, roles by position); the Speakers panel shows every Voice speaker with the head the speaker map
@@ -599,6 +610,7 @@ loudnorm figures and the ebur128 measurement of the finished file).
 |---|---|
 | 26/10 evening (kickoff day) | engine skeleton, run to `edl_v1.json` with a ledger; reframe and render to `cut_v1.mp4`; kill test (a) on the NASA clip; captions, callouts, the Muse Image title card, loudness; the blind review loop; kill test (b) 3 of 3 in 3 of 3 |
 | 27/10 | the edge pass (loops 76 to 100 and 65 to 85); two-pass loudness and a minimum caption duration; a second source (run 013) and its three fixes; SAM at 5 fps for every concept; the API and the review room, then the NLE editor with trim by drag; the bundled caption font and CI; speaker to head mapping; the Open Weight planner; punch-ins, then their switch, markers and removal in the editor; the hook A/B; the brand (logo, tokens in the editor and the render, social preview, title and end cards, logo sting) |
+| 28/10 | the hosted demo on Modal and its first upload; the Codex review fixes; caption looks and the canvas drag; the Export page with its pre-flight; style by prompt; saved looks; the Spark cover; Feed 4:5 and Square 1:1 exports |
 | 28/10 to 4/11 | runs on more footage, the planner A/B, polish, the demo video, the submission |
 
 Design rules fixed on 26/10:

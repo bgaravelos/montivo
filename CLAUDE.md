@@ -396,6 +396,20 @@ else a new review copy uploaded, moments outside the cut or on the title dropped
 edge variance in the face band), `python -m montivo.export RUN --version N --suggest-cover` -> `cover_vN.json`,
 GET/POST /export/cover, "Let Muse Spark pick" + moment chips on the Export page. 015 v5: 1.9 s "Hi. I'm Billy.",
 18.4 s "Four Meta models" callout, 22.5 s.
+Feed 4:5 and Square 1:1 (28/10, $0): `engine/frame.py` (EDL `target.aspect` 9:16 | 4:5 1080x1350 | 1:1 1080x1080,
+`frame_for(edl)`, `with_aspect`); `plan_paths` / `review.crop_paths` pass the aspect to `reframe.plan_segment` (crop full
+height, narrower; a source narrower than the aspect keeps its width, `crop_size` cuts the height and `SegmentPath.crop_y`
+puts the head centre 0.4 down, `crop_top`); render, title card, zoompan, look.frame_at/preview take the frame; captions
+scale every stored y by h / 1920 (`Frame.y`: CAPTION_TOP, look top, forced top, pinned callout), x kept, and a feed frame
+keeps a 6 % margin (`Frame.band`) instead of the Reels band (with it every 4:5 line of 015 v5 went above the head), plus
+an `above_head` callout spot on feed frames only. 9:16 is bit-identical (015 v5 framemd5 of every frame + audio md5,
+previews, EDL fields before/after). `python -m montivo.export RUN --version N --aspect 4:5|1:1` renders `video` and
+`clean` again from an EDL copy (`export.render_copy`, files `-4x5` / `-1x1`), the cover is `look.preview` in that frame,
+the grid crop the 3:4 middle (`grid_crop`); POST /export/bundle and /preview take `aspect`, GET /export/check `aspect`
+(`preflight.checks`: feed format row, one safe-area info row instead of the app rows, the face rows from
+`look.layout`, no render). Export page: Feed 4:5 and Square 1:1 cards, cover still per aspect, grid bands at the sides.
+Checked keyless in the browser pane on a throwaway copy of 015 (removed): 4:5 28 lines below the head, callouts above it;
+1:1 27 below, 1 above; the 1:1 bundle in 12 s.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
