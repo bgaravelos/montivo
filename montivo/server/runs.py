@@ -274,7 +274,8 @@ def progress(lines: list[dict], label: str | None = None, ledger: dict | None = 
             continue
         m = SEG_DONE.match(msg)
         if m and cur and cur["stage"] == "render" and seg["n"]:
-            seg["k"], seg["done_frames"] = int(m.group(1)), seg["done_frames"] + int(m.group(2))
+            # segments land in finishing order (cache hits first, then the parallel encodes): count them, not their index
+            seg["k"], seg["done_frames"] = seg["k"] + 1, seg["done_frames"] + int(m.group(2))
             k, n = seg["k"], seg["n"]
             share = seg["done_frames"] / seg["frames"] if seg["frames"] else k / n
             nxt = 1.0 if seg["frames"] or k >= n else (k + 1) / n

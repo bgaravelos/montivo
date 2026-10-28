@@ -24,14 +24,33 @@ Voice words in cut time, the two are mixed and the mix goes through the same two
 true peak is measured and the pass runs again with a lower TP while the encode overshoots -1 dBTP. The speech alone is
 kept as render/<cut>.speech.m4a for the review's silences and heard words, the bed as render/<cut>.music.m4a for the
 editor's live faders.
+
+Re-renders (E7): a segment longer than CHUNK_S encodes as chunks of CHUNK_S counted from its first frame (a segment
+with punch-ins stays whole: zoompan counts its own output frames), each chunk seeking the source at its first frame
+with the segment's own clock (setpts adds the chunk's offset), so the crop's sendcmd, the overlays' enable times and
+their fades are the segment's. Every encode (chunk or title clip) is one ffmpeg command whose arguments, with each input
+file replaced by what identifies its content (the source by path + mtime + size, the chunk's sendcmd text, the bytes of
+every overlay PNG on screen in it) and the ffmpeg build, hash to a cache key; an encode whose key is in
+render/cache/ is linked from there instead of encoded, so a one-caption edit re-encodes only the chunk that shows that
+line. The encodes that do run go side by side (ENCODE_WORKERS, each x264 on X264_THREADS threads: x264's bitstream
+depends on its thread count, so that count is fixed per machine and part of the key). The audio runs at the same time in
+its own thread and is cached the same way (its key: the source, the segment times, the title lead, loudness, the music
+and its words, and this code), with its loudness records. The cache keeps about SEGCACHE_RENDERS renders' worth of
+files, least recently used out first.
 """
 from __future__ import annotations
 
+import functools
+import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -64,11 +83,22 @@ ENCODE_TRIES, ENCODE_MARGIN_DB = 2, 0.3
 # veryfast: 2.7x faster segment encodes than medium at SSIM 0.992 (015 seg_01: 7.24 s -> 2.67 s, 28/10)
 X264 = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-video_track_timescale", "90000",
         "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
-        "-map_metadata", "-1", "-movflags", "+faststart"]
+        "-map_metadata", "-1", "-movflags", "+faststart", "-movie_timescale", "90000"]
+# movie_timescale: the edit list in 1/1000 s stored a 25-frame chunk as 0.833 s, and the concat demuxer moved every
+# file after it that much early (a fraction of a millisecond per segment edge, frames paired wrong across chunk edges)
 # every frame leaves the graph limited range BT.709 and says so: run 015's full-range source used to come out
 # yuvj420p / pc, and the overlays went to YUV with BT.601 on untagged frames (marker #FFC629 came back #FFC122)
 TAG_709 = "setparams=range=tv:colorspace=bt709:color_primaries=bt709:color_trc=bt709"
 TO_709 = "scale=out_color_matrix=bt709:out_range=tv"
+# parallel encodes: a few at once, the CPUs split between them; the thread count goes into every x264 command (and so
+# into the cache key), the number of workers changes nothing in the output
+CPUS = os.cpu_count() or 2
+ENCODE_WORKERS = max(1, min(4, CPUS // 2))
+X264_THREADS = max(1, CPUS // ENCODE_WORKERS)
+SEGCACHE = "cache"  # render/cache/: the hosted demo's judge copy of a sample skips folders named cache (app.py)
+CHUNK_S = 4.0  # long segments encode in chunks of this many seconds: they run side by side and cache one by one
+SEGCACHE_RENDERS = 4  # the cache keeps about this many renders' worth of segment bytes
+SEGCACHE_PART_MAX_AGE_S = 3600
 _MATRIX = {"bt709": "bt709", "smpte170m": "smpte170m", "bt470bg": "bt470", "fcc": "fcc", "smpte240m": "smpte240m",
            "bt2020nc": "bt2020", "bt2020c": "bt2020"}
 
@@ -236,31 +266,108 @@ def _overlay_graph(base: str, overlays: list[Overlay], first_input: int, fps: fl
     return args, ";".join(chain)
 
 
-def render_segment_video(source: Path, seg: Segment, path: SegmentPath, render_dir: Path,
-                         overlays: list[Overlay] | None = None, zoom: dict | None = None, frame: Frame = FRAME_916,
-                         color: dict | None = None) -> Path:
-    """One segment's video: crop, scale to the frame (from the source's range and matrix, `color` = source_color, to
-    limited BT.709), the zoom, the overlays."""
-    cmds = render_dir / f"seg_{seg.index + 1:02d}_crop.cmd"
-    cmds.write_text(path.sendcmd_text())
-    out = render_dir / f"seg_{seg.index + 1:02d}.mp4"
+@dataclass
+class Encode:
+    """One video encode: the ffmpeg args (no output) and, for the cache key, a stand-in for every file path in them
+    that names its content (`stand_ins`, path text -> identity)."""
+    args: list[str]
+    out: Path
+    stand_ins: dict[str, str] = field(default_factory=dict)
+
+    def key(self) -> str:
+        subs = sorted(self.stand_ins.items(), key=lambda kv: -len(kv[0]))
+        args = []
+        for a in self.args:
+            for path, ident in subs:
+                a = a.replace(path, ident)
+            args.append(a)
+        blob = json.dumps({"ffmpeg": _ffmpeg_build(), "args": args}, separators=(",", ":"))
+        return hashlib.sha256(blob.encode()).hexdigest()[:24]
+
+
+@functools.lru_cache(maxsize=1)
+def _ffmpeg_build() -> str:
+    """The ffmpeg build in the cache key: an upgraded ffmpeg (or libraries) encodes differently."""
+    proc = subprocess.run(["ffmpeg", "-hide_banner", "-version"], capture_output=True, text=True)
+    return hashlib.sha256(proc.stdout.encode()).hexdigest()[:16]
+
+
+def _file_id(p: Path) -> str:
+    return "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def _source_id(p: Path) -> str:
+    st = p.stat()
+    return f"source:{p.resolve().as_posix()}:{st.st_mtime_ns}:{st.st_size}"
+
+
+def _sendcmd(path: SegmentPath, k0: int, k1: int) -> str:
+    """The crop's sendcmd lines for source frames k0..k1-1 of the segment, in the segment's own clock: the whole path's
+    text (SegmentPath.sendcmd_text) when it is all of it. A chunk's first line fires on its first frame."""
+    return "".join(f"{0.0 if k == 0 else (k - 0.5) / path.fps:.4f} crop x {path.xs[k]};\n" for k in range(k0, k1))
+
+
+def chunk_bounds(seg: Segment, zoom: dict | None = None) -> list[tuple[int, int]]:
+    """The segment's chunks as frame ranges: CHUNK_S each from its first frame, a short tail joined to the chunk before
+    it (so a trim at the end leaves the earlier chunks as they were); one chunk with punch-ins (zoompan's `on`)."""
+    size = max(1, int(round(CHUNK_S * seg.fps)))
+    if zoom or seg.frames < 2 * size:
+        return [(0, seg.frames)]
+    starts = list(range(0, seg.frames, size))
+    if seg.frames - starts[-1] < size // 2:
+        starts.pop()
+    return [(a, starts[k + 1] if k + 1 < len(starts) else seg.frames) for k, a in enumerate(starts)]
+
+
+def segment_encode(source: Path, seg: Segment, path: SegmentPath, render_dir: Path,
+                   overlays: list[Overlay] | None = None, zoom: dict | None = None, frame: Frame = FRAME_916,
+                   color: dict | None = None, part: tuple[int, int] | None = None) -> Encode:
+    """One segment's video, or its frames part = (k0, k1): crop, scale to the frame (from the source's range and
+    matrix, `color` = source_color, to limited BT.709), the zoom, the overlays (a part takes the ones on screen in it).
+    Writes the crop's sendcmd file; returns the encode."""
+    k0, k1 = part or (0, seg.frames)
+    whole = (k0, k1) == (0, seg.frames)
+    name = f"seg_{seg.index + 1:02d}" + ("" if whole else f"_{k0:05d}")
+    cmds = render_dir / f"{name}_crop.cmd"
+    text = _sendcmd(path, k0, k1)
+    cmds.write_text(text)
+    out = render_dir / f"{name}.mp4"
     color = color or {"range": "tv", "matrix": "bt709"}
-    # seek half a frame early so the frame on the grid is never lost to rounding, then rebase pts to 0
-    seek = max(0.0, seg.t_in - 0.5 / seg.fps)
-    vf = (f"setpts=PTS-STARTPTS,sendcmd=f={cmds.as_posix()},crop={path.crop_w}:{path.crop_h}:{path.xs[0]}:{path.crop_y},"
+    c0, c1 = k0 / seg.fps, k1 / seg.fps
+    if not whole:  # only the overlays this part shows, so an edit elsewhere in the segment leaves its key alone
+        overlays = [ov for ov in overlays or [] if ov.t_in < c1 + 1e-3 and ov.t_out > c0 - 1e-3]
+    # seek half a frame early so the frame on the grid is never lost to rounding, then rebase pts to 0 (a part: to its
+    # offset in the segment, rounded to the stream's time base, and back to 0 after the overlays)
+    seek = max(0.0, seg.t_in + c0 - 0.5 / seg.fps)
+    rebase = "setpts=PTS-STARTPTS" + (f"+{c0:.9f}/TB+0.5" if k0 else "")
+    vf = (f"{rebase},sendcmd=f={cmds.as_posix()},crop={path.crop_w}:{path.crop_h}:{path.xs[k0]}:{path.crop_y},"
           f"scale={frame.w}:{frame.h}:flags=lanczos:in_range={color['range']}:in_color_matrix={color['matrix']}:"
           f"out_range=tv:out_color_matrix=bt709,format=yuv420p,setsar=1"
           + (f",{zoom_filter(zoom, seg.fps, (frame.w, frame.h))}" if zoom else "") + f",{TAG_709}")
     ov_args, ov_graph = _overlay_graph("[base]", overlays or [], 1, seg.fps)
+    if k0:
+        ov_graph = ov_graph[:-len("[v]")] + ",setpts=PTS-STARTPTS[v]"
     graph = f"[0:v]{vf}[base];{ov_graph}"
-    _ffmpeg(["-ss", f"{seek:.6f}", "-t", f"{(seg.frames + 2) / seg.fps:.6f}", "-i", str(source), *ov_args,
-             "-filter_complex", graph, "-map", "[v]", "-an", "-frames:v", str(seg.frames), "-r", f"{seg.fps:g}",
-             "-fps_mode", "cfr", *X264, str(out)])
-    return out
+    n = k1 - k0
+    args = ["-ss", f"{seek:.6f}", "-t", f"{(n + 2) / seg.fps:.6f}", "-i", str(source), *ov_args,
+            "-filter_complex", graph, "-map", "[v]", "-an", "-frames:v", str(n), "-r", f"{seg.fps:g}",
+            "-fps_mode", "cfr", *X264, "-threads", str(X264_THREADS)]
+    stand_ins = {str(source): _source_id(source), cmds.as_posix(): "sendcmd:" + hashlib.sha256(text.encode()).hexdigest()}
+    stand_ins.update({str(ov.png): _file_id(Path(ov.png)) for ov in overlays or []})
+    return Encode(args, out, stand_ins)
 
 
-def render_title_video(png: Path, fps: float, render_dir: Path, seconds: float = TITLE_S, fade_s: float = TITLE_FADE_S,
-                       frame: Frame = FRAME_916) -> tuple[Path, int]:
+def render_segment_video(source: Path, seg: Segment, path: SegmentPath, render_dir: Path,
+                         overlays: list[Overlay] | None = None, zoom: dict | None = None, frame: Frame = FRAME_916,
+                         color: dict | None = None) -> Path:
+    """segment_encode, encoded now without the cache."""
+    enc = segment_encode(source, seg, path, render_dir, overlays, zoom, frame, color)
+    _ffmpeg([*enc.args, str(enc.out)])
+    return enc.out
+
+
+def title_encode(png: Path, fps: float, render_dir: Path, seconds: float = TITLE_S, fade_s: float = TITLE_FADE_S,
+                 frame: Frame = FRAME_916) -> tuple[Encode, int]:
     """The title card as a segment of whole frames: scaled to cover the frame (1080x1920; the 9:16 card's middle in a
     feed aspect), fade to black over the last fade_s."""
     frames = int(round(seconds * fps))
@@ -268,9 +375,102 @@ def render_title_video(png: Path, fps: float, render_dir: Path, seconds: float =
     d = frames / fps
     vf = (f"scale={frame.w}:{frame.h}:force_original_aspect_ratio=increase:flags=lanczos,crop={frame.w}:{frame.h},setsar=1,"
           f"fade=t=out:st={d - fade_s:.4f}:d={fade_s},{TO_709},format=yuv420p,{TAG_709}")
-    _ffmpeg(["-loop", "1", "-framerate", f"{fps:g}", "-t", f"{d + 1 / fps:.6f}", "-i", str(png), "-vf", vf,
-             "-frames:v", str(frames), "-r", f"{fps:g}", "-fps_mode", "cfr", *X264, str(out)])
-    return out, frames
+    args = ["-loop", "1", "-framerate", f"{fps:g}", "-t", f"{d + 1 / fps:.6f}", "-i", str(png), "-vf", vf,
+            "-frames:v", str(frames), "-r", f"{fps:g}", "-fps_mode", "cfr", *X264, "-threads", str(X264_THREADS)]
+    return Encode(args, out, {str(png): _file_id(png)}), frames
+
+
+def render_title_video(png: Path, fps: float, render_dir: Path, seconds: float = TITLE_S, fade_s: float = TITLE_FADE_S,
+                       frame: Frame = FRAME_916) -> tuple[Path, int]:
+    """title_encode, encoded now without the cache."""
+    enc, frames = title_encode(png, fps, render_dir, seconds, fade_s, frame)
+    _ffmpeg([*enc.args, str(enc.out)])
+    return enc.out, frames
+
+
+def _place(src: Path, out: Path) -> None:
+    """The cached file at `out`: a hard link (no copy), else a copy where links are not possible."""
+    out.unlink(missing_ok=True)
+    try:
+        os.link(src, out)
+    except OSError:
+        if not src.is_file():
+            raise
+        shutil.copyfile(src, out)
+
+
+def take_cached(enc: Encode, cache_dir: Path, key: str) -> bool:
+    """Put the cached encode with this key at enc.out (and mark it used); False when there is none."""
+    hit = cache_dir / f"{key}.mp4"
+    try:
+        _place(hit, enc.out)
+        os.utime(hit)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def run_encode(enc: Encode, cache_dir: Path | None, key: str | None) -> None:
+    """Encode to enc.out; with a cache, into the cache first (as a .part renamed when done), then linked out."""
+    if cache_dir is None or key is None:
+        enc.out.unlink(missing_ok=True)  # it may be a link to a cache file: ffmpeg -y would write into that
+        _ffmpeg([*enc.args, str(enc.out)])
+        return
+    part = cache_dir / f"{key}.{os.getpid()}.{threading.get_ident()}.part"
+    try:
+        _ffmpeg([*enc.args, "-f", "mp4", str(part)])
+        part.replace(cache_dir / f"{key}.mp4")
+    finally:
+        part.unlink(missing_ok=True)
+    _place(cache_dir / f"{key}.mp4", enc.out)
+
+
+def encode_all(encodes: list[Encode], cache_dir: Path | None, on_done, workers: int = ENCODE_WORKERS) -> list[str | None]:
+    """Every encode, cache hits first, the rest ENCODE_WORKERS at a time; `on_done(i, cached)` is called on this
+    thread as each one lands (so in finishing order, not in segment order). Returns the cache keys."""
+    keys = [enc.key() if cache_dir is not None else None for enc in encodes]
+    todo = []
+    for i, enc in enumerate(encodes):
+        if cache_dir is not None and take_cached(enc, cache_dir, keys[i]):
+            on_done(i, True)
+        else:
+            todo.append(i)
+    if not todo:
+        return keys
+    pool = ThreadPoolExecutor(max_workers=max(1, min(workers, len(todo))))
+    try:
+        futures = {pool.submit(run_encode, encodes[i], cache_dir, keys[i]): i for i in todo}
+        for fut in as_completed(futures):
+            fut.result()
+            on_done(futures[fut], False)
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+    return keys
+
+
+def prune_cache(cache_dir: Path, keep: set[str], renders: int = SEGCACHE_RENDERS) -> int:
+    """Drop the least recently used cache files past `renders` times the bytes of the keys in `keep` (the render just
+    made, never dropped), and .part files left by a crash; returns how many went."""
+    files = sorted(cache_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+    budget = renders * sum(p.stat().st_size for p in files if p.stem in keep)
+    total, dropped = 0, 0
+    for p in files:
+        total += p.stat().st_size
+        if p.stem not in keep and total > budget:
+            p.unlink(missing_ok=True)
+            dropped += 1
+    metas = sorted(cache_dir.glob("audio_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for k, meta in enumerate(metas):
+        key = meta.stem[len("audio_"):]
+        if key not in keep and k >= renders:
+            for f in cache_dir.glob(f"audio_{key}.*"):
+                f.unlink(missing_ok=True)
+            dropped += 1
+    now = time.time()
+    for p in cache_dir.glob("*.part"):
+        if now - p.stat().st_mtime > SEGCACHE_PART_MAX_AGE_S:
+            p.unlink(missing_ok=True)
+    return dropped
 
 
 _LOUD_JSON = re.compile(r"\{[^{}]*\"input_i\"[^{}]*\}", re.S)
@@ -428,6 +628,61 @@ def render_audio(source: Path, segments: list[Segment], render_dir: Path, lead_s
     return out, rec, mrec
 
 
+@functools.lru_cache(maxsize=1)
+def _code_id() -> str:
+    """This module and music.py: the audio's cache key cannot see the ffmpeg graphs it would run, so a change to the
+    code that builds them starts the audio cache over."""
+    here = Path(__file__).resolve().parent
+    return hashlib.sha256(b"".join((here / f).read_bytes() for f in ("render.py", "music.py"))).hexdigest()[:16]
+
+
+def audio_key(source: Path, segments: list[Segment], lead_s: float, loudnorm: bool, music: dict | None,
+              words: list[dict] | None, run_dir: Path) -> str:
+    """What render_audio's output depends on: the source, each segment's in point and length, the title lead, the
+    loudness switch and, with music, the bed, the words it ducks along (else the run's audio.wav) and the track file."""
+    rec: dict = {"ffmpeg": _ffmpeg_build(), "code": _code_id(), "source": _source_id(source),
+                 "segments": [[seg.t_in, seg.duration] for seg in segments], "lead": round(lead_s, 6),
+                 "loudnorm": bool(loudnorm), "music": music}
+    if music:
+        from . import music as bed_mod
+        rec["words"] = hashlib.sha256(json.dumps(words, sort_keys=True).encode()).hexdigest() if words else None
+        wav = run_dir / "audio.wav"
+        rec["audio_wav"] = _source_id(wav) if not words and wav.is_file() else None
+        rec["track"] = _source_id(Path(bed_mod.track(music["track"])["path"]))
+    return hashlib.sha256(json.dumps(rec, sort_keys=True).encode()).hexdigest()[:24]
+
+
+def cached_audio(cache_dir: Path | None, key: str | None, render_dir: Path, stem_name: str,
+                 make) -> tuple[Path, dict | None, dict | None, bool]:
+    """render_audio's (file, loudness record, music record) from the cache when the key is there (the files copied
+    out: ffmpeg -y on a later render writes into the file it finds), else `make()` and keep a copy. The last item says
+    whether it came from the cache."""
+    files = {"audio": render_dir / "audio.m4a", "speech": render_dir / f"{stem_name}.speech.m4a",
+             "music": render_dir / f"{stem_name}.music.m4a"}
+    meta = cache_dir / f"audio_{key}.json" if cache_dir is not None and key else None
+    if meta is not None and meta.is_file():
+        try:
+            m = json.loads(meta.read_text())
+            for kind in m["files"]:
+                shutil.copyfile(cache_dir / f"audio_{key}.{kind}.m4a", files[kind])
+            os.utime(meta)
+            bed = m["music"]
+            if bed:
+                bed["speech_stem"], bed["music_stem"] = files["speech"].as_posix(), files["music"].as_posix()
+            return files["audio"], m["loudnorm"], bed, True
+        except (OSError, ValueError, KeyError):
+            pass
+    out, rec, bed = make()
+    if meta is not None:
+        kinds = ["audio"] + (["speech", "music"] if bed else [])
+        for kind in kinds:
+            part = cache_dir / f"audio_{key}.{kind}.{os.getpid()}.part"
+            shutil.copyfile(files[kind], part)
+            part.replace(cache_dir / f"audio_{key}.{kind}.m4a")
+        dump_json(meta, {"files": kinds, "loudnorm": rec, "music": bed})
+    return out, rec, bed, False
+
+
 def music_stem(run_dir: Path, edl: dict, out: Path) -> Path:
     """The ducked bed of a rendered version as AAC, rebuilt from its render block (segments, title seconds) and the
     Voice words, as render_audio made it: for versions rendered before the bed was kept as render/<cut>.music.m4a."""
@@ -542,12 +797,13 @@ def plan_paths(edl: dict, track: dict | None, speaker_ids: dict[str, list[str]],
 def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str = "cut_v1.mp4",
            params: ReframeParams | None = None, log=print, edl_path: Path | None = None, words: list[dict] | None = None,
            title_png: Path | None = None, captions: bool = True, callouts: bool = True, loudnorm: bool = True,
-           punch: bool = False) -> dict:
+           punch: bool = False, cache: bool | None = None) -> dict:
     """Render the EDL to run_dir/<out_name>; writes segments, cmd files, overlay PNGs and the audio under run_dir/render/
     and fills the EDL's `reframe` keyframes, `captions` / `callouts` / `caption_corrections` and a `render` block
     (written back to edl_path when given). `words` are the Voice words (voice.json) the captions come from; without
     them, or with captions=False, the cut has no captions. `title_png` puts the title card in front. `punch` adds the
-    punch-in zooms (punch.py) and records them in the EDL's `punch_ins`."""
+    punch-in zooms (punch.py) and records them in the EDL's `punch_ins`. `cache` (default on, MONTIVO_SEGCACHE=0 turns
+    it off) reuses encoded segments from render/cache/ (see the module docstring)."""
     if not source.is_file():
         raise FileNotFoundError(f"source footage not found: {source}")
     if not edl.get("spans"):
@@ -565,13 +821,17 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     speaker_ids = load_speaker_ids(run_dir, concept, edl)
     segments, paths = plan_paths(edl, track, speaker_ids, params)
     color = source_color(source)
+    if cache is None:
+        cache = os.environ.get("MONTIVO_SEGCACHE", "1") != "0"
+    cache_dir = render_dir / SEGCACHE if cache else None
+    if cache_dir is not None:
+        cache_dir.mkdir(exist_ok=True)
     log(f"render: {len(edl['spans'])} spans -> {len(segments)} segments ({sum(s.frames for s in segments)} frames), "
         f"source {source.name}, {frame.w}x{frame.h} ({frame.aspect}), track {concept or 'none (centre crop)'}"
         + (f", following speakers {', '.join(f'{k}->{'/'.join(v)}' for k, v in speaker_ids.items())}" if speaker_ids else ""))
 
     keyframes: list[dict] = []
     seg_info: list[dict] = []
-    files: list[Path] = []
     with Timer() as t:
         title_frames = 0
         title_s = 0.0
@@ -601,33 +861,73 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
             log(f"render: {len(edl['punch_ins'])} punch-ins" + "".join(
                 f"{'; ' if k else ': '}{e['t_in']:.1f}s {e.get('word') or 'jump cut'} x{e['zoom']}"
                 for k, e in enumerate(edl["punch_ins"])))
+        encodes: list[Encode] = []
+        owner: list[int] = []  # the segment index of each encode, -1 for the title clip
         if title_png is not None:
-            tfile, _ = render_title_video(title_png, fps, render_dir, frame=frame)
-            files.append(tfile)
-            log(f"render: title card {title_png.name} {title_s:.2f}s ({title_frames} frames, fade {TITLE_FADE_S}s)")
+            encodes.append(title_encode(title_png, fps, render_dir, frame=frame)[0])
+            owner.append(-1)
+        lines: list[str] = []
         for seg, path in zip(segments, paths):
             ovs = overlays.get(seg.index, [])
-            f = render_segment_video(source, seg, path, render_dir, ovs, zooms.get(seg.index), frame, color)
-            files.append(f)
+            parts = chunk_bounds(seg, zooms.get(seg.index))
+            for part in parts:
+                encodes.append(segment_encode(source, seg, path, render_dir, ovs, zooms.get(seg.index), frame, color, part))
+                owner.append(seg.index)
             keyframes.extend(path.keyframes)
             moving = sum(1 for a, b in zip(path.xs, path.xs[1:]) if a != b)
             seg_info.append({"index": seg.index, "t_in": seg.t_in, "t_out": seg.t_out, "duration": seg.duration, "frames": seg.frames,
                              "spans": seg.span_ids, "track_concept": concept, "track_id": path.track_id, "crop": [path.crop_w, path.crop_h],
                              **({"crop_y": path.crop_y} if path.crop_y else {}),
                              "x_first": path.xs[0], "x_min": min(path.xs), "x_max": max(path.xs),
-                             "frames_moving": moving, "overlays": len(ovs), "file": f.as_posix(),
+                             "frames_moving": moving, "overlays": len(ovs),
+                             "files": [e.out.as_posix() for e, o in zip(encodes, owner) if o == seg.index],
+                             "chunks": [list(p) for p in parts],
                              **({"pieces": path.pieces} if path.pieces else {}),
                              **({"zoom": {"base": zooms[seg.index]["base"], "events": len(zooms[seg.index]["events"])}}
                                 if seg.index in zooms else {})})
-            log(f"render: seg {seg.index + 1} {seg.t_in:.3f}-{seg.t_out:.3f}s ({seg.frames} frames, {'+'.join(seg.span_ids)}) "
-                f"track {'/'.join(f'{p['speaker']}:{p['track_id']}' for p in path.pieces) if path.pieces else path.track_id} crop {path.crop_w}x{path.crop_h} x {min(path.xs)}..{max(path.xs)}, {len(ovs)} overlays")
+            lines.append(f"render: seg {seg.index + 1} {seg.t_in:.3f}-{seg.t_out:.3f}s ({seg.frames} frames, {'+'.join(seg.span_ids)}) "
+                         f"track {'/'.join(f'{p['speaker']}:{p['track_id']}' for p in path.pieces) if path.pieces else path.track_id} crop {path.crop_w}x{path.crop_h} x {min(path.xs)}..{max(path.xs)}, {len(ovs)} overlays")
+        files = [e.out for e in encodes]
+        cached: list[bool] = [False] * len(encodes)
+        left = {seg.index: owner.count(seg.index) for seg in segments}
+
+        def landed(i: int, hit: bool) -> None:
+            """The log line of a segment once its last chunk is in (the progress bar counts these lines)."""
+            cached[i] = hit
+            k = owner[i]
+            if k < 0:
+                log(f"render: title card {title_png.name} {title_s:.2f}s ({title_frames} frames, fade {TITLE_FADE_S}s)"
+                    + (", cached" if hit else ""))
+                return
+            left[k] -= 1
+            if left[k]:
+                return
+            n = owner.count(k)
+            hits = sum(c for c, o in zip(cached, owner) if o == k)
+            note = ", cached" if hits == n else f", {hits} of {n} chunks cached" if hits else f", {n} chunks" if n > 1 else ""
+            log(lines[k] + note)
+
         music = normalize_music(edl.get("music"))
         if music and words is None:
             vpath = run_dir / "voice" / "voice.json"
             words = json.loads(vpath.read_text())["words"] if vpath.is_file() else None
-        audio, loud, bed = render_audio(source, segments, render_dir, lead_s=title_s, loudnorm=loudnorm, music=music,
-                                        words=words, audio=Audio.load(run_dir) if music else None,
-                                        stem_name=Path(out_name).stem)
+        stem_name = Path(out_name).stem
+        akey = audio_key(source, segments, title_s, loudnorm, music, words, run_dir) if cache_dir is not None else None
+
+        def make_audio():
+            return render_audio(source, segments, render_dir, lead_s=title_s, loudnorm=loudnorm, music=music,
+                                words=words, audio=Audio.load(run_dir) if music else None, stem_name=stem_name)
+        # the audio needs only the segment times: it runs beside the video encodes
+        with ThreadPoolExecutor(max_workers=1) as audio_pool:
+            audio_job = audio_pool.submit(cached_audio, cache_dir, akey, render_dir, stem_name, make_audio)
+            keys = encode_all(encodes, cache_dir, landed)
+            audio, loud, bed, audio_hit = audio_job.result()
+        for info in seg_info:
+            mine = [i for i, o in enumerate(owner) if o == info["index"]]
+            info["cached"] = all(cached[i] for i in mine)
+            info["chunks_cached"] = sum(cached[i] for i in mine)
+            if cache_dir is not None:
+                info["cache_keys"] = [keys[i] for i in mine]
         if bed:
             m = bed["measured"]
             log(f"render: music {bed['name']} at {bed['level_db']} LUFS, ducked {bed['duck_db']} dB over "
@@ -635,6 +935,8 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
                 f"bed under it {m['bed_under_speech_rms_db']} dB (margin {m['margin_db']} dB), bed in the open "
                 f"{m['bed_open_rms_db']} dB")
         out = mux(files, audio, run_dir / out_name, render_dir)
+        if cache_dir is not None:
+            prune_cache(cache_dir, {k for k in [*keys, akey] if k})
     measured = measure_loudness(out)
     size_mb = out.stat().st_size / 1e6
     total = round(title_s + sum(s.duration for s in segments), 3)
@@ -645,7 +947,9 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
                      "color": {"source": color, "output": {"range": "tv", "matrix": "bt709"}},
                      "loudnorm": loud, "loudness_ebur128": measured, "music": bed,
                      "captions": len(edl.get("captions") or []), "callouts": len(edl.get("callouts") or []),
-                     "audio": audio.as_posix(), "seconds": t.seconds, "bytes": out.stat().st_size}
+                     "audio": audio.as_posix(), "seconds": t.seconds, "bytes": out.stat().st_size,
+                     "segcache": {"on": cache_dir is not None, "cached": sum(cached), "encoded": len(cached) - sum(cached),
+                                  "audio_cached": audio_hit, "workers": ENCODE_WORKERS, "x264_threads": X264_THREADS}}
     if edl_path:
         dump_json(edl_path, edl)
     loud_note = f", {measured['integrated_lufs']} LUFS / {measured['true_peak_dbtp']} dBTP" if measured else ""
@@ -654,7 +958,7 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     if bed:
         loud_note += f", music {bed['track']}"
     ledger.add(Entry(stage="render", model="ffmpeg", seconds=t.seconds, cost_usd=0.0,
-                     note=f"{len(segments)} segments{' + title' if title_png else ''}, {total} s, "
+                     note=f"{len(segments)} segments{' + title' if title_png else ''} ({sum(cached)} of {len(cached)} encodes{' + audio' if audio_hit else ''} cached), {total} s, "
                           f"{len(edl.get('captions') or [])} captions, {out.name} {size_mb:.1f} MB{loud_note}"))
     log(f"render: {out} ({total} s, {size_mb:.1f} MB{loud_note}) in {t.seconds}s")
     return edl["render"]
