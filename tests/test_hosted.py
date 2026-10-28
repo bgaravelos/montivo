@@ -173,7 +173,8 @@ def test_sign_in_gives_each_browser_a_judge_id(tmp_path, hosted_env):
     hosted_env.setenv("MONTIVO_PASSWORD", "pw")
     c = TestClient(A.create_app(tmp_path))
     r = c.post("/api/login", data={"password": "pw"}, follow_redirects=False)
-    assert len(r.cookies.get(H.JUDGE) or "") == 8
+    jid, _, sig = (r.cookies.get(H.JUDGE) or "").partition(".")
+    assert len(jid) == 8 and r.cookies.get(H.JUDGE) == H.judge_cookie("pw", jid)
     old = TestClient(A.create_app(tmp_path))  # signed in before the judge cookie existed
     old.cookies.set(H.COOKIE, H.token("pw"))
     assert old.get("/api/runs").cookies.get(H.JUDGE)
@@ -228,7 +229,7 @@ def test_a_judge_never_reads_another_judges_project(tmp_path, hosted_env):
     for judge in ("aaaa", "bbbb"):
         c = TestClient(A.create_app(tmp_path))
         c.post("/api/login", data={"password": "pw"})
-        c.cookies.set(H.JUDGE, judge)
+        c.cookies.set(H.JUDGE, H.judge_cookie("pw", judge))
         clients[judge] = c
     a, b = clients["aaaa"], clients["bbbb"]
     for path in ("", "/file/edl_v2.json", "/log", "/heads", "/frame?t=0.5", "/export", "/events"):
@@ -266,3 +267,67 @@ def test_a_slow_sample_copy_runs_off_the_event_loop_after_the_body_is_read(tmp_p
     assert r.status_code == 200 and r.json()["job"]["run"] == "r1-aa11"
     assert seen[-1][3:7] == ["runs/r1-aa11", "--track", "chill_lofi", "--level"] and seen[-1][7] == "-22"
     assert threads == ["worker"]  # copied in a worker thread, not on the loop
+
+
+def test_a_judge_cookie_the_server_did_not_sign_is_another_judge(tmp_path, hosted_env):
+    # code review, debugging day 1: the id is in every copy's name (runs/<sample>-<id>, and the one-job 409 named the
+    # running run), so a bare id cookie let one judge act as another
+    d = _run_folder(tmp_path)
+    ledger(d, 0.36)
+    hosted_env.setenv("MONTIVO_BUDGET_USD", "15")
+    hosted_env.setenv("MONTIVO_PASSWORD", "pw")
+    fake_jobs(hosted_env)
+    victim = tmp_path / "runs" / "r1-6fa922fb"
+    A.shutil.copytree(d, victim)
+    (victim / "ui").mkdir(exist_ok=True)
+    (victim / "ui" / "owner").write_text("6fa922fb")
+    owner = TestClient(A.create_app(tmp_path))
+    owner.post("/api/login", data={"password": "pw"})
+    owner.cookies.set(H.JUDGE, H.judge_cookie("pw", "6fa922fb"))
+    assert owner.get("/api/runs/r1-6fa922fb").status_code == 200
+    thief = TestClient(A.create_app(tmp_path))
+    thief.post("/api/login", data={"password": "pw"})
+    for forged in ("6fa922fb", "6fa922fb.0000", "a b", "../x", H.judge_cookie("other", "6fa922fb")):
+        thief.cookies.set(H.JUDGE, forged)
+        r = thief.get("/api/runs/r1-6fa922fb")
+        assert r.status_code == 404, forged
+        new = r.cookies.get(H.JUDGE)  # a fresh signed id instead
+        assert new and new.partition(".")[0] != "6fa922fb" and new == H.judge_cookie("pw", new.partition(".")[0])
+    thief.cookies.set(H.JUDGE, "a b")
+    assert thief.post("/api/runs/r1/drop", json={"span": "s1"}).json()["job"]["run"] != "r1-a b"
+    assert not (tmp_path / "runs" / "r1-a b").exists()
+
+
+def test_a_second_copy_after_archiving_the_first_still_counts_its_spend(tmp_path, hosted_env):
+    # code review, debugging day 1: the budget keyed ledgers by folder name, so runs/_archive/<id> replaced runs/<id>
+    # and a judge's second copy of a sample took the archived ledger as its baseline: nothing it spent counted
+    d = _run_folder(tmp_path)
+    ledger(d, 0.36)
+    hosted_env.setenv("MONTIVO_BUDGET_USD", "15")
+    fake_jobs(hosted_env)
+    c = TestClient(A.create_app(tmp_path))
+    c.cookies.set(H.JUDGE, "aa11")
+    assert c.post("/api/runs/r1/drop", json={"span": "s1"}).json()["job"]["run"] == "r1-aa11"
+    mine = tmp_path / "runs" / "r1-aa11"
+    ledger(mine, 0.66)  # $0.30 spent on the host
+    assert c.post("/api/runs/r1-aa11/archive").status_code == 200
+    assert c.get("/api/runs").json()["budget"]["spent"] == pytest.approx(0.30)
+    assert c.post("/api/runs/r1/drop", json={"span": "s1"}).json()["job"]["run"] == "r1-aa11"  # a new copy
+    ledger(mine, 0.36 + 5.0)
+    assert c.get("/api/runs").json()["budget"]["spent"] == pytest.approx(5.30)
+    # an old budget.json (archived runs under their bare name) moves the baseline to the archived key
+    b = json.loads((tmp_path / "budget.json").read_text())
+    b["baseline"]["gone"] = b["baseline"].pop("_archive/r1-aa11")
+    (tmp_path / "budget.json").write_text(json.dumps(b))
+    (tmp_path / "runs" / "_archive" / "r1-aa11").rename(tmp_path / "runs" / "_archive" / "gone")
+    assert H.Budget(tmp_path, 15).baseline["_archive/gone"] == pytest.approx(0.36)
+
+
+def test_try_again_checks_what_the_job_costs_not_the_cheapest_action(tmp_path, hosted_env):
+    # code review, debugging day 1: a stopped run or review loop ran again on the last cent of the budget
+    est = A.retry_estimate(tmp_path, "run", ["-m", "montivo.cli", "run", "footage/x.mp4", "--brief", "b", "--review",
+                                             "--out", "runs/r", "--resume"], duration=lambda p: None)
+    assert est == pytest.approx(A.COST["run_fixed"] + A.COST["run_per_s"] * 95 + A.COST["review_loop"])
+    assert A.retry_estimate(tmp_path, "review", ["-m", "montivo.cli", "review", "runs/r", "--passes", "3"]) == \
+        pytest.approx(3 * A.COST["review"])
+    assert A.retry_estimate(tmp_path, "drop", ["-m", "montivo.human", "drop", "runs/r", "--span", "s1"]) == H.MIN_PAID_USD

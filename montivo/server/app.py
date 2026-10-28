@@ -94,6 +94,7 @@ class Job:
     log_pos: int = 0  # run.log's size when the job started: its own lines come after
     spent_at: float = 0.0  # the run ledger's total when the job started
     charged: float | None = None  # what the ledger grew by during the job, once it ended
+    v0: int = 0  # the newest edl_vN when the job started: a failed job's unrendered versions come after it
 
     def public(self) -> dict:
         return {"id": self.id, "run": self.run, "kind": self.kind, "label": self.label, "started": self.started,
@@ -120,6 +121,7 @@ class State:
         self.jobs: dict[str, Job] = {}  # run id -> its latest job
         self.lock = threading.Lock()
         self.one_job = os.environ.get("MONTIVO_ONE_JOB") == "1"  # hosted: one engine job at a time over all runs
+        self.exporting: dict[str, int] = {}  # run id -> exports rendering in it (they share the run's render/ folder)
 
     def run_dir(self, run_id: str) -> Path:
         if not SAFE_NAME.match(run_id):
@@ -205,6 +207,46 @@ def latest_cut(run_dir: Path) -> int:
     return max(vs, default=0) or latest_version(run_dir)
 
 
+def retry_estimate(root: Path, kind: str, args: list[str], duration=lambda p: None) -> float:
+    """What a failed job's command may spend when it runs again, from its arguments (a retry used to check only the
+    cheapest paid action, so a stopped run or review loop ran again on the last cent of the hosted budget)."""
+    def num(flag: str, default: int = 0) -> int:
+        try:
+            return int(args[args.index(flag) + 1]) if flag in args else default
+        except (IndexError, ValueError):
+            return default
+    est = COST["review"] * max(num("--review"), num("--passes"), num("--review-passes"))
+    if kind == "run":
+        clip = next((root / a for a in args if a.startswith("footage/")), None)
+        dur = (duration(clip) if clip and clip.is_file() else None) or 95.0
+        est += COST["run_fixed"] + COST["run_per_s"] * dur + (COST["review_loop"] if "--review" in args else 0.0)
+    if "replan" in args or kind == "ask":
+        est += COST["plan"] + COST["ask"]
+    if kind == "hook":
+        est += COST["hook_ab"] + COST["review"]
+    if "--prompt" in args:
+        est += COST["look"]
+    if "--title" in args or "overlay" in args:
+        est += 0.01
+    return round(max(est, hosted.MIN_PAID_USD), 4)
+
+
+def set_aside_unrendered(run_dir: Path, after: int, job_id: str) -> list[int]:
+    """A job stopped or failed in its render leaves edl_vN without cut_vN: every such version past `after` (the newest
+    when the job started) moves to stopped/, so no version without a cut is listed, becomes the base of the next edit
+    or takes a version number. A new run's edl_v1 (the plan, which `run --resume` reuses) stays."""
+    moved = []
+    for p in run_dir.glob("edl_v*.json"):
+        m = re.fullmatch(r"edl_v(\d+)\.json", p.name)
+        n = int(m.group(1)) if m else 0
+        if n > max(after, 1) and not (run_dir / f"cut_v{n}.mp4").is_file():
+            dest = run_dir / "stopped" / f"edl_v{n}-{job_id}.json"
+            dest.parent.mkdir(exist_ok=True)
+            shutil.move(str(p), str(dest))
+            moved.append(n)
+    return sorted(moved)
+
+
 def result_message(st: State, job: Job) -> dict:
     """The agent's chat line when a job ends: the newest version and its score, or the error (after the version on
     screen then, with what the job spent)."""
@@ -260,9 +302,11 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
     with st.lock:
         if st.busy(run_id):
             raise HTTPException(409, f"{st.jobs[run_id].label} is still running on this run")
+        if st.exporting.get(run_id):
+            raise HTTPException(409, "an export is rendering this run: try again when it is ready")
         other = next((j for j in st.jobs.values() if j.ended is None), None) if st.one_job else None
         if other:
-            raise HTTPException(409, f"{other.label} is running on {other.run}: this demo server runs one job at a "
+            raise HTTPException(409, f"{other.label} is running (another project): this demo server runs one job at a "
                                      "time, try again when it finishes")
         (d / "ui").mkdir(parents=True, exist_ok=True)
         jid = time.strftime("%Y%m%d-%H%M%S")
@@ -270,7 +314,8 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
         cmd = [sys.executable, *args]
         logp = d / "run.log"
         job = Job(id=jid, run=run_id, kind=kind, label=label, cmd=cmd, out=str(out),
-                  log_pos=logp.stat().st_size if logp.is_file() else 0, spent_at=ledger_total(d))
+                  log_pos=logp.stat().st_size if logp.is_file() else 0, spent_at=ledger_total(d),
+                  v0=latest_version(d))
         fh = out.open("w")
         job.proc = subprocess.Popen(cmd, cwd=st.root, stdout=fh, stderr=subprocess.STDOUT, env=os.environ.copy())
         st.jobs[run_id] = job
@@ -281,6 +326,8 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
         rc = job.proc.wait()
         fh.close()
         job.charged = round(max(0.0, ledger_total(d) - job.spent_at), 5)
+        if rc != 0:
+            set_aside_unrendered(d, job.v0, job.id)
         job.rc, job.ended = rc, time.time()
         chat_append(d, result_message(st, job))
 
@@ -317,7 +364,8 @@ def create_app(root: Path) -> FastAPI:
     copying = threading.Lock()
 
     def judge_of(request: Request) -> str:
-        return request.cookies.get(hosted.JUDGE) or "guest"
+        """The judge id the sign-in gate checked (hosted.judge_id), else a well-formed cookie (no password set)."""
+        return request.scope.get(hosted.JUDGE_SCOPE) or hosted.judge_id(request, None) or "guest"
 
     def owner(d: Path) -> str | None:
         p = d / "ui" / "owner"
@@ -655,9 +703,22 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(400, f"include: some of {', '.join(KINDS)}; preset: full or 720; cover_t: seconds; "
                                      f"aspect: one of {', '.join(ASPECTS)}")
         renders = "clean" in inc or (aspect != "9:16" and "video" in inc)
-        if renders and st.busy(run_id):
-            raise HTTPException(409, f"{st.jobs[run_id].label} is running: the "
-                                     f"{'copy without captions' if 'clean' in inc else aspect + ' video'} renders after it")
+        with st.lock:  # a job and a rendering export never share render/ (start_job checks st.exporting)
+            if renders and st.busy(run_id):
+                raise HTTPException(409, f"{st.jobs[run_id].label} is running: the "
+                                         f"{'copy without captions' if 'clean' in inc else aspect + ' video'} renders after it")
+            if renders:
+                st.exporting[run_id] = st.exporting.get(run_id, 0) + 1
+        try:
+            return make_bundle(run_id, d, v, inc, preset, name, cover, aspect, design)
+        finally:
+            if renders:
+                with st.lock:
+                    st.exporting[run_id] -= 1
+                    if not st.exporting[run_id]:
+                        del st.exporting[run_id]
+
+    def make_bundle(run_id: str, d: Path, v: int, inc: list, preset: str, name: str, cover, aspect: str, design) -> dict:
         edl = d / f"edl_v{v}.json"
         key_in = [v, inc, preset, name, cover, edl.stat().st_mtime_ns] + ([aspect] if aspect != "9:16" else []) \
             + ([design] if design else []) \
@@ -1622,7 +1683,7 @@ def create_app(root: Path) -> FastAPI:
         if j.kind == "run" and "--resume" not in args:
             args.append("--resume")  # the stages that finished stay: a second try pays only for the rest
         if paid_cmd(st.runs / run_id, args):
-            need_key(j.label)
+            need_key(j.label, retry_estimate(st.root, j.kind, args, footage_duration))
         job = start_job(st, run_id, j.kind, j.label, args,
                         chat={"role": "user", "kind": "retry_job", "job": j.id, "text": f"Try again: {j.label}"})
         return {"job": job.public()}
@@ -1690,6 +1751,8 @@ def create_app(root: Path) -> FastAPI:
         for p in side_logs(st.runs, run_id):
             shutil.move(str(p), str(dest.parent / p.name))
         st.jobs.pop(run_id, None)
+        if budget is not None:
+            budget.move(run_id, f"{ARCHIVE}/{run_id}")
         return {"archived": run_id}
 
     @app.post("/api/archive/{run_id}/restore")
@@ -1704,6 +1767,8 @@ def create_app(root: Path) -> FastAPI:
         shutil.move(str(src), str(st.runs / run_id))
         for p in side_logs(st.runs / ARCHIVE, run_id):
             shutil.move(str(p), str(st.runs / p.name))
+        if budget is not None:
+            budget.move(f"{ARCHIVE}/{run_id}", run_id)
         return {"restored": run_id}
 
     @app.post("/api/runs/{run_id}/stop")

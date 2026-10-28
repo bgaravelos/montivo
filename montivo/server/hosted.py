@@ -24,6 +24,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import time
 from pathlib import Path
@@ -38,6 +39,7 @@ COOKIE = "montivo_auth"
 JUDGE = "montivo_judge"  # one id per browser: the judge's own copies of the samples and their own runs
 OPEN_PATHS = ("/login", "/api/login", "/api/health", "/favicon", "/apple-touch-icon", "/s/")  # /s/: share links (share.py)
 MIN_PAID_USD = 0.01  # the cheapest paid action (a Muse Image title card)
+ARCHIVED = "_archive"  # runs/_archive/<id> (app.ARCHIVE)
 
 
 def usd(x: float) -> str:
@@ -62,6 +64,11 @@ class Budget:
         self.baseline: dict[str, float] = self.data["baseline"]
         if first:  # the runs already here (the seeded samples) are not host spend
             self.adopt(list(self.ledgers()))
+        for k in self.ledgers():  # budget.json from before archived runs had keys of their own
+            name = k.removeprefix(f"{ARCHIVED}/")
+            if k != name and k not in self.baseline and name in self.baseline \
+                    and not (root / "runs" / name / "ledger.json").is_file():
+                self.baseline[k] = self.baseline.pop(name)
         self.save()
 
     def adopt(self, names: list[str]) -> None:
@@ -71,15 +78,23 @@ class Budget:
         self.save()
 
     def ledgers(self) -> dict[str, float]:
-        """Every run's ledger total, archived runs included (an archive moves the folder, the spend stays)."""
+        """Every run's ledger total, archived runs included (an archive moves the folder, the spend stays), keyed
+        <id> and _archive/<id>: a run and an archived run of the same name are two runs (a judge's second copy of a
+        sample after archiving the first used to take the archived ledger as its baseline, and nothing counted)."""
         out: dict[str, float] = {}
-        for folder in (self.root / "runs", self.root / "runs" / "_archive"):
+        for folder, pre in ((self.root / "runs", ""), (self.root / "runs" / ARCHIVED, f"{ARCHIVED}/")):
             for p in folder.glob("*/ledger.json") if folder.is_dir() else []:
                 try:
-                    out[p.parent.name] = float(json.loads(p.read_text()).get("total_cost_usd") or 0.0)
+                    out[pre + p.parent.name] = float(json.loads(p.read_text()).get("total_cost_usd") or 0.0)
                 except (OSError, ValueError):
                     continue
         return out
+
+    def move(self, old: str, new: str) -> None:
+        """A run archived or restored: its baseline goes with the folder."""
+        if old in self.baseline:
+            self.baseline[new] = self.baseline.pop(old)
+            self.save()
 
     def save(self) -> None:
         write_atomic(self.file, json.dumps(self.data, indent=1))
@@ -117,6 +132,30 @@ def token(password: str) -> str:
 
 def signed_in(request: Request, password: str) -> bool:
     return hmac.compare_digest(request.cookies.get(COOKIE, ""), token(password))
+
+
+JUDGE_ID = re.compile(r"[0-9a-f]{4,16}")
+JUDGE_SCOPE = "montivo.judge"  # the gate puts the checked judge id in the request scope (app.judge_of reads it)
+
+
+def judge_cookie(password: str, jid: str) -> str:
+    """<id>.<signature>: the id alone could be copied from a run name (runs/<sample>-<id>) and let one judge act as
+    another; the signature (HMAC with the password) makes the cookie the server's own."""
+    sig = hmac.new(password.encode(), f"montivo-judge-v1:{jid}".encode(), hashlib.sha256).hexdigest()[:20]
+    return f"{jid}.{sig}"
+
+
+def judge_id(request: Request, password: str | None) -> str | None:
+    """The browser's judge id when its cookie is valid (signed, when there is a password), else None."""
+    raw = request.cookies.get(JUDGE, "")
+    if password is None:
+        return raw if JUDGE_ID.fullmatch(raw) else None
+    jid = raw.partition(".")[0]
+    return jid if JUDGE_ID.fullmatch(jid) and hmac.compare_digest(raw, judge_cookie(password, jid)) else None
+
+
+def set_judge(resp, password: str, jid: str) -> None:
+    resp.set_cookie(JUDGE, judge_cookie(password, jid), max_age=60 * 86400, httponly=True, samesite="lax")
 
 
 LOGIN_HTML = """<!doctype html>
@@ -158,10 +197,12 @@ def install(app, password: str | None) -> None:
         if path.startswith(OPEN_PATHS):
             return await call_next(request)
         if signed_in(request, password):
-            if request.cookies.get(JUDGE):
+            jid = judge_id(request, password)
+            request.scope[JUDGE_SCOPE] = jid or secrets.token_hex(4)
+            if jid:
                 return await call_next(request)
-            resp = await call_next(request)  # signed in before the judge cookie existed: one for this browser now
-            resp.set_cookie(JUDGE, secrets.token_hex(4), max_age=60 * 86400, httponly=True, samesite="lax")
+            resp = await call_next(request)  # no judge cookie yet, or one the server did not sign: a new id
+            set_judge(resp, password, request.scope[JUDGE_SCOPE])
             return resp
         if path.startswith("/api/"):
             return JSONResponse({"error": "sign in first"}, status_code=401)
@@ -186,8 +227,8 @@ def install(app, password: str | None) -> None:
             await asyncio.sleep(1.0)  # slows a guesser down without holding the other requests
             return RedirectResponse("/login?error=1", status_code=303)
         resp = RedirectResponse("/", status_code=303)
-        if not request.cookies.get(JUDGE):
-            resp.set_cookie(JUDGE, secrets.token_hex(4), max_age=60 * 86400, httponly=True, samesite="lax")
+        if not judge_id(request, password):
+            set_judge(resp, password, secrets.token_hex(4))
         resp.set_cookie(COOKIE, token(password), max_age=14 * 86400, httponly=True, samesite="lax",
                         secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https")
         return resp
