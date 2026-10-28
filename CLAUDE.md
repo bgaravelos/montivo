@@ -515,9 +515,21 @@ names the weakest criterion; timeline clips show the caption text (`edit.spanTex
 title carries a job's % and a done mark when it ends hidden, plus a browser notification if allowed
 (`Progress.useJobSignals`, `askToNotify` on run / ask / review / hook); the waiting view says the tab can close and its
 loop can pause (WCAG 2.2.2); on the hosted demo Home opens with a Start here card and the composer shows the budget left.
-Checked keyless in the browser pane at 1440 and 375 px; the tab title not yet seen on a live job. Not deployed.
-Still to do: A3 (the planner names what the brief asks and the footage lacks, said once instead of a reviewer major on
-every review), after the engine-hygiene batch.
+Checked keyless in the browser pane at 1440 and 375 px; the tab title seen on a live $0 job (5 % -> 80 % -> done).
+Engine hygiene (28/10, $0, commit `efba5bf`, side session, batch 1 of `docs/notes/engine-editing-research_2026-10-28.md`):
+x264 veryfast (015 v5 render 18.4 -> 9 s, 26 -> 18 MB), every segment and the title tv-range BT.709 and tagged
+(`render.source_color`, EDL `render.color`), overlays to YUV with BT.709; glossary and highlight words per run in the EDL
+(`glossary`, `highlight`; new runs empty, older EDLs keep the demo words; punch-ins follow the look's highlight_add/off);
+atomic writes (`.part` + rename: dump_json, ledger, cut_vN.mp4, budget.json); back-off on 429 / 5xx with Retry-After,
+Voice chunk rerun on a broken stream, SAM asked again when no frame came, Spark one retry on incomplete / bad JSON;
+`review_loop` writes loop.json when a pass fails; ingest ffmpeg stderr reaches run.log. Throwaway re-render in
+`runs/015-hygiene/cut_v5_hygiene.mp4`.
+Brief vs footage (UX A3, 28/10, $0.096, commit `6fd517f`): the plan schema has `brief_not_in_footage`; `build_edl` keeps
+it as `brief_missing` after `edl.brief_missing` drops any item whose content words are mostly in the kept spans (the
+planner reads Voice's transcript: on 015 it listed "SAM tracks me" and "four Meta models", misheard but kept); the
+reviewer gets it as a fact about the source (`facts_text(not_in_source=)`), the chat says it once under the planned
+version. On a copy of 015 (removed): re-plan + review 100 pass, no brief_covered major. Old EDLs have no list, so 015
+itself still shows the major until a re-plan. Not deployed (UX batch A, engine hygiene and A3 all wait for one deploy).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
