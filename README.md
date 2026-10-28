@@ -372,6 +372,12 @@ one where they dragged it (span `callout_xy`). `python -m montivo.human style RU
 and a pinned callout where the person put them, and a re-plan carries both. The editor's Style panel shows each preset
 on a real frame of the cut and previews every change on the paused viewer with the same Pillow code
 (`engine/look.py`, about 0.4 s per still): what it shows is the new version's frame.
+A look can also be asked for in words (`--prompt "bold yellow, one word at a time, higher"`, the Style panel's
+Describe it box): one Muse Spark call with a strict schema of the look's fields (about $0.008, 8-12 s) gets the current
+look, how light the picture is behind the caption rows (mean luma of the source frames under them) and the rows the
+speaker's head covers, and answers the whole look with one line of why; out-of-range numbers are clamped, a bad colour
+keeps the old one, and a fixed height that would sit on the face becomes auto (on run 015 its first answer put the
+words on the mouth at y 1150 before the face rows were in the prompt and the guard existed).
 
 The editor: `make ui` (or `.venv/bin/montivo serve [--port 8765] [--root .]`). It reads the run folders and starts the
 engine as a subprocess (`montivo run ... --review`, `montivo review`, `python -m montivo.human drop|trim|replan|punch`); it never

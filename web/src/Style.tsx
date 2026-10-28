@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, tc } from "./api";
+import { Icon } from "./icons";
 import type { Look, LooksInfo, Version } from "./types";
 
 // The Style panel and its canvas handles. A person's look (font, colours, words per line, the caption position) and
@@ -87,12 +88,14 @@ function Seg<T extends string | number>({ value, options, onChange }: { value: T
   );
 }
 
-export function StylePanel({ id, v, t, next, canEdit, draft, setDraft, onSeek, onApply }: {
+export function StylePanel({ id, v, t, next, canEdit, draft, setDraft, onSeek, onApply, hasKey, keyNote, cost, onPrompt }: {
   id: string; v: Version | null; t: number; next: number; canEdit: string | null;
   draft: StyleDraft; setDraft: (d: StyleDraft) => void; onSeek: (a: number) => void; onApply: () => void;
+  hasKey: boolean; keyNote: string | null; cost: number; onPrompt: (text: string) => void;
 }) {
   const [info, setInfo] = useState<LooksInfo | null>(null);
   const [words, setWords] = useState("");
+  const [ask, setAsk] = useState("");
   useEffect(() => { getLooks().then(setInfo).catch(() => {}); }, []);
   const base = v?.look ?? info?.default ?? null;
   const look = draft.look ?? base;
@@ -112,6 +115,16 @@ export function StylePanel({ id, v, t, next, canEdit, draft, setDraft, onSeek, o
     <section className="side-panel">
       <div className="panel-head"><span className="ph-title">Style</span><span className="ph-sub">captions and callouts</span></div>
       <div className="panel-body style-panel">
+        <div className="pn-k">Describe it</div>
+        <div className="st-ask">
+          <textarea rows={2} value={ask} maxLength={300} placeholder="Bold yellow, one word at a time, higher up"
+            onChange={(e) => setAsk(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && ask.trim() && hasKey && !canEdit) { e.preventDefault(); onPrompt(ask.trim()); setAsk(""); } }} />
+          <button className="btn small" disabled={!ask.trim() || !hasKey || !!canEdit}
+            title={canEdit ?? (hasKey ? `Muse Spark picks the look and Montivo renders Version ${next} (about $${cost.toFixed(3)})` : keyNote ?? "Set MODEL_API_KEY to style from a sentence")}
+            onClick={() => { onPrompt(ask.trim()); setAsk(""); }}><Icon name="spark" size={12} /> Make Version {next} · ~${cost.toFixed(3)}</button>
+        </div>
+        <p className="mute small">Muse Spark reads the current look and how light the picture is behind the captions, then picks fonts and colours from the options below. Tweak the result here after.</p>
         <div className="pn-k">Presets</div>
         <div className="preset-grid">
           {info.presets.map((p) => <PresetCard key={p.id} id={id} v={v} t={presetT} look={p.look} on={look.preset === p.id} onPick={() => pick(p.look)} />)}

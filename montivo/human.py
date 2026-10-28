@@ -390,13 +390,27 @@ def style_fixes(edl: dict, look: dict | None, callouts: dict[str, list[float] | 
 
 
 def style(run_dir: Path, look: dict | None = None, callouts: dict[str, list[float] | None] | None = None,
-          from_v: int | None = None, passes: int = 0, budget: float = 0.15) -> dict:
+          from_v: int | None = None, passes: int = 0, budget: float = 0.15, prompt: str | None = None) -> dict:
     """The look of the captions and callouts and the callout places of edl_v{from} -> edl_vN, rendered, $0. The EDL's
     `look` and every span's `callout_xy` travel with later versions (review patches deep-copy the EDL, replan carries
     them), and the review loop keeps a fixed caption position (review.gate_check, resolve)."""
     log = RunLog(run_dir / "run.log")
     from_v, edl, n = _new_version(run_dir, from_v)
+    ledger = Ledger.resume(run_dir / "ledger.json")
+    why = None
+    if prompt:
+        from .engine.look import suggest
+        log(f"montivo style: the look for {prompt!r} (one Spark call)")
+        try:
+            look, why, corrected = suggest(run_dir, edl, prompt, ledger, log)
+        except ValueError as e:
+            raise SystemExit(f"Spark's look did not check out: {e}")
+        if corrected:
+            log(f"style: corrected Spark's answer: {'; '.join(corrected)}")
     new_look, fixes = style_fixes(edl, look, callouts or {})
+    if why and fixes[0]["op"] == "look":
+        fixes[0]["note"] += f" ({why})"
+        fixes[0]["args"]["prompt"] = prompt
     log(f"montivo style: {len(fixes)} change(s) in edl_v{from_v} -> edl_v{n}")
     new, _ = apply_fixes(edl, [], _words(run_dir))
     if new_look is not None:
@@ -408,7 +422,10 @@ def style(run_dir: Path, look: dict | None = None, callouts: dict[str, list[floa
         elif f["op"] == "callout_auto":
             by_id[f["target"]].pop("callout_xy", None)
     edl_path = _save(run_dir, new, n, from_v, "style", fixes, log)
-    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+    if prompt:
+        new["patches"][-1]["instruction"] = prompt
+        dump_json(edl_path, new)
+    return _finish(run_dir, edl_path, n, passes, budget, ledger, log)
 
 
 def carry_callout_places(prev: dict, new: dict) -> list[str]:
@@ -920,6 +937,7 @@ def main(argv: list[str] | None = None) -> int:
     sy.add_argument("run_dir", type=Path)
     sy.add_argument("--look", default=None, help='the look as JSON: {"preset": "box", "font": "anton", ...}')
     sy.add_argument("--callout", action="append", default=[], metavar="SPAN=X,Y", help="pin a callout (SPAN=auto unpins it)")
+    sy.add_argument("--prompt", default=None, help="describe the look in words: one Spark call (about $0.008) picks it")
     for p in (d, t, r, pu, c, tx, ro, pn, cu, ed, sy):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
@@ -967,7 +985,9 @@ def main(argv: list[str] | None = None) -> int:
             if not m:
                 ap.error("--callout SPAN=X,Y or SPAN=auto, like s5=120,300")
             places[m.group(1)] = None if m.group(2) else [float(m.group(3)), float(m.group(4))]
-        out = style(a.run_dir, look, places, a.from_v, a.review, a.budget)
+        if a.prompt and look is not None:
+            ap.error("give --look or --prompt, not both")
+        out = style(a.run_dir, look, places, a.from_v, a.review, a.budget, prompt=a.prompt)
     elif a.cmd == "pin":
         out = pin(a.run_dir, a.speaker, None if a.head.lower() == "none" else a.head, a.from_v, a.review, a.budget)
     else:

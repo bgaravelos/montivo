@@ -287,6 +287,8 @@ export function Editor({ id, replay, go }: Props) {
         )}
         {panel === "style" && (
           <StylePanel id={id} v={v} t={t} next={next} canEdit={canEdit} draft={styleDraft} setDraft={setStyleDraft} onSeek={(a) => { player.current?.pause(); seek(a); }}
+            hasKey={state.has_key} keyNote={state.key_note ?? null} cost={state.costs?.look ?? 0.004}
+            onPrompt={(text) => { setPanel("assistant"); act("style", { prompt: text, from: v?.n }); }}
             onApply={() => { const d = styleDraft; setPanel("assistant"); act("style", { look: d.look, callouts: d.callouts, from: v?.n }); }} />
         )}
         {panel === "text" && (

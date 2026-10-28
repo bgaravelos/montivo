@@ -10,6 +10,16 @@ Muse Spark 1.3 watches the footage and plans a paper edit, Muse Voice gives turn
 the speaker for the 9:16 reframe and callouts, ffmpeg renders, then Spark reviews its own render against a rubric and
 re-cuts (closed loop), with a chat-driven UI on top. Track: Indie. Bonus targets: Best Agentic, Best Creative, Most
 Viral; Open Weight too: the Baseten and Meta credits arrived 26-27/10.
+Discord #questions answers (Cerebral Valley bot, 28/10): the track follows who enters, not the team name (Indie =
+individuals; Startup = an incorporated company that can employ people, EIN or the local tax ID), picked on the submit
+form and switchable until the deadline; prizes stack (one track prize plus any bonus prizes); Most Viral = likes +
+reposts + comments on the one X post linked in the submission, counted through 8/11 EOD (views and hashtags do not
+count, build-in-public posts are fine, it can go up any time during the event); the submission stays editable after
+Submit until Wed 4/11 9:00 PM ET, early submission gives no edge. Still open: which repo commit is judged, Open Weight
+with one Spark Open stage.
+Track decision (Billy, 28/10): Nocta Digital is a Greek OE (general partnership, can employ people), so by the bot's rule
+it fits Startup; Billy prefers Indie, which holds only if the entry is his own as an individual, not the agency's
+(team name, README credit and brand cards still say Nocta Digital: see the Board card «Αποφάσεις form»).
 
 ## Hard rules
 - At run time the application calls Meta models only (`muse-spark-1.3`, `muse-voice-transcribe-1.0`, `sam-3.1`,
@@ -365,6 +375,11 @@ changes; zip when more than one file); POST /export/bundle (ui/cache/exports/<ke
 for clean while a job runs), GET /export/check -> `server/preflight.py` (review + gate, loudness, format, length vs
 Reels/Shorts 3 min and TikTok 10 min, safe area per app from SafeArea.tsx zones, right column only in the lower half,
 captions over the face). On 015 v5 the pre-flight says 25 of 28 lines meet TikTok's caption (bottom 1480).
+Style by prompt (28/10, $0.026 incl. one incomplete call): `montivo.human style RUN --prompt "..."` / POST /style
+{"prompt"} / the Style panel's Describe it box -> `look.suggest`: one muse-spark-1.3 call (strict schema of every Look
+field + why, reasoning low, 6000 output tokens: 1500 came back incomplete), facts = current look, `look.backdrop` (luma
+behind the caption rows), `look.face_note` (median head rows from the EDL); `settle` clamps / keeps bad colours,
+a fixed top on the face -> auto. 015-style v8: upper, 2 words, yellow, auto from 1200, off the face; $0.008-0.010 each.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

@@ -744,3 +744,6 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .ex-sum.s-fail { background: #ff5a4e22; color: var(--blocker); }
 .modal-foot .err { color: var(--blocker); }
 @media (max-width: 760px) { .ex-grid { grid-template-columns: 1fr; } .ex-kinds, .ex-dest { grid-template-columns: 1fr; } }
+.st-ask { display: flex; flex-direction: column; gap: 6px; }
+.st-ask textarea { background: var(--panel-3); color: var(--text); border: 1px solid var(--line-2); border-radius: 6px; padding: 7px 9px; font: inherit; resize: vertical; }
+.st-ask .btn { align-self: flex-end; }

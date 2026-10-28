@@ -49,7 +49,7 @@ PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 # the review loop adds about two reviews and a render (run 015: $0.07, 85 s)
 COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_fixed": 0.045,
         "run_per_s": 0.0026, "run_wall_fixed_s": 60, "run_wall_per_s": 0.9, "review_loop": 0.07, "review_loop_s": 85,
-        "hook_ab": 0.04,
+        "hook_ab": 0.04, "look": 0.008,
         "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175}
 
 
@@ -857,10 +857,19 @@ def create_app(root: Path) -> FastAPI:
         frm = int(b.get("from") or latest_version(d))
         passes = int(b.get("review") or 0)
         look, places = style_body(b)
-        if look is None and not places:
+        prompt = " ".join(str(b.get("prompt") or "").split())[:300] or None
+        if look is None and not places and not prompt:
             raise HTTPException(400, "nothing to change")
-        if passes:
-            need_key("Reviewing the new cut", COST["review"] * passes)
+        if prompt and (look is not None or places):
+            raise HTTPException(400, "a prompt or a look, not both")
+        if passes or prompt:
+            need_key("Styling from a sentence (Muse Spark)" if prompt else "Reviewing the new cut",
+                     (COST["look"] if prompt else 0.0) + COST["review"] * passes)
+        if prompt:
+            args = ["-m", "montivo.human", "style", f"runs/{run_id}", "--prompt", prompt, "--from", str(frm), "--review", str(passes)]
+            job = start_job(st, run_id, "style", "Style", args,
+                            chat={"role": "user", "text": f"Style v{frm}: {prompt}", "chips": [f"v{frm}"], "kind": "style"})
+            return {"job": job.public()}
         args = ["-m", "montivo.human", "style", f"runs/{run_id}", *(["--look", json.dumps(look)] if look is not None else []),
                 *[f"--callout={k}={'auto' if v is None else f'{v[0]:.0f},{v[1]:.0f}'}" for k, v in places.items()],
                 "--from", str(frm), "--review", str(passes)]

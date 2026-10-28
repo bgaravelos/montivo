@@ -143,3 +143,23 @@ def test_style_routes_check_the_body(tmp_path, monkeypatch):
     assert c.post("/api/runs/r1/style", json={}).status_code == 400
     assert c.post("/api/runs/r1/style", json={"look": {"preset": "box"}, "review": 1}).status_code == 409  # review needs the key
     assert c.post("/api/runs/r1/preview", json={"v": 9, "t": 1.0}).status_code == 404
+
+
+def test_a_sentence_look_is_settled_and_kept_off_the_face(monkeypatch, tmp_path):
+    from montivo.engine import look as L
+    assert L.settle({"size": 300, "text": "yellow", "box": "", "top": 50}, Look())[1] == \
+        ["size 300 -> 160", "top 50 -> 160", "text 'yellow' kept as '#FFFFFF'"]
+    edl = {"captions": [{"head_box": [300, 825, 760, 1400]}, {"head_box": [310, 830, 770, 1390]}, {"head_box": [300, 800, 760, 1420]}]}
+    assert L.face_band(edl) == (825, 1400) and "at or below 1436" in L.face_note(edl, 84)
+    answer = {**Look().to_json(), "position": "fixed", "top": 1150, "text": "#FFC629", "why": "higher and yellow"}
+    answer.pop("highlight_off")
+
+    class FakeSpark:
+        def __init__(self, *a, **k): pass
+        def call(self, *a, **k): return SimpleNamespace(parsed=dict(answer))
+    monkeypatch.setattr("montivo.engine.spark.Spark", FakeSpark)
+    monkeypatch.setattr(L, "backdrop", lambda *a, **k: {"reads_as": "light", "mean_luma": 0.8})
+    look, why, fixed = L.suggest(tmp_path, edl, "yellow and higher", ledger=None)
+    assert look["position"] == "auto" and look["text"] == "#FFC629" and why == "higher and yellow"
+    assert any("on the face" in f for f in fixed)
+    assert set(L.schema()["required"]) == set(L.schema()["properties"])  # strict: every field required
