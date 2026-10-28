@@ -492,6 +492,8 @@ kind "ask" with `after`). Without the key (or past the hosted budget) `keywords`
 preset names, title on/off, $0, no review. UI: the agent's message, reply and steps in the chat, "asked Montivo".
 Checked on a throwaway copy of 015 (removed): "Βάλε μουσική, κάτι χαλαρό, και κάνε τα captions πιο έντονα" -> Chill Lofi
 + Bold pop in one render (22.8 s); a score question answered with no version; keyless in the browser: ukulele + karaoke.
+Commit 4f4d601, deployed to Modal 28/10 14:56 (the last job, 015-dd516021 v9, had finished; the old container was
+already stopped); smoke 015 v6 34.3 s, -14.0 LUFS / -1.7 dBTP; host spend $2.46 of $15. Not yet asked live with the key.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
