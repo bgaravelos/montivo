@@ -311,3 +311,40 @@ export function clipsAsk(v: Version, ids: string[], words: Record<string, Word[]
     path: "cut", body: { words: ranges, text: text.slice(0, 120) },
   };
 }
+
+/** The words of the recording this version does not use, as runs per Voice turn in recording order (`t`: the first
+ *  word's source second): the transcript shows them grey, to put back with montivo.human insert. */
+export function unusedRuns(v: Version, words: Record<string, Word[]>): { turn: number; from: number; to: number; t: number }[] {
+  const kept = keptSet(v);
+  const out: { turn: number; from: number; to: number; t: number }[] = [];
+  for (const [turn, ws] of Object.entries(words)) {
+    let run: { turn: number; from: number; to: number; t: number } | null = null;
+    for (const w of ws) {
+      if (kept.has(key(Number(turn), w.i))) { run = null; continue; }
+      if (run && w.i === run.to + 1) run.to = w.i;
+      else { run = { turn: Number(turn), from: w.i, to: w.i, t: w.t }; out.push(run); }
+    }
+  }
+  return out.sort((a, b) => a.t - b.t);
+}
+
+/** A ghost clip (a span the parent had and this version dropped) as an insert: its longest run of words no clip uses
+ *  now (two at least) and the clip it goes back in front of (the next one after the place it had, else the end). */
+export function ghostRestore(v: Version, g: Block, blocks: Block[], words: Record<string, Word[]>):
+  { from: number; to: number; before: string; text: string; error: string | null } {
+  const sp = g.span!;
+  const kept = keptSet(v);
+  let best: [number, number] | null = null;
+  let a: number | null = null;
+  for (let i = sp.word_from; i <= sp.word_to + 1; i++) {
+    const free = i <= sp.word_to && !kept.has(key(sp.turn_id, i));
+    if (free && a == null) a = i;
+    if (!free && a != null) { if (!best || i - 1 - a > best[1] - best[0]) best = [a, i - 1]; a = null; }
+  }
+  const at = blocks.indexOf(g);
+  const next = blocks.slice(at + 1).find((b) => b.kind === "span");
+  const before = next?.span!.id ?? "end";
+  if (!best || best[1] === best[0]) return { from: sp.word_from, to: sp.word_to, before, text: "", error: "its words are in other clips now" };
+  const tw = words[String(sp.turn_id)] ?? [];
+  return { from: best[0], to: best[1], before, text: tw.slice(best[0], best[1] + 1).map((w) => w.w).join(" "), error: null };
+}

@@ -61,7 +61,7 @@ from .engine.edl import build_edl, carry_run_words, edl_summary, normalize_roles
 from .engine.graphics import Look, normalize_look
 from .engine.music import DUCK_DB as MUSIC_DUCK_DB, LEVEL_DB as MUSIC_LEVEL_DB, normalize_music
 from .engine.punch import parse_key
-from .engine.render import merge_segments
+from .engine.render import TITLE_S, merge_segments
 from .engine.review import (REACH_S, Fix, _caption_at, _src_time, apply_fixes, cut_map, finalize, kept_elsewhere,
                             refresh_span, review_loop)
 from .engine.voice import VoiceResult
@@ -302,10 +302,11 @@ def _new_version(run_dir: Path, from_v: int | None) -> tuple[int, dict, int]:
     return from_v, json.loads((run_dir / f"edl_v{from_v}.json").read_text()), next_version(run_dir)
 
 
-def _save(run_dir: Path, new: dict, n: int, from_v: int, action: str, fixes: list[dict], log) -> Path:
+def _save(run_dir: Path, new: dict, n: int, from_v: int, action: str, fixes: list[dict], log,
+          instruction: str | None = None) -> Path:
     new["version"] = n
     new.setdefault("patches", []).append({"from": from_v, "review": None, "source": "human", "action": action,
-                                          "fixes": fixes})
+                                          "fixes": fixes, **({"instruction": instruction} if instruction else {})})
     for f in fixes:
         log(f"patch v{from_v} -> v{n}: {f['op']} {f['target']}: {f['note']} (human)")
     edl_path = run_dir / f"edl_v{n}.json"
@@ -948,7 +949,7 @@ def insert(run_dir: Path, turn: int, a: int, b: int, before: str | None = None, 
         note += f"; roles by position: {', '.join(roles)}"
     fix = {"op": "insert_span", "target": span["id"], "issue": -1, "severity": "human", "t_s": 0.0,
            "args": {"turn": turn, "word_from": a, "word_to": b, "before": before, "at": at}, "note": note}
-    edl_path = _save(run_dir, new, n, from_v, "insert", [fix], log)
+    edl_path = _save(run_dir, new, n, from_v, "insert", [fix], log, instruction=f"Add back “{span['words'][:60]}”")
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
 
 
@@ -1062,14 +1063,19 @@ def pauses(run_dir: Path, over: float = PAUSE_OVER_S, keep: float = PAUSE_KEEP_S
            "args": {"over_s": over, "keep_s": keep, "pauses": plan["pauses"], "skipped": plan["skipped"]},
            "note": f"{plan['count']} pause{'s' if plan['count'] != 1 else ''} shortened, -{plan['saved_s']:.2f} s: "
                    + "; ".join(notes) + (f"; roles by position: {', '.join(roles)}" if roles else "")}
-    edl_path = _save(run_dir, new, n, from_v, "pauses", [fix], log)
+    edl_path = _save(run_dir, new, n, from_v, "pauses", [fix], log,
+                     instruction=f"Shorten {plan['count']} pause{'s' if plan['count'] != 1 else ''} over {over:g} s "
+                                 f"(−{plan['saved_s']:.1f} s).")
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
 
 
 def overlay_anchor(edl: dict, at: float) -> tuple[str, float]:
-    """A cut second of a rendered EDL as (span id, source second): where an overlay is anchored."""
+    """A cut second of the EDL as (span id, source second): where an overlay is anchored. An EDL not rendered yet (one
+    of montivo.agent's chained edits) gets the title card's length the render will give it."""
     if not edl.get("render"):
-        raise SystemExit("this EDL is not rendered yet: an overlay is placed on a rendered cut")
+        fps = float(edl["source"]["fps"])
+        card = edl.get("title_card", True) is not False and bool(edl.get("title_card_text"))
+        edl = {**edl, "render": {"title": {"seconds": round(TITLE_S * fps) / fps} if card else None}}
     cmap = cut_map(edl)
     c = next((c for c in cmap if c.cut_in <= at < c.cut_out), None)
     if c is None:
@@ -1142,7 +1148,9 @@ def overlay(run_dir: Path, prompt: str | None = None, at: float | None = None, d
         new["overlays"] = sorted(items, key=lambda o: o["id"])
     else:
         new.pop("overlays", None)
-    edl_path = _save(run_dir, new, n, from_v, "overlay", [fix], log)
+    say = {"overlay_add": f"Show “{(prompt or '')[:60]}” at {at or 0:.1f} s.", "overlay_set": f"Move B-roll {set_id}.",
+           "overlay_remove": f"Take B-roll {remove} out."}[fix["op"]]
+    edl_path = _save(run_dir, new, n, from_v, "overlay", [fix], log, instruction=say)
     return _finish(run_dir, edl_path, n, passes, budget, ledger, log)
 
 

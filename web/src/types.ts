@@ -77,7 +77,21 @@ export type Version = {
   punch: boolean; punch_skip: string[]; punch_ins: PunchIn[];
   speaker_pins: Record<string, string>; // reframe_speaker_ids: Voice speaker -> the head the crop follows (a human pin)
   planner: { model: string; name: string } | null; // the paper edit's planner: v1 and every re-plan
+  overlays: Overlay[]; // the B-roll stills (engine/broll.py): cut seconds from the render, null when not shown
   plan_compare: PlanCompare | null;
+};
+
+/** A B-roll still over the cut (EDL `overlays`): a Muse Image picture a person asked for, anchored to a source second. */
+export type Overlay = {
+  id: string; placement: "full" | "upper" | "pip"; style: string | null; prompt: string | null; image: string | null;
+  dur: number; span: string | null; t_in: number | null; t_out: number | null; shown: boolean; why: string | null;
+};
+
+/** What "Remove pauses" would shorten (GET /pauses, montivo.human pauses --dry-run). */
+export type PausePlan = {
+  over_s: number; keep_s: number; count: number; saved_s: number;
+  pauses: { span: string; word: number; after: string; before: string; was_s: number; keep_s: number; saved_s: number; t_cut: number | null }[];
+  skipped: { span: string; why: string; was_s: number }[];
 };
 
 /** A punch-in zoom of a rendered version (EDL `punch_ins`); `key` names it across versions (montivo.human punch --skip). */

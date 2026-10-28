@@ -37,7 +37,8 @@ const PANELS: { id: PanelId; label: string; icon: string }[] = [
 type Current = { version: number | null; newest: number | null };
 const currentKey = (id: string) => `montivo.current.${id}`;
 // the requests that make a version from the one on screen: after an undo they branch from an older version
-const MAKES_VERSION = ["drop", "trim", "reorder", "cut", "split", "punch", "caption", "text", "style", "music", "pin", "ask", "review", "hook"];
+const MAKES_VERSION = ["drop", "trim", "reorder", "cut", "split", "punch", "caption", "text", "style", "music", "pin", "ask", "review", "hook",
+  "insert", "pauses", "overlay"];
 
 const typing = (el: EventTarget | null) => {
   const e = el as HTMLElement | null;
@@ -504,6 +505,12 @@ export function Editor({ id, replay, go }: Props) {
           wordSel={wordSel} onWordSel={pickWords} onCutWords={askCut} onDelete={askDelete} onAsk={ask}
           mix={mix} base={mixBase} live={live} next={next} canEdit={canEdit} onMix={setMixDraft} onResetMix={() => setMixDraft(null)}
           onMusicPanel={() => setPanel("music")}
+          onEdit={(path, body, note) => { // add a passage back, remove pauses, B-roll stills (Batch D)
+            if (!v) return;
+            if (canEdit) return flash(`Cannot edit now: ${canEdit.toLowerCase()}.`);
+            flash(note);
+            act(path, { ...body, from: v.n });
+          }}
           onApplyMix={() => {
             if (!v?.music || !mixDraft) return;
             const m = mixDraft;

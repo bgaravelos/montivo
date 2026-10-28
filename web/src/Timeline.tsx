@@ -1,16 +1,21 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { crit, tc } from "./api";
-import { blockAt, edgeSnaps, flatWords, punchLabel, selRange, sevRank, spanText, type Block, type Snap, type WordSel } from "./edit";
+import { api, crit, fileUrl, tc } from "./api";
+import { blockAt, edgeSnaps, flatWords, ghostRestore, punchLabel, selRange, sevRank, spanText, unusedRuns, type Block, type Snap, type WordSel } from "./edit";
 import { Icon } from "./icons";
 import { LEVEL_RANGE, VOICE_RANGE, type Mix } from "./Mix";
-import type { Issue, Version, Word } from "./types";
+import type { Issue, Overlay, PausePlan, Version, Word } from "./types";
 
 export type TrimAsk = { span: string; edge: "in" | "out"; word: number; words: number; dt: number; label: string };
 export type ClipMenu = { x: number; y: number; span: string };
 /** A clip dragged to a new place: in front of `before`, or to the end (null). */
 export type MoveAsk = { span: string; before: string | null; label: string };
 
-const TRACK_H = { text: 24, captions: 24, video: 58, audio: 40, music: 40 };
+const TRACK_H = { overlays: 30, text: 24, captions: 24, video: 58, audio: 40, music: 40 };
+const PLACEMENTS: { k: Overlay["placement"]; label: string; note: string }[] = [
+  { k: "full", label: "Full frame", note: "covers the frame, the voice goes on (a cutaway)" },
+  { k: "upper", label: "Card", note: "a card above the speaker's head" },
+  { k: "pip", label: "Corner", note: "a small card in the corner away from the head" },
+];
 const RULER_H = 30;
 export const ZOOM_MIN = 6;
 export const ZOOM_MAX = 240;
@@ -32,6 +37,8 @@ type Props = {
   mix: Mix | null; base: Mix | null; live: { ready: boolean; active: boolean; failed: string | null };
   next: number; canEdit: string | null; onMix: (m: Mix) => void; onResetMix: () => void; onApplyMix: () => void;
   onMusicPanel: () => void;
+  /** A Batch D edit (insert, pauses, overlay): the route, its body (the editor adds `from`), a note for the toast. */
+  onEdit: (path: string, body: Record<string, unknown>, note: string) => void;
 };
 
 /** The bottom of the editor: a read-mostly multi-track timeline of the selected version (select, seek, delete from the
@@ -54,6 +61,9 @@ export function Timeline(p: Props) {
   const pps = zoom ?? fit;
   p.ppsRef.current = pps;
   const zoomTo = (z: number) => setZoom(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)));
+  const [bar, setBar] = useState<Bar | null>(null); // a selected still, a ghost clip or the new-still prompt
+  useEffect(() => setBar(null), [v?.n]);
+  const plan = usePausePlan(p.id, v);
 
   return (
     <div className="timeline">
@@ -74,6 +84,7 @@ export function Timeline(p: Props) {
               <button className="icon-btn" disabled={!b} onClick={() => b && p.onSeek(b.t0, b.t1)} title={b ? `Play ${pick} on a loop` : pick}><Icon name="repeat" /></button>
               <button className="icon-btn" disabled={!b} onClick={() => b && p.onAsk(b.span!.id)} title={b ? `Ask Montivo about ${pick}` : pick}><Icon name="spark" /></button>
               <button className="icon-btn" disabled={!!del} onClick={() => (many.length > 1 ? p.onDeleteClips(many) : b && p.onDelete(b.span!.id))} title={del ?? `Delete ${pick} (⌫)`}><Icon name="trash" /></button>
+              <PausesButton plan={plan} locked={locked} onEdit={p.onEdit} />
             </span>
           );
         })()}
@@ -104,12 +115,17 @@ export function Timeline(p: Props) {
           </span>
         )}
       </div>
+      {v && mode === "timeline" && bar && <EditBar {...p} v={v} bar={bar} setBar={setBar} />}
       {!v ? <div className="tl-empty mute">The timeline appears when the first version is rendered.</div>
         : mode === "transcript" ? <Transcript {...p} v={v} />
         : (
           <div className="tl-body">
             <div className="tl-heads">
               <div style={{ height: RULER_H }} />
+              <div className="tl-head" style={{ height: TRACK_H.overlays }}><Icon name="media" size={13} />B-roll
+                <button className="head-add" disabled={!p.canTrim || !v.cut} onClick={() => setBar({ kind: "new" })}
+                  title={!p.canTrim ? "Not while an edit runs or in replay" : "Add a Muse Image still at the playhead ($0.01)"}><Icon name="plus" size={11} /></button>
+              </div>
               <div className="tl-head" style={{ height: TRACK_H.text }}><Icon name="text" size={13} />Text</div>
               <div className="tl-head" style={{ height: TRACK_H.captions }}><Icon name="captions" size={13} />Captions</div>
               <div className="tl-head video" style={{ height: TRACK_H.video }}><Icon name="film" size={13} />Video</div>
@@ -124,7 +140,7 @@ export function Timeline(p: Props) {
                 onChange={(x) => p.mix && p.onMix({ ...p.mix, level_db: x })} />
             </div>
             <div className="tl-scroll" ref={scroller}>
-              <Canvas {...p} v={v} pps={pps} dur={dur} scroller={scroller} />
+              <Canvas {...p} v={v} pps={pps} dur={dur} scroller={scroller} bar={bar} setBar={setBar} plan={plan} />
             </div>
           </div>
         )}
@@ -134,7 +150,7 @@ export function Timeline(p: Props) {
 
 // ------------------------------------------------------------------- canvas
 
-function Canvas(p: Props & { v: Version; pps: number; dur: number; scroller: React.RefObject<HTMLDivElement> }) {
+function Canvas(p: Props & { v: Version; pps: number; dur: number; scroller: React.RefObject<HTMLDivElement> } & BarProps & { plan: PausePlan | null }) {
   const { v, pps, dur, t, playing, scroller, onScrub } = p;
   const canvas = useRef<HTMLDivElement>(null);
   const width = Math.ceil(dur * pps) + 40;
@@ -176,7 +192,7 @@ function Canvas(p: Props & { v: Version; pps: number; dur: number; scroller: Rea
       <Tracks id={p.id} v={v} blocks={p.blocks} words={p.words} selected={p.selected} selection={p.selection} canTrim={p.canTrim} pps={pps} dur={dur}
         snap={p.snap} getT={getT}
         timeAt={timeAt} onSelect={p.onSelect} onSeek={p.onSeek} onMenu={p.onMenu} onTrim={p.onTrim} onMove={p.onMove}
-        mix={p.mix} base={p.base} onMusicPanel={p.onMusicPanel} />
+        mix={p.mix} base={p.base} onMusicPanel={p.onMusicPanel} bar={p.bar} setBar={p.setBar} plan={p.plan} />
       <div className="playhead" style={{ transform: `translateX(${t * pps}px)` }}>
         <span className="ph-handle" onPointerDown={scrub} />
         <span className="ph-line" />
@@ -252,8 +268,8 @@ type Move = { key: string; slot: number; t: number; target: number | null }; // 
 const MOVE_PX = 6; // a press that travels further than this is a drag, not a click
 
 type TrackProps = Pick<Props, "id" | "blocks" | "words" | "selected" | "selection" | "canTrim" | "onSelect" | "onSeek" | "onMenu" | "onTrim" | "onMove"
-  | "mix" | "base" | "onMusicPanel" | "snap"> & {
-  v: Version; pps: number; dur: number; timeAt: (x: number) => number; getT: () => number;
+  | "mix" | "base" | "onMusicPanel" | "snap"> & BarProps & {
+  v: Version; pps: number; dur: number; timeAt: (x: number) => number; getT: () => number; plan: PausePlan | null;
 };
 
 const Tracks = memo(function Tracks(p: TrackProps) {
@@ -345,6 +361,21 @@ const Tracks = memo(function Tracks(p: TrackProps) {
 
   return (
     <div className="tracks" onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); onSeek(timeAt(e.clientX)); } }}>
+      {/* B-roll: the Muse Image stills over the cut (a person's ask only) */}
+      <div className="track overlays" style={{ height: TRACK_H.overlays }} onPointerDown={(e) => { if (e.target === e.currentTarget) { p.setBar(null); onSeek(timeAt(e.clientX)); } }}
+        onDoubleClick={(e) => { if (e.target === e.currentTarget && canTrim && v.cut) { onSeek(timeAt(e.clientX)); p.setBar({ kind: "new" }); } }}>
+        {v.overlays.filter((o) => o.shown && o.t_in != null).map((o) => (
+          <button key={o.id} className={`item still ${o.placement} ${p.bar?.kind === "overlay" && p.bar.id === o.id ? "sel" : ""}`}
+            style={{ left: o.t_in! * pps, width: Math.max(14, (o.t_out! - o.t_in!) * pps - 1) }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => { p.setBar({ kind: "overlay", id: o.id }); onSeek(o.t_in!, o.t_out!); }}
+            title={`B-roll ${o.id} · ${placementLabel(o.placement)} · ${tc(o.t_in)}–${tc(o.t_out)}\n“${o.prompt ?? ""}”`}>
+            {o.image && <img src={fileUrl(id, o.image)} alt="" loading="lazy" />}
+            <span>{o.prompt}</span>
+          </button>
+        ))}
+        {!v.overlays.some((o) => o.shown) && v.cut && <span className="track-hint mute">Double-click to add a Muse Image still at a moment</span>}
+      </div>
       {/* text: title card + callouts */}
       <div className="track" style={{ height: TRACK_H.text }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); onSeek(timeAt(e.clientX)); } }}>
         {v.title_s > 0 && (
@@ -419,7 +450,13 @@ const Tracks = memo(function Tracks(p: TrackProps) {
           );
         })}
         {blocks.filter((b) => b.kind === "ghost").map((b) => (
-          <span key={b.key} className="ghost-mark" style={{ left: b.t0 * pps }} title={`${b.span!.id} was deleted from Version ${v.origin.from}: “${b.span!.words}”`} />
+          <button key={b.key} className={`ghost-mark ${p.bar?.kind === "ghost" && p.bar.key === b.key ? "sel" : ""}`} style={{ left: b.t0 * pps }}
+            onPointerDown={(e) => e.stopPropagation()} onClick={() => p.setBar({ kind: "ghost", key: b.key })}
+            title={`${b.span!.id} was deleted from Version ${v.origin.from}: “${b.span!.words}” (click to bring it back)`} />
+        ))}
+        {(p.plan?.pauses ?? []).filter((x) => x.t_cut != null).map((x) => (
+          <span key={`${x.span}:${x.word}`} className="pause-mark" style={{ left: x.t_cut! * pps, width: Math.max(3, x.was_s * pps) }}
+            title={`${x.was_s.toFixed(2)} s pause after “${x.after}”: Remove pauses cuts it to ${x.keep_s} s`} />
         ))}
         {move && (() => {
           const b = live.find((x) => x.key === move.key)!;
@@ -523,7 +560,7 @@ function Wave({ peaks, pps, height, width, top: topIn, gain = 1, color = "--wave
 
 // ------------------------------------------------------------------- transcript (the paper edit)
 
-function Transcript({ v, blocks, t, selected, onSelect, onSeek, onMenu, wordSel, onWordSel, onCutWords }: Props & { v: Version }) {
+function Transcript({ v, blocks, t, selected, onSelect, onSeek, onMenu, wordSel, onWordSel, onCutWords, words, canTrim, onEdit }: Props & { v: Version }) {
   const scroller = useRef<HTMLDivElement>(null);
   const issues = v.review?.issues ?? [];
   const playing = useMemo(() => blockAt(blocks, t), [blocks, t]);
@@ -553,16 +590,63 @@ function Transcript({ v, blocks, t, selected, onSelect, onSeek, onMenu, wordSel,
   };
   const enter = (k: string) => { if (drag.current) onWordSel({ a: drag.current, b: k }); };
   const secs = picked.length ? picked.reduce((a, x, j) => a + (x.e - x.t) + (j && picked[j - 1].span.id === x.span.id ? x.t - picked[j - 1].e : 0), 0) : 0;
+  // the words this version does not use, in recording order: select some and put them back in
+  const unused = useMemo(() => unusedRuns(v, words), [v, words]);
+  const [src, setSrc] = useState<{ turn: number; a: number; b: number } | null>(null);
+  const srcDrag = useRef<{ turn: number; a: number } | null>(null);
+  useEffect(() => setSrc(null), [v.n]);
+  useEffect(() => {
+    const up = () => { srcDrag.current = null; };
+    window.addEventListener("pointerup", up);
+    return () => window.removeEventListener("pointerup", up);
+  }, []);
+  const srcDown = (e: React.PointerEvent, turn: number, i: number) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    onWordSel(null);
+    const a = e.shiftKey && src && src.turn === turn ? src.a : i;
+    setSrc({ turn, a: Math.min(a, i), b: Math.max(a, i) });
+    srcDrag.current = { turn, a };
+  };
+  const srcEnter = (turn: number, i: number) => {
+    const d = srcDrag.current;
+    if (d && d.turn === turn) setSrc({ turn, a: Math.min(d.a, i), b: Math.max(d.a, i) });
+  };
+  const srcWords = src ? (words[String(src.turn)] ?? []).slice(src.a, src.b + 1) : [];
+  const srcFree = src ? unused.find((r) => r.turn === src.turn && r.from <= src.a && src.b <= r.to) : null;
+  const insert = (where: "source" | "playhead") => {
+    if (!src || !srcFree) return;
+    let before: string | undefined;
+    if (where === "playhead") {
+      const live = blocks.filter((b) => b.kind === "span");
+      const at = blockAt(blocks, t);
+      const k = at && at.kind === "span" ? live.indexOf(at) + (t > (at.t0 + at.t1) / 2 ? 1 : 0) : 0;
+      before = live[k]?.span!.id ?? "end";
+    }
+    const text = srcWords.map((w) => w.w).join(" ");
+    onEdit("insert", { turn: src.turn, word_from: src.a, word_to: src.b, ...(before ? { before } : {}), text: text.slice(0, 60) },
+      `Adding back “${text.slice(0, 50)}${text.length > 50 ? "…" : ""}” ${before ? (before === "end" ? "at the end" : `before ${before}`) : "where it sits in the recording"} ($0, a re-render)…`);
+    setSrc(null);
+  };
   return (
     <div className="strip">
-      {picked.length ? (
+      {src ? (
+        <div className="strip-note sel-note">
+          <b>{srcWords.length} word{srcWords.length === 1 ? "" : "s"}</b> not in the cut · about {srcWords.length ? (srcWords.at(-1)!.e - srcWords[0].t).toFixed(1) : 0} s
+          <button className="btn small" disabled={!canTrim || srcWords.length < 2 || !srcFree} onClick={() => insert("source")}
+            title={srcWords.length < 2 ? "A clip keeps at least two words" : "Between the clips around it in the recording"}><Icon name="plus" size={12} /> Insert</button>
+          <button className="btn small quiet" disabled={!canTrim || srcWords.length < 2 || !srcFree} onClick={() => insert("playhead")}
+            title="Next to the clip under the playhead">At the playhead</button>
+          <button className="btn small quiet" onClick={() => setSrc(null)}>Clear</button>
+        </div>
+      ) : picked.length ? (
         <div className="strip-note sel-note">
           <b>{picked.length} word{picked.length === 1 ? "" : "s"}</b> selected · about {secs.toFixed(1)} s
           <button className="btn small danger" onClick={onCutWords}><Icon name="trash" size={12} /> Delete</button>
           <span className="mute">⌫ · Shift-click extends · Esc clears</span>
         </div>
       ) : (
-        <div className="strip-note mute">Click or drag over words to select them, ⌫ deletes them · struck words were cut from Version {v.origin.from ?? v.n - 1} · flags are the reviewer's notes at cut time</div>
+        <div className="strip-note mute">Click or drag over words to select them, ⌫ deletes them · struck words were cut from Version {v.origin.from ?? v.n - 1} · grey words at the end are not in the cut: select some to put them back</div>
       )}
       <div className="blocks" ref={scroller}>
         {blocks.map((b) => {
@@ -605,7 +689,133 @@ function Transcript({ v, blocks, t, selected, onSelect, onSeek, onMenu, wordSel,
             </div>
           );
         })}
+        {unused.length > 0 && (
+          <div className="block unused">
+            <div className="b-top"><span className="b-id">Not in the cut</span><span className="b-role">recording order</span></div>
+            <div className="b-words">
+              {unused.map((r) => (
+                <span key={`${r.turn}:${r.from}`} className="u-run" title={`Turn ${r.turn} · ${tc(r.t)} in the recording`}>
+                  {(words[String(r.turn)] ?? []).slice(r.from, r.to + 1).map((w) => {
+                    const on = src && src.turn === r.turn && w.i >= src.a && w.i <= src.b;
+                    return <span key={w.i} className={`w unused-w ${on ? "wsel" : ""}`}
+                      onPointerDown={(e) => srcDown(e, r.turn, w.i)} onPointerEnter={() => srcEnter(r.turn, w.i)}>{w.w + " "}</span>;
+                  })}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+// ------------------------------------------------------------------- Batch D: pauses, B-roll stills, ghost clips
+
+type Bar = { kind: "new" } | { kind: "overlay"; id: string } | { kind: "ghost"; key: string };
+type BarProps = { bar: Bar | null; setBar: (b: Bar | null) => void };
+const placementLabel = (k: string) => PLACEMENTS.find((x) => x.k === k)?.label ?? k;
+
+/** What "Remove pauses" would shorten in this version (GET /pauses, a dry run of montivo.human pauses), $0. */
+function usePausePlan(id: string, v: Version | null): PausePlan | null {
+  const [plan, setPlan] = useState<PausePlan | null>(null);
+  const n = v?.cut ? v.n : null;
+  useEffect(() => {
+    setPlan(null);
+    if (n == null) return;
+    let live = true;
+    api<PausePlan>(`/api/runs/${id}/pauses?v=${n}`).then((x) => { if (live) setPlan(x); }).catch(() => {});
+    return () => { live = false; };
+  }, [id, n]);
+  return plan;
+}
+
+function PausesButton({ plan, locked, onEdit }: { plan: PausePlan | null; locked: string | null; onEdit: Props["onEdit"] }) {
+  const n = plan?.count ?? 0;
+  const why = locked ?? (!plan ? "Looking for pauses…" : n ? null : `No pause over ${plan.over_s} s in this version`);
+  return (
+    <button className="btn quiet small pauses-btn" disabled={!!why}
+      onClick={() => plan && onEdit("pauses", { over: plan.over_s, keep: plan.keep_s },
+        `Shortening ${n} pause${n === 1 ? "" : "s"} to ${plan.keep_s} s (−${plan.saved_s.toFixed(1)} s, $0, a re-render)…`)}
+      title={why ?? `Shorten every pause over ${plan!.over_s} s to about ${plan!.keep_s} s: the clip splits at the pause, no word is removed. The reviewer may still give a dramatic pause back.`}>
+      <Icon name="wave" size={12} />{n ? `${n} pause${n === 1 ? "" : "s"}, −${plan!.saved_s.toFixed(1)} s` : "No pauses"}
+    </button>
+  );
+}
+
+/** The bar under the toolbar for what is selected on the B-roll track or the ghost clips: a new still's prompt, a
+ *  still's place and length, or a deleted clip to bring back. */
+function EditBar(p: Props & BarProps & { v: Version; bar: Bar }) {
+  const { v, bar, setBar, onEdit, t, canTrim, words, blocks } = p;
+  const [prompt, setPrompt] = useState("");
+  const [placement, setPlacement] = useState<Overlay["placement"]>("full");
+  const [dur, setDur] = useState(2.5);
+  const locked = !canTrim ? "Not while an edit runs or in replay" : null;
+  if (bar.kind === "new") {
+    const go = () => {
+      const q = prompt.trim();
+      if (!q) return;
+      onEdit("overlay", { at: Number(t.toFixed(2)), prompt: q, placement, dur },
+        `Muse Image is making the still for ${tc(t)} (about 10 s, $0.01), then a re-render…`);
+      setBar(null); setPrompt("");
+    };
+    return (
+      <div className="edit-bar">
+        <Icon name="media" size={13} /><b>B-roll at {tc(t)}</b>
+        <input className="eb-prompt" autoFocus value={prompt} placeholder="What should the still show? e.g. a flow diagram of the four models"
+          onChange={(e) => setPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") go(); if (e.key === "Escape") setBar(null); e.stopPropagation(); }} />
+        <Placement value={placement} onChange={setPlacement} />
+        <select value={dur} onChange={(e) => setDur(Number(e.target.value))} aria-label="Seconds on screen">
+          {[1.5, 2, 2.5, 3, 4, 5].map((x) => <option key={x} value={x}>{x} s</option>)}
+        </select>
+        <button className="btn small" disabled={!!locked || !prompt.trim()} onClick={go} title={locked ?? "One Muse Image call, $0.01"}>Make it</button>
+        <button className="icon-btn" onClick={() => setBar(null)} title="Close"><Icon name="close" /></button>
+      </div>
+    );
+  }
+  if (bar.kind === "overlay") {
+    const o = v.overlays.find((x) => x.id === bar.id);
+    if (!o) return null;
+    const set = (body: Record<string, unknown>, note: string) => { onEdit("overlay", { set: o.id, ...body }, note); setBar(null); };
+    return (
+      <div className="edit-bar">
+        {o.image && <img className="eb-thumb" src={fileUrl(p.id, o.image)} alt="" />}
+        <b>{o.id}</b><span className="eb-text" title={o.prompt ?? ""}>{o.prompt}</span>
+        <Placement value={o.placement} disabled={!!locked}
+          onChange={(k) => k !== o.placement && set({ placement: k }, `B-roll ${o.id} as ${placementLabel(k).toLowerCase()} ($0, a re-render)…`)} />
+        <button className="btn small quiet" disabled={!!locked || o.dur <= 1} onClick={() => set({ dur: Math.max(0.8, o.dur - 0.5) }, `B-roll ${o.id} shorter ($0)…`)}>−0.5 s</button>
+        <span className="mute">{o.dur} s</span>
+        <button className="btn small quiet" disabled={!!locked || o.dur >= 8} onClick={() => set({ dur: Math.min(8, o.dur + 0.5) }, `B-roll ${o.id} longer ($0)…`)}>+0.5 s</button>
+        <button className="btn small quiet" disabled={!!locked} onClick={() => set({ at: Number(t.toFixed(2)) }, `B-roll ${o.id} to ${tc(t)} ($0)…`)}
+          title="Start it at the playhead">To {tc(t)}</button>
+        <button className="btn small danger" disabled={!!locked} onClick={() => { onEdit("overlay", { remove: o.id }, `Taking B-roll ${o.id} out ($0)…`); setBar(null); }}>
+          <Icon name="trash" size={12} /> Remove</button>
+        <button className="icon-btn" onClick={() => setBar(null)} title="Close"><Icon name="close" /></button>
+      </div>
+    );
+  }
+  const g = blocks.find((b) => b.key === bar.key);
+  if (!g?.span) return null;
+  const r = ghostRestore(v, g, blocks, words);
+  return (
+    <div className="edit-bar">
+      <Icon name="undo" size={13} /><b>{g.span.id} deleted</b>
+      <span className="eb-text">“{r.text || g.span.words}”</span>
+      <button className="btn small" disabled={!!locked || !!r.error} title={locked ?? r.error ?? `Back ${r.before === "end" ? "at the end" : `before ${r.before}`}, where it was ($0, a re-render)`}
+        onClick={() => { onEdit("insert", { turn: g.span!.turn_id, word_from: r.from, word_to: r.to, before: r.before, text: r.text.slice(0, 60) },
+          `Bringing ${g.span!.id} back ($0, a re-render)…`); setBar(null); }}>Bring it back</button>
+      {r.error && <span className="mute">{r.error}</span>}
+      <button className="icon-btn" onClick={() => setBar(null)} title="Close"><Icon name="close" /></button>
+    </div>
+  );
+}
+
+function Placement({ value, onChange, disabled }: { value: string; onChange: (k: Overlay["placement"]) => void; disabled?: boolean }) {
+  return (
+    <span className="seg-group small">
+      {PLACEMENTS.map((x) => (
+        <button key={x.k} className={`seg ${value === x.k ? "on" : ""}`} disabled={disabled} title={x.note} onClick={() => onChange(x.k)}>{x.label}</button>
+      ))}
+    </span>
   );
 }

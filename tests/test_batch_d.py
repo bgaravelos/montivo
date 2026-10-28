@@ -190,17 +190,38 @@ def test_overlay_adds_moves_and_removes_a_still_anchored_to_the_words(tmp_path, 
     assert [o["id"] for o in v5["overlays"]] == ["b1", "b2"] and v5["overlays"][1]["style"] == "icon"
 
 
-def test_overlay_needs_a_rendered_cut_and_a_clip_under_it(tmp_path, monkeypatch):
+def test_overlay_needs_a_clip_under_it_and_reads_an_unrendered_version(tmp_path, monkeypatch):
     import montivo.human as H
     d = _human_run(tmp_path, monkeypatch)
     _fake_image(monkeypatch)
     with pytest.raises(SystemExit, match="title card"):
         H.overlay(d, prompt="x", at=0.5)  # the title card's seconds
     edl = json.loads((d / "edl_v1.json").read_text())
-    edl.pop("render")
-    (d / "edl_v1.json").write_text(json.dumps(edl))
-    with pytest.raises(SystemExit, match="not rendered"):
-        H.overlay(d, prompt="x", at=3.0)
+    edl.pop("render")  # an agent's chained edit: the title card the render will add is counted (1.5 s at 30 fps)
+    assert H.overlay_anchor(edl, 3.0) == ("s2", 12.1)
+    edl["title_card"] = False
+    assert H.overlay_anchor(edl, 1.3) == ("s2", 11.9)
+
+
+def test_ask_montivo_makes_a_still_only_when_asked(tmp_path, monkeypatch):
+    import montivo.agent as A
+    import montivo.human as H
+    finish = H._finish  # with human.DEFER set (run_ops) it renders nothing
+    d = _human_run(tmp_path, monkeypatch)
+    monkeypatch.setattr(H, "_finish", finish)
+    calls = _fake_image(monkeypatch)
+    edl = json.loads((d / "edl_v1.json").read_text())
+    ops = [{"op": "overlay", "at_s": 3.0, "text": "a flow diagram of the loop"}, {"op": "overlay", "at_s": -1, "text": ""},
+           {"op": "caption", "at_s": 2.0, "text": "x"}]
+    kept, skipped = A.check(edl, ops)
+    assert [o["op"] for o in kept] == ["overlay", "caption"] and skipped == ["overlay: no cut second or nothing to show"]
+    assert A.estimate(kept[:1], None, 0, 0.0)[0] == pytest.approx(0.01)
+    assert "B-roll at 3.0 s" in A.op_label(kept[0])
+    assert A.check(edl, ops[:1] + [{"op": "replan", "instruction": "shorter"}])[1][0].startswith("overlay skipped")
+    written, done, _ = A.run_ops(d, 1, kept[:1], None, print)
+    assert written == [2] and done == ["B-roll at 3.0 s: a flow diagram of the loop"] and calls[0][2] == "diagram"
+    assert json.loads((d / "edl_v2.json").read_text())["overlays"][0]["src_t"] == 12.1
+    assert "overlay" in A.OPS and "Only when the editor asks" in A.PROMPT
 
 
 def test_replan_carries_the_overlays():

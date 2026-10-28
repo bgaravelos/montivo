@@ -47,9 +47,9 @@ from .engine.review import caption_timeline, cut_map
 from .ledger import Ledger
 from .run import RunLog
 
-OPS = ["music_on", "music_off", "style", "punch", "caption", "callout", "title_text", "title_on", "title_off", "drop",
-       "reorder", "cut", "replan", "review"]
-SPAN_OPS = {"caption", "callout", "drop", "reorder", "cut"}  # they name clips or lines of this version: a re-plan makes new ones
+OPS = ["music_on", "music_off", "style", "punch", "caption", "callout", "title_text", "title_on", "title_off", "overlay",
+       "drop", "reorder", "cut", "replan", "review"]
+SPAN_OPS = {"caption", "callout", "drop", "reorder", "cut", "overlay"}  # they name clips or lines of this version: a re-plan makes new ones
 STRUCTURAL = {"replan", "drop", "reorder", "cut"}  # what is said or in which order: previewed before it runs
 COST_USD = 0.006  # one router call (015 v5 context: about 4K tokens in, 300 out)
 PREVIEW_USD = 0.02  # ops estimated over this are previewed too (Billy, 28/10)
@@ -70,8 +70,10 @@ OP_SCHEMA = {"type": "object", "additionalProperties": False,
                  "word_to": {"type": "integer", "description": "cut: the last word index to delete; else -1"},
                  "before": {"type": "string", "description": "reorder: the clip it moves in front of; empty = to the end"},
                  "text": {"type": "string", "description": "caption: the new words of the line; callout: its text, empty "
-                                                           "removes it; title_text: the title card's words"},
-                 "at_s": {"type": "number", "description": "caption: a cut second inside that line; else -1"},
+                                                           "removes it; title_text: the title card's words; overlay: what the "
+                                                           "still shows, in English"},
+                 "at_s": {"type": "number", "description": "caption: a cut second inside that line; overlay: the cut "
+                                                         "second the still starts; else -1"},
                  "track": {"type": "string", "description": "music_on: a track id from the list"},
                  "level_db": {"type": "number", "description": "music_on: bed loudness in LUFS, -30 quiet to -14 loud; "
                                                                "0 keeps the current or default (-20)"},
@@ -101,6 +103,9 @@ Ops (fill the fields the op uses, leave the others empty, -1, 0 or false):
 - caption: change the words of one caption line on screen (at_s inside the line, text = the full new line).
 - callout: the text pill on a clip (span, text; empty text removes it).
 - title_text: new words for the title card at the start (a new Muse Image card). title_on / title_off: the card on or off.
+- overlay: a B-roll still made by Muse Image over 2.5 s of the cut (at_s = the cut second it starts, text = what the \
+picture shows, in English, e.g. "a flow diagram of the four models"). Only when the editor asks for an image, a \
+picture, a diagram or B-roll; never on your own.
 - drop: delete one clip (span). reorder: move a clip (span) in front of another (before) or to the end.
 - cut: delete words inside one clip (span, word_from, word_to: indices of that clip's numbered words below). Each \
 piece left keeps at least two words. Use it to shorten a selected clip or remove a phrase, a filler or a retake.
@@ -355,11 +360,13 @@ def check(edl: dict, ops: list[dict], scope: dict | None = None) -> tuple[list[d
             why = "replan: no instruction"
         elif op == "title_text" and not (o.get("text") or "").strip():
             why = "title: no words"
+        elif op == "overlay" and (float(o.get("at_s", -1)) < 0 or not (o.get("text") or "").strip()):
+            why = "overlay: no cut second or nothing to show"
         if why:
             skipped.append(why)
         else:
             kept.append(o)
-    rank = {"caption": 0, "replan": 1, "callout": 2, "title_text": 2, "title_on": 2, "title_off": 2, "style": 3,
+    rank = {"caption": 0, "overlay": 0, "replan": 1, "callout": 2, "title_text": 2, "title_on": 2, "title_off": 2, "style": 3,
             "music_on": 4, "music_off": 4, "punch": 5, "cut": 6, "drop": 6, "reorder": 7, "review": 8}
     return sorted(kept, key=lambda o: rank[o["op"]]), skipped
 
@@ -381,6 +388,10 @@ def run_ops(run_dir: Path, from_v: int, ops: list[dict], planner: str | None, lo
         steps: list[tuple[str, callable]] = []
         if caps:
             steps.append((f"{len(caps)} caption line(s) retexted", lambda: human.caption(run_dir, caps, from_v=at())))
+        for o in ops:  # cut seconds of this version: before anything moves the clips
+            if o["op"] == "overlay":
+                steps.append((f"B-roll at {float(o['at_s']):.1f} s: {o['text']}", lambda o=o: human.overlay(
+                    run_dir, prompt=o["text"], at=float(o["at_s"]), from_v=at())))
         for o in ops:
             if o["op"] == "replan":
                 steps.append((f"re-planned: {o['instruction']}", lambda o=o: human.replan(
@@ -462,7 +473,8 @@ def op_label(o: dict) -> str:
             "caption": f"caption line at {float(o.get('at_s', 0)):.1f} s: “{o.get('text', '')}”",
             "callout": f"callout on {o.get('span')}: “{o.get('text', '')}”" if o.get("text") else f"callout off {o.get('span')}",
             "title_text": f"title card: “{o.get('text', '')}”", "title_on": "title card on",
-            "title_off": "title card off"}.get(op, op)
+            "title_off": "title card off",
+            "overlay": f"B-roll at {float(o.get('at_s', 0)):.1f} s: “{o.get('text', '')}”"}.get(op, op)
 
 
 def needs_preview(ops: list[dict], planner: str | None = None) -> bool:
@@ -480,6 +492,8 @@ def estimate(ops: list[dict], planner: str | None, passes: int, runtime_s: float
         sec += EST["plan_open_s" if planner else "plan_s"]
     if "title_text" in kinds:
         usd, sec = usd + EST["image"], sec + EST["image_s"]
+    n_still = sum(o["op"] == "overlay" for o in ops)
+    usd, sec = usd + EST["image"] * n_still, sec + EST["image_s"] * n_still
     if any(o["op"] == "style" and not o.get("preset") for o in ops):
         usd, sec = usd + EST["look"], sec + EST["look_s"]
     return round(usd, 3), round(sec)

@@ -553,6 +553,34 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .mt-name { text-transform: capitalize; }
 .music-tag:hover, .music-add:hover { color: var(--text); background: #000d; }
 .music-add { top: 50%; transform: translateY(-50%); color: var(--mute); background: transparent; border: 1px dashed var(--line-2); }
+/* Batch D: the B-roll track, pause marks, ghost clips to bring back, the edit bar, unused transcript words */
+.head-add { margin-left: auto; margin-right: 6px; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--mute); border: 1px dashed var(--line-2); }
+.head-add:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.head-add:disabled { opacity: 0.35; }
+.track.overlays { background: repeating-linear-gradient(135deg, transparent 0 7px, rgba(255, 255, 255, 0.015) 7px 14px); }
+.track-hint { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); font-size: 11px; pointer-events: none; }
+.item.still { background: #2b2717; border: 1px solid #6f5d22; padding: 0 6px 0 0; gap: 6px; }
+.item.still img { height: 100%; aspect-ratio: 9 / 16; object-fit: cover; flex-shrink: 0; }
+.item.still.upper img, .item.still.pip img { aspect-ratio: 1; }
+.item.still.sel { box-shadow: inset 0 0 0 2px var(--accent); }
+.pause-mark { position: absolute; bottom: 2px; height: 5px; border-radius: 2px; background: repeating-linear-gradient(90deg, var(--accent) 0 2px, transparent 2px 4px); opacity: 0.75; z-index: 1; pointer-events: auto; }
+button.ghost-mark { cursor: pointer; padding: 0; }
+button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacity: 1; box-shadow: 0 0 0 2px var(--accent); }
+.pauses-btn { margin-left: 6px; }
+.edit-bar { display: flex; align-items: center; gap: 8px; padding: 5px 12px; background: var(--panel-2); border-bottom: 1px solid var(--line); font-size: 12px; min-width: 0; flex-shrink: 0; }
+.edit-bar > .icon-btn:last-child { margin-left: auto; }
+.edit-bar b { white-space: nowrap; }
+.edit-bar select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: var(--r); font-size: 11.5px; padding: 3px 4px; }
+.eb-prompt { flex: 1 1 240px; min-width: 160px; background: var(--bg); color: var(--text); border: 1px solid var(--line-2); border-radius: var(--r); padding: 4px 8px; font-size: 12px; }
+.eb-prompt:focus { outline: none; border-color: var(--accent); }
+.eb-thumb { height: 28px; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 3px; }
+.eb-text { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 60px; flex: 0 1 420px; }
+.seg-group.small .seg { padding: 2px 8px; font-size: 11.5px; }
+.block.unused { flex: 0 0 auto; max-width: 520px; min-width: 220px; background: transparent; border-style: dashed; cursor: default; overflow-y: auto; }
+.block.unused .b-words { line-height: 1.55; }
+.u-run { margin-right: 6px; }
+.w.unused-w { color: var(--dim); cursor: text; user-select: none; border-radius: 2px; }
+.w.unused-w:hover { background: var(--panel-3); color: var(--text-2); }
 .fader-head { flex-direction: column; align-items: stretch; justify-content: center; gap: 2px; padding: 0 8px 0 12px; }
 .fh-top { display: flex; align-items: center; gap: 7px; }
 .fh-val { margin-left: auto; font-family: var(--mono); font-size: 10px; font-weight: 500; color: var(--dim); }
