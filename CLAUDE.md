@@ -445,6 +445,12 @@ cut, mute (M), safe area (the "Safe area" chip shows only while on), full screen
 (`icons.tsx`, `CRIT_ICON` per criterion), track headers, Timeline / Transcript tabs, clip tools (loop, Ask, Delete) in
 the timeline bar, inspector heads and sections. No eye / lock / split / snap: nothing in the engine backs them. Checked
 keyless on 015 and replay 4x; the composer and suggestions with a key not clicked yet.
+Waiting view (28/10, $0, commit `b9674af`, deployed to Modal): while no version has a cut (a new project's first run,
+or a replay before v1) the viewer is `web/src/Waiting.tsx` instead of "Waiting for the first render": the footage
+(`/api/footage/<name>`, then `proxy.mp4` once the log says `ingest: proxy`) muted, Voice's words as captions, chips for
+the finished steps, Watch's moves at their seconds, then the paper edit played clip by clip from the source with role
+and why; gated on run.log lines so replay matches live. Edits on a project with a cut keep the player. Checked keyless on
+015 replay; first live run with it not watched yet. `modal container stop` needs `-y` when run from Claude Code.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
