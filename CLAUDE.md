@@ -320,6 +320,16 @@ copy adopted so its ledger is not host spend, a chat line says so), every mutati
 follows `job.run`; `/api/runs` shows each judge the samples (or their copy) and their own runs (`ui/owner`); a judge
 may archive their copy, never a sample. Not tried yet: an upload and a paid run through the live UI (needs Billy's
 sign-in, about $0.30) (commit e64c156).
+First live upload (28/10, Billy, `runs/ui-1027-2252` on the Volume: a TEDx clip, 84 s, multi-camera with wide stage
+shots, the speaker small in them): upload -> run -> loop in the container, 209 s, $0.32, v1 72 -> v2 76, no pass.
+Found: the reviewer's caption_text on a line where Voice doubled a phrase across the break ("I wrote down wrote | down
+the letters of") retexted the first line and left the second, so v2 showed the words twice and the reviewer flagged
+it. `captions.covered` / `apply_overrides`: a retext takes over the next line's leading words it already says (aligned
+against both lines' heard words, same span only; a next line left empty goes); none of the 192 retexted lines in the
+local runs changes. `modal run modal_app.py::rereview --run ID --version N` re-renders cut_vN with today's code and runs
+the loop (stop the web container first and after: it does not see another container's writes). Live re-review: v2's
+lines fixed, captions_match_speech 10, 74 with one major (hook); the loop's swap_hook put the brief's ending first ->
+v3 48, the regression guard kept v2; $0.07; host spend $0.40 of $15 (commit 32e3416).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
