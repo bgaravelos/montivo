@@ -89,9 +89,10 @@ def budget():
 
 
 @app.function(image=image, volumes={DATA: volume}, cpu=4.0, memory=8192, timeout=900)
-def smoke(run: str = "015", span: str = "s4"):
+def smoke(run: str = "015", span: str = "s4", music: str = ""):
     """`modal run modal_app.py::smoke`: a $0 drop on a copy of a sample outside the Volume, so this image's ffmpeg is
-    checked end to end (render, captions, loudness) without changing what the judges see."""
+    checked end to end (render, captions, loudness) without changing what the judges see. `--music ID` puts that
+    bundled music bed under the speech instead (the mix, its loudness and the speech stem)."""
     import shutil
     import subprocess
     import sys
@@ -101,7 +102,8 @@ def smoke(run: str = "015", span: str = "s4"):
     (root / "runs").mkdir(parents=True)
     shutil.copytree(Path(DATA) / "runs" / run, root / "runs" / run)
     (root / "footage").symlink_to(Path(DATA) / "footage")
-    r = subprocess.run([sys.executable, "-m", "montivo.human", "drop", f"runs/{run}", "--span", span], cwd=root,
+    op = ["music", f"runs/{run}", "--track", music] if music else ["drop", f"runs/{run}", "--span", span]
+    r = subprocess.run([sys.executable, "-m", "montivo.human", *op], cwd=root,
                        capture_output=True, text=True, env={**os.environ, "MODEL_API_KEY": ""})
     print(r.stdout[-1500:], r.stderr[-3000:], f"exit {r.returncode}", sep="\n", flush=True)
     log = (root / "runs" / run / "run.log").read_text().splitlines()
