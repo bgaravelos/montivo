@@ -15,13 +15,16 @@ individuals; Startup = an incorporated company that can employ people, EIN or th
 form and switchable until the deadline; prizes stack (one track prize plus any bonus prizes); Most Viral = likes +
 reposts + comments on the one X post linked in the submission, counted through 8/11 EOD (views and hashtags do not
 count, build-in-public posts are fine, it can go up any time during the event); the submission stays editable after
-Submit until Wed 4/11 9:00 PM ET, early submission gives no edge. Still open: which repo commit is judged, Open Weight
-with one Spark Open stage.
+Submit until Wed 4/11 9:00 PM ET, early submission gives no edge. Kai | CV (organizer, 28/10): "once submissions are due, no
+further edits are allowed" (so nothing pushed after the deadline counts: the repo is final by Thu 5/11 04:00 Athens);
+the demo video should be 3:00, a few seconds over is not disqualified but they stop watching at 3:00; sped-up runs are
+fine for the demo. Still open: Open Weight with one Spark Open stage.
 Track decision (Billy, 28/10, FINAL): Indie, as Billy's own entry as an individual. Nocta Digital is a Greek OE
 (general partnership, can employ people), so by the bot's rule the agency would fit Startup: every public credit
 (team name "Montivo", README, brand title/end cards, demo end card, submission drafts, X post) must name Vasileios Gkaravelos (Billy's official name), not
 Nocta Digital; the open list is in the Board card «Credit από Nocta Digital στον Billy (Indie)». Follow-up
-in thread 4 (28/10): the bot would not rule on our case and passed it to the organizers; their answer is pending there.
+in thread 4 (28/10): Kai | CV (organizer) confirmed "having an agency doesn't automatically put you as startup, you may
+proceed with the indie".
 Event pages (read 28/10): Indie = "individual builders and students", judged on creativity, technical ambition and
 whether it works; Startup = "teams and founders building a real product", judged on technical execution and whether it
 holds up in production, and startups may build on existing products. Stage 2 rubric is the same for both tracks
@@ -87,7 +90,7 @@ fixes: captions avoid only the followed head, a title-card issue drops the card,
 SAM $0.50 -> $0.33 on 166 s, a 150 s run about $0.48. API + UI (layout A, Review room, commit `b5f1f98`): `montivo serve` / `make ui`, `montivo/server/` (FastAPI + SSE,
 reads run folders, engine as subprocess), `montivo/human.py` (drop span, re-plan -> next edl_vN, source human), `web/`
 React/Vite built into `montivo/server/static` (`make web` after editing `web/src`); neutral dark, replay `?replay=4`,
-Compare; test UI actions with `env -u MODEL_API_KEY`. Sample release `sample-012` not created yet (needs Billy's yes).
+Compare; test UI actions with `env -u MODEL_API_KEY`. No sample release (Billy, 28/10): README "Try it" points only to the hosted demo.
 NLE redesign (27/10, commit `767e5f2`): `web/src/Editor.tsx` replaces `Room.tsx` (icon rail + panels, 9:16 viewer, inspector,
 multi-track timeline with filmstrip / waveform / issue markers, J/K/L, export), trim by drag via `montivo.human trim`
 (snaps to word boundaries, reviewer rules), `montivo/server/media.py` (filmstrip, peaks). Caption style is read-only (one

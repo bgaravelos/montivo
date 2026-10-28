@@ -96,21 +96,17 @@ submission. Two finished projects open there, and you can upload your own clip (
 cut, review and re-cut it; your edits go to your own copy, so every judge starts from the same samples. A shared
 budget caps the Meta model calls; past it, the finished projects and the $0 edits still work.
 
-Without an API key, on a finished run (Billy's clip, every version, every review):
+Locally, without an API key:
 
 ```bash
-make dev                                          # Python 3.12 venv, needs ffmpeg and ffprobe on the PATH
-.venv/bin/python -m montivo.server.sample fetch   # runs/012 from the sample-012 GitHub release, about 210 MB
-make ui                                           # the editor at http://127.0.0.1:8765
+make dev    # Python 3.12 venv, needs ffmpeg and ffprobe on the PATH
+make test   # the offline tests (recorded Voice and SAM streams, no network)
 ```
 
-Opening the run, playing every version, reading the reviews, Compare, replay, trimming and deleting a clip (an ffmpeg
-re-render) need no key. Re-plan, a new run and the review loop call Meta models and need `MODEL_API_KEY`
-(dev.meta.ai). `make test` runs the offline tests (recorded Voice and SAM streams, no network).
-
-With a key, on your own footage:
+With a key (`MODEL_API_KEY`, dev.meta.ai), on your own footage:
 
 ```bash
+make dev
 export MODEL_API_KEY=...
 .venv/bin/montivo run footage.mp4 --brief "A 40 second vertical reel: ..." --target 40 --review --out runs/001
 make ui
