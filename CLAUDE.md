@@ -451,6 +451,11 @@ or a replay before v1) the viewer is `web/src/Waiting.tsx` instead of "Waiting f
 the finished steps, Watch's moves at their seconds, then the paper edit played clip by clip from the source with role
 and why; gated on run.log lines so replay matches live. Edits on a project with a cut keep the player. Checked keyless on
 015 replay; first live run with it not watched yet. `modal container stop` needs `-y` when run from Claude Code.
+New-deploy check (28/10, $0, commit `9d74697`): `web/src/main.tsx` reads index.html every minute and when the tab comes
+back into view; a bundle name other than its own reloads the page at the next route change and shows a Reload pill until
+then (none on the Vite dev server). Live as Modal v12 = 15d14e0 + 9d74697, built in a clean worktree: the Cover maker
+(b214930) is on main but NOT deployed yet; the next `modal deploy` from main ships it. A tab loaded before v12 has no
+check and needs one manual reload.
 Cover maker (28/10, $0.011, Billy's pick A + D + E after research in `docs/notes/cover-maker-*_2026-10-28`): the cover was
 a raw frame of cut_vN with that second's half caption. `engine/thumb.py`: templates `frame` (clean still), `headline`
 (face punched in, ink gradient, headline with a marker word), `sticker` (tilted marker sticker, edges darkened), `cutout`
