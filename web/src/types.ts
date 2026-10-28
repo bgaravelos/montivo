@@ -84,7 +84,8 @@ export type MusicInfo = {
   tracks: { id: string; name: string; mood: string; loop_s: number; licence: string; author: string; source: string; url: string }[];
   default: { level_db: number; duck_db: number }; level_range: [number, number]; duck_range: [number, number];
 };
-export type LooksInfo = { presets: { id: string; name: string; look: Look }[]; fonts: { id: string; name: string }[]; default: Look };
+export type SavedLook = { id: string; name: string; look: Look; saved: string };
+export type LooksInfo = { presets: { id: string; name: string; look: Look }[]; fonts: { id: string; name: string }[]; default: Look; saved: SavedLook[] };
 
 export type CaptionStyle = { font?: number; max_words?: number; default_top?: number; font_path?: string; glossary?: Record<string, string> };
 
@@ -127,7 +128,7 @@ export type RunState = {
 /** Rough prices and times for the button hints (server COST). */
 export type Costs = { plan: number; plan_open: number; plan_s: number; plan_open_s: number; review: number; run_per_s: number;
   review_s?: number; review_prep_s?: number; image_s?: number; render_s_per_frame?: number;
-  run_fixed?: number; run_wall_fixed_s?: number; run_wall_per_s?: number; review_loop?: number; review_loop_s?: number; hook_ab?: number; look?: number };
+  run_fixed?: number; run_wall_fixed_s?: number; run_wall_per_s?: number; review_loop?: number; review_loop_s?: number; hook_ab?: number; look?: number; cover?: number };
 
 export type Planner = "spark" | "open";
 

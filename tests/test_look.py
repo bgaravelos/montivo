@@ -163,3 +163,20 @@ def test_a_sentence_look_is_settled_and_kept_off_the_face(monkeypatch, tmp_path)
     assert look["position"] == "auto" and look["text"] == "#FFC629" and why == "higher and yellow"
     assert any("on the face" in f for f in fixed)
     assert set(L.schema()["required"]) == set(L.schema()["properties"])  # strict: every field required
+
+
+def test_saved_looks(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from montivo.server.app import create_app
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    c = TestClient(create_app(tmp_path))
+    assert c.get("/api/looks").json()["saved"] == []
+    r = c.post("/api/looks/saved", json={"name": "Nocta brand", "look": {"preset": "box", "text": "#FFC629"}})
+    assert r.status_code == 200 and r.json()["saved"][0]["id"] == "nocta-brand"
+    assert c.post("/api/looks/saved", json={"name": "nocta BRAND", "look": {"preset": "clean"}}).json()["saved"][0]["look"]["preset"] == "clean"
+    assert c.post("/api/looks/saved", json={"name": "x", "look": {"preset": "neon"}}).status_code == 400
+    assert c.post("/api/looks/saved", json={"name": " ", "look": {}}).status_code == 400
+    assert len(c.get("/api/looks").json()["saved"]) == 1 and (tmp_path / "looks" / "saved.json").is_file()
+    assert c.delete("/api/looks/saved/nocta-brand").json()["saved"] == []
+    assert c.delete("/api/looks/saved/nocta-brand").status_code == 404

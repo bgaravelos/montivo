@@ -149,14 +149,23 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m montivo.export", description="One version's export bundle ($0).")
     ap.add_argument("run_dir", type=Path)
     ap.add_argument("--version", type=int, required=True)
-    ap.add_argument("--out", type=Path, required=True, help="folder for the files (inside the run folder)")
+    ap.add_argument("--out", type=Path, default=None, help="folder for the files (inside the run folder)")
     ap.add_argument("--name", default=None, help="file name stem (default montivo-<run>-v<N>)")
     ap.add_argument("--include", default="video", help=f"comma list of {', '.join(KINDS)}")
     ap.add_argument("--preset", default="full", choices=("full", "720"))
     ap.add_argument("--cover-t", type=float, default=None, help="cut second of the cover frame (default a third in)")
-    a = ap.parse_args(argv)
+    ap.add_argument("--suggest-cover", action="store_true",
+                    help="only ask Muse Spark for the best cover moments (one call, about $0.03) -> cover_vN.json")
+    a = ap.parse_args(sys.argv[1:] if argv is None else argv)
     if not a.run_dir.is_dir():
         ap.error(f"{a.run_dir} is not a run folder")
+    if a.suggest_cover:
+        from .engine.cover import suggest
+        from .run import RunLog
+        print(json.dumps(suggest(a.run_dir, a.version, Ledger.resume(a.run_dir / "ledger.json"), RunLog(a.run_dir / "run.log")), indent=2))
+        return 0
+    if a.out is None:
+        ap.error("--out is needed for an export")
     name = a.name or f"montivo-{a.run_dir.name}-v{a.version}"
     rec = export(a.run_dir, a.version, a.out, name, [k.strip() for k in a.include.split(",") if k.strip()], a.preset,
                  a.cover_t)

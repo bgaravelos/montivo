@@ -49,7 +49,7 @@ PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 # the review loop adds about two reviews and a render (run 015: $0.07, 85 s)
 COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_fixed": 0.045,
         "run_per_s": 0.0026, "run_wall_fixed_s": 60, "run_wall_per_s": 0.9, "review_loop": 0.07, "review_loop_s": 85,
-        "hook_ab": 0.04, "look": 0.008,
+        "hook_ab": 0.04, "look": 0.008, "cover": 0.025,
         "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175}
 
 
@@ -402,6 +402,28 @@ def create_app(root: Path) -> FastAPI:
         return {"checks": preflight.checks(d, v)}
 
     export_lock = threading.Lock()
+
+    @app.get("/api/runs/{run_id}/export/cover")
+    def cover_get(run_id: str, v: int):
+        """Muse Spark's cover moments for version v, when they were asked for before (cover_vN.json)."""
+        d, _ = cut_of(run_id, v)
+        return read_json(d / f"cover_v{v}.json") or {"moments": []}
+
+    @app.post("/api/runs/{run_id}/export/cover")
+    def cover_post(run_id: str, b: dict):
+        """{"v": N}: Muse Spark watches the version and names its best cover moments (engine/cover.py, one call, about
+        $0.025, 10-20 s; python -m montivo.export --suggest-cover)."""
+        v = int(b.get("v") or 0)
+        d, _ = cut_of(run_id, v)
+        need_key("Picking a cover (Muse Spark)", COST["cover"])
+        if st.busy(run_id):
+            raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: ask for a cover after it")
+        args = [sys.executable, "-m", "montivo.export", str(d.relative_to(st.root)) if d.is_relative_to(st.root) else str(d),
+                "--version", str(v), "--suggest-cover"]
+        proc = subprocess.run(args, cwd=st.root, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise HTTPException(500, f"cover failed: {(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")
+        return json.loads(proc.stdout)
 
     @app.post("/api/runs/{run_id}/export/bundle")
     def export_bundle(run_id: str, b: dict):
@@ -840,11 +862,54 @@ def create_app(root: Path) -> FastAPI:
         job = start_job(st, run_id, "music", label, args, chat={"role": "user", "text": text, "chips": [f"v{frm}"], "kind": "music"})
         return {"job": job.public()}
 
+    looks_lock = threading.Lock()
+
+    def saved_path(request: Request) -> Path:
+        """A person's saved looks (their brand kit): <root>/looks/saved.json, or one file per judge on the hosted demo."""
+        who = "saved" if budget is None else re.sub(r"[^A-Za-z0-9_-]", "", judge_of(request))[:40] or "guest"
+        return st.root / "looks" / f"{who}.json"
+
+    def saved_looks(request: Request) -> list[dict]:
+        return (read_json(saved_path(request)) or {}).get("looks") or []
+
     @app.get("/api/looks")
-    def looks():
-        """The Style panel's choices: every preset as a full look, the fonts, the default (marker) look."""
+    def looks(request: Request):
+        """The Style panel's choices: every preset as a full look, the fonts, the default (marker) look, and the looks
+        this person saved."""
         return {"presets": [{"id": k, "name": PRESET_NAMES[k], "look": normalize_look({"preset": k}).to_json()} for k in PRESETS],
-                "fonts": [{"id": k, "name": v[0]} for k, v in FONTS.items()], "default": normalize_look(None).to_json()}
+                "fonts": [{"id": k, "name": v[0]} for k, v in FONTS.items()], "default": normalize_look(None).to_json(),
+                "saved": saved_looks(request)}
+
+    @app.post("/api/looks/saved")
+    def save_look(request: Request, b: dict):
+        """{"name": "Nocta", "look": {...}}: kept with the person's looks (same name replaces it, 24 at most)."""
+        name = " ".join(str(b.get("name") or "").split())[:40]
+        if not name:
+            raise HTTPException(400, "name: 1 to 40 characters")
+        try:
+            look = normalize_look(b.get("look")).to_json()
+        except ValueError as e:
+            raise HTTPException(400, f"look: {e}")
+        with looks_lock:
+            items = [x for x in saved_looks(request) if x["name"].lower() != name.lower()]
+            if len(items) >= 24:
+                raise HTTPException(409, "24 saved looks at most: delete one first")
+            sid = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:30] or "look"
+            while any(x["id"] == sid for x in items):
+                sid += "-2"
+            items.append({"id": sid, "name": name, "look": look, "saved": time.strftime("%Y-%m-%d %H:%M")})
+            write_json(saved_path(request), {"looks": items})
+        return {"saved": items}
+
+    @app.delete("/api/looks/saved/{sid}")
+    def delete_look(request: Request, sid: str):
+        with looks_lock:
+            items = saved_looks(request)
+            if not any(x["id"] == sid for x in items):
+                raise HTTPException(404, "no such saved look")
+            items = [x for x in items if x["id"] != sid]
+            write_json(saved_path(request), {"looks": items})
+        return {"saved": items}
 
     def style_body(b: dict) -> tuple[dict | None, dict[str, list[float] | None]]:
         look, places = b.get("look"), b.get("callouts") or {}
