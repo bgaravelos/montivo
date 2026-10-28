@@ -50,7 +50,7 @@ PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 # the review loop adds about two reviews and a render (run 015: $0.07, 85 s)
 COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_fixed": 0.045,
         "run_per_s": 0.0026, "run_wall_fixed_s": 60, "run_wall_per_s": 0.9, "review_loop": 0.07, "review_loop_s": 85,
-        "hook_ab": 0.04, "look": 0.008, "cover": 0.025, "cover_design": 0.05, "cover_mask": 0.01,
+        "hook_ab": 0.04, "ask": 0.006, "look": 0.008, "cover": 0.025, "cover_design": 0.05, "cover_mask": 0.01,
         "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175}
 
 
@@ -203,6 +203,15 @@ def result_message(st: State, job: Job) -> dict:
     rv = read_json(d / f"review_v{n}.json") if n else None
     loop = read_json(d / "review" / "loop.json") or {}
     text = f"{job.label}: done."
+    if job.kind == "ask" and (rec := job_json(job)) is not None:
+        # the agent's own words: its reply (or the question it asks back) and what it could not do
+        said = " ".join(x for x in (rec.get("reply"), rec.get("question")) if x)
+        if rec.get("skipped"):
+            said += " Not done: " + "; ".join(rec["skipped"]) + "."
+        if not rec.get("version") and rec.get("ops") and not rec.get("done"):
+            said += " Nothing changed, so there is no new version."
+        return {"role": "agent", "kind": "ask", "text": said.strip() or "Nothing to change.", "version": rec.get("version"),
+                "after": rec.get("from"), "message": rec.get("message"), "router": rec.get("router")}
     if job.kind == "hook":
         rec = job_json(job) or {}
         if rec.get("stop"):
@@ -1242,6 +1251,33 @@ def create_app(root: Path) -> FastAPI:
                 "--review", str(passes), *(["--model", model] if model else [])]
         job = start_job(st, run_id, "replan", "Ask Montivo" + (" (Muse Spark Open)" if model else ""), args,
                         chat={"role": "user", "text": text, "chips": chips + [f"v{frm}"], "kind": "instruction"})
+        return {"job": job.public()}
+
+    @app.post("/api/runs/{run_id}/ask")
+    async def ask(run_id: str, request: Request):
+        """Ask Montivo: {"message", "chips", "from", "review", "planner"} -> montivo.agent: one Spark call picks the
+        edits (music, look, punch-ins, captions, callouts, title, clips, a re-plan), one new version. Without the key
+        (or past the hosted budget) a keyword reader does the few edits it can name safely, $0."""
+        run_id = await own(run_id, request)
+        d = st.run_dir(run_id)
+        b = await request.json()
+        model = planner_of(b)
+        text = (b.get("message") or b.get("instruction") or "").strip()
+        if not text:
+            raise HTTPException(400, "the message is empty")
+        frm = int(b.get("from") or latest_version(d))
+        passes = int(b.get("review") or 0)
+        use = key_ok()
+        if not use:
+            passes = 0  # the keyword reader edits for $0: no review without the key
+        if use and budget is not None:
+            budget.require("Ask Montivo", COST["ask"] + COST["plan_open" if model else "plan"] + COST["review"] * passes)
+        chips = [str(c) for c in b.get("chips") or []]
+        msg = text + (f" (about {', '.join(chips)})" if chips else "")
+        args = ["-m", "montivo.agent", f"runs/{run_id}", "--message", msg, "--from", str(frm), "--review", str(passes),
+                "--planner", "open" if model else "spark", *([] if use else ["--no-model"])]
+        job = start_job(st, run_id, "ask", "Ask Montivo", args,
+                        chat={"role": "user", "text": text, "chips": chips + [f"v{frm}"], "kind": "ask"})
         return {"job": job.public()}
 
     @app.post("/api/runs/{run_id}/review")

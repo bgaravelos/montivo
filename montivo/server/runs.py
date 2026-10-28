@@ -490,9 +490,11 @@ def versions(run_dir: Path) -> list[dict]:
             origin = {"source": last.get("source") or "review", "from": last.get("from"), "review": last.get("review"),
                       "action": last.get("action") or "review", "instruction": last.get("instruction"),
                       "result": last.get("result"), "challenger": last.get("challenger"), "why": last.get("why"),
+                      "agent": last.get("agent"),
                       "fixes": [{k: f.get(k) for k in ("op", "target", "issue", "severity", "t_s", "note", "args", "check")} for f in last.get("fixes") or []]}
         # the planner that made this paper edit: v1's for the plan, a re-plan's own model; patches keep their parent's
-        planner = first_planner if origin["source"] == "plan" else last.get("model") if origin.get("action") == "replan" else None
+        planner = first_planner if origin["source"] == "plan" else last.get("model") if origin.get("action") == "replan" \
+            or (origin.get("agent") and last.get("model")) else None
         if origin.get("action") == "replan" and not planner:
             planner = SPARK_MODEL  # re-plans before the model was recorded ran on Spark 1.3
         cmp = read_json(run_dir / f"plan_compare_v1_v{n}.json")

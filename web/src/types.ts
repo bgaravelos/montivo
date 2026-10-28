@@ -32,7 +32,15 @@ export type Origin = {
   source: "plan" | "review" | "human" | string; from?: number; review?: string | null; action?: string;
   instruction?: string | null; fixes?: PlannedFix[]; result?: HookResult | null;
   challenger?: string | null; why?: string | null; // hook A/B: the span B opens on, and why it was picked
+  agent?: AgentRecord | null; // Ask Montivo: the message, the agent's reply and the ops it ran (montivo/agent.py)
 };
+
+/** What Ask Montivo did with one message (the version's patch `agent`, montivo/agent.py). */
+export type AgentRecord = { message: string; reply: string; router: string; ops: { op: string }[]; done: string[]; skipped: string[] };
+
+/** One line of ui/chat.jsonl: your messages and the agent's replies (an `ask` reply without a version is shown from here). */
+export type ChatLine = { t: number; role: "user" | "agent"; kind?: string; text?: string; version?: number | null;
+  after?: number | null; message?: string | null; router?: string | null };
 
 /** The planner A/B of a fresh re-plan against v1 (plan_compare_v1_vN.json): one side per planner. */
 export type PlanSide = { planner: string; spans: number; runtime_s: number; verbatim_rate: number; unplaced: number; hook: string;
@@ -122,11 +130,11 @@ export type RunState = {
   ledger: { total_cost_usd: number; wall_seconds: number; stages: Record<string, { seconds: number; cost_usd: number; calls: number; tokens_in: number; tokens_out: number }> };
   loop: { stop: string; passes: { version: number; overall: number; pass: boolean }[]; best: { version: number; overall: number } | null } | null;
   versions: Version[]; words: Record<string, Word[]>; stages: Stage[]; job: Job | null; has_key: boolean; has_open_key: boolean;
-  costs: Costs; key_note?: string | null; budget?: Budget | null;
+  costs: Costs; key_note?: string | null; budget?: Budget | null; chat?: ChatLine[];
 };
 
 /** Rough prices and times for the button hints (server COST). */
-export type Costs = { plan: number; plan_open: number; plan_s: number; plan_open_s: number; review: number; run_per_s: number;
+export type Costs = { ask?: number; plan: number; plan_open: number; plan_s: number; plan_open_s: number; review: number; run_per_s: number;
   review_s?: number; review_prep_s?: number; image_s?: number; render_s_per_frame?: number;
   run_fixed?: number; run_wall_fixed_s?: number; run_wall_per_s?: number; review_loop?: number; review_loop_s?: number; hook_ab?: number; look?: number; cover?: number;
   cover_design?: number; cover_mask?: number };

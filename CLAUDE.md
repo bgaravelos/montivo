@@ -479,6 +479,19 @@ mask (015-demo v5 at 1.54 s, $0.010, 2.4 s): one person, clean edge; the cutout 
 (`WORD_VISIBLE`: "Self-reviewing AI" used to hide "AI" whole behind the head while 89 % of the pixels showed).
 Deployed to Modal 28/10 (commit b214930 + the smoke option): `modal run modal_app.py::smoke --cover` renders the
 newest version's headline and sticker covers on a copy ($0) and imports the parser; old web container stopped.
+Ask Montivo agent (28/10, $0.013): the chat used to send every message to `human.replan` (the plan schema has no music,
+look or punch fields, so "put music" only re-planned). `montivo/agent.py` (`python -m montivo.agent RUN --message ...`,
+POST `/api/runs/{id}/ask`, the composer now posts there): one muse-spark-1.3 call (strict json_schema, no video,
+$0.0035-0.0052 on 015) reads the message next to the version (`agent.context`: clips with cut seconds and callouts,
+caption lines, title, look, music, punch, the last review) and picks ops from a closed list (music_on/off, style preset or
+look_prompt, punch, caption, callout, title_text/on/off, drop, reorder, replan, review); `check` validates ids and
+orders them (caption first, a replan drops the clip ops), `run_ops` runs the human edits with `human.DEFER` set
+(unrendered edl_vN each), `fold` folds the chain into one version with one patch (`action` the op's own or "ask",
+`agent` {message, reply, router, ops, done, skipped}), rendered once. A question gets a reply and no version (chat line
+kind "ask" with `after`). Without the key (or past the hosted budget) `keywords` reads music / track names, punch,
+preset names, title on/off, $0, no review. UI: the agent's message, reply and steps in the chat, "asked Montivo".
+Checked on a throwaway copy of 015 (removed): "Βάλε μουσική, κάτι χαλαρό, και κάνε τα captions πιο έντονα" -> Chill Lofi
++ Bold pop in one render (22.8 s); a score question answered with no version; keyless in the browser: ukulele + karaoke.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

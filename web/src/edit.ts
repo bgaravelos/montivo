@@ -109,7 +109,9 @@ export function originLabel(v: Version): string {
   if (o.source === "hook_ab") return "hook A/B";
   if (o.action === "drop") return "your edit · deleted a clip";
   if (o.action === "trim") return "your edit · trimmed a clip";
+  if (o.agent && (o.action === "ask" || o.action === "replan")) return "asked Montivo";
   if (o.action === "replan") return "your edit · asked Montivo";
+  if (o.action === "ask") return "asked Montivo";
   if (o.action === "caption") return `your edit · ${o.fixes?.length === 1 ? "a caption line" : `${o.fixes?.length ?? ""} caption lines`}`;
   if (o.action === "text") {
     const f = o.fixes ?? [];

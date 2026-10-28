@@ -282,7 +282,7 @@ export function Editor({ id, replay, go }: Props) {
         {panel === "assistant" && (
           <Assistant state={state} versions={visible} lines={lines} job={job} seen={seen} progress={progress} replay={replay} v={v}
             clip={block?.kind === "span" ? block.span!.id : null} getTime={getTime} focusNonce={askNonce}
-            onSend={(text, chips, review, planner) => act("replan", { instruction: text, chips, from: v?.n, review, planner })}
+            onSend={(text, chips, review, planner) => act("ask", { message: text, chips, from: v?.n, review, planner })}
             onStop={() => act("stop", {})} onPick={pick} onSeek={(x) => { player.current?.pause(); seek(x); }}
             onCompare={(a, b) => go(`${base}/compare?a=${a}&b=${b}${replay ? `&replay=${replay}` : ""}`)} />
         )}

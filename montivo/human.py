@@ -74,8 +74,14 @@ def _words(run_dir: Path) -> Words:
     return Words(json.loads((run_dir / "voice" / "voice.json").read_text())["words"])
 
 
+DEFER: list[int] | None = None  # montivo.agent chains several edits: each one's version is kept here, unrendered
+
+
 def _finish(run_dir: Path, edl_path: Path, n: int, passes: int, budget: float, ledger: Ledger, log) -> dict:
     """Render cut_vN.mp4 from the new EDL, then the review loop from it when passes > 0."""
+    if DEFER is not None:
+        DEFER.append(n)
+        return {"version": n, "edl": edl_path.name, "deferred": True}
     render_run(run_dir, edl_path=edl_path, out_name=f"cut_v{n}.mp4", ledger=ledger, log=log)
     loop = None
     if passes > 0:

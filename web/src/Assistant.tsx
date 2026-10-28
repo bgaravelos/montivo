@@ -114,10 +114,16 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
   const out: Item[] = [
     { kind: "you", text: state.run.brief ?? "", chips: [state.run.footage?.split("/").pop() ?? "footage", `${state.run.target_s ?? 40} s`] },
   ];
+  const asked = (state.chat ?? []).filter((c) => c.role === "agent" && c.kind === "ask" && !c.version && c.after != null);
   for (const v of versions) {
     const o = v.origin;
     const fixes = (o.fixes ?? []).map((f) => f.note ?? f.op).filter(Boolean) as string[];
-    if (o.source === "human") {
+    if (o.source === "human" && o.agent) {
+      out.push({ kind: "you", text: o.agent.message, chips: [`from v${o.from}`] });
+      if (o.agent.reply) out.push({ kind: "text", who: "montivo", text: o.agent.reply });
+      const lines = [...(o.agent.done.length ? o.agent.done : fixes), ...o.agent.skipped.map((x) => `not done · ${x}`)];
+      if (lines.length) out.push({ kind: "steps", title: `${o.agent.router === "keywords" ? "Read the keywords" : "Picked the tools"} · ${plural(o.agent.done.length || fixes.length, "edit")}`, lines });
+    } else if (o.source === "human") {
       const f = o.fixes?.[0];
       const what = o.action === "drop" ? `Delete clip ${f?.target ?? ""}.`
         : o.action === "trim" ? `Trim the ${(f?.args as { edge?: string } | null)?.edge === "in" ? "start" : "end"} of clip ${f?.target ?? ""}.`
@@ -145,6 +151,10 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
     if (v.review) out.push({ kind: "review", v });
     const ab = o.source === "hook_ab" ? o.result : null;
     if (ab) out.push({ kind: "text", who: "montivo", text: `Keeping ${vName(ab.kept)} (${ab.reason}${ab.decisive ? "" : "; within the reviewer's 10-point noise"}).` });
+    for (const c of replay ? [] : asked.filter((x) => x.after === v.n)) { // a message that made no version: its reply
+      out.push({ kind: "you", text: c.message ?? "", chips: [`v${v.n}`] });
+      out.push({ kind: "text", who: "montivo", text: c.text ?? "" });
+    }
     if (!replay && state.loop?.stop && v.n === state.loop.passes.at(-1)?.version) {
       const stop = state.loop.stop.split(":")[0];
       out.push({ kind: "text", who: "montivo", text: stop === "pass" ? "The review loop stopped: the cut passes." : `The review loop stopped (${state.loop.stop}).` });
@@ -264,6 +274,7 @@ function suggestions(state: RunState, v: Version | null): string[] {
   if ((s.pacing ?? 10) < 8) out.push("Tighten the pacing");
   if ((s.ending ?? 10) < 8) out.push("End on the strongest line");
   if (state.run.target_s && len > state.run.target_s + 5) out.push(`Make it ${state.run.target_s} seconds`);
+  if (v && !v.music) out.push("Add some music under it");
   for (const x of ["Make it 30 seconds", "Drop the weakest clip", "End on the strongest line"]) if (!out.includes(x)) out.push(x);
   return out.slice(0, 3);
 }
@@ -365,11 +376,10 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
     el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
   }, [text]);
   const chips = [...(clip && useClip ? [clip] : []), ...(time != null ? [`@${tc(time)}`] : [])];
-  const cost = (planner === "open" ? state.costs.plan_open : state.costs.plan) + (review ? state.costs.review : 0);
+  const cost = state.has_key ? (state.costs.ask ?? 0.006) + (review ? state.costs.review : 0) : 0;
   const running = !!job?.running;
-  const blocked = !state.has_key ? state.key_note ?? "Asking Montivo calls Muse Spark: set MODEL_API_KEY and restart montivo serve."
-    : running ? "Montivo is working…" : replay ? "Replay is on: turn it off in the menu to edit." : null;
-  const send = () => { if (!text.trim() || blocked) return; onSend(text.trim(), chips, review ? 1 : 0, planner); setText(""); setTime(null); };
+  const blocked = running ? "Montivo is working…" : replay ? "Replay is on: turn it off in the menu to edit." : null;
+  const send = () => { if (!text.trim() || blocked) return; onSend(text.trim(), chips, review && state.has_key ? 1 : 0, planner); setText(""); setTime(null); };
   const tips = !blocked && !text ? suggestions(state, v) : [];
   return (
     <section className="assistant">
@@ -401,7 +411,8 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
         <Tray state={state} lines={lines} job={job} seen={seen} progress={progress} replay={replay} onStop={onStop} />
         <div className={`cbox ${blocked ? "off" : ""}`}>
           <textarea ref={box} value={text} onChange={(e) => setText(e.target.value)} rows={2}
-            placeholder={blocked ?? "Ask Montivo to change the cut… “drop the agency line”, “make it 30 seconds”"}
+            placeholder={blocked ?? (state.has_key ? "Ask Montivo… “add some lo-fi music”, “bold captions”, “make it 30 seconds”"
+              : `${state.key_note ?? "No MODEL_API_KEY"}: Montivo reads keywords only… “add music”, “bold pop captions”, “punch-ins on”`)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} disabled={!!blocked} />
           <div className="cb-ctx">
             {clip && <button className={`pill sel ${useClip ? "on" : ""}`} onClick={() => setUseClip(!useClip)} title="Send the selected clip with the message"><Icon name="film" size={12} />clip {clip}</button>}
@@ -412,12 +423,12 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
           </div>
           <div className="cb-row">
             <PlannerMenu value={planner} onChange={setPlanner} hasOpen={state.has_open_key} state={state} />
-            <button className={`cb-btn ${review ? "on" : ""}`} onClick={() => setReview(!review)}
-              title={review ? "The blind reviewer scores the result (click to skip)" : "No review of the result (click to add one)"}>
-              <Icon name="eyeOff" size={13} />Review{review ? "" : " off"}
+            <button className={`cb-btn ${review && state.has_key ? "on" : ""}`} onClick={() => setReview(!review)} disabled={!state.has_key}
+              title={!state.has_key ? "The blind review calls Muse Spark: it needs MODEL_API_KEY" : review ? "The blind reviewer scores the result (click to skip)" : "No review of the result (click to add one)"}>
+              <Icon name="eyeOff" size={13} />Review{review && state.has_key ? "" : " off"}
             </button>
             <span className="grow" />
-            <span className="cost" title={`${planner === "open" ? "Muse Spark Open" : "Muse Spark 1.3"} plan call${review ? " plus one blind review on Spark 1.3" : ""}, roughly`}>~{usd(cost)}</span>
+            <span className="cost" title={state.has_key ? `One Muse Spark 1.3 call picks the edits${review ? ", plus one blind review" : ""}; a re-plan adds ~${usd(planner === "open" ? state.costs.plan_open : state.costs.plan)} on ${planner === "open" ? "Muse Spark Open" : "Muse Spark 1.3"}. Music, look, captions and clip edits are $0.` : "Without the key Montivo reads keywords: $0"}>~{usd(cost)}</span>
             {running && !replay
               ? <button className="send stop" onClick={onStop} title="Stop the running job"><Icon name="stop" size={11} /></button>
               : <button className="send" disabled={!!blocked || !text.trim()} onClick={send} title="Send (Enter)"><Icon name="send" size={15} /></button>}
