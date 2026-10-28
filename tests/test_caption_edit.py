@@ -154,3 +154,30 @@ def test_the_replan_prompt_names_the_current_callouts():
     with_call = edl_summary({"runtime_s": 4.7, "spans": [{**span, "callout": "Four Meta models"}]})
     assert 'callout "Four Meta models"' in with_call and "Keep these callouts" in with_call
     assert "callout" not in edl_summary({"runtime_s": 4.7, "spans": [{**span, "callout": ""}]})
+
+
+def test_a_carried_text_splices_into_a_longer_line():
+    from montivo.engine.captions import carried_text
+    voice = "meta models do all".split()
+    assert carried_text(voice, voice, "Four Meta models do all") == "Four Meta models do all"
+    assert carried_text("meta models do all the".split(), voice, "Four Meta models do all") == "Four Meta models do all the"
+    assert carried_text("so meta models do all".split(), voice, "Four Meta models do all") == "so Four Meta models do all"
+    assert carried_text("meta models do".split(), voice, "Four Meta models do all") is None  # broken inside the run
+    line = [CWord(w=w, t_in=36.7 + k * 0.2, t_out=36.9 + k * 0.2, span="s5") for k, w in enumerate("meta models do all the".split())]
+    ov = {"span": "s5", "src_t": 36.71, "text": "Four Meta models do all", "voice": "meta models do all"}
+    assert override_for(line, [ov])["text"] == "Four Meta models do all the"
+
+
+def test_a_replan_that_drops_the_lines_first_word_still_carries_it():
+    # 015-demo v5 -> v7: the hand-fixed "Four Meta models do all" (heard "meta models do all") sat on a line whose first
+    # word (the first of "meta meta") the Open re-plan dropped: s5 now starts 0.08 s later and the text was lost
+    words = [{"w": w, "t_in": round(0.2 * k, 3), "t_out": round(0.2 * k + 0.2, 3), **({"voice": "meta models do all"} if k == 0 else {})}
+             for k, w in enumerate("Four Meta models do all".split())]
+    prev = {"source": {"fps": 30}, "title_card": False,
+            "spans": [{"id": "s5", "t_in": 36.62, "t_out": 41.28, "role": "body"}],
+            "caption_overrides": [{"span": "s5", "src_t": 36.63, "text": "Four Meta models do all", "why": "human"}],
+            "captions": [{"spans": ["s5"], "text": "Four Meta models do all", "words": words}]}
+    new = {"spans": [{"id": "s5", "t_in": 36.7, "t_out": 41.28}]}
+    got = human.carry_caption_text(prev, new)
+    assert len(got) == 1 and got[0]["span"] == "s5" and 36.7 < got[0]["src_t"] < 37.62  # inside what is left of the line
+    assert got[0]["text"] == "Four Meta models do all" and got[0]["voice"] == "meta models do all"

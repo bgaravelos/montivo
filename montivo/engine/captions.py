@@ -480,11 +480,31 @@ def override_for(words: list[CWord], overrides: list[dict]) -> dict | None:
     strict: src_t is the line's first word + 0.01 s, which would also land on the end of a line it abuts (run 015).
     An entry with `voice` (a text carried across a re-plan) applies only to a line that still reads exactly those
     words: the new plan can break the lines elsewhere, and the old text would then replace the wrong words."""
-    heard = " ".join(w.w for w in words)
-    hit = [ov for ov in overrides if any(w.span == ov.get("span") for w in words)
-           and words[0].t_in - 0.01 <= float(ov["src_t"]) < words[-1].t_out
-           and ov.get("voice") in (None, heard)]
+    heard = [w.w for w in words]
+    hit = []
+    for ov in overrides:
+        if not (any(w.span == ov.get("span") for w in words) and words[0].t_in - 0.01 <= float(ov["src_t"]) < words[-1].t_out):
+            continue
+        if ov.get("voice") is not None:
+            text = carried_text(heard, ov["voice"].split(), ov.get("text"))
+            if text is None:
+                continue
+            ov = {**ov, "text": text}
+        hit.append(ov)
     return {k: v for ov in hit for k, v in ov.items() if v is not None} or None
+
+
+def carried_text(heard: list[str], voice: list[str], text: str | None) -> str | None:
+    """A carried text on a line of the new plan: the line still reads the words Voice heard (the text as it is), or
+    holds them as one run with words around it (the text spliced in, the rest as heard); else None (the line breaks
+    inside those words: the old text would replace the wrong ones)."""
+    if text is None or heard == voice:
+        return text
+    n = len(voice)
+    k = next((k for k in range(len(heard) - n + 1) if n and heard[k:k + n] == voice), None)
+    if k is None:
+        return None
+    return " ".join([*heard[:k], text, *heard[k + len(voice):]])
 
 
 def retext(words: list[CWord], text: str) -> list[CWord]:

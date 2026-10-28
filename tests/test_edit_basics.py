@@ -122,3 +122,14 @@ def test_current_version_is_remembered_and_cleared(tmp_path):
     assert c.post("/api/runs/r1/current", json={"version": "x"}).status_code == 400
     c.post("/api/runs/r1/current", json={"version": None})
     assert c.get("/api/runs/r1/current").json()["version"] is None
+
+
+def test_a_cut_that_deletes_the_hook_whole_writes_nothing(tmp_path, monkeypatch):
+    # code review, debugging day 1: apply_fixes skips a drop of the hook, and cut() saved and rendered the version
+    # anyway, keeping the words the selection deleted
+    import montivo.human as H
+    d = _human_run(tmp_path, monkeypatch)
+    s1 = json.loads((d / "edl_v1.json").read_text())["spans"][0]
+    with pytest.raises(SystemExit, match="s1 cannot go"):
+        H.cut(d, [("s1", s1["word_from"], s1["word_to"])])
+    assert not (d / "edl_v2.json").exists()

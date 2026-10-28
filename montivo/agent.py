@@ -674,6 +674,9 @@ def apply(run_dir: Path, pid: str, passes: int | None = None, budget: float = 0.
     (a re-plan plans now, once). Try again after a failure runs it once more; an applied one refuses."""
     log = RunLog(run_dir / "run.log")
     p = load_pending(run_dir, pid)
+    newest = human.latest_edl(run_dir)
+    if newest > p["from"]:  # its ops run from v{from}: applied now, they would leave out every edit made since
+        raise SystemExit(f"the cut changed since this proposal (v{p['from']} -> v{newest}): ask again on the newest version")
     set_status(run_dir, p, "running")
     log(f"montivo ask: apply proposal {pid} ({p['message']!r}) on edl_v{p['from']}")
     record = {k: p[k] for k in ("message", "reply", "question", "router", "from", "ops", "skipped") if k in p}

@@ -204,3 +204,20 @@ def test_unshare_removes_the_link_and_a_new_share_gets_a_new_token(tmp_path):
     assert [x["version"] for x in s.of_run("015")] == [5, 3] and s.of_run("015")[0]["path"] == f"/s/{a}"
     assert not s.delete("other", a) and s.delete("015", a)
     assert [x["token"] for x in s.of_run("015")] == [b] and s.create("015", 5) != a
+
+
+def test_apply_refuses_a_proposal_made_on_an_older_version(tmp_path, monkeypatch):
+    # code review, debugging day 1: a proposal made on v3, applied after the editor made v4 (music), chained from v3
+    # and the new version left the music out
+    d = _run(tmp_path)
+    monkeypatch.setattr(agent, "route", lambda *a, **k: ({"reply": "Dropping s2.", "question": "",
+                                                          "ops": [op("drop", span="s2")]}, 0.004))
+    card = agent.ask(d, "drop the weak clip", preview=True)["pending"]
+    (d / "edl_v4.json").write_text(json.dumps({"version": 4, "spans": SPANS, "runtime_s": 7.0, "music": {"track": "ukulele"}}))
+    monkeypatch.setattr(agent, "run_ops", lambda *a, **k: (_ for _ in ()).throw(AssertionError("ran on a stale base")))
+    try:
+        agent.apply(d, card["id"])
+        raise AssertionError("a stale proposal must refuse")
+    except SystemExit as e:
+        assert "changed since this proposal (v3 -> v4)" in str(e)
+    assert json.loads((d / "ui" / "pending" / f"{card['id']}.json").read_text())["status"] == "open"

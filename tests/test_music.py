@@ -285,3 +285,33 @@ def test_the_stem_and_track_peak_routes(tmp_path, monkeypatch):
     assert c.get(f"/api/runs/r1/stem?v={n}&track=drums").status_code == 400
     mu = next(x for x in c.get("/api/runs/r1").json()["versions"] if x["n"] == n)["music"]
     assert mu["voice_db"] == 0.0 and mu["ducked"] == [[1.0, 2.0]]
+
+
+@pytest.mark.parametrize("prev_look,want", [(None, None), ({"line_breaks": "greedy", "preset": "box"},
+                                                           {"line_breaks": "greedy", "preset": "box"}),
+                                             ({"line_breaks": "phrase"}, {"line_breaks": "phrase"})])
+def test_a_replan_keeps_the_versions_line_breaks_and_run_words(tmp_path, monkeypatch, prev_look, want):
+    # debugging day 1: an EDL from before the look (greedy lines) came back from a re-plan with build_edl's
+    # {"line_breaks": "phrase"}, so every caption line broke elsewhere and no hand-fixed caption text carried
+    d = tmp_path / "r"
+    (d / "voice").mkdir(parents=True)
+    (d / "voice" / "voice.json").write_text("{}")
+    (d / "watch.json").write_text("{}")
+    (d / "run.json").write_text(json.dumps({"brief": "b", "target_s": 30}))
+    prev = {"spans": [], "runtime_s": 30, "source": {}, "glossary": {"newspark": "Muse Spark"}, "highlight": ["Montivo"],
+            **({"look": prev_look} if prev_look else {})}
+    (d / "edl_v2.json").write_text(json.dumps(prev))
+    planned = SimpleNamespace(parsed={}, cost_usd=0.0, seconds=0.0)
+    monkeypatch.setattr("montivo.engine.spark.Spark", lambda *a, **k: SimpleNamespace(plan=lambda *a, **k: planned))
+    monkeypatch.setattr(human.VoiceResult, "from_json", staticmethod(lambda j: SimpleNamespace(
+        transcript_text=lambda: "", speech_rate=lambda: 2.5)))
+    monkeypatch.setattr(human, "build_edl", lambda *a, **k: {"spans": [{"id": "s1", "role": "hook", "t_in": 0.0, "t_out": 1.0,
+                                                                         "words": "hi"}], "runtime_s": 1.0, "role_fixes": [],
+                                                              "title_card_text": "t", "glossary": {}, "highlight": [],
+                                                              "look": {"line_breaks": "phrase"}})
+    done = {}
+    monkeypatch.setattr(human, "_finish", lambda run_dir, edl_path, n, *a: done.update(edl=json.loads(edl_path.read_text())))
+    human.replan(d, "shorter")
+    e = done["edl"]
+    assert e.get("look") == want
+    assert e["glossary"] == {"newspark": "Muse Spark"} and e["highlight"] == ["Montivo"]

@@ -94,7 +94,12 @@ def _finish(run_dir: Path, edl_path: Path, n: int, passes: int, budget: float, l
     if DEFER is not None:
         DEFER.append(n)
         return {"version": n, "edl": edl_path.name, "deferred": True}
-    render_run(run_dir, edl_path=edl_path, out_name=f"cut_v{n}.mp4", ledger=ledger, log=log)
+    try:
+        render_run(run_dir, edl_path=edl_path, out_name=f"cut_v{n}.mp4", ledger=ledger, log=log)
+    except BaseException:  # a failed or interrupted render: no edl_vN without its cut (the server sets aside the rest)
+        if not (run_dir / f"cut_v{n}.mp4").is_file():
+            edl_path.unlink(missing_ok=True)
+        raise
     loop = None
     if passes > 0:
         loop = review_loop(run_dir, edl_path, passes=passes, budget_usd=budget, ledger=ledger, log=log)
@@ -220,6 +225,10 @@ def carry_caption_text(prev: dict, new: dict) -> list[dict]:
     re-plan: the text goes to the new span over the same source time, with the words Voice heard on that line
     (`voice`), so the renderer applies it only where the new plan breaks a line the same way (captions.override_for)."""
     texts = [o for o in prev.get("caption_overrides") or [] if o.get("text")]
+    try:
+        cmap = cut_map(prev)
+    except (KeyError, TypeError, ValueError):
+        cmap = []
     out = []
     for c in prev.get("captions") or []:
         heard = next((w["voice"] for w in c.get("words") or [] if w.get("voice")), None)
@@ -227,9 +236,18 @@ def carry_caption_text(prev: dict, new: dict) -> list[dict]:
         if not heard or ov is None:
             continue
         src_t = float(ov["src_t"])
-        s = next((s for s in new["spans"] if s["t_in"] <= src_t < s["t_out"]), None)
-        if s is not None:
-            out.append({"span": s["id"], "src_t": src_t, "text": c["text"], "voice": heard, "why": ov.get("why")})
+        hit = next(((src_t, s) for s in new["spans"] if s["t_in"] <= src_t < s["t_out"]), None)
+        ws = c.get("words") or []
+        cs = next((x for x in cmap if x.span in c["spans"]), None) if ws else None
+        if cs is not None:
+            # the middle of what the new plan keeps of the line's source time: the line's first word may be gone (a
+            # re-plan starting the clip one word later, 015-demo v7 "meta | meta models do all", lost "Four Meta")
+            a = _src_time(prev, cmap, cs.span, float(ws[0]["t_in"]))
+            b = _src_time(prev, cmap, cs.span, float(ws[-1]["t_out"]))
+            hit = next(((round((max(a, s["t_in"]) + min(b, s["t_out"])) / 2, 3), s) for s in new["spans"]
+                        if max(a, s["t_in"]) < min(b, s["t_out"])), None)
+        if hit is not None:
+            out.append({"span": hit[1]["id"], "src_t": hit[0], "text": c["text"], "voice": heard, "why": ov.get("why")})
     return out
 
 
@@ -769,6 +787,9 @@ def cut(run_dir: Path, ranges: list[tuple[str, int, int]], from_v: int | None = 
     for sid, a, b in ranges:
         deleted.setdefault(by_id[sid]["turn_id"], set()).update(range(a, b + 1))
     new, plog = apply_fixes(edl, fixes, words, audio)
+    refused = [p for p in plog if p.get("skipped") and p["op"] == "drop_span"]
+    if refused:  # as drop(): a version that keeps the words the selection deletes would only look like the edit
+        raise SystemExit(f"{refused[0]['target']} cannot go: {refused[0]['note'].removeprefix('not applied: ')}")
     hold_trimmed_edges(edl, new, fixes, plog, words, audio, keep_out=deleted)
     meet: set[tuple[str, str]] = set()
     dropped = {f.target for f in fixes if f.op == "drop_span"}
@@ -1320,6 +1341,8 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
         new["reframe_speaker_ids"] = dict(prev["reframe_speaker_ids"])
     if prev.get("look"):
         new["look"] = dict(prev["look"])
+    else:  # an EDL from before the look keeps its greedy caption lines, as a style edit does (graphics.restyle)
+        new.pop("look", None)
     if prev.get("music"):
         new["music"] = dict(prev["music"])
     if prev.get("overlays"):  # each stays on its source second, shown where the new plan keeps those words

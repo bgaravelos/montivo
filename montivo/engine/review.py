@@ -1508,6 +1508,10 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
             error = f"{type(exc).__name__}: {str(exc)[:500]}"
             stop = f"error in pass {k + 1} (v{n}): {error}"
             log(f"review loop: {stop}")
+            if k > 0 and not (run_dir / f"cut_v{n}.mp4").is_file():  # the loop's own patched EDL never rendered:
+                edl_path.unlink(missing_ok=True)  # no edl_vN without its cut (the job still exits 0)
+                edl_path = run_dir / history[-1]["edl"]
+                log(f"review loop: edl_v{n}.json removed (no cut), the last version stays {edl_path.name}")
             break
     best = max(history, key=rank) if history else None
     summary = {"stop": stop, "passes": history, "reviews": len(history), "review_cost_usd": round(spent, 4),

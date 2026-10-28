@@ -521,3 +521,24 @@ def test_a_pass_that_fails_still_writes_the_loop_with_the_reviews_before_it(tmp_
         R.review_loop(tmp_path, passes=1, budget_usd=1.0, log=lambda m: None, render_fn=render_fn,
                       review_fn=review_fails, ledger=R.Ledger(tmp_path / "ledger.json"))
     assert json.loads((tmp_path / "review" / "loop.json").read_text())["reviews"] == 0
+
+
+def test_a_render_that_fails_in_the_loop_leaves_no_version_without_a_cut(tmp_path):
+    # debugging day 1: the loop caught the render failure of its own patched edl_v2 and exited 0, so edl_v2 stayed
+    # without cut_v2 (the server only sets those aside after a failed job)
+    ok = _loop_folder(tmp_path)
+
+    def render_fn(ep, name):
+        if name == "cut_v2.mp4":
+            raise RuntimeError("ffmpeg exit 1")
+        ok(ep, name)
+
+    def review_fn(e, cut, n):
+        return {"name": f"review_v{n}", "cost_usd": 0.04, "review": {
+            "pass": False, "overall": 70, "scores": {},
+            "issues": [issue(R.cut_map(e)[0].cut_in + 0.1, "extend_span", edge="out", seconds=0.3)]}}
+
+    out = R.review_loop(tmp_path, passes=3, budget_usd=1.0, log=lambda m: None, render_fn=render_fn, review_fn=review_fn,
+                        ledger=R.Ledger(tmp_path / "ledger.json"))
+    assert out["stop"].startswith("error in pass 2") and out["last_edl"] == "edl_v1.json"
+    assert not (tmp_path / "edl_v2.json").exists() and (tmp_path / "edl_v1.json").is_file()
