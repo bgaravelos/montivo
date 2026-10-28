@@ -123,6 +123,32 @@ def dedupe_words(words: list[CWord], max_gap_s: float = DEDUPE_GAP_S) -> tuple[l
             prev.t_out = max(prev.t_out, w.t_out)
             continue
         out.append(CWord(w=w.w, t_in=w.t_in, t_out=w.t_out, span=w.span, src=w.src, t0=w.t0))
+    return dedupe_phrases(out, fixes, max_gap_s)
+
+
+def dedupe_phrases(words: list[CWord], fixes: list[dict], max_gap_s: float = DEDUPE_GAP_S,
+                   longest: int = 3) -> tuple[list[CWord], list[dict]]:
+    """The same for a phrase of 2 or 3 words heard twice back to back: Voice can double one ("You have You have one
+    second." on tips take 2, 28/10, where the audio says it once). The kept copy shares both copies' time by length."""
+    out = list(words)
+    k = 0
+    while k < len(out):
+        for n in range(longest, 1, -1):
+            a, b = out[k:k + n], out[k + n:k + 2 * n]
+            if len(b) == n and all(norm(x.w) for x in a) and [norm(x.w) for x in a] == [norm(x.w) for x in b] \
+                    and b[0].t_in - a[-1].t_out < max_gap_s:
+                fixes.append({"kind": "dedupe", "from": " ".join(x.w for x in a + b), "to": " ".join(x.w for x in a),
+                              "src_t": round(a[0].t_in, 3), "span": a[0].span})
+                t0, t1 = a[0].t_in, b[-1].t_out
+                total = sum(len(x.w) for x in a) or 1
+                t, kept = t0, []
+                for x in a:
+                    d = (t1 - t0) * len(x.w) / total
+                    kept.append(CWord(w=x.w, t_in=round(t, 3), t_out=round(t + d, 3), span=x.span, src=x.src, t0=x.t0))
+                    t += d
+                out[k:k + 2 * n] = kept
+                break
+        k += 1
     return out, fixes
 
 

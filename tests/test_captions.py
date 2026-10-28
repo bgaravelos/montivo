@@ -275,3 +275,16 @@ def test_a_retext_of_its_own_words_leaves_the_next_line_alone():
     assert covered(_line("and I said", 1.0), "and I said the", _line("the end", 1.6, span="s3")) == 0  # another span
     lines, forced = apply_overrides([a, b], [{"span": "s2", "src_t": 25.71, "top": 500}])
     assert [" ".join(w.w for w in ln) for ln in lines] == ["we did short form", "videos every"] and list(forced) == [1]
+
+
+def test_dedupe_drops_a_phrase_voice_heard_twice_back_to_back():
+    # bug bash 28/10 (tips take 2, the future sample 017): Voice heard "You have You have one second." where the audio
+    # says "you have" once (silence 22.5-23.2 s, speech from 23.3 s); the cut opened on the caption "You have You"
+    words, fixes = dedupe_words(cw([("You", 23.19, 23.19), ("have", 23.19, 23.58), ("You", 23.58, 23.66),
+                                    ("have", 23.66, 23.78), ("one", 23.78, 23.9), ("second.", 23.9, 24.46)], "s1"))
+    assert " ".join(w.w for w in words) == "You have one second."
+    assert (words[0].t_in, words[1].t_out) == (23.19, 23.78) and words[0].t_out == words[1].t_in
+    assert [(f["from"], f["to"], f["src_t"]) for f in fixes] == [("You have You have", "You have", 23.19)]
+    # a phrase said again after a real pause stays: that is a retake the cut may keep
+    words, fixes = dedupe_words(cw([("so", 1.0, 1.2), ("we", 1.2, 1.4), ("so", 1.9, 2.1), ("we", 2.1, 2.3)]))
+    assert [w.w for w in words] == ["so", "we", "so", "we"] and fixes == []
