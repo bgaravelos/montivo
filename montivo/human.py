@@ -9,6 +9,7 @@
     python -m montivo.human text runs/015 [--callout s5="Four Meta models"] [--callout s6=] [--title "..."] [--title-off]
     python -m montivo.human reorder runs/015 --span s4 (--before s2 | --end)
     python -m montivo.human cut runs/015 --words s2:16-16 [--words s3:0-2 ...]
+    python -m montivo.human split runs/015 --span s3 --word 12
     python -m montivo.human pin runs/014 --speaker A --head 3 (or --head none to drop the pin)
     python -m montivo.human edges runs/015
     python -m montivo.human style runs/015 [--look '{"preset": "box", "position": "fixed", "top": 1180}'] [--callout s5=120,300] [--callout s5=auto]
@@ -25,7 +26,8 @@ words (one Muse Image call, $0.01: the words are part of the generated image). `
 reorder patch) and tightens the cuts that now meet; `pin` makes the crop follow one head for a speaker (EDL
 `reframe_speaker_ids`, for clips where the speaker map got it wrong, like run 014). Both $0. `cut` deletes the words
 of a transcript selection (turn word indices per span) in one version: whole clips are dropped, words at a clip's edge
-trimmed like a timeline drag, words inside a clip split it in two; $0. `edges` runs the edge pass again from the
+trimmed like a timeline drag, words inside a clip split it in two; $0. `split` cuts one clip in two in front of a
+word with nothing removed (the same cut renders; the pieces can then move or go on their own); $0. `edges` runs the edge pass again from the
 Voice word boundaries with today's rules, for a version made before a rule changed; $0. `style` sets the look of the
 captions and callouts (graphics.normalize_look: a preset, font, colours, words per line, the caption position auto or
 fixed) and pins callouts where a person dragged them on the canvas (span `callout_xy`), or back to auto; $0.
@@ -553,6 +555,10 @@ def reorder(run_dir: Path, span_id: str, before: str | None, from_v: int | None 
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
 
 
+def tw_word(words: Words, span: dict, i: int) -> str:
+    return repr(words.turn(span["turn_id"])[i]["w"])
+
+
 def cut_plan(edl: dict, words: Words, ranges: list[tuple[str, int, int]]) -> tuple[list[Fix], dict[str, list[tuple[int, int]]]]:
     """A transcript selection ((span id, first, last turn word index deleted) per range) as the ops that remove it: a
     whole clip -> drop_span, words at a clip's start or end -> trim_fix (the timeline drag's own op: reviewer rules, the
@@ -591,10 +597,65 @@ def cut_plan(edl: dict, words: Words, ranges: list[tuple[str, int, int]]) -> tup
             if b < s["word_to"]:
                 fixes.append(trim_fix(edl, words, sid, "out", b))
         else:
+            lone = [tw_word(words, s, a) for a, b in runs if a == b]
+            if lone:
+                raise SystemExit(f"{sid} would keep a one-word clip ({', '.join(lone)}): a clip keeps at least two "
+                                 "words, delete that word too or keep one more")
             splits[sid] = runs
     if sum(f.op == "drop_span" for f in fixes) == len(by_id):
         raise SystemExit("that deletes every clip")
     return fixes, splits
+
+
+def next_span_id(edl: dict) -> int:
+    """One past every sN id in the EDL and its punch_skip keys (jump_cut:sN), so a new clip never takes the id of a
+    removed punch-in's clip."""
+    taken = [int(m.group(1)) for x in [*edl["spans"], *({"id": k.split(":", 1)[1]} for k in edl.get("punch_skip") or [])]
+             if (m := re.fullmatch(r"s(\d+)", x["id"]))]
+    return max(taken, default=0) + 1
+
+
+def split_pieces(new: dict, words: Words, sid: str, runs: list[tuple[int, int]], next_id: int,
+                 split_edges: set[tuple[str, str]]) -> tuple[list[dict], int]:
+    """Replace span `sid` of `new` with one span per word run (turn word indices), in place: the first piece keeps the
+    id and the callout, the others get new ids from `next_id`; an edge between pieces goes on its Voice word boundary
+    and lands in `split_edges`. Caption overrides follow the piece over their source time. Returns (pieces, next id)."""
+    k = next(i for i, x in enumerate(new["spans"]) if x["id"] == sid)
+    s = new["spans"][k]
+    tw = words.turn(s["turn_id"])
+    pieces = []
+    for j, (a, b) in enumerate(runs):
+        p = copy.deepcopy(s)
+        if j:  # the callout stays on the first piece, the place it was timed from
+            p["id"], next_id = f"s{next_id}", next_id + 1
+            p["callout"] = ""
+            p.pop("callout_shift_s", None)
+            p.pop("callout_xy", None)
+        tuned = p.get("edge_tuned") or {}
+        if a != s["word_from"]:
+            p["t_in"] = tw[a]["t_start"]
+            tuned.pop("in", None)
+            (p.get("edges") or {}).pop("in", None)
+            split_edges.add((p["id"], "in"))
+        if b != s["word_to"]:
+            p["t_out"] = tw[b]["t_end"]
+            tuned.pop("out", None)
+            (p.get("edges") or {}).pop("out", None)
+            split_edges.add((p["id"], "out"))
+        if not tuned:
+            p.pop("edge_tuned", None)
+        p["word_from"], p["word_to"] = a, b
+        refresh_span(p, words)
+        pieces.append(p)
+    new["spans"][k:k + 1] = pieces
+    ovs = new.get("caption_overrides") or []  # an override goes with the piece over its source time, or goes
+    for o in [o for o in ovs if o.get("span") == sid]:
+        home = next((p for p in pieces if p["t_in"] - 0.05 <= float(o["src_t"]) < p["t_out"]), None)
+        if home is None:
+            ovs.remove(o)
+        else:
+            o["span"] = home["id"]
+    return pieces, next_id
 
 
 SPLIT_SETTLE_S = 0.1  # run 015: Voice put the second "and" 0.25 s late; the and/we dip sat 0.08 s before its "we"
@@ -706,44 +767,12 @@ def cut(run_dir: Path, ranges: list[tuple[str, int, int]], from_v: int | None = 
         meet.add((ids[alive[0]], "in"))
     if dropped and alive[-1] < len(ids) - 1:
         meet.add((ids[alive[-1]], "out"))
-    taken = [int(m.group(1)) for x in [*edl["spans"], *({"id": k.split(":", 1)[1]} for k in edl.get("punch_skip") or [])]
-             if (m := re.fullmatch(r"s(\d+)", x["id"]))]
-    next_id = max(taken, default=0) + 1
+    next_id = next_span_id(edl)
     split_edges: set[tuple[str, str]] = set()
     for sid, runs in splits.items():
-        k = next(i for i, x in enumerate(new["spans"]) if x["id"] == sid)
-        s = new["spans"][k]
+        pieces, next_id = split_pieces(new, words, sid, runs, next_id, split_edges)
+        s = next(x for x in edl["spans"] if x["id"] == sid)
         tw = words.turn(s["turn_id"])
-        pieces = []
-        for j, (a, b) in enumerate(runs):
-            p = copy.deepcopy(s)
-            if j:  # the callout stays on the first piece, the place it was timed from
-                p["id"], next_id = f"s{next_id}", next_id + 1
-                p["callout"] = ""
-                p.pop("callout_shift_s", None)
-                p.pop("callout_xy", None)
-            tuned = p.get("edge_tuned") or {}
-            if a != s["word_from"]:
-                p["t_in"] = tw[a]["t_start"]
-                tuned.pop("in", None)
-                split_edges.add((p["id"], "in"))
-            if b != s["word_to"]:
-                p["t_out"] = tw[b]["t_end"]
-                tuned.pop("out", None)
-                split_edges.add((p["id"], "out"))
-            if not tuned:
-                p.pop("edge_tuned", None)
-            p["word_from"], p["word_to"] = a, b
-            refresh_span(p, words)
-            pieces.append(p)
-        new["spans"][k:k + 1] = pieces
-        ovs = new.get("caption_overrides") or []  # an override goes with the piece over its source time, or goes
-        for o in [o for o in ovs if o.get("span") == sid]:
-            home = next((p for p in pieces if p["t_in"] - 0.05 <= float(o["src_t"]) < p["t_out"]), None)
-            if home is None:
-                ovs.remove(o)
-            else:
-                o["span"] = home["id"]
         cutw = [tw[i]["w"] for i in range(s["word_from"], s["word_to"] + 1) if not any(a <= i <= b for a, b in runs)]
         plog.append({"op": "split_span", "target": sid, "issue": -1, "severity": "human", "t_s": 0.0,
                      "args": {"runs": [list(r) for r in runs], "ids": [p["id"] for p in pieces]},
@@ -764,6 +793,54 @@ def cut(run_dir: Path, ranges: list[tuple[str, int, int]], from_v: int | None = 
     if roles:
         plog[-1]["note"] += f"; roles by position: {', '.join(roles)}"
     edl_path = _save(run_dir, new, n, from_v, "cut", plog, log)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
+def split_plan(edl: dict, words: Words, span_id: str, word: int) -> tuple[dict, list[tuple[int, int]]]:
+    """Split `span_id` in front of turn word `word` (the second piece's first word): (the span, its two word runs).
+    Each piece keeps at least two words, the trim rule."""
+    s = next((x for x in edl["spans"] if x["id"] == span_id), None)
+    if s is None:
+        raise SystemExit(f"{span_id} is not a span of this EDL ({', '.join(x['id'] for x in edl['spans'])})")
+    a, b = s["word_from"], s["word_to"]
+    if not a < word <= b:
+        raise SystemExit(f"word {word} is not inside {span_id} (words {a + 1}-{b} can start the second piece)")
+    if word - a < 2 or b - word + 1 < 2:
+        raise SystemExit(f"a split there leaves a one-word clip ({tw_word(words, s, a if word - a < 2 else b)}): "
+                         "each piece keeps at least two words")
+    return s, [(a, word - 1), (word, b)]
+
+
+def split(run_dir: Path, span_id: str, word: int, from_v: int | None = None, passes: int = 0,
+          budget: float = 0.15) -> dict:
+    """Split one clip of edl_v{from} in two in front of turn word `word` -> edl_vN, $0. No word is removed: both
+    pieces meet on one point, the quietest 40 ms between the two words, so the render joins them again into the same
+    cut (render.merge_segments); the split is the step before a move, a delete or a callout of its own."""
+    log = RunLog(run_dir / "run.log")
+    from_v, edl, n = _new_version(run_dir, from_v)
+    words, audio = _words(run_dir), Audio.load(run_dir)
+    s, runs = split_plan(edl, words, span_id, word)
+    tw = words.turn(s["turn_id"])
+    log(f"montivo split: {span_id} in front of word {word} ({tw[word]['w']!r}) in edl_v{from_v} -> edl_v{n}")
+    new, _ = apply_fixes(edl, [], words)
+    pieces, _ = split_pieces(new, words, span_id, runs, next_span_id(edl), set())
+    first, second = pieces
+    lo, hi = tw[word - 1]["t_end"], tw[word]["t_start"]
+    t = round((lo + hi) / 2, 3)
+    if audio is not None:  # Voice's abutting word edges can be off by a few hundred ms: the dip between the words
+        x, _ = audio.quietest(lo - SPLIT_SETTLE_S, hi + SPLIT_SETTLE_S, step=0.01)
+        t = round(x, 3)
+    t = min(max(t, tw[word - 1]["t_start"] + 0.02), tw[word]["t_end"] - 0.02)
+    first["t_out"] = second["t_in"] = t
+    for p, edge in ((first, "out"), (second, "in")):
+        p.setdefault("edge_tuned", {})[edge] = t
+    finalize(new, words)
+    roles = roles_by_position(new["spans"])
+    fix = {"op": "split_span", "target": span_id, "issue": -1, "severity": "human", "t_s": 0.0,
+           "args": {"word": word, "runs": [list(r) for r in runs], "ids": [first["id"], second["id"]], "at": t},
+           "note": f"{span_id} split at {t:.3f} in front of {tw[word]['w']!r}: {first['id']} {first['words'][:40]} | "
+                   f"{second['id']} {second['words'][:40]}" + (f"; roles by position: {', '.join(roles)}" if roles else "")}
+    edl_path = _save(run_dir, new, n, from_v, "split", [fix], log)
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
 
 
@@ -1023,6 +1100,10 @@ def main(argv: list[str] | None = None) -> int:
     cu.add_argument("run_dir", type=Path)
     cu.add_argument("--words", action="append", required=True, metavar="SPAN:FROM-TO",
                     help="turn word indices to delete from a span, inclusive (repeat for more ranges)")
+    sp = sub.add_parser("split", help="split one clip in two in front of a word -> edl_vN -> cut_vN ($0)")
+    sp.add_argument("run_dir", type=Path)
+    sp.add_argument("--span", required=True)
+    sp.add_argument("--word", type=int, required=True, help="turn word index that starts the second piece")
     ed = sub.add_parser("edges", help="the edge pass again with today's rules -> edl_vN -> cut_vN ($0 without --review)")
     ed.add_argument("run_dir", type=Path)
     sy = sub.add_parser("style", help="caption look and callout places -> edl_vN -> cut_vN ($0)")
@@ -1040,7 +1121,7 @@ def main(argv: list[str] | None = None) -> int:
     mu.add_argument("--voice", type=float, default=None, help="dB on the speech against the bed, -12..6 (default 0)")
     rs = sub.add_parser("restore", help="an earlier version back as the newest -> edl_vN -> cut_vN ($0)")
     rs.add_argument("run_dir", type=Path)
-    for p in (d, t, r, pu, c, tx, ro, pn, cu, ed, sy, mu, rs):
+    for p in (d, t, r, pu, c, tx, ro, pn, cu, sp, ed, sy, mu, rs):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
         p.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
@@ -1072,6 +1153,8 @@ def main(argv: list[str] | None = None) -> int:
                 ap.error("--words SPAN:FROM-TO, like s2:16-18")
             ranges.append((m.group(1), int(m.group(2)), int(m.group(3))))
         out = cut(a.run_dir, ranges, a.from_v, a.review, a.budget)
+    elif a.cmd == "split":
+        out = split(a.run_dir, a.span, a.word, a.from_v, a.review, a.budget)
     elif a.cmd == "edges":
         out = edges(a.run_dir, a.from_v, a.review, a.budget)
     elif a.cmd == "restore":

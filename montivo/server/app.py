@@ -948,6 +948,60 @@ def create_app(root: Path) -> FastAPI:
                         chat={"role": "user", "text": f"Restore Version {frm}.", "chips": [f"v{frm}"], "kind": "restore"})
         return {"job": job.public()}
 
+    @app.post("/api/runs/{run_id}/split")
+    async def split(run_id: str, request: Request):
+        """Split one clip in two in front of a word ({"span": "s3", "word": 12}, the turn word index that starts the
+        second piece): the next version, $0. Nothing is removed, so the cut plays the same."""
+        run_id = await own(run_id, request)
+        d = st.run_dir(run_id)
+        b = await request.json()
+        span = str(b.get("span", ""))
+        frm = int(b.get("from") or latest_version(d))
+        if not re.fullmatch(r"s\d+", span):
+            raise HTTPException(400, "span id like s3")
+        try:
+            word = int(b.get("word"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "word: the turn word index that starts the second piece")
+        args = ["-m", "montivo.human", "split", f"runs/{run_id}", "--span", span, "--word", str(word),
+                "--from", str(frm), "--review", "0"]
+        quote = str(b.get("text") or "").strip()[:40]
+        job = start_job(st, run_id, "split", f"Split clip {span}", args,
+                        chat={"role": "user", "chips": [span, f"v{frm}"], "kind": "split",
+                              "text": f"Split clip {span} of v{frm}" + (f" in front of “{quote}”." if quote else ".")})
+        return {"job": job.public()}
+
+    @app.get("/api/runs/{run_id}/current")
+    def current_get(run_id: str):
+        """The version the editor was left on by undo / redo (ui/current.json), while no newer version came since."""
+        p = st.run_dir(run_id) / "ui" / "current.json"
+        return read_json(p) if p.is_file() else {"version": None, "newest": None}
+
+    @app.post("/api/runs/{run_id}/current")
+    async def current_set(run_id: str, request: Request):
+        """Remember the version undo / redo stepped to ({"version": N, "newest": M}, null clears it), so a reload opens
+        there. A hosted sample is shared by every judge: the browser keeps it there instead ({"stored": false})."""
+        d = st.run_dir(run_id)
+        b = await request.json()
+        if is_sample(d):
+            return {"stored": False}
+        if budget is not None and owner(d) != judge_of(request):
+            raise HTTPException(404, "no such run")
+        try:
+            n = None if b.get("version") is None else int(b["version"])
+            newest = None if b.get("newest") is None else int(b["newest"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "version and newest: version numbers or null")
+        if n is not None and not (d / f"edl_v{n}.json").is_file():
+            raise HTTPException(404, f"no version {n}")
+        p = d / "ui" / "current.json"
+        if n is None:
+            p.unlink(missing_ok=True)
+        else:
+            p.parent.mkdir(exist_ok=True)
+            write_json(p, {"version": n, "newest": newest, "at": round(time.time(), 1)})
+        return {"stored": True, "version": n}
+
     @app.post("/api/runs/{run_id}/caption")
     async def caption(run_id: str, request: Request):
         """Retext caption lines ({"edits": [{"at": cut second, "text": words spoken}]}): the next version, ffmpeg only."""
