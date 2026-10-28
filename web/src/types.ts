@@ -128,7 +128,8 @@ export type RunState = {
 /** Rough prices and times for the button hints (server COST). */
 export type Costs = { plan: number; plan_open: number; plan_s: number; plan_open_s: number; review: number; run_per_s: number;
   review_s?: number; review_prep_s?: number; image_s?: number; render_s_per_frame?: number;
-  run_fixed?: number; run_wall_fixed_s?: number; run_wall_per_s?: number; review_loop?: number; review_loop_s?: number; hook_ab?: number; look?: number; cover?: number };
+  run_fixed?: number; run_wall_fixed_s?: number; run_wall_per_s?: number; review_loop?: number; review_loop_s?: number; hook_ab?: number; look?: number; cover?: number;
+  cover_design?: number; cover_mask?: number };
 
 export type Planner = "spark" | "open";
 

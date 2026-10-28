@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, frameUrl, tc } from "./api";
+import { api, tc } from "./api";
+import { CoverMaker, type CoverRecord, type CoverState } from "./CoverMaker";
 import { Icon } from "./icons";
-import type { Version } from "./types";
+import type { Costs, Version } from "./types";
 
 // The Export page: a cover and a file name on the left, the destination, what goes in the bundle and the pre-flight on
 // the right (as CapCut and Descript split it). Nothing here re-encodes for its own sake: the platforms re-encode, so the
 // only presets are the cut as rendered and a small 720p copy. Feed 4:5 and Square 1:1 render the version again in that
-// frame (the crop narrows and follows the head, the captions are laid out again); their cover is that frame's still
-// (POST /preview with the aspect) and their pre-flight says the app safe areas are a 9:16 matter. The files come from
+// frame (the crop narrows and follows the head, the captions are laid out again); the cover maker lays its still out in
+// that frame too, and their pre-flight says the app safe areas are a 9:16 matter. The files come from
 // POST /export/bundle (python -m montivo.export, $0); more than one file downloads as a zip.
 
 type Check = { id: string; label: string; status: "ok" | "warn" | "fail" | "info"; detail: string };
@@ -27,7 +28,7 @@ const KINDS: { k: Kind; label: string; note: string }[] = [
   { k: "clean", label: "Video without captions", note: "MP4 for the app's own captions · renders again, about 30 s" },
   { k: "srt", label: "Captions file", note: "SRT, the lines as burned in" },
   { k: "vtt", label: "Web captions", note: "WebVTT" },
-  { k: "cover", label: "Cover", note: "JPG of the frame and the 3:4 profile-grid crop" },
+  { k: "cover", label: "Cover", note: "JPG of the cover and the 3:4 profile-grid crop" },
   { k: "audio", label: "Audio", note: "WAV, loudness as in the cut" },
   { k: "transcript", label: "Transcript", note: "TXT with times" },
 ];
@@ -46,52 +47,40 @@ function download(url: string, name: string) {
   a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
 }
 
-export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, keyNote, coverCost }: {
+export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, keyNote, costs }: {
   id: string; versions: Version[]; initial: number | null; onClose: () => void; onStyle: () => void;
-  hasKey: boolean; keyNote: string | null; coverCost: number;
+  hasKey: boolean; keyNote: string | null; costs: Costs | undefined;
 }) {
   const cuts = versions.filter((x) => x.cut);
   const [n, setN] = useState(initial ?? cuts.at(-1)?.n ?? 1);
   const v = cuts.find((x) => x.n === n) ?? null;
   const total = v?.duration_s ?? v?.runtime_s ?? 0;
   const [saved, setSaved] = useState<Saved>(load);
-  const [coverT, setCoverT] = useState(() => Math.round(Math.max(v?.title_s ?? 0, total / 3) * 10) / 10);
+  const firstT = () => Math.round(Math.max(v?.title_s ?? 0, total / 3) * 10) / 10;
+  const [cover, setCover] = useState<CoverState>(() => ({ t: firstT(), template: "headline", text: "", highlight: "" }));
+  const [record, setRecord] = useState<CoverRecord | null>(null);
   const [name, setName] = useState(`montivo-${id}-v${n}`);
   const [checks, setChecks] = useState<Check[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<{ name: string; url: string; bytes: number }[] | null>(null);
-  const [moments, setMoments] = useState<{ t_s: number; why: string }[]>([]);
-  const [picking, setPicking] = useState(false);
-  useEffect(() => { setMoments([]); api<{ moments: { t_s: number; why: string }[] }>(`/api/runs/${id}/export/cover?v=${n}`).then((r) => setMoments(r.moments)).catch(() => {}); }, [id, n]);
-  const pickCover = async () => {
-    setPicking(true); setErr(null);
-    try {
-      const r = await api<{ moments: { t_s: number; why: string }[] }>(`/api/runs/${id}/export/cover`, { v: n });
-      setMoments(r.moments);
-      if (r.moments[0]) setCoverT(r.moments[0].t_s);
-    } catch (e) { setErr(String((e as Error).message)); } finally { setPicking(false); }
-  };
+  useEffect(() => {
+    setRecord(null);
+    api<CoverRecord>(`/api/runs/${id}/export/cover?v=${n}`).then((r) => {
+      setRecord(r);
+      const f = r.design?.final;
+      setCover(f ? { t: f.t_s, template: f.template, text: f.text, highlight: f.highlight } : (c) => ({ ...c, t: r.moments[0]?.t_s ?? c.t }));
+    }).catch(() => {});
+  }, [id, n]);
   useEffect(() => { try { localStorage.setItem("montivo.export", JSON.stringify(saved)); } catch { /* this tab only */ } }, [saved]);
   useEffect(() => { setName((x) => x.replace(/-v\d+$/, `-v${n}`)); setChecks(null); setDone(null); setErr(null);
     api<{ checks: Check[] }>(`/api/runs/${id}/export/check?v=${n}&aspect=${encodeURIComponent(saved.aspect ?? "9:16")}`).then((r) => setChecks(r.checks))
       .catch((e) => setChecks([{ id: "err", label: "Pre-flight", status: "info", detail: `could not be read (${(e as Error).message})` }])); }, [id, n, saved.aspect]);
-  useEffect(() => setDone(null), [saved, coverT, name]);
+  useEffect(() => setDone(null), [saved, cover, name]);
   const aspect: Aspect = saved.aspect ?? "9:16";
   const feed = aspect !== "9:16";
   const [W, H] = SIZE[aspect];
   const bands = gridBands(aspect);
-  const [feedCover, setFeedCover] = useState<string | null>(null);
-  useEffect(() => {
-    setFeedCover(null);
-    if (!feed || !v) return;
-    let live = true;
-    const tm = setTimeout(() => {
-      api<{ image: string }>(`/api/runs/${id}/preview`, { v: v.n, t: coverT, aspect })
-        .then((r) => { if (live) setFeedCover(r.image); }).catch(() => {});
-    }, 250);
-    return () => { live = false; clearTimeout(tm); };
-  }, [id, v, coverT, aspect, feed]);
   const inc = saved.include;
   const toggle = (k: Kind) => setSaved({ ...saved, include: inc.includes(k) ? inc.filter((x) => x !== k) : [...inc, k] });
   const p720 = saved.preset === "720";
@@ -107,7 +96,8 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
     setBusy(true); setErr(null);
     try {
       const r = await api<{ files: { name: string; url: string; bytes: number }[]; zip: { name: string; url: string; bytes: number } | null }>(
-        `/api/runs/${id}/export/bundle`, { v: v.n, include: inc, preset: saved.preset, name, cover_t: inc.includes("cover") ? coverT : null, aspect });
+        `/api/runs/${id}/export/bundle`, { v: v.n, include: inc, preset: saved.preset, name, aspect,
+          ...(inc.includes("cover") ? { cover_t: cover.t, cover_design: { template: cover.template, text: cover.text, highlight: cover.highlight } } : {}) });
       const one = r.zip ?? r.files[0];
       download(one.url, one.name);
       setDone(r.zip ? [r.zip, ...r.files] : r.files);
@@ -120,26 +110,9 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
         <div className="modal-head"><span className="mh-title">Export</span><button className="icon-btn" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button></div>
         <div className="ex-grid">
           <div className="ex-left">
-            <div className={`ex-cover ${saved.grid ? "grid" : ""}`} style={{ aspectRatio: `${W} / ${H}` }}>
-              {v && (feed ? (feedCover ? <img src={feedCover} alt={`Cover frame, ${aspect}`} /> : <span className="ex-cover-wait"><span className="pulse" /> laying out {aspect}…</span>)
-                : <img src={frameUrl(id, v.n, coverT, true)} alt="Cover frame" />)}
-              {saved.grid && (bands.side
-                ? <><i className="ex-grid-l" style={{ width: `${bands.pct}%` }} /><i className="ex-grid-r" style={{ width: `${bands.pct}%` }} /></>
-                : <><i className="ex-grid-top" /><i className="ex-grid-bot" /></>)}
-              {saved.grid && <span className="ex-grid-tag" style={bands.side ? { top: 8, left: `calc(${bands.pct}% + 8px)` } : undefined}>profile grid 3:4</span>}
-            </div>
-            <label className="field">Cover frame <span className="mono mute">{tc(coverT)}</span>
-              <input type="range" min={0} max={Math.max(0.1, total - 0.1)} step={0.1} value={coverT} onChange={(e) => setCoverT(Number(e.target.value))} />
-            </label>
-            <div className="ex-pick">
-              <button className="btn quiet small" disabled={!v || picking || !hasKey} onClick={pickCover}
-                title={hasKey ? `Muse Spark watches Version ${n} and names its best cover moments (about $${coverCost.toFixed(3)})` : keyNote ?? "Set MODEL_API_KEY to let Muse Spark pick"}>
-                {picking ? <><span className="pulse" /> Watching…</> : <><Icon name="spark" size={12} /> Let Muse Spark pick · ~${coverCost.toFixed(3)}</>}</button>
-              {moments.map((m, k) => (
-                <button key={k} className={`ex-moment ${Math.abs(m.t_s - coverT) < 0.05 ? "on" : ""}`} onClick={() => setCoverT(m.t_s)} title={m.why}>
-                  <b>{tc(m.t_s)}</b> <span>{m.why}</span></button>
-              ))}
-            </div>
+            <CoverMaker id={id} v={v} total={total} aspect={aspect} W={W} H={H} grid={saved.grid} bands={bands}
+              cover={cover} setCover={setCover} record={record} setRecord={setRecord}
+              hasKey={hasKey} keyNote={keyNote} costs={costs} onErr={setErr} />
             <label className="st-check"><input type="checkbox" checked={saved.grid} onChange={(e) => setSaved({ ...saved, grid: e.target.checked })} /> Show the Instagram grid crop</label>
             <label className="field">File name
               <input className="st-input" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />

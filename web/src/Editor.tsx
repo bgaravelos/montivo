@@ -374,7 +374,7 @@ export function Editor({ id, replay, go }: Props) {
       )}
       {dialog?.kind === "export" && <ExportPage id={id} versions={visible} initial={sel} onClose={() => setDialog(null)}
         onStyle={() => { setDialog(null); setPanel("style"); }}
-        hasKey={state.has_key} keyNote={state.key_note ?? null} coverCost={state.costs?.cover ?? 0.025} />}
+        hasKey={state.has_key} keyNote={state.key_note ?? null} costs={state.costs} />}
       {dialog?.kind === "ledger" && <LedgerDialog state={state} onClose={() => setDialog(null)} />}
       {dialog?.kind === "keys" && <ShortcutsDialog onClose={() => setDialog(null)} />}
       {toast && <div className={`toast ${toast.tone ?? ""}`} onClick={() => setToast(null)}>{toast.text}</div>}

@@ -451,6 +451,21 @@ or a replay before v1) the viewer is `web/src/Waiting.tsx` instead of "Waiting f
 the finished steps, Watch's moves at their seconds, then the paper edit played clip by clip from the source with role
 and why; gated on run.log lines so replay matches live. Edits on a project with a cut keep the player. Checked keyless on
 015 replay; first live run with it not watched yet. `modal container stop` needs `-y` when run from Claude Code.
+Cover maker (28/10, $0.011, Billy's pick A + D + E after research in `docs/notes/cover-maker-*_2026-10-28`): the cover was
+a raw frame of cut_vN with that second's half caption. `engine/thumb.py`: templates `frame` (clean still), `headline`
+(face punched in, ink gradient, headline with a marker word), `sticker` (tilted marker sticker, edges darkened), `cutout`
+(giant Anton headline behind the head, the person laid back over it from SAM 3.1's mask of that one still,
+`still_mask`, one image request, lossless mask, cached in ui/cache/cover/), laid out around the caption layout's head
+box, text kept in the 3:4 grid window and off the face; measured checks (in grid, off face, cap height on a 130 px
+tile, cutout text visible >= 72 %, 2-6 words). `design` = the agent: cover moments (cover.suggest, reused), 18 clean
+stills around them in a numbered contact sheet -> Spark 1.3 picks the still + 3 headlines + template (`Spark.call(images=)`,
+inline data URLs, works on 1.3), render, Spark checks the cover and its tile, one fix (shorter text / other template /
+other still). `python -m montivo.export --design-cover | --cover-mask --cover-t S | --cover-design JSON`; POST
+/cover/design, /cover/mask, /cover/render ($0), bundle `cover_design`. UI `web/src/CoverMaker.tsx` in the Export page.
+First real design (015-demo v5): still 1.54 s smiling, "AI That Fixes Itself", headline, pass at once, $0.011.
+The mask decodes with Meta's `meta-sam-parser==0.1.0` (Billy's yes, 28/10; in pyproject and modal_app). First real
+mask (015-demo v5 at 1.54 s, $0.010, 2.4 s): one person, clean edge; the cutout keeps every word at least 80 % visible
+(`WORD_VISIBLE`: "Self-reviewing AI" used to hide "AI" whole behind the head while 89 % of the pixels showed).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

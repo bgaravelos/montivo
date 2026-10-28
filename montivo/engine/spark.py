@@ -47,9 +47,11 @@ class Spark:
 
     def call(self, name: str, prompt: str, schema: dict, file_id: str | None = None, max_output_tokens: int = 12000,
              reasoning_effort: str | None = None, stage: str | None = None, schema_name: str | None = None,
-             video: Path | None = None) -> SparkCall:
+             video: Path | None = None, images: list[Path] | None = None) -> SparkCall:
         """`name` names the request/response files; `stage` the ledger entry (default spark.<name>). `file_id` is an
-        uploaded file (Meta Files API, Spark 1.3); `video` a local mp4 sent inline (Muse Spark Open only)."""
+        uploaded file (Meta Files API, Spark 1.3); `video` a local mp4 sent inline (Muse Spark Open only); `images`
+        local JPEG / PNG stills sent inline as data URLs (either model)."""
+        urls = [_data_url(p) for p in images or []]
         open_model = is_open_model(self.model)
         if open_model:
             if file_id:
@@ -59,6 +61,9 @@ class Spark:
             if video is not None:
                 url = "data:video/mp4;base64," + base64.b64encode(video.read_bytes()).decode()
                 content = [{"type": "text", "text": prompt}, {"type": "video_url", "video_url": {"url": url}}]
+            if urls:
+                content = ([{"type": "text", "text": prompt}] if isinstance(content, str) else content) + \
+                    [{"type": "image_url", "image_url": {"url": u}} for u in urls]
             body: dict = {"model": self.model, "max_tokens": max_output_tokens,
                           "messages": [{"role": "user", "content": content}],
                           "response_format": {"type": "json_schema", "json_schema": {
@@ -72,13 +77,15 @@ class Spark:
             content = [{"type": "input_text", "text": prompt}]
             if file_id:
                 content.append({"type": "input_file", "file_id": file_id})
+            content += [{"type": "input_image", "image_url": u} for u in urls]
             body = {"model": self.model, "max_output_tokens": max_output_tokens,
                     "input": [{"type": "message", "role": "user", "content": content}],
                     "text": {"format": {"type": "json_schema", "name": schema_name or name, "strict": True, "schema": schema}}}
             if reasoning_effort:
                 body["reasoning"] = {"effort": reasoning_effort}
         dump_json(self.dir / f"{name}_request.json", _without_media(body))
-        self.log(f"spark: {name} -> {self.model}{' + video' if file_id or video else ''} ...")
+        self.log(f"spark: {name} -> {self.model}{' + video' if file_id or video else ''}"
+                 f"{f' + {len(urls)} image(s)' if urls else ''} ...")
         with Timer() as t:
             if open_model:
                 raw = chat_create(body)
@@ -230,17 +237,29 @@ FIX_OP_GUIDE = "\n".join(f"- {op}: {d}" for op, d in {
 }.items())
 
 
+def _data_url(path: Path) -> str:
+    mime = "image/png" if path.suffix.lower() == ".png" else "image/jpeg"
+    return f"data:{mime};base64," + base64.b64encode(path.read_bytes()).decode()
+
+
 def _without_media(body: dict) -> dict:
-    """The request as written to disk: an inline video data URL replaced by its size (a 40 s review copy is 5 MB)."""
+    """The request as written to disk: an inline video or image data URL replaced by its size (a 40 s review copy is
+    5 MB)."""
     msgs = body.get("messages")
-    if not msgs or isinstance(msgs[0].get("content"), str):
-        return body
-    parts = []
-    for c in msgs[0]["content"]:
-        if c.get("type") == "video_url":
-            c = {"type": "video_url", "video_url": {"url": f"<inline mp4, {len(c['video_url']['url'])} chars>"}}
-        parts.append(c)
-    return {**body, "messages": [{**msgs[0], "content": parts}]}
+    if msgs and not isinstance(msgs[0].get("content"), str):
+        parts = []
+        for c in msgs[0]["content"]:
+            if c.get("type") in ("video_url", "image_url"):
+                kind = "mp4" if c["type"] == "video_url" else "image"
+                c = {"type": c["type"], c["type"]: {"url": f"<inline {kind}, {len(c[c['type']]['url'])} chars>"}}
+            parts.append(c)
+        return {**body, "messages": [{**msgs[0], "content": parts}]}
+    inp = body.get("input")
+    if inp and any(c.get("type") == "input_image" for c in inp[0].get("content") or []):
+        parts = [{"type": "input_image", "image_url": f"<inline image, {len(c['image_url'])} chars>"}
+                 if c.get("type") == "input_image" else c for c in inp[0]["content"]]
+        return {**body, "input": [{**inp[0], "content": parts}]}
+    return body
 
 
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.S)

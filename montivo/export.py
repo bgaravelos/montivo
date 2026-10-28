@@ -15,6 +15,11 @@ sound as WAV, `transcript` the caption lines as text with their times.
 follows the head, captions and callouts are laid out again in the frame); the cover is that frame's still (engine/
 look.py, the render's own pixels without the punch-in zoom) and its grid crop the 3:4 middle of it. The SRT, VTT, WAV
 and transcript are the same in every aspect.
+
+`--cover-design '{"template": "headline", "text": "...", "highlight": "..."}'` makes the cover a designed one
+(engine/thumb.py: a clean still with the headline laid out around the head; `cutout` needs its person mask made first
+with `--cover-mask`). `--design-cover` (about $0.03-0.05) and `--cover-mask` (about $0.01) are the two paid entries: the
+agent's design into cover_vN.json, and SAM 3.1's person mask of the still at --cover-t.
 """
 from __future__ import annotations
 
@@ -114,7 +119,7 @@ def cover_still(run_dir: Path, edl: dict, t: float, cut: Path, frame: Frame, dst
 
 
 def export(run_dir: Path, n: int, out: Path, name: str, include: list[str], preset: str = "full",
-           cover_t: float | None = None, aspect: str = "9:16") -> dict:
+           cover_t: float | None = None, aspect: str = "9:16", cover_design: dict | None = None) -> dict:
     edl_path, cut = run_dir / f"edl_v{n}.json", run_dir / f"cut_v{n}.mp4"
     if not edl_path.is_file() or not cut.is_file():
         raise SystemExit(f"version {n} has no edl_v{n}.json and cut_v{n}.mp4 in {run_dir}")
@@ -161,7 +166,14 @@ def export(run_dir: Path, n: int, out: Path, name: str, include: list[str], pres
         dur = float((edl.get("render") or {}).get("duration_s") or edl.get("runtime_s") or 1.0)
         t = min(max(0.0, cover_t if cover_t is not None else dur / 3), max(0.0, dur - 0.05))
         dst = out / f"{name}{tag}-cover.jpg"
-        if feed:
+        if cover_design:
+            from .engine.thumb import NeedMask, cover_image
+            try:
+                img, _ = cover_image(run_dir, n, {**cover_design, "t_s": t}, frame.aspect)
+            except NeedMask as e:
+                raise SystemExit(f"cover: {e}; make it with --cover-mask --cover-t {t:.2f} first")
+            img.save(dst, quality=95)
+        elif feed:
             cover_still(run_dir, edl, t, cut, frame, dst)
         else:
             ffmpeg("-ss", f"{t:.3f}", "-i", str(cut), "-frames:v", "1", "-q:v", "2", str(dst))
@@ -195,6 +207,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cover-t", type=float, default=None, help="cut second of the cover frame (default a third in)")
     ap.add_argument("--suggest-cover", action="store_true",
                     help="only ask Muse Spark for the best cover moments (one call, about $0.03) -> cover_vN.json")
+    ap.add_argument("--cover-design", default=None,
+                    help='JSON {"template": frame|headline|sticker|cutout, "text": ..., "highlight": ...} for the cover')
+    ap.add_argument("--design-cover", action="store_true",
+                    help="only let Muse Spark design the cover: still, headline, template, check (about $0.04) -> cover_vN.json")
+    ap.add_argument("--cover-mask", action="store_true",
+                    help="only make SAM 3.1's person mask of the still at --cover-t for the cutout cover (about $0.01)")
     a = ap.parse_args(sys.argv[1:] if argv is None else argv)
     if not a.run_dir.is_dir():
         ap.error(f"{a.run_dir} is not a run folder")
@@ -203,11 +221,29 @@ def main(argv: list[str] | None = None) -> int:
         from .run import RunLog
         print(json.dumps(suggest(a.run_dir, a.version, Ledger.resume(a.run_dir / "ledger.json"), RunLog(a.run_dir / "run.log")), indent=2))
         return 0
+    if a.design_cover or a.cover_mask:
+        from .engine import thumb
+        from .run import RunLog
+        ledger, log = Ledger.resume(a.run_dir / "ledger.json"), RunLog(a.run_dir / "run.log")
+        if a.design_cover:
+            print(json.dumps(thumb.design(a.run_dir, a.version, ledger, log, a.aspect), indent=2))
+        else:
+            if a.cover_t is None:
+                ap.error("--cover-mask needs --cover-t")
+            path = thumb.still_mask(a.run_dir, a.version, a.cover_t, a.aspect, ledger, log)
+            print(json.dumps({"mask": str(path)}))
+        return 0
     if a.out is None:
         ap.error("--out is needed for an export")
+    design = None
+    if a.cover_design:
+        try:
+            design = json.loads(a.cover_design)
+        except json.JSONDecodeError as e:
+            ap.error(f"--cover-design: {e}")
     name = a.name or f"montivo-{a.run_dir.name}-v{a.version}"
     rec = export(a.run_dir, a.version, a.out, name, [k.strip() for k in a.include.split(",") if k.strip()], a.preset,
-                 a.cover_t, a.aspect)
+                 a.cover_t, a.aspect, design)
     print(json.dumps(rec, indent=2))
     return 0
 

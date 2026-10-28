@@ -50,7 +50,7 @@ PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 # the review loop adds about two reviews and a render (run 015: $0.07, 85 s)
 COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_fixed": 0.045,
         "run_per_s": 0.0026, "run_wall_fixed_s": 60, "run_wall_per_s": 0.9, "review_loop": 0.07, "review_loop_s": 85,
-        "hook_ab": 0.04, "look": 0.008, "cover": 0.025,
+        "hook_ab": 0.04, "look": 0.008, "cover": 0.025, "cover_design": 0.05, "cover_mask": 0.01,
         "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175}
 
 
@@ -448,6 +448,87 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(500, f"cover failed: {(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")
         return json.loads(proc.stdout)
 
+    def export_cmd(d: Path, v: int, *extra: str) -> dict:
+        args = [sys.executable, "-m", "montivo.export", str(d.relative_to(st.root)) if d.is_relative_to(st.root) else str(d),
+                "--version", str(v), *extra]
+        proc = subprocess.run(args, cwd=st.root, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise HTTPException(500, f"cover failed: {(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")
+        return json.loads(proc.stdout)
+
+    def cover_body(b: dict) -> tuple[int, str, dict]:
+        from ..engine.thumb import TEMPLATES
+        aspect = b.get("aspect") or "9:16"
+        template = b.get("template") or "frame"
+        try:
+            v, t = int(b.get("v")), round(float(b.get("t")), 2)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "v: a version, t: a cut second")
+        if aspect not in ASPECTS or template not in TEMPLATES:
+            raise HTTPException(400, f"aspect: one of {', '.join(ASPECTS)}; template: one of {', '.join(TEMPLATES)}")
+        text = " ".join(str(b.get("text") or "").split())[:80]
+        highlight = " ".join(str(b.get("highlight") or "").split())[:40]
+        return v, aspect, {"t_s": t, "template": template, "text": text, "highlight": highlight}
+
+    @app.post("/api/runs/{run_id}/cover/design")
+    def cover_design(run_id: str, b: dict):
+        """{"v": N, "aspect"}: the agent designs the cover (engine/thumb.py: the exact still from a contact sheet,
+        three headlines, a template, a render, Spark's check at grid-tile size and one fix; about $0.04, 30-60 s;
+        python -m montivo.export --design-cover). Returns cover_vN.json."""
+        v = int(b.get("v") or 0)
+        aspect = b.get("aspect") or "9:16"
+        if aspect not in ASPECTS:
+            raise HTTPException(400, f"aspect: one of {', '.join(ASPECTS)}")
+        d, _ = cut_of(run_id, v)
+        need_key("Designing a cover (Muse Spark)", COST["cover_design"])
+        if st.busy(run_id):
+            raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: design the cover after it")
+        return export_cmd(d, v, "--design-cover", *(["--aspect", aspect] if aspect != "9:16" else []))
+
+    @app.post("/api/runs/{run_id}/cover/mask")
+    def cover_mask(run_id: str, b: dict):
+        """{"v": N, "t": s, "aspect"}: SAM 3.1's person mask of that still for the cutout cover (one image request,
+        about $0.01, cached under ui/cache/cover/)."""
+        from ..engine.thumb import mask_path
+        v, aspect, design = cover_body(b)
+        d, _ = cut_of(run_id, v)
+        if not mask_path(d, v, design["t_s"], aspect).is_file():
+            need_key("Cutting out the speaker (SAM 3.1)", COST["cover_mask"])
+            export_cmd(d, v, "--cover-mask", "--cover-t", f"{design['t_s']:.2f}", *(["--aspect", aspect] if aspect != "9:16" else []))
+        return {"ok": True}
+
+    @app.post("/api/runs/{run_id}/cover/render")
+    def cover_render(run_id: str, b: dict):
+        """{"v", "t", "template", "text", "highlight", "aspect"}: the designed cover as the export would write it, its
+        grid tile and the measured checks ($0, about 0.1 s after the first call of a version). A cutout without its
+        mask answers {"need_mask": true}."""
+        from ..engine.thumb import NeedMask, cover_image, tile
+        v, aspect, design = cover_body(b)
+        d = st.run_dir(run_id)
+        edl_path = d / f"edl_v{v}.json"
+        if not edl_path.is_file():
+            raise HTTPException(404, f"no edl_v{v}.json")
+        key = hashlib.sha1(json.dumps([v, aspect, design, edl_path.stat().st_mtime_ns], sort_keys=True).encode()).hexdigest()[:16]
+        out = d / "ui" / "cache" / "cover" / f"{key}.jpg"
+        meta = out.with_suffix(".json")
+        if not (out.is_file() and meta.is_file()):
+            try:
+                img, info = cover_image(d, v, design, aspect)
+            except NeedMask:
+                return {"need_mask": True}
+            except (FileNotFoundError, subprocess.CalledProcessError) as e:
+                raise HTTPException(500, f"cover failed: {e}")
+            out.parent.mkdir(parents=True, exist_ok=True)
+            for old in sorted(out.parent.glob("*.jpg"), key=lambda p: p.stat().st_mtime)[:-60]:  # keep the cache small
+                old.unlink(missing_ok=True)
+                old.with_suffix(".json").unlink(missing_ok=True)
+                old.with_name(old.stem + "-tile.jpg").unlink(missing_ok=True)
+            img.save(out, quality=88)
+            tile(img).save(out.with_name(f"{key}-tile.jpg"), quality=92)
+            write_json(meta, info)
+        base = f"/api/runs/{run_id}/file/ui/cache/cover/"
+        return {"image": base + out.name, "tile": base + f"{key}-tile.jpg", **read_json(meta)}
+
     @app.post("/api/runs/{run_id}/export/bundle")
     def export_bundle(run_id: str, b: dict):
         """{"v": N, "include": ["video", "clean", "srt", ...], "preset": "full" | "720", "name": stem, "cover_t": s,
@@ -462,6 +543,10 @@ def create_app(root: Path) -> FastAPI:
         name = re.sub(r"[^A-Za-z0-9._-]+", "-", str(b.get("name") or f"montivo-{run_id}-v{v}")).strip("-.")[:80] or f"montivo-{run_id}-v{v}"
         cover = b.get("cover_t")
         aspect = b.get("aspect") or "9:16"
+        design = None
+        if "cover" in inc and isinstance(b.get("cover_design"), dict):
+            _, _, design = cover_body({**b["cover_design"], "v": b.get("v"), "t": cover or 0, "aspect": aspect})
+            design.pop("t_s")
         if not inc or preset not in ("full", "720") or (cover is not None and not isinstance(cover, (int, float))) \
                 or aspect not in ASPECTS:
             raise HTTPException(400, f"include: some of {', '.join(KINDS)}; preset: full or 720; cover_t: seconds; "
@@ -471,7 +556,8 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(409, f"{st.jobs[run_id].label} is running: the "
                                      f"{'copy without captions' if 'clean' in inc else aspect + ' video'} renders after it")
         edl = d / f"edl_v{v}.json"
-        key_in = [v, inc, preset, name, cover, edl.stat().st_mtime_ns] + ([aspect] if aspect != "9:16" else [])
+        key_in = [v, inc, preset, name, cover, edl.stat().st_mtime_ns] + ([aspect] if aspect != "9:16" else []) \
+            + ([design] if design else [])
         key = hashlib.sha1(json.dumps(key_in).encode()).hexdigest()[:12]
         out = d / "ui" / "cache" / "exports" / key
         rec_p = out / "export.json"
@@ -484,7 +570,8 @@ def create_app(root: Path) -> FastAPI:
                 args = [sys.executable, "-m", "montivo.export", str(d.relative_to(st.root)) if d.is_relative_to(st.root) else str(d),
                         "--version", str(v), "--out", str(out), "--name", name, "--include", ",".join(inc), "--preset", preset,
                         *(["--cover-t", f"{float(cover):.2f}"] if cover is not None else []),
-                        *(["--aspect", aspect] if aspect != "9:16" else [])]
+                        *(["--aspect", aspect] if aspect != "9:16" else []),
+                        *(["--cover-design", json.dumps(design)] if design else [])]
                 proc = subprocess.run(args, cwd=st.root, capture_output=True, text=True)
                 if proc.returncode != 0:
                     raise HTTPException(500, f"export failed: {(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")

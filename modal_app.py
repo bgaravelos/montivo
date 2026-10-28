@@ -31,7 +31,7 @@ volume = modal.Volume.from_name("montivo-data", create_if_missing=True)
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("ffmpeg")
-    .pip_install("httpx>=0.28", "pillow>=10.1", "fastapi>=0.115", "uvicorn>=0.32")
+    .pip_install("httpx>=0.28", "pillow>=10.1", "fastapi>=0.115", "uvicorn>=0.32", "meta-sam-parser==0.1.0")
     .env(HOSTED)
     .add_local_dir("montivo", "/root/app/montivo", ignore=["**/__pycache__/**"])
 )
