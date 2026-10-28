@@ -635,3 +635,8 @@ def test_the_ui_page_is_never_cached_and_its_hashed_assets_are(tmp_path):
     assert page.status_code == 200 and page.headers["cache-control"] == "no-cache"
     js = re.search(r'assets/[^"]+\.js', page.text).group(0)
     assert "immutable" in c.get(f"/{js}").headers["cache-control"]
+    # Modal stamps every file 1970-01-01 and the page keeps its size, so an ETag never changed across deploys: no
+    # validators on the page, and a conditional request still gets the whole page
+    assert "etag" not in page.headers and "last-modified" not in page.headers
+    again = c.get("/", headers={"If-None-Match": '"anything"', "If-Modified-Since": "Thu, 01 Jan 1970 00:00:00 GMT"})
+    assert again.status_code == 200 and js in again.text

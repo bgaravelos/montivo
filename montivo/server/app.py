@@ -56,7 +56,16 @@ COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "revie
 
 class WebFiles(StaticFiles):
     """The UI build. index.html is never cached: a browser holding the old page after a deploy asks for the old asset
-    names and shows the old UI. The assets carry a content hash in their names, so they may be cached for good."""
+    names and shows the old UI. The assets carry a content hash in their names, so they may be cached for good.
+
+    index.html also never answers 304 and carries no ETag or Last-Modified: Modal's image gives every file the mtime
+    1970-01-01 and the page is always 1066 bytes, so Starlette's ETag (mtime + size) was the same on every deploy and a
+    browser revalidating its copy was told it had not changed (28/10: tabs kept the old UI after reloads)."""
+
+    def is_not_modified(self, response_headers, request_headers) -> bool:
+        if response_headers.get("content-type", "").startswith("text/html"):
+            return False
+        return super().is_not_modified(response_headers, request_headers)
 
     async def get_response(self, path: str, scope):
         r = await super().get_response(path, scope)
@@ -64,6 +73,9 @@ class WebFiles(StaticFiles):
             r.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         elif r.headers.get("content-type", "").startswith("text/html") or r.status_code == 304:
             r.headers["Cache-Control"] = "no-cache"
+            for h in ("etag", "last-modified"):
+                if h in r.headers:
+                    del r.headers[h]
         return r
 
 
