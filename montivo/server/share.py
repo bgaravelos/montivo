@@ -1,7 +1,9 @@
 """A share link per version: /s/<token> is a read-only page with the cut, its blind review and how the score got there,
 open without the hosted demo's sign-in (hosted.OPEN_PATHS). A token names one run and one version and nothing else; the
 video and the poster are served under the same token, so a link never reaches another file of the run folder.
-Tokens live in <root>/shares.json ({token: {run, version, created}}); the same version keeps its token."""
+Tokens live in <root>/shares.json ({token: {run, version, created}}); the same version keeps its token. Unshare
+removes the token: the link and its video and poster answer 404 from then on, and sharing that version again makes a
+new token, so an old link never comes back."""
 from __future__ import annotations
 
 import html
@@ -39,6 +41,19 @@ class Shares:
         d[tok] = {"run": run, "version": version, "created": time.strftime("%Y-%m-%dT%H:%M:%S")}
         dump_json(self.path, d)
         return tok
+
+    def of_run(self, run: str) -> list[dict]:
+        """This run's links, newest version first."""
+        return sorted(({"token": t, "path": f"/s/{t}", **s} for t, s in self.all().items() if s.get("run") == run),
+                      key=lambda x: (-int(x.get("version") or 0), x.get("created") or ""))
+
+    def delete(self, run: str, tok: str) -> bool:
+        d = self.all()
+        if d.get(tok, {}).get("run") != run:
+            return False
+        del d[tok]
+        dump_json(self.path, d)
+        return True
 
     def get(self, tok: str) -> dict:
         s = self.all().get(tok)
@@ -149,6 +164,20 @@ def install(app, st) -> None:
         if not (d / f"cut_v{n}.mp4").is_file():
             raise HTTPException(404, f"version {n} has no cut")
         return {"token": (tok := shares.create(run_id, n)), "path": f"/s/{tok}"}
+
+    @app.get("/api/runs/{run_id}/shares")
+    def run_shares(run_id: str):
+        """This run's share links: [{token, path, version, created}]."""
+        st.run_dir(run_id)
+        return {"shares": shares.of_run(run_id)}
+
+    @app.delete("/api/runs/{run_id}/share/{tok}")
+    def unshare(run_id: str, tok: str):
+        """Unshare: the link stops working at once (its page, video and poster); the version and its cut stay."""
+        st.run_dir(run_id)
+        if not shares.delete(run_id, tok):
+            raise HTTPException(404, "no such link on this run")
+        return {"removed": tok, "shares": shares.of_run(run_id)}
 
     @app.get("/s/{tok}")
     def share_page(tok: str, request: Request):

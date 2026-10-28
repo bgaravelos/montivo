@@ -1,6 +1,9 @@
 """Ask Montivo: the chat's agent. One message -> the edits it asks for -> one new version, rendered once.
 
     python -m montivo.agent runs/015 --message "put some lo-fi music under it" [--from 5] [--review 1] [--planner open]
+    python -m montivo.agent runs/015 --message "make this shorter" --scope '{"clips": ["s3"]}' --preview
+    python -m montivo.agent runs/015 --apply PENDING_ID [--review 1]        # run a previewed proposal
+    python -m montivo.agent runs/015 --retry PENDING_ID --preview            # "Try something else": route once more
 
 One muse-spark-1.3 call (strict json_schema, no video, about $0.005) reads the message next to the current version
 (clips, captions on screen, title card, look, music, punch-ins, the last review's notes) and picks ops from a closed
@@ -11,15 +14,28 @@ unrendered, the chain is folded into one version (one patch, `action` the op's o
 with an `agent` record: message, reply, ops, router) and that version is rendered once, with the review loop when
 asked. A message that asks a question or needs an answer gets a reply and no version.
 
+With --preview (the chat sends it) a structural change (re-plan, drop, reorder, cut words) or ops estimated over
+PREVIEW_USD are not run: the routed ops go to ui/pending/<id>.json and the record carries a `pending` card (what
+changes in plain words, cost and time) for the editor's Apply or Try something else. A re-plan is not planned for the
+card (the plan is the costly part): Apply plans it once. --retry routes the same message again with the turned-down
+proposal in the prompt, once and without a review. Cheap edits (music, look, captions, callouts, title, punch-ins) run
+at once as before.
+
+--scope is what the editor selected (clips, words of the transcript, a caption line, the playhead): the router reads it
+as what "this" means, and `check` refuses an op that names a clip, word or line outside it.
+
 Without MODEL_API_KEY (or with --no-model) a keyword reader stands in for the call: music on or off, punch-ins on or
-off, a caption preset by name, the title card on or off. Anything else needs the key.
+off, a caption preset by name, the title card on or off, and deleting or moving the clips or words named or selected.
+Anything else needs the key.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import re
+import secrets
 import sys
+import time
 from pathlib import Path
 
 from . import human
@@ -32,16 +48,26 @@ from .ledger import Ledger
 from .run import RunLog
 
 OPS = ["music_on", "music_off", "style", "punch", "caption", "callout", "title_text", "title_on", "title_off", "drop",
-       "reorder", "replan", "review"]
-SPAN_OPS = {"caption", "callout", "drop", "reorder"}  # they name clips or lines of this version: a re-plan makes new ones
+       "reorder", "cut", "replan", "review"]
+SPAN_OPS = {"caption", "callout", "drop", "reorder", "cut"}  # they name clips or lines of this version: a re-plan makes new ones
+STRUCTURAL = {"replan", "drop", "reorder", "cut"}  # what is said or in which order: previewed before it runs
 COST_USD = 0.006  # one router call (015 v5 context: about 4K tokens in, 300 out)
+PREVIEW_USD = 0.02  # ops estimated over this are previewed too (Billy, 28/10)
+# rough prices and times of what an op calls (server/app.py COST: Spark 1.3 plan $0.05 in 35 s, Spark Open $0.012 in
+# 7 s, a Muse Image title card $0.01 in 10 s, a look from words $0.008, a blind review $0.035 in about 34 s with its
+# prep; a render about 0.5 s per cut second on the Mac, less with the segment cache)
+EST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "image": 0.01, "image_s": 10, "look": 0.008,
+       "look_s": 6, "review": 0.035, "review_s": 34, "render_s_per_s": 0.5}
 
 OP_SCHEMA = {"type": "object", "additionalProperties": False,
-             "required": ["op", "span", "before", "text", "at_s", "track", "level_db", "on", "preset", "look_prompt",
-                          "instruction"],
+             "required": ["op", "span", "word_from", "word_to", "before", "text", "at_s", "track", "level_db", "on",
+                          "preset", "look_prompt", "instruction"],
              "properties": {
                  "op": {"type": "string", "enum": OPS},
-                 "span": {"type": "string", "description": "clip id (s3) for callout, drop, reorder; else empty"},
+                 "span": {"type": "string", "description": "clip id (s3) for callout, drop, reorder, cut; else empty"},
+                 "word_from": {"type": "integer", "description": "cut: the first word index to delete (the clip's "
+                                                                 "numbered words); else -1"},
+                 "word_to": {"type": "integer", "description": "cut: the last word index to delete; else -1"},
                  "before": {"type": "string", "description": "reorder: the clip it moves in front of; empty = to the end"},
                  "text": {"type": "string", "description": "caption: the new words of the line; callout: its text, empty "
                                                            "removes it; title_text: the title card's words"},
@@ -76,9 +102,11 @@ Ops (fill the fields the op uses, leave the others empty, -1, 0 or false):
 - callout: the text pill on a clip (span, text; empty text removes it).
 - title_text: new words for the title card at the start (a new Muse Image card). title_on / title_off: the card on or off.
 - drop: delete one clip (span). reorder: move a clip (span) in front of another (before) or to the end.
+- cut: delete words inside one clip (span, word_from, word_to: indices of that clip's numbered words below). Each \
+piece left keeps at least two words. Use it to shorten a selected clip or remove a phrase, a filler or a retake.
 - replan: plan the paper edit again (which passages, their order, the length, the opening or the ending) with the \
-editor's note in instruction. Use it for any change to what is said or how long the cut is; never together with \
-caption, callout, drop or reorder (the plan makes new clips).
+editor's note in instruction. Use it for a change to what is said or how long the whole cut is; never together with \
+caption, callout, drop, reorder or cut (the plan makes new clips).
 - review: one blind review of the new version by the reviewer (about $0.04). Only when asked for a review or a score.
 
 Rules:
@@ -88,6 +116,8 @@ Rules:
 say so in the reply instead.
 - A question about the cut (what score, why, how long) gets an answer in reply and no ops.
 - Prefer doing a sensible default over asking. Ask (question, no ops) only when the message cannot be done safely.
+- When the editor selected something, "this", "these", "it" and "here" mean the selection: change only what is \
+selected (cut, drop, callout or caption on those clips, words or line) and leave every other clip and setting as it is.
 - reply speaks to the editor in the language of the message, plainly, no more than two sentences.
 
 The current version (v{version}):
@@ -95,9 +125,18 @@ The current version (v{version}):
 
 Music tracks (id: name, mood): {tracks}
 Caption presets (id: name): {presets}
-
+{scope}{note}
 The editor's message: "{message}"
 """
+
+
+def numbered(run_dir: Path, span: dict) -> str:
+    """A clip's words with their turn indices ("12 Hi 13 I'm ..."), what a cut op names; "" without Voice's words."""
+    try:
+        tw = human._words(run_dir).turn(span["turn_id"])
+        return " ".join(f"{w['i']} {w['w']}" for w in tw if span["word_from"] <= w["i"] <= span["word_to"])
+    except (OSError, KeyError, TypeError, ValueError):
+        return ""
 
 
 def context(run_dir: Path, edl: dict) -> str:
@@ -116,6 +155,8 @@ def context(run_dir: Path, edl: dict) -> str:
         at = f" cut {t[0]:.1f}-{t[1]:.1f} s" if t else ""
         call = f", callout {s['callout']!r}" if (s.get("callout") or "").strip() else ""
         lines.append(f"- {s['id']} [{s.get('role', 'body')}]{at}: {s.get('words', '')!r}{call}")
+        if nw := numbered(run_dir, s):
+            lines.append(f"  numbered words: {nw}")
     caps = caption_timeline(edl)
     if caps:
         lines.append("Caption lines on screen (cut seconds): " + "; ".join(
@@ -145,13 +186,61 @@ def _review(run_dir: Path, n: int) -> dict | None:
         return None
 
 
-def route(run_dir: Path, edl: dict, message: str, ledger: Ledger, log) -> tuple[dict, float]:
+def norm_scope(scope: dict | None) -> dict:
+    """The selection the composer sends: {"clips": [ids], "words": [{"span", "from", "to", "text"}], "caption":
+    {"t_in", "t_out", "text"}, "t": playhead seconds}; anything else dropped."""
+    scope = scope if isinstance(scope, dict) else {}
+    out: dict = {}
+    clips = [str(c) for c in scope.get("clips") or [] if re.fullmatch(r"s\d+", str(c))]
+    if clips:
+        out["clips"] = list(dict.fromkeys(clips))
+    words = []
+    for w in scope.get("words") or []:
+        try:
+            words.append({"span": str(w["span"]), "from": int(w["from"]), "to": int(w["to"]),
+                          "text": str(w.get("text") or "")[:200]})
+        except (KeyError, TypeError, ValueError):
+            continue
+    if words:
+        out["words"] = words
+    c = scope.get("caption")
+    if isinstance(c, dict):
+        try:
+            out["caption"] = {"t_in": float(c["t_in"]), "t_out": float(c["t_out"]), "text": str(c.get("text") or "")[:200]}
+        except (KeyError, TypeError, ValueError):
+            pass
+    if isinstance(scope.get("t"), (int, float)):
+        out["t"] = float(scope["t"])
+    return out
+
+
+def scope_text(scope: dict) -> str:
+    """The selection as the prompt states it (empty without one)."""
+    said = []
+    if scope.get("clips"):
+        said.append(f"clip{'s' if len(scope['clips']) > 1 else ''} {', '.join(scope['clips'])}")
+    for w in scope.get("words") or []:
+        said.append(f"the words {w['from']}-{w['to']} of {w['span']} ({w['text']!r})")
+    if c := scope.get("caption"):
+        said.append(f"the caption line {c['t_in']:.1f}-{c['t_out']:.1f} s ({c['text']!r})")
+    if "t" in scope:
+        said.append(f"the playhead at {scope['t']:.1f} s of the cut")
+    return f"\nThe editor selected: {'; '.join(said)}.\n" if said else ""
+
+
+def scope_spans(scope: dict) -> set[str]:
+    """The clips an op that names a clip may touch: the selected clips and the clips of the selected words."""
+    return set(scope.get("clips") or []) | {w["span"] for w in scope.get("words") or []}
+
+
+def route(run_dir: Path, edl: dict, message: str, ledger: Ledger, log, scope: dict | None = None,
+          note: str = "") -> tuple[dict, float]:
     """The router call: Spark 1.3 reads the message and the version and answers {reply, question, ops}."""
     from .engine.spark import Spark
     prompt = PROMPT.format(version=edl.get("version"), context=context(run_dir, edl),
                            tracks="; ".join(f"{t['id']}: {t['name']}, {t.get('mood', '')}" for t in music_mod.tracks()),
                            presets=", ".join(f"{k}: {PRESET_NAMES[k]}" for k in PRESETS),
-                           message=message.replace('"', "'"))
+                           scope=scope_text(scope or {}), note=note, message=message.replace('"', "'"))
     call = Spark(run_dir, ledger, model=SPARK_MODEL, log=log).call("ask", prompt, SCHEMA, max_output_tokens=6000,
                                                                     reasoning_effort="low", stage="spark.ask",
                                                                     schema_name="ask_montivo")
@@ -160,15 +249,34 @@ def route(run_dir: Path, edl: dict, message: str, ledger: Ledger, log) -> tuple[
 
 OFF = re.compile(r"\b(off|no|without|remove|stop|kill|mute)\b|βγάλ|χωρίς|σβήσ|κλείσ|αφαίρεσ|σταμάτ|όχι|καθόλου", re.I)
 GREEK_PRESETS = {"καραόκε": "karaoke", "κουτί": "box", "μίνιμαλ": "minimal"}
+DELETE = re.compile(r"\b(delete|drop|remove|cut)\b|σβήσ|διάγραψ|κόψ|βγάλ", re.I)
+THIS = re.compile(r"\b(this|these|that|those|it|them|selected|selection)\b|αυτ|επιλεγμέν", re.I)
+MOVE = re.compile(r"\bmove\s+(s\d+)\s+(?:before|in front of)\s+(s\d+)|\bmove\s+(s\d+)\s+to the end", re.I)
 
 
-def keywords(edl: dict, message: str) -> dict:
+def keywords(edl: dict, message: str, scope: dict | None = None) -> dict:
     """The router without a model: the few edits a keyword names safely. Same answer shape as `route`."""
     m = message.lower()
     off = bool(OFF.search(m))
+    scope = scope or {}
     ops, said = [], []
     blank = {k: "" for k in ("span", "before", "text", "track", "preset", "look_prompt", "instruction")} | \
-        {"at_s": -1, "level_db": 0, "on": False}
+        {"at_s": -1, "level_db": 0, "on": False, "word_from": -1, "word_to": -1}
+    ids = [s["id"] for s in edl["spans"]]
+    named = [x for x in dict.fromkeys(re.findall(r"\bs\d+\b", m)) if x in ids]
+    if (mv := MOVE.search(m)) and (mv.group(1) or mv.group(3)) in ids:
+        span, before = (mv.group(1), mv.group(2)) if mv.group(1) else (mv.group(3), "")
+        ops.append(blank | {"op": "reorder", "span": span, "before": before})
+        said.append(f"{span} moved " + (f"before {before}" if before else "to the end"))
+    elif DELETE.search(m) and not re.search(r"music|μουσικ|title|τίτλ|punch|zoom", m):
+        if scope.get("words") and (THIS.search(m) or not named):
+            for w in scope["words"]:
+                ops.append(blank | {"op": "cut", "span": w["span"], "word_from": w["from"], "word_to": w["to"]})
+                said.append(f"{w['to'] - w['from'] + 1} words of {w['span']} deleted")
+        else:
+            for sid in named or (scope.get("clips") if THIS.search(m) else []) or []:
+                ops.append(blank | {"op": "drop", "span": sid})
+                said.append(f"clip {sid} deleted")
     ts = music_mod.tracks()
     named = next((t for t in ts if t["id"].replace("_", " ") in m or t["name"].lower() in m), None)
     if named or re.search(r"music|μουσικ|τραγούδ|soundtrack", m):
@@ -193,16 +301,23 @@ def keywords(edl: dict, message: str) -> dict:
         ops.append(blank | {"op": "title_off" if off else "title_on"})
         said.append(f"title card {'off' if off else 'on'}")
     if not ops:
-        return {"reply": "Without MODEL_API_KEY I can only do music, punch-ins, a caption preset by name or the title "
-                         "card on and off. Set the key for anything else.", "question": "", "ops": []}
+        return {"reply": "Without MODEL_API_KEY I can only do music, punch-ins, a caption preset by name, the title "
+                         "card on and off, and delete or move the clips or words you name or select. Set the key for "
+                         "anything else.", "question": "", "ops": []}
     return {"reply": "Done: " + ", ".join(said) + ".", "question": "", "ops": ops}
 
 
-def check(edl: dict, ops: list[dict]) -> tuple[list[dict], list[str]]:
+def check(edl: dict, ops: list[dict], scope: dict | None = None) -> tuple[list[dict], list[str]]:
     """The ops in the order they can run, each id checked against the version; the rest skipped with a reason.
     Order: caption lines first (they need this version's rendered captions), then a re-plan, then the edits that
-    survive one (text, look, music, punch-ins), then the clip edits."""
+    survive one (text, look, music, punch-ins), then the clip edits. With a selection, an op that names a clip, words
+    or a caption line outside it is skipped: "make this shorter" touches only what is selected."""
     ids = {s["id"] for s in edl["spans"]}
+    by_id = {s["id"]: s for s in edl["spans"]}
+    scope = scope or {}
+    allowed = scope_spans(scope)
+    picked = {(w["span"], i) for w in scope.get("words") or [] for i in range(w["from"], w["to"] + 1)}
+    line = scope.get("caption")
     tracks = {t["id"] for t in music_mod.tracks()}
     replan = any(o.get("op") == "replan" for o in ops)
     kept, skipped = [], []
@@ -213,10 +328,21 @@ def check(edl: dict, ops: list[dict]) -> tuple[list[dict], list[str]]:
             why = f"unknown op {op!r}"
         elif replan and op in SPAN_OPS:
             why = f"{op} skipped: the re-plan makes new clips, ask again on the new version"
-        elif op in ("callout", "drop", "reorder") and o.get("span") not in ids:
+        elif op in ("callout", "drop", "reorder", "cut") and o.get("span") not in ids:
             why = f"{op}: {o.get('span')!r} is not a clip of this version ({', '.join(sorted(ids))})"
         elif op == "reorder" and o.get("before") and o["before"] not in ids:
             why = f"reorder: {o['before']!r} is not a clip of this version"
+        elif op in ("callout", "drop", "reorder", "cut") and allowed and o["span"] not in allowed:
+            why = f"{op} {o['span']}: outside your selection ({', '.join(sorted(allowed))})"
+        elif op == "cut" and not (by_id[o["span"]]["word_from"] <= int(o.get("word_from", -1)) <= int(o.get("word_to", -1))
+                                  <= by_id[o["span"]]["word_to"]):
+            why = (f"cut: words {o.get('word_from')}-{o.get('word_to')} are not in {o['span']} "
+                   f"({by_id[o['span']]['word_from']}-{by_id[o['span']]['word_to']})")
+        elif op == "cut" and picked and any((o["span"], i) not in picked for i in range(int(o["word_from"]),
+                                                                                        int(o["word_to"]) + 1)):
+            why = f"cut {o['span']}: words outside your selection"
+        elif op == "caption" and line and not line["t_in"] - 0.05 <= float(o.get("at_s", -1)) <= line["t_out"] + 0.05:
+            why = f"caption at {float(o.get('at_s', -1)):.1f} s: outside the selected line ({line['t_in']:.1f}-{line['t_out']:.1f} s)"
         elif op == "music_on" and o.get("track") not in tracks:
             why = f"music: {o.get('track')!r} is not a bundled track"
         elif op == "style" and not o.get("preset") and not (o.get("look_prompt") or "").strip():
@@ -234,7 +360,7 @@ def check(edl: dict, ops: list[dict]) -> tuple[list[dict], list[str]]:
         else:
             kept.append(o)
     rank = {"caption": 0, "replan": 1, "callout": 2, "title_text": 2, "title_on": 2, "title_off": 2, "style": 3,
-            "music_on": 4, "music_off": 4, "punch": 5, "drop": 6, "reorder": 7, "review": 8}
+            "music_on": 4, "music_off": 4, "punch": 5, "cut": 6, "drop": 6, "reorder": 7, "review": 8}
     return sorted(kept, key=lambda o: rank[o["op"]]), skipped
 
 
@@ -279,7 +405,14 @@ def run_ops(run_dir: Path, from_v: int, ops: list[dict], planner: str | None, lo
                               lambda o=o: human.punch(run_dir, on=bool(o["on"]), from_v=at())))
             elif op == "drop":
                 steps.append((f"clip {o['span']} deleted", lambda o=o: human.drop(run_dir, o["span"], from_v=at())))
-            elif op == "reorder":
+        cuts = [(o["span"], int(o["word_from"]), int(o["word_to"])) for o in ops if o["op"] == "cut"]
+        if cuts:  # one cut for every range: a split renames the clip, so a second cut could not find it
+            n = sum(b - a + 1 for _, a, b in cuts)
+            steps.append((f"{n} word{'s' if n != 1 else ''} deleted in {', '.join(dict.fromkeys(c[0] for c in cuts))}",
+                          lambda: human.cut(run_dir, cuts, from_v=at())))
+        for o in ops:
+            op = o["op"]
+            if op == "reorder":
                 steps.append((f"clip {o['span']} moved " + (f"before {o['before']}" if o["before"] else "to the end"),
                               lambda o=o: human.reorder(run_dir, o["span"], o["before"] or None, from_v=at())))
         for what, step in steps:
@@ -294,6 +427,9 @@ def run_ops(run_dir: Path, from_v: int, ops: list[dict], planner: str | None, lo
     return written, done, skipped
 
 
+AGENT_KEYS = ("message", "reply", "router", "ops", "done", "skipped", "pending", "scope", "retry_of")
+
+
 def fold(run_dir: Path, from_v: int, written: list[int], record: dict) -> int:
     """The chain v_a -> v_b -> ... folded into v_a: the last EDL with one patch for the whole message, the in-between
     edl files removed (they were never rendered)."""
@@ -306,7 +442,7 @@ def fold(run_dir: Path, from_v: int, written: list[int], record: dict) -> int:
              "action": actions[0] if len(set(actions)) == 1 else "ask",
              "instruction": record["message"],
              "fixes": [f for p in mine for f in p.get("fixes") or []],
-             "agent": {k: record[k] for k in ("message", "reply", "router", "ops", "done", "skipped")}}
+             "agent": {k: record[k] for k in AGENT_KEYS if k in record}}
     if model := next((p.get("model") for p in mine if p.get("action") == "replan"), None):
         patch["model"] = model
     edl["patches"] = list(base.get("patches") or []) + [patch]
@@ -317,59 +453,251 @@ def fold(run_dir: Path, from_v: int, written: list[int], record: dict) -> int:
     return first
 
 
-def ask(run_dir: Path, message: str, from_v: int | None = None, passes: int = 0, planner: str | None = None,
-        use_model: bool = True, budget: float = 0.15) -> dict:
-    log = RunLog(run_dir / "run.log")
-    from_v = from_v or human.latest_edl(run_dir)
-    edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
-    ledger = Ledger.resume(run_dir / "ledger.json")
-    log(f"montivo ask: {message!r} on edl_v{from_v}")
-    router, cost = "keywords", 0.0
-    answer = None
-    if use_model:
-        try:
-            answer, cost = route(run_dir, edl, message, ledger, log)
-            router = SPARK_MODEL
-        except (SystemExit, Exception) as e:  # a failed or unparsable call: the keyword reader still helps
-            log(f"agent: the router call failed ({e}); reading keywords")
-    if answer is None:
-        answer = keywords(edl, message)
-    ops, skipped = check(edl, answer.get("ops") or [])
-    passes = max(passes, 1 if any(o["op"] == "review" for o in ops) else 0)
-    ops = [o for o in ops if o["op"] != "review"]
-    log(f"agent ({router}): {answer.get('reply', '')!r}; ops: {', '.join(o['op'] for o in ops) or 'none'}"
-        + (f"; skipped: {'; '.join(skipped)}" if skipped else ""))
-    record = {"message": message, "reply": (answer.get("reply") or "").strip(), "question": (answer.get("question") or "").strip(),
-              "router": router, "router_cost_usd": round(cost, 5), "from": from_v,
-              "ops": [{k: v for k, v in o.items() if v not in ("", -1, None) and not (k == "level_db" and v == 0)
-                       and not (k == "on" and o["op"] != "punch")} for o in ops],
-              "done": [], "skipped": skipped, "version": None}
+def op_label(o: dict) -> str:
+    """One op in plain words, for the preview card's "also" line."""
+    op = o["op"]
+    track = next((t["name"] for t in music_mod.tracks() if t["id"] == o.get("track")), o.get("track"))
+    return {"music_on": f"music: {track}", "music_off": "music out", "punch": f"punch-ins {'on' if o.get('on') else 'off'}",
+            "style": f"captions: {PRESET_NAMES.get(o.get('preset'), o.get('look_prompt') or '')}",
+            "caption": f"caption line at {float(o.get('at_s', 0)):.1f} s: “{o.get('text', '')}”",
+            "callout": f"callout on {o.get('span')}: “{o.get('text', '')}”" if o.get("text") else f"callout off {o.get('span')}",
+            "title_text": f"title card: “{o.get('text', '')}”", "title_on": "title card on",
+            "title_off": "title card off"}.get(op, op)
+
+
+def needs_preview(ops: list[dict], planner: str | None = None) -> bool:
+    """A structural change, or ops that cost over PREVIEW_USD, wait for the editor's Apply (Billy, 28/10)."""
+    return any(o["op"] in STRUCTURAL for o in ops) or estimate(ops, planner, 0, 0.0)[0] > PREVIEW_USD
+
+
+def estimate(ops: list[dict], planner: str | None, passes: int, runtime_s: float) -> tuple[float, float]:
+    """(dollars, seconds) the ops, one render of about runtime_s and `passes` reviews take."""
+    kinds = {o["op"] for o in ops}
+    usd = EST["review"] * passes
+    sec = EST["render_s_per_s"] * runtime_s + EST["review_s"] * passes
+    if "replan" in kinds:
+        usd += EST["plan_open" if planner else "plan"]
+        sec += EST["plan_open_s" if planner else "plan_s"]
+    if "title_text" in kinds:
+        usd, sec = usd + EST["image"], sec + EST["image_s"]
+    if any(o["op"] == "style" and not o.get("preset") for o in ops):
+        usd, sec = usd + EST["look"], sec + EST["look_s"]
+    return round(usd, 3), round(sec)
+
+
+def preview_card(run_dir: Path, edl: dict, ops: list[dict], planner: str | None, passes: int) -> dict:
+    """What the ops would change, in plain words, before anything runs: the clips before and after, which go or move,
+    the words a cut deletes, the re-plan's note and target (not planned yet), the other edits, cost and time."""
+    spans = edl["spans"]
+    by_id = {s["id"]: s for s in spans}
+    runtime = float(edl.get("runtime_s") or sum(s.get("duration", 0.0) for s in spans))
+    order = [s["id"] for s in spans]
+    lines: list[str] = []
+    replan = next((o for o in ops if o["op"] == "replan"), None)
+    after_s = runtime
+    if replan:
+        run = json.loads((run_dir / "run.json").read_text()) if (run_dir / "run.json").is_file() else {}
+        target = human.target_from(replan["instruction"]) or run.get("target_s")
+        lines.append(f"Plan the edit again: “{replan['instruction']}”")
+        lines.append(f"{'Muse Spark Open' if planner else 'Muse Spark 1.3'} plans it when you apply"
+                     + (f", aiming at about {float(target):.0f} s" if target else "")
+                     + f"; now {len(spans)} clips, {runtime:.1f} s")
+        after_s = float(target or runtime)
+    gone = [o["span"] for o in ops if o["op"] == "drop"]
+    cuts = [o for o in ops if o["op"] == "cut"]
+    cut_s, cut_lines = 0.0, []
+    try:
+        words = human._words(run_dir)
+    except (OSError, KeyError, ValueError):
+        words = None
+    for o in cuts:
+        s = by_id[o["span"]]
+        a, b = int(o["word_from"]), int(o["word_to"])
+        tw = {w["i"]: w for w in words.turn(s["turn_id"])} if words else {}
+        if a == s["word_from"] and b == s["word_to"]:
+            gone.append(s["id"])
+            continue
+        if a in tw and b in tw:
+            cut_s += max(0.0, float(tw[b]["t_end"]) - float(tw[a]["t_start"]))
+        text = " ".join(tw[i]["w"] for i in range(a, b + 1) if i in tw)
+        cut_lines.append(f"{s['id']} loses {b - a + 1} word{'s' if b > a else ''}" + (f": “{text[:80]}”" if text else ""))
+    moves = []
+    for o in ops:
+        if o["op"] == "reorder" and o["span"] in order:
+            order.remove(o["span"])
+            if o.get("before") and o["before"] in order:
+                order.insert(order.index(o["before"]), o["span"])
+            else:
+                order.append(o["span"])
+            moves.append(f"{o['span']} moves " + (f"in front of {o['before']}" if o.get("before") else "to the end"))
+    if not replan:
+        gone = list(dict.fromkeys(gone))
+        after_s = max(0.0, runtime - sum(float(by_id[g].get("duration", 0.0)) for g in gone) - cut_s)
+        kept = [x for x in order if x not in gone]
+        lines.append(f"{len(spans)} → {len(kept)} clips, about {after_s:.0f} s (now {runtime:.1f} s)"
+                     if gone else f"{len(kept)} clips, about {after_s:.0f} s (now {runtime:.1f} s)")
+        for g in gone:
+            lines.append(f"{g} goes: “{(by_id[g].get('words') or '')[:80]}”")
+        lines += cut_lines + moves
+        if moves:
+            lines.append("New order: " + " ".join(kept))
+    also = [op_label(o) for o in ops if o["op"] not in STRUCTURAL]
+    if also:
+        lines.append("Also: " + ", ".join(also))
+    usd, sec = estimate(ops, planner, passes, after_s)
+    return {"lines": lines, "usd": usd, "seconds": sec, "clips_before": len(spans), "runtime_before": round(runtime, 2),
+            "runtime_after": round(after_s, 1), "replan": bool(replan), "review": passes}
+
+
+PENDING_ID = re.compile(r"^[A-Za-z0-9_-]{4,40}$")
+
+
+def pending_path(run_dir: Path, pid: str) -> Path:
+    if not PENDING_ID.match(pid or ""):
+        raise SystemExit(f"{pid!r} is not a proposal id")
+    return run_dir / "ui" / "pending" / f"{pid}.json"
+
+
+def load_pending(run_dir: Path, pid: str, *ok: str) -> dict:
+    """A proposal waiting for Apply; SystemExit when it is gone or already settled (applied, or turned down for
+    another try)."""
+    p = pending_path(run_dir, pid)
+    if not p.is_file():
+        raise SystemExit(f"no proposal {pid} in this run")
+    rec = json.loads(p.read_text())
+    if rec.get("status") not in (ok or ("open", "running")):
+        raise SystemExit(f"proposal {pid} was already {rec.get('status')}")
+    return rec
+
+
+def set_status(run_dir: Path, rec: dict, status: str) -> None:
+    rec["status"] = status
+    rec[f"{status}_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    dump_json(pending_path(run_dir, rec["id"]), rec)
+
+
+def execute(run_dir: Path, from_v: int, ops: list[dict], record: dict, passes: int, planner: str | None,
+            budget: float, log) -> dict:
+    """Run the checked ops: one folded version, rendered once (with the review loop when asked), or the review loop
+    alone when the message only asked for a review."""
     if ops:
         written, done, more = run_ops(run_dir, from_v, ops, planner, log)
-        record["done"], record["skipped"] = done, skipped + more
+        record["done"], record["skipped"] = done, record["skipped"] + more
         if written:
             n = fold(run_dir, from_v, written, record)
             record["version"] = n
             human._finish(run_dir, run_dir / f"edl_v{n}.json", n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
     elif passes:  # "review it" with nothing to change: the review loop on this version
         from .engine.review import review_loop
-        review_loop(run_dir, run_dir / f"edl_v{from_v}.json", passes=passes, budget_usd=budget, ledger=ledger, log=log)
+        review_loop(run_dir, run_dir / f"edl_v{from_v}.json", passes=passes, budget_usd=budget,
+                    ledger=Ledger.resume(run_dir / "ledger.json"), log=log)
         record["reviewed"] = from_v
     return record
+
+
+def compact(ops: list[dict]) -> list[dict]:
+    return [{k: v for k, v in o.items() if v not in ("", -1, None) and not (k == "level_db" and v == 0)
+             and not (k == "on" and o["op"] != "punch")} for o in ops]
+
+
+def ask(run_dir: Path, message: str | None, from_v: int | None = None, passes: int = 0, planner: str | None = None,
+        use_model: bool = True, budget: float = 0.15, scope: dict | None = None, preview: bool = False,
+        retry_of: str | None = None) -> dict:
+    log = RunLog(run_dir / "run.log")
+    note = ""
+    if retry_of:  # "Try something else": the same message, its proposal in the prompt as turned down; once, no review
+        old = load_pending(run_dir, retry_of, "open")
+        set_status(run_dir, old, "retried")
+        message, scope, from_v, passes = old["message"], old.get("scope"), old["from"], 0
+        note = ("\nThe editor turned down your first proposal for this message (" + "; ".join(old["card"]["lines"])
+                + "). Propose a different way to do what they asked: other clips, a smaller change, or a question "
+                  "back.\n")
+    if not (message or "").strip():
+        raise SystemExit("the message is empty")
+    scope = norm_scope(scope)
+    from_v = from_v or human.latest_edl(run_dir)
+    edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
+    ledger = Ledger.resume(run_dir / "ledger.json")
+    log(f"montivo ask: {message!r} on edl_v{from_v}" + (f", selection {scope_text(scope).strip()}" if scope else "")
+        + (f" (another try after {retry_of})" if retry_of else ""))
+    router, cost = "keywords", 0.0
+    answer = None
+    if use_model:
+        try:
+            answer, cost = route(run_dir, edl, message, ledger, log, scope, note)
+            router = SPARK_MODEL
+        except (SystemExit, Exception) as e:  # a failed or unparsable call: the keyword reader still helps
+            log(f"agent: the router call failed ({e}); reading keywords")
+    if answer is None:
+        answer = keywords(edl, message, scope)
+    ops, skipped = check(edl, answer.get("ops") or [], scope)
+    passes = max(passes, 1 if any(o["op"] == "review" for o in ops) else 0)
+    ops = [o for o in ops if o["op"] != "review"]
+    log(f"agent ({router}): {answer.get('reply', '')!r}; ops: {', '.join(o['op'] for o in ops) or 'none'}"
+        + (f"; skipped: {'; '.join(skipped)}" if skipped else ""))
+    record = {"message": message, "reply": (answer.get("reply") or "").strip(), "question": (answer.get("question") or "").strip(),
+              "router": router, "router_cost_usd": round(cost, 5), "from": from_v, "ops": compact(ops),
+              "done": [], "skipped": skipped, "version": None}
+    if scope:
+        record["scope"] = scope
+    if retry_of:
+        record["retry_of"] = retry_of
+    if preview and ops and needs_preview(ops, planner):
+        card = preview_card(run_dir, edl, ops, planner, passes)
+        pid = time.strftime("%H%M%S-") + secrets.token_hex(3)
+        dump_json(pending_path(run_dir, pid), {**record, "id": pid, "status": "open", "created": time.strftime(
+            "%Y-%m-%dT%H:%M:%S"), "full_ops": ops, "passes": passes, "planner": planner, "card": card})
+        record["pending"] = {"id": pid, **card, "can_retry": not retry_of}
+        if router == "keywords":  # its "Done: ..." would read as if it ran
+            record["reply"] = "Here is what would change. Nothing runs until you Apply."
+        log(f"agent: proposal {pid} waits for Apply: {'; '.join(card['lines'])} (about ${card['usd']:.3f}, {card['seconds']} s)")
+        return record
+    return execute(run_dir, from_v, ops, record, passes, planner, budget, log)
+
+
+def apply(run_dir: Path, pid: str, passes: int | None = None, budget: float = 0.15) -> dict:
+    """The editor's Apply on a proposal: its ops as checked when it was made, from its version, one rendered version
+    (a re-plan plans now, once). Try again after a failure runs it once more; an applied one refuses."""
+    log = RunLog(run_dir / "run.log")
+    p = load_pending(run_dir, pid)
+    set_status(run_dir, p, "running")
+    log(f"montivo ask: apply proposal {pid} ({p['message']!r}) on edl_v{p['from']}")
+    record = {k: p[k] for k in ("message", "reply", "question", "router", "from", "ops", "skipped") if k in p}
+    record |= {"router_cost_usd": 0.0, "done": [], "version": None, "pending": pid, "applied": True}
+    if p.get("scope"):
+        record["scope"] = p["scope"]
+    out = execute(run_dir, p["from"], p["full_ops"], record, p["passes"] if passes is None else passes,
+                  p.get("planner"), budget, log)
+    set_status(run_dir, p, "applied")
+    return out
 
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="python -m montivo.agent", description=__doc__.split("\n")[0])
     p.add_argument("run_dir", type=Path)
-    p.add_argument("--message", required=True)
+    p.add_argument("--message", default=None)
     p.add_argument("--from", dest="from_v", type=int, default=None)
-    p.add_argument("--review", type=int, default=0, help="review passes after the edit")
+    p.add_argument("--review", type=int, default=None, help="review passes after the edit (--apply: else the proposal's)")
     p.add_argument("--planner", choices=["spark", "open"], default="spark", help="the planner a re-plan uses")
     p.add_argument("--no-model", action="store_true", help="read keywords instead of calling Spark")
+    p.add_argument("--scope", default=None, help='the selection as JSON: {"clips": [...], "words": [...], "caption": {...}}')
+    p.add_argument("--preview", action="store_true", help="structural or costly ops wait in ui/pending/ for --apply")
+    p.add_argument("--apply", default=None, metavar="ID", help="run a waiting proposal")
+    p.add_argument("--retry", default=None, metavar="ID", help="route the proposal's message again, once, no review")
     a = p.parse_args(argv)
     import os
-    out = ask(a.run_dir, a.message, a.from_v, a.review, OPEN_MODEL if a.planner == "open" else None,
-              use_model=not a.no_model and bool(os.environ.get("MODEL_API_KEY")))
+    if a.apply:
+        out = apply(a.run_dir, a.apply, a.review)
+    else:
+        if not a.message and not a.retry:
+            p.error("--message, --apply or --retry")
+        try:
+            scope = json.loads(a.scope) if a.scope else None
+        except json.JSONDecodeError as e:
+            p.error(f"--scope: {e}")
+        out = ask(a.run_dir, a.message, a.from_v, a.review or 0, OPEN_MODEL if a.planner == "open" else None,
+                  use_model=not a.no_model and bool(os.environ.get("MODEL_API_KEY")), scope=scope, preview=a.preview,
+                  retry_of=a.retry)
     print(json.dumps(out, ensure_ascii=False))
     sys.stdout.flush()
 

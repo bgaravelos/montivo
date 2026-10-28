@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, crit, frameUrl, tc, usd, type Seen } from "./api";
-import { sevRank } from "./edit";
+import { selRange, sevRank, type FlatWord, type WordSel } from "./edit";
 import { Icon } from "./icons";
 import { Bar, expTip, measure, useTick } from "./Progress";
-import type { Job, LogLine, PlanSide, Planner, Progress, RunState, Stage, Version } from "./types";
+import type { AskScope, ChatLine, Job, LogLine, PendingCard, PlanSide, Planner, Progress, RunState, Stage, Version } from "./types";
 
 // ------------------------------------------------------------------- pipeline checklist
 
@@ -105,22 +105,56 @@ type Item =
   | { kind: "steps"; title: string; lines: string[]; live?: boolean }
   | { kind: "version"; v: Version; by: string }
   | { kind: "review"; v: Version }
-  | { kind: "error"; text: string };
+  | { kind: "preview"; card: PendingCard; status: "open" | "applying" | "applied" | "retried" }
+  | { kind: "error"; text: string; charged?: number | null; retry?: boolean };
 
+/** The message as typed: the server adds the chips for the router as " (about s3, @00:12.00)". */
+const typed = (m: string | null | undefined) => (m ?? "").replace(/ \(about [^()]*\)$/, "");
 const vName = (n: number | undefined) => (n == null ? "the cut" : `Version ${n}`);
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : /(s|x|ch|sh)$/.test(w) ? "es" : "s"}`;
+
+/** The selection an ask was about, as chips: "s3", "s3, s5 · 2 clips", "s3 · 4 words", "caption 00:12.0". */
+export function scopeChips(s: AskScope | null | undefined): string[] {
+  if (!s) return [];
+  const out: string[] = [];
+  if (s.clips?.length) out.push(s.clips.length === 1 ? s.clips[0] : `${s.clips.slice(0, 3).join(", ")}${s.clips.length > 3 ? " …" : ""} · ${s.clips.length} clips`);
+  if (s.words?.length) {
+    const n = s.words.reduce((a, w) => a + w.to - w.from + 1, 0);
+    const spans = [...new Set(s.words.map((w) => w.span))];
+    out.push(`${spans.length > 2 ? `${spans[0]}–${spans.at(-1)}` : spans.join(", ")} · ${plural(n, "word")}`);
+  }
+  if (s.caption) out.push(`caption ${tc(s.caption.t_in)}`);
+  if (s.t != null) out.push(`@${tc(s.t)}`);
+  return out;
+}
+
+/** Where a proposal stands: applied once a version carries it, applying while its Apply runs, turned down for another
+ *  try, else open (an Apply that failed can be clicked again). */
+function proposalStatus(id: string, chat: ChatLine[], versions: Version[], job: Job | null): "open" | "applying" | "applied" | "retried" {
+  if (versions.some((x) => x.origin.agent?.pending === id)) return "applied";
+  const mine = chat.filter((c) => c.role === "user" && c.pending === id);
+  if (mine.some((c) => c.kind === "retry")) return "retried";
+  if (mine.some((c) => c.kind === "apply") && job?.running && job.kind === "ask") return "applying";
+  return "open";
+}
 
 function story(state: RunState, versions: Version[], lines: LogLine[], job: Job | null, replay: number): Item[] {
   const out: Item[] = [
     { kind: "you", text: state.run.brief ?? "", chips: [state.run.footage?.split("/").pop() ?? "footage", `${state.run.target_s ?? 40} s`] },
   ];
-  const asked = (state.chat ?? []).filter((c) => c.role === "agent" && c.kind === "ask" && !c.version && c.after != null);
+  const chat = state.chat ?? [];
+  // the agent's answers that made no version: a reply, or a proposal waiting for Apply
+  const asked = chat.filter((c) => c.role === "agent" && c.after != null && ((c.kind === "ask" && !c.version) || c.kind === "preview" || c.kind === "error"));
+  const failed = job && !job.running && job.rc ? job : null; // the last job, when it failed: Try again runs it once more
+  const tail = (j: Job) => j.tail.split("\n").slice(-4).join("\n").trim();
   for (const v of versions) {
     const o = v.origin;
     const fixes = (o.fixes ?? []).map((f) => f.note ?? f.op).filter(Boolean) as string[];
     if (o.source === "human" && o.agent) {
-      out.push({ kind: "you", text: o.agent.message, chips: [`from v${o.from}`] });
-      if (o.agent.reply) out.push({ kind: "text", who: "montivo", text: o.agent.reply });
+      const applied = !!o.agent.pending; // its message and reply are on the proposal card above
+      out.push({ kind: "you", text: applied ? "Apply" : o.agent.retry_of ? "Try something else" : typed(o.agent.message),
+        chips: applied ? [] : [...scopeChips(o.agent.scope), `from v${o.from}`] });
+      if (o.agent.reply && !applied) out.push({ kind: "text", who: "montivo", text: o.agent.reply });
       const lines = [...(o.agent.done.length ? o.agent.done : fixes), ...o.agent.skipped.map((x) => `not done · ${x}`)];
       if (lines.length) out.push({ kind: "steps", title: `${o.agent.router === "keywords" ? "Read the keywords" : "Picked the tools"} · ${plural(o.agent.done.length || fixes.length, "edit")}`, lines });
     } else if (o.source === "human") {
@@ -157,13 +191,20 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
     if (v.review) out.push({ kind: "review", v });
     const ab = o.source === "hook_ab" ? o.result : null;
     if (ab) out.push({ kind: "text", who: "montivo", text: `Keeping ${vName(ab.kept)} (${ab.reason}${ab.decisive ? "" : "; within the reviewer's 10-point noise"}).` });
-    for (const c of replay ? [] : asked.filter((x) => x.after === v.n)) { // a message that made no version: its reply
-      out.push({ kind: "you", text: c.message ?? "", chips: [`v${v.n}`] });
-      out.push({ kind: "text", who: "montivo", text: c.text ?? "" });
-    }
     if (!replay && state.loop?.stop && v.n === state.loop.passes.at(-1)?.version) {
       const stop = state.loop.stop.split(":")[0];
       out.push({ kind: "text", who: "montivo", text: stop === "pass" ? "The review loop stopped: the cut passes." : `The review loop stopped (${state.loop.stop}).` });
+    }
+    for (const c of replay ? [] : asked.filter((x) => x.after === v.n)) { // a message that made no version: its reply or proposal
+      if (c.kind === "error") {
+        const last = failed?.id === c.job;
+        out.push({ kind: "error", text: `${c.text ?? ""}${last && failed!.rc! > 0 && tail(failed!) ? `\n${tail(failed!)}` : ""}`, charged: c.charged_usd, retry: last });
+        continue;
+      }
+      out.push({ kind: "you", text: c.retry_of ? "Try something else" : typed(c.message), chips: c.retry_of ? [] : [...scopeChips(c.scope), `v${v.n}`] });
+      if (c.text) out.push({ kind: "text", who: "montivo", text: c.text });
+      const card = c.kind === "preview" && typeof c.pending === "object" ? c.pending : null;
+      if (card) out.push({ kind: "preview", card, status: proposalStatus(card.id, chat, versions, job) });
     }
   }
   if (job?.running) {
@@ -171,7 +212,8 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
     const notable = lines.filter((l) => l.session === session && /^(patch v|review: review_v\d+ overall|plan: |edges: \d+ cut edges|render: \S*cut_v)/.test(l.msg));
     if (notable.length) out.push({ kind: "steps", title: `${job.label} · ${plural(notable.length, "step")} so far`, lines: notable.slice(-6).map((l) => l.msg), live: true });
   }
-  if (job && !job.running && job.rc) out.push({ kind: "error", text: `${job.label} failed (exit ${job.rc}).\n${job.tail.split("\n").slice(-4).join("\n")}` });
+  if (failed && !replay && !chat.some((c) => c.kind === "error" && c.job === failed.id && c.after != null)) // its chat line not read yet
+    out.push({ kind: "error", text: `${failed.label} ${failed.rc! < 0 ? "was stopped" : `failed (exit ${failed.rc})`}.\n${tail(failed)}`, charged: failed.charged_usd, retry: true });
   return out;
 }
 
@@ -272,6 +314,28 @@ function ReviewCard({ v, current, onPick, onSeek }: { v: Version; current: boole
   );
 }
 
+/** A structural or costly ask before it runs (agent.py preview_card): what changes in plain words, the cost and time,
+ *  Apply and one free Try something else. A re-plan's card shows the note and the target: Apply plans it, once. */
+function PreviewCard({ card, status, busy, onApply, onRetry }: {
+  card: PendingCard; status: "open" | "applying" | "applied" | "retried"; busy: string | null;
+  onApply: (id: string) => void; onRetry: (id: string) => void;
+}) {
+  const open = status === "open";
+  return (
+    <div className={`pcard ${open ? "" : "done"}`}>
+      <div className="pc-head"><Icon name={card.replan ? "spark" : "scissors"} size={13} /><b>{card.replan ? "Re-plan, before it runs" : "Before it runs"}</b>
+        <span className="grow" /><span className="mono mute pc-est" title="Estimated cost and time of applying it">{card.usd ? `~${usd(card.usd)}` : "$0"} · ~{card.seconds < 90 ? `${Math.round(card.seconds)} s` : tc(card.seconds, 0)}</span></div>
+      <ul>{card.lines.map((l, k) => <li key={k}>{l}</li>)}</ul>
+      {open ? (
+        <div className="pc-acts">
+          <button className="btn small" disabled={!!busy} title={busy ?? "Make the new version"} onClick={() => onApply(card.id)}><Icon name="check" size={12} />Apply</button>
+          {card.can_retry && <button className="btn quiet small" disabled={!!busy} title={busy ?? "Montivo proposes another way, once (one routing call, no review)"} onClick={() => onRetry(card.id)}>Try something else</button>}
+        </div>
+      ) : <div className="pc-state mute small">{status === "applied" ? "Applied" : status === "applying" ? "Applying…" : "Turned down: another try below"}</div>}
+    </div>
+  );
+}
+
 /** Up to three prompts the last review suggests, else the common asks. A click puts the words in the box. */
 function suggestions(state: RunState, v: Version | null): string[] {
   const out: string[] = [];
@@ -360,38 +424,95 @@ function PlannerMenu({ value, onChange, hasOpen, state }: { value: Planner; onCh
   );
 }
 
-export function Assistant({ state, versions, lines, job, seen, progress, replay, v, clip, getTime, focusNonce, onSend, onStop, onPick, onSeek, onCompare, onRestore }: {
+/** What is selected in the editor right now: clips on the timeline, words in the transcript, a caption line. */
+export type Selection = { clips: string[]; words: NonNullable<AskScope["words"]> | null; caption: AskScope["caption"] | null };
+
+/** The transcript's word selection as the agent's scope: one range per clip, with its words. */
+export function wordScope(flat: FlatWord[], sel: WordSel | null): Selection["words"] {
+  const r = selRange(flat, sel);
+  if (!r) return null;
+  const out: NonNullable<Selection["words"]> = [];
+  for (const x of flat.slice(r[0], r[1] + 1)) {
+    const last = out.at(-1);
+    if (last && last.span === x.span.id) { last.to = x.w.i; last.text += ` ${x.w.w}`; }
+    else out.push({ span: x.span.id, from: x.w.i, to: x.w.i, text: x.w.w });
+  }
+  return out;
+}
+
+/** A message typed while a job runs: it waits here and is sent when the job ends (never dropped, never sent over it). */
+type Queued = { text: string; review: number; planner: Planner; scope: AskScope; chips: string[]; failed?: boolean };
+const queueKey = (id: string) => `montivo.queue.${id}`;
+
+export function Assistant({ state, versions, lines, job, seen, progress, replay, v, selection, getTime, focusNonce, onSend, onStop, onPick, onSeek, onCompare, onRestore, onApply, onRetry, onRetryJob }: {
   state: RunState; versions: Version[]; lines: LogLine[]; job: Job | null; seen: Seen; progress: Progress | null; replay: number; v: Version | null;
-  clip: string | null; getTime: () => number; focusNonce: number;
-  onSend: (text: string, chips: string[], review: number, planner: Planner) => void; onStop: () => void;
+  selection: Selection; getTime: () => number; focusNonce: number;
+  onSend: (text: string, chips: string[], review: number, planner: Planner, scope: AskScope, latest: boolean) => Promise<boolean>; onStop: () => void;
   onPick: (n: number) => void; onSeek: (t: number) => void; onCompare: (a: number, b: number) => void;
   onRestore: ((n: number) => void) | null; // null while an edit runs or in replay
+  onApply: (pending: string, review: number) => void; onRetry: (pending: string) => void; onRetryJob: () => void;
 }) {
   const [text, setText] = useState("");
-  const [useClip, setUseClip] = useState(true);
+  const [use, setUse] = useState({ clips: true, words: true, caption: true });
   const [time, setTime] = useState<number | null>(null);
   const [review, setReview] = useState(true);
   const [planner, setPlanner] = useState<Planner>("spark");
+  const [queue, setQueue] = useState<Queued[]>(() => { try { return JSON.parse(localStorage.getItem(queueKey(state.id)) ?? "[]"); } catch { return []; } });
   const items = story(state, versions, lines, job, replay);
   const end = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { // scroll the messages only: scrollIntoView also moved the whole page on a phone
     const list = end.current?.parentElement;
     if (list) list.scrollTop = list.scrollHeight;
-  }, [items.length, job?.running]);
-  useEffect(() => { if (focusNonce) { setUseClip(true); box.current?.focus(); } }, [focusNonce]);
+  }, [items.length, job?.running, queue.length]);
+  const selKey = JSON.stringify(selection);
+  useEffect(() => setUse({ clips: true, words: true, caption: true }), [selKey]); // a new selection is in until clicked off
+  useEffect(() => { if (focusNonce) { setUse({ clips: true, words: true, caption: true }); box.current?.focus(); } }, [focusNonce]);
+  useEffect(() => { try { localStorage.setItem(queueKey(state.id), JSON.stringify(queue)); } catch { /* this tab only */ } }, [queue, state.id]);
   useLayoutEffect(() => { // the box grows with the text, up to about six lines
     const el = box.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
   }, [text]);
-  const chips = [...(clip && useClip ? [clip] : []), ...(time != null ? [`@${tc(time)}`] : [])];
+  const scope: AskScope = {
+    ...(use.clips && selection.clips.length ? { clips: selection.clips } : {}),
+    ...(use.words && selection.words?.length ? { words: selection.words } : {}),
+    ...(use.caption && selection.caption ? { caption: selection.caption } : {}),
+    ...(time != null ? { t: time } : {}),
+  };
+  const chips = scopeChips(scope);
   const cost = state.has_key ? (state.costs.ask ?? 0.006) + (review ? state.costs.review : 0) : 0;
   const running = !!job?.running;
-  const blocked = running ? "Montivo is working…" : replay ? "Replay is on: turn it off in the menu to edit." : null;
-  const send = () => { if (!text.trim() || blocked) return; onSend(text.trim(), chips, review && state.has_key ? 1 : 0, planner); setText(""); setTime(null); };
-  const tips = !blocked && !text ? suggestions(state, v) : [];
+  const blocked = replay ? "Replay is on: turn it off in the menu to edit." : null;
+  // a queued message goes once the job has ended; `waiting` holds the next one until the job it started is seen
+  const waiting = useRef(0);
+  useEffect(() => { if (running) waiting.current = 0; }, [running]);
+  // a send the server refused (a job started a moment before, say) comes back to the queue, never lost; refused twice,
+  // it stays there with Send for the editor to try
+  const post = (q: Queued, queued: boolean) => {
+    waiting.current = Date.now();
+    // a queued message edits the newest version (the job it waited for made one), not the one on screen when it was typed
+    onSend(q.text, q.chips, q.review, q.planner, q.scope, queued).then((ok) => {
+      if (!ok) { waiting.current = 0; setQueue((x) => [{ ...q, failed: queued }, ...x]); }
+    });
+  };
+  useEffect(() => {
+    const q = queue[0];
+    if (running || replay || !q || q.failed || Date.now() - waiting.current < 8000) return;
+    setQueue(queue.slice(1));
+    post(q, true);
+  }, [running, replay, queue]); // eslint-disable-line
+  const send = () => {
+    if (!text.trim() || blocked) return;
+    const msg: Queued = { text: text.trim(), chips, review: review && state.has_key ? 1 : 0, planner, scope };
+    if (running || queue.length) setQueue((q) => [...q, msg]);
+    else post(msg, false);
+    setText(""); setTime(null);
+  };
+  const tips = !blocked && !text && !queue.length ? suggestions(state, v) : [];
+  const busyNote = running ? `${job!.label} is running` : blocked;
+  const nWords = selection.words?.reduce((a, w) => a + w.to - w.from + 1, 0) ?? 0;
   return (
     <section className="assistant">
       <div className="panel-head"><span className="ph-title">Assistant</span><span className="ph-sub">{planner === "open" ? "Muse Spark Open" : "Muse Spark 1.3"}</span></div>
@@ -411,7 +532,18 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
                 : it.kind === "steps" ? <Steps key={j} title={it.title} lines={it.lines} live={it.live} />
                 : it.kind === "version" ? <VersionCard key={j} id={state.id} v={it.v} by={it.by} current={it.v.n === v?.n} newest={it.v.n === versions.at(-1)?.n} onPick={onPick} onCompare={onCompare} onRestore={onRestore} />
                 : it.kind === "review" ? <ReviewCard key={j} v={it.v} current={it.v.n === v?.n} onPick={onPick} onSeek={onSeek} />
-                : it.kind === "error" ? <p key={j} className="say error">{it.text}</p> : null)}
+                : it.kind === "preview" ? <PreviewCard key={j} card={it.card} status={it.status} busy={busyNote}
+                    onApply={(pid) => onApply(pid, review && state.has_key ? 1 : 0)} onRetry={onRetry} />
+                : it.kind === "error" ? (
+                  <div key={j} className="say error">
+                    <p>{it.text}</p>
+                    <div className="err-acts">
+                      {it.retry && <button className="btn small" disabled={!!busyNote} onClick={onRetryJob} title="Run the same action once more">Try again</button>}
+                      {!/charged|spent/.test(it.text) && it.charged === 0 && <span className="mute small">Nothing was charged.</span>}
+                      {!/charged|spent/.test(it.text) && !!it.charged && <span className="mute small">It spent {usd(it.charged, 3)} before it stopped.</span>}
+                    </div>
+                  </div>
+                ) : null)}
             </div>
           </div>
         ))}
@@ -420,13 +552,34 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
       {tips.length > 0 && <div className="sugg">{tips.map((s) => <button key={s} onClick={() => { setText(s); box.current?.focus(); }}>{s}</button>)}</div>}
       <div className="composer">
         <Tray state={state} lines={lines} job={job} seen={seen} progress={progress} replay={replay} onStop={onStop} />
+        {queue.map((q, k) => (
+          <div key={k} className="queued">
+            <Icon name="clock" size={12} />
+            <span className="q-text" title={q.text}>{q.text}</span>
+            <button className="ib" onClick={() => setQueue((x) => x.filter((_, i) => i !== k))} title="Take this message back" aria-label="Remove the queued message"><Icon name="close" size={11} /></button>
+            <div className="q-foot">
+              <span className="mute small">{q.failed ? "Not sent: the server refused it." : running ? `Waiting: it goes when ${job!.label} ends.` : "Sending…"}</span>
+              {q.failed ? <button className="btn quiet small" disabled={running} onClick={() => { setQueue((x) => x.filter((_, i) => i !== k)); post({ ...q, failed: false }, true); }}>Send</button>
+                : running && k === 0 ? <button className="btn quiet small" onClick={onStop} title="Stop the running job; this message goes as soon as it has stopped">Send now (stops the current job)</button> : null}
+            </div>
+          </div>
+        ))}
         <div className={`cbox ${blocked ? "off" : ""}`}>
           <textarea ref={box} value={text} onChange={(e) => setText(e.target.value)} rows={2}
-            placeholder={blocked ?? (state.has_key ? "Ask Montivo… “add some lo-fi music”, “bold captions”, “make it 30 seconds”"
-              : `${state.key_note ?? "No MODEL_API_KEY"}: Montivo reads keywords only… “add music”, “bold pop captions”, “punch-ins on”`)}
+            placeholder={blocked ?? (running ? `${job!.label} is running: type your next message, it waits and goes when the job ends`
+              : state.has_key ? "Ask Montivo… “add some lo-fi music”, “bold captions”, “make it 30 seconds”"
+              : `${state.key_note ?? "No MODEL_API_KEY"}: Montivo reads keywords only… “add music”, “bold pop captions”, “delete these clips”`)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }} disabled={!!blocked} />
           <div className="cb-ctx">
-            {clip && <button className={`pill sel ${useClip ? "on" : ""}`} onClick={() => setUseClip(!useClip)} title="Send the selected clip with the message"><Icon name="film" size={12} />clip {clip}</button>}
+            {selection.clips.length > 0 && <button className={`pill sel ${use.clips ? "on" : ""}`} onClick={() => setUse({ ...use, clips: !use.clips })}
+              title={`Send the selected clip${selection.clips.length > 1 ? "s" : ""} with the message: “this” means ${selection.clips.join(", ")}`}>
+              <Icon name="film" size={12} />{selection.clips.length === 1 ? `clip ${selection.clips[0]}` : `${selection.clips.length} clips`}</button>}
+            {selection.words?.length ? <button className={`pill sel ${use.words ? "on" : ""}`} onClick={() => setUse({ ...use, words: !use.words })}
+              title={`Send the selected words with the message: “${selection.words.map((w) => w.text).join(" … ")}”`}>
+              <Icon name="captions" size={12} />{scopeChips({ words: selection.words })[0] ?? `${nWords} words`}</button> : null}
+            {selection.caption && <button className={`pill sel ${use.caption ? "on" : ""}`} onClick={() => setUse({ ...use, caption: !use.caption })}
+              title={`Send the selected caption line with the message: “${selection.caption.text}”`}>
+              <Icon name="captions" size={12} />caption {tc(selection.caption.t_in)}</button>}
             <button className={`pill sel ${time != null ? "on" : ""}`} onClick={() => setTime(time != null ? null : getTime())} title="Send the playhead time with the message">
               <Icon name="clock" size={12} />{time != null ? `@ ${tc(time)}` : "playhead"}
             </button>
@@ -439,10 +592,8 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
               <Icon name="eyeOff" size={13} />Review{review && state.has_key ? "" : " off"}
             </button>
             <span className="grow" />
-            <span className="cost" title={state.has_key ? `One Muse Spark 1.3 call picks the edits${review ? ", plus one blind review" : ""}; a re-plan adds ~${usd(planner === "open" ? state.costs.plan_open : state.costs.plan)} on ${planner === "open" ? "Muse Spark Open" : "Muse Spark 1.3"}. Music, look, captions and clip edits are $0.` : "Without the key Montivo reads keywords: $0"}>~{usd(cost)}{state.budget ? <span className="mute"> · {usd(state.budget.left)} left</span> : null}</span>
-            {running && !replay
-              ? <button className="send stop" onClick={onStop} title="Stop the running job"><Icon name="stop" size={11} /></button>
-              : <button className="send" disabled={!!blocked || !text.trim()} onClick={send} title="Send (Enter)"><Icon name="send" size={15} /></button>}
+            <span className="cost" title={state.has_key ? `One Muse Spark 1.3 call picks the edits${review ? ", plus one blind review" : ""}. A re-plan (~${usd(planner === "open" ? state.costs.plan_open : state.costs.plan)} on ${planner === "open" ? "Muse Spark Open" : "Muse Spark 1.3"}), deleting or moving clips, and anything over $0.02 show a preview first: nothing runs until you Apply. Music, look, captions and callouts are $0 and apply at once.` : "Without the key Montivo reads keywords: $0"}>~{usd(cost)}{state.budget ? <span className="mute"> · {usd(state.budget.left)} left</span> : null}</span>
+            <button className="send" disabled={!!blocked || !text.trim()} onClick={send} title={running ? "Queue it: it goes when the running job ends (Enter)" : "Send (Enter)"}><Icon name={running ? "clock" : "send"} size={15} /></button>
           </div>
         </div>
       </div>

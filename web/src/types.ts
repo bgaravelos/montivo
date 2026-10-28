@@ -36,11 +36,22 @@ export type Origin = {
 };
 
 /** What Ask Montivo did with one message (the version's patch `agent`, montivo/agent.py). */
-export type AgentRecord = { message: string; reply: string; router: string; ops: { op: string }[]; done: string[]; skipped: string[] };
+export type AgentRecord = { message: string; reply: string; router: string; ops: { op: string }[]; done: string[]; skipped: string[];
+  pending?: string; scope?: AskScope; retry_of?: string }; // pending: the proposal this version applied
+
+/** What the editor selected when they asked: the agent reads it as "this" (montivo/agent.py norm_scope). */
+export type AskScope = { clips?: string[]; words?: { span: string; from: number; to: number; text: string }[];
+  caption?: { t_in: number; t_out: number; text: string }; t?: number };
+
+/** A structural or costly ask waiting for Apply (agent.py preview_card): what changes, cost and time. */
+export type PendingCard = { id: string; lines: string[]; usd: number; seconds: number; clips_before: number; runtime_before: number;
+  runtime_after: number; replan: boolean; review: number; can_retry: boolean };
 
 /** One line of ui/chat.jsonl: your messages and the agent's replies (an `ask` reply without a version is shown from here). */
 export type ChatLine = { t: number; role: "user" | "agent"; kind?: string; text?: string; version?: number | null;
-  after?: number | null; message?: string | null; router?: string | null };
+  after?: number | null; message?: string | null; router?: string | null;
+  pending?: PendingCard | string | null; scope?: AskScope | null; retry_of?: string | null; // a preview line's card; a user line's proposal id
+  job?: string; charged_usd?: number | null }; // an error line: the job that failed and what it spent
 
 /** The planner A/B of a fresh re-plan against v1 (plan_compare_v1_vN.json): one side per planner. */
 export type PlanSide = { planner: string; spans: number; runtime_s: number; verbatim_rate: number; unplaced: number; hook: string;
@@ -108,7 +119,8 @@ export type Stage = { id: string; label: string; model: string; artefact: string
 
 export type Word = { w: string; i: number; t: number; e: number };
 
-export type Job = { id: string; run: string; kind: string; label: string; started: number; ended: number | null; rc: number | null; running: boolean; tail: string };
+export type Job = { id: string; run: string; kind: string; label: string; started: number; ended: number | null; rc: number | null; running: boolean; tail: string;
+  charged_usd?: number | null }; // what the run's ledger grew by during the job, once it ended
 
 export type LogLine = { i: number; t: number; msg: string; stage: string | null; session: number };
 

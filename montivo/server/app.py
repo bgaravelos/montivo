@@ -92,11 +92,17 @@ class Job:
     rc: int | None = None
     out: str = ""
     log_pos: int = 0  # run.log's size when the job started: its own lines come after
+    spent_at: float = 0.0  # the run ledger's total when the job started
+    charged: float | None = None  # what the ledger grew by during the job, once it ended
 
     def public(self) -> dict:
         return {"id": self.id, "run": self.run, "kind": self.kind, "label": self.label, "started": self.started,
                 "ended": self.ended, "rc": self.rc, "running": self.ended is None,
-                "tail": _tail(self.out) if self.rc not in (None, 0) else ""}
+                "tail": _tail(self.out) if self.rc not in (None, 0) else "", "charged_usd": self.charged}
+
+
+def ledger_total(run_dir: Path) -> float:
+    return float((read_json(run_dir / "ledger.json") or {}).get("total_cost_usd") or 0.0)
 
 
 def _tail(path: str, n: int = 2000) -> str:
@@ -193,11 +199,21 @@ def latest_version(run_dir: Path) -> int:
     return max(ns, default=0)
 
 
+def latest_cut(run_dir: Path) -> int:
+    """The newest version with a rendered cut: a job stopped in its render leaves an edl_vN without one."""
+    vs = [int(m.group(1)) for p in run_dir.glob("cut_v*.mp4") if (m := re.fullmatch(r"cut_v(\d+)\.mp4", p.name))]
+    return max(vs, default=0) or latest_version(run_dir)
+
+
 def result_message(st: State, job: Job) -> dict:
-    """The agent's chat line when a job ends: the newest version and its score, or the error."""
+    """The agent's chat line when a job ends: the newest version and its score, or the error (after the version on
+    screen then, with what the job spent)."""
     d = st.runs / job.run
     if job.rc != 0:
-        return {"role": "agent", "text": f"{job.label} failed (exit {job.rc}). The log has the details.", "kind": "error"}
+        free = " Nothing was charged." if not job.charged else f" It spent ${job.charged:.3f} before it stopped."
+        what = "was stopped" if job.rc < 0 else f"failed (exit {job.rc}). The log has the details"
+        return {"role": "agent", "text": f"{job.label} {what}.{free}", "kind": "error", "job": job.id,
+                "charged_usd": job.charged, "after": latest_cut(d) or None}
     vs = sorted(int(m.group(1)) for p in d.glob("cut_v*.mp4") if (m := re.fullmatch(r"cut_v(\d+)\.mp4", p.name)))
     n = vs[-1] if vs else None
     rv = read_json(d / f"review_v{n}.json") if n else None
@@ -208,10 +224,15 @@ def result_message(st: State, job: Job) -> dict:
         said = " ".join(x for x in (rec.get("reply"), rec.get("question")) if x)
         if rec.get("skipped"):
             said += " Not done: " + "; ".join(rec["skipped"]) + "."
+        if isinstance(rec.get("pending"), dict):  # a structural or costly ask waits for the editor's Apply (--preview)
+            return {"role": "agent", "kind": "preview", "text": said.strip(), "after": rec.get("from"),
+                    "message": rec.get("message"), "router": rec.get("router"), "pending": rec["pending"],
+                    "scope": rec.get("scope"), "retry_of": rec.get("retry_of")}
         if not rec.get("version") and rec.get("ops") and not rec.get("done"):
             said += " Nothing changed, so there is no new version."
         return {"role": "agent", "kind": "ask", "text": said.strip() or "Nothing to change.", "version": rec.get("version"),
-                "after": rec.get("from"), "message": rec.get("message"), "router": rec.get("router")}
+                "after": rec.get("from"), "message": rec.get("message"), "router": rec.get("router"),
+                "pending": rec.get("pending")}
     if job.kind == "hook":
         rec = job_json(job) or {}
         if rec.get("stop"):
@@ -249,7 +270,7 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
         cmd = [sys.executable, *args]
         logp = d / "run.log"
         job = Job(id=jid, run=run_id, kind=kind, label=label, cmd=cmd, out=str(out),
-                  log_pos=logp.stat().st_size if logp.is_file() else 0)
+                  log_pos=logp.stat().st_size if logp.is_file() else 0, spent_at=ledger_total(d))
         fh = out.open("w")
         job.proc = subprocess.Popen(cmd, cwd=st.root, stdout=fh, stderr=subprocess.STDOUT, env=os.environ.copy())
         st.jobs[run_id] = job
@@ -259,6 +280,7 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
     def wait():
         rc = job.proc.wait()
         fh.close()
+        job.charged = round(max(0.0, ledger_total(d) - job.spent_at), 5)
         job.rc, job.ended = rc, time.time()
         chat_append(d, result_message(st, job))
 
@@ -1496,7 +1518,7 @@ def create_app(root: Path) -> FastAPI:
         text = (b.get("message") or b.get("instruction") or "").strip()
         if not text:
             raise HTTPException(400, "the message is empty")
-        frm = int(b.get("from") or latest_version(d))
+        frm = int(b.get("from") or latest_cut(d))
         passes = int(b.get("review") or 0)
         use = key_ok()
         if not use:
@@ -1505,10 +1527,85 @@ def create_app(root: Path) -> FastAPI:
             budget.require("Ask Montivo", COST["ask"] + COST["plan_open" if model else "plan"] + COST["review"] * passes)
         chips = [str(c) for c in b.get("chips") or []]
         msg = text + (f" (about {', '.join(chips)})" if chips else "")
+        scope = b.get("scope") if isinstance(b.get("scope"), dict) else None
         args = ["-m", "montivo.agent", f"runs/{run_id}", "--message", msg, "--from", str(frm), "--review", str(passes),
-                "--planner", "open" if model else "spark", *([] if use else ["--no-model"])]
+                "--planner", "open" if model else "spark", *([] if use else ["--no-model"]),
+                *(["--scope", json.dumps(scope)] if scope else []), *(["--preview"] if b.get("preview") else [])]
         job = start_job(st, run_id, "ask", "Ask Montivo", args,
                         chat={"role": "user", "text": text, "chips": chips + [f"v{frm}"], "kind": "ask"})
+        return {"job": job.public()}
+
+    def pending_of(d: Path, pid: str) -> dict:
+        from ..agent import PENDING_ID
+        p = d / "ui" / "pending" / f"{pid}.json"
+        rec = read_json(p) if PENDING_ID.match(pid or "") else None
+        if not rec:
+            raise HTTPException(404, "no such proposal")
+        if rec.get("status") not in ("open", "running"):
+            raise HTTPException(409, f"this proposal was already {rec.get('status')}")
+        return rec
+
+    @app.post("/api/runs/{run_id}/ask/apply")
+    async def ask_apply(run_id: str, request: Request):
+        """{"pending": id, "review": passes}: Apply on a previewed proposal (agent.py --apply): its ops from its version,
+        one rendered version; a re-plan plans now, once."""
+        run_id = await own(run_id, request)
+        d = st.run_dir(run_id)
+        b = await request.json()
+        rec = pending_of(d, str(b.get("pending") or ""))
+        passes = int(b.get("review") or 0) if key_ok() else 0
+        est = float(rec.get("card", {}).get("usd") or 0) - COST["review"] * int(rec.get("passes") or 0) + COST["review"] * passes
+        if est > 0.001:
+            need_key("Applying this change", est)
+        args = ["-m", "montivo.agent", f"runs/{run_id}", "--apply", rec["id"], "--review", str(passes)]
+        job = start_job(st, run_id, "ask", "Ask Montivo", args,
+                        chat={"role": "user", "kind": "apply", "pending": rec["id"], "text": "Apply"})
+        return {"job": job.public()}
+
+    @app.post("/api/runs/{run_id}/ask/retry")
+    async def ask_retry(run_id: str, request: Request):
+        """{"pending": id}: Try something else: the same message routed once more with the turned-down proposal in the
+        prompt, no review (one router call, about $0.006; keywords without the key)."""
+        run_id = await own(run_id, request)
+        d = st.run_dir(run_id)
+        b = await request.json()
+        rec = pending_of(d, str(b.get("pending") or ""))
+        if rec.get("retry_of"):
+            raise HTTPException(409, "one more try per message: ask again in your own words")
+        use = key_ok()
+        args = ["-m", "montivo.agent", f"runs/{run_id}", "--retry", rec["id"], "--preview", "--review", "0",
+                "--planner", "open" if rec.get("planner") else "spark", *([] if use else ["--no-model"])]
+        job = start_job(st, run_id, "ask", "Ask Montivo", args,
+                        chat={"role": "user", "kind": "retry", "pending": rec["id"], "text": "Try something else"})
+        return {"job": job.public()}
+
+    def paid_cmd(d: Path, args: list[str]) -> bool:
+        """Whether a job's command calls a Meta model: the run, review and hook commands, the agent's router (not with
+        --no-model, not an Apply whose proposal is $0), a re-plan, a look from words, new title words or a review."""
+        if "--no-model" in args:
+            return False
+        if "--review" in args and args[args.index("--review") + 1] not in ("0", ""):
+            return True
+        if "--apply" in args:
+            rec = read_json(d / "ui" / "pending" / f"{args[args.index('--apply') + 1]}.json") or {}
+            return float((rec.get("card") or {}).get("usd") or 0) - COST["review"] * int(rec.get("passes") or 0) > 0.001
+        return args[1] in ("montivo.cli", "montivo.agent") or any(x in args for x in ("replan", "--prompt", "--title"))
+
+    @app.post("/api/runs/{run_id}/retry")
+    async def retry_job(run_id: str, request: Request):
+        """Try again on the run's last job when it failed: the same command once more."""
+        run_id = await own(run_id, request)
+        st.run_dir(run_id)
+        j = st.job(run_id)
+        if not j or j.ended is None or not j.rc:
+            raise HTTPException(409, "nothing failed to try again")
+        args = j.cmd[1:]
+        if j.kind == "run" and "--resume" not in args:
+            args.append("--resume")  # the stages that finished stay: a second try pays only for the rest
+        if paid_cmd(st.runs / run_id, args):
+            need_key(j.label)
+        job = start_job(st, run_id, j.kind, j.label, args,
+                        chat={"role": "user", "kind": "retry_job", "job": j.id, "text": f"Try again: {j.label}"})
         return {"job": job.public()}
 
     @app.post("/api/runs/{run_id}/review")

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, fileUrl, tc, usd } from "./api";
 import { originKind, originLabel, parentOf } from "./edit";
 import { Icon } from "./icons";
-import type { Costs, HeadsInfo, Planner, RunState, Version } from "./types";
+import type { CaptionLine, Costs, HeadsInfo, Planner, RunState, Version } from "./types";
 
 const mb = (b: number | null | undefined) => (b == null ? "–" : b > 1e9 ? `${(b / 1e9).toFixed(2)} GB` : `${(b / 1e6).toFixed(1)} MB`);
 
@@ -67,9 +67,10 @@ export type CaptionEdit = { at: number; text: string };
 
 /** The caption lines of a version; each can be retexted where Voice misheard a word. Edits are staged here and applied
  *  together as the next version (the reviewer's caption_text patch, $0, a re-render), so four fixes are one render. */
-export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply }: {
+export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk }: {
   v: Version | null; t: number; next: number; canEdit: string | null; onSeek: (a: number) => void;
   onApply: (edits: CaptionEdit[]) => void;
+  onAsk?: (line: CaptionLine) => void; // the line goes to the chat as "this" (UX B3)
 }) {
   const lines = v?.caption_lines ?? [];
   const st = v?.caption_style;
@@ -137,6 +138,8 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply }: {
                 {staged[c.id] ? <span className="lr-flag edited">edited</span> : c.over_face && <span className="lr-flag" title="moved off the face">moved</span>}
                 <button className="icon-btn lr-edit" disabled={!!canEdit} title={canEdit ?? "Edit this line"}
                   onClick={(e) => { e.stopPropagation(); open(c.id, c.text); }}><Icon name="pencil" size={13} /></button>
+                {onAsk && <button className="icon-btn lr-edit" title="Ask Montivo about this line"
+                  onClick={(e) => { e.stopPropagation(); onAsk(c); }}><Icon name="assistant" size={13} /></button>}
               </span>
             </div>
           ))}

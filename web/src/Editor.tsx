@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, dur, fileUrl, tc, usd, useRun } from "./api";
-import { Assistant } from "./Assistant";
+import { Assistant, wordScope, type Selection } from "./Assistant";
 import { EditDialog, LedgerDialog, ShortcutsDialog } from "./Dialogs";
 import { ExportPage } from "./Export";
 import { childOf, clipsAsk, cutAsk, flatWords, layout, parentOf, projectName, splitAt, type CutAsk, type WordSel } from "./edit";
@@ -15,6 +15,7 @@ import { FPS, Player, type PlayerHandle } from "./Player";
 import { draftCount, EMPTY_DRAFT, StyleCanvas, StylePanel, usePreview, type StyleDraft } from "./Style";
 import { Timeline, ZOOM_MAX, ZOOM_MIN, type ClipMenu, type MoveAsk, type TrimAsk } from "./Timeline";
 import { Waiting } from "./Waiting";
+import { ShareMenu } from "./Share";
 import type { LogLine, RunState } from "./types";
 
 type Props = { id: string; replay: number; go: (hash: string) => void };
@@ -57,6 +58,7 @@ export function Editor({ id, replay, go }: Props) {
   const splitFrom = useRef<number | null>(null); // a split asked from this version: select its second piece when it lands
   const [current, setCurrent] = useState<Current | null | undefined>(replay ? null : undefined); // undefined: still loading
   const [wordSel, setWordSel] = useState<WordSel | null>(null); // words selected in the transcript view
+  const [capSel, setCapSel] = useState<Selection["caption"]>(null); // a caption line picked in the Captions panel for the chat
   const [t, setT] = useState(0);
   const tRef = useRef(0);
   const [playing, setPlaying] = useState(false);
@@ -141,6 +143,12 @@ export function Editor({ id, replay, go }: Props) {
     setSelKeys((ks) => ks.filter((k) => v.spans.some((sp) => sp.id === k)));
   }, [v?.n]); // eslint-disable-line
   useEffect(() => setWordSel(null), [v?.n, tlMode]);
+  useEffect(() => setCapSel(null), [v?.n]);
+  // what the chat's "this" means: the selected clips, the transcript words, the caption line (UX B3)
+  const selection = useMemo<Selection>(() => ({
+    clips: selKeys.length ? selKeys : block?.kind === "span" ? [block.span!.id] : [],
+    words: wordScope(flatWords(blocks), wordSel), caption: capSel,
+  }), [selKeys, block, blocks, wordSel, capSel]);
   useEffect(() => setStyleDraft(EMPTY_DRAFT), [v?.n]);
   // the timeline's faders: staged against the version's own mix and heard live through its stems (Mix.ts)
   const mixBase = mixOf(v);
@@ -169,7 +177,8 @@ export function Editor({ id, replay, go }: Props) {
     try {
       const r = await api<{ job?: { run?: string } }>(`/api/runs/${id}/${path}`, body);
       if (r.job?.run && r.job.run !== id) go(`#/run/${r.job.run}`); // the hosted demo edits the judge's own copy of a sample
-    } catch (e) { flash(String((e as Error).message), "error"); }
+      return true;
+    } catch (e) { flash(String((e as Error).message), "error"); return false; }
   }, [id, flash, go, forkFrom, newest, state]);
   const shareLink = async (n: number) => {
     try {
@@ -404,10 +413,7 @@ export function Editor({ id, replay, go }: Props) {
             </div>
           )}
         </div>
-        <button className="btn quiet share-btn" disabled={!v?.cut || !!replay} onClick={() => v && shareLink(v.n)}
-          title="A read-only page with this version, its blind review and the score history; anyone with the link can watch it">
-          <Icon name="link" /> Share
-        </button>
+        <ShareMenu id={id} version={v?.cut ? v.n : null} disabled={!!replay} onShare={shareLink} flash={flash} />
         <button className="btn export" disabled={!v?.cut} onClick={() => setDialog({ kind: "export" })}><Icon name="export" /> Export</button>
       </header>
 
@@ -426,8 +432,10 @@ export function Editor({ id, replay, go }: Props) {
       <aside className="panel">
         {panel === "assistant" && (
           <Assistant state={state} versions={visible} lines={lines} job={job} seen={seen} progress={progress} replay={replay} v={v}
-            clip={block?.kind === "span" ? block.span!.id : null} getTime={getTime} focusNonce={askNonce}
-            onSend={(text, chips, review, planner) => act("ask", { message: text, chips, from: v?.n, review, planner })}
+            selection={selection} getTime={getTime} focusNonce={askNonce}
+            onSend={(text, chips, review, planner, scope, latest) => act("ask", { message: text, chips, scope, from: latest ? undefined : v?.n, review, planner, preview: true })}
+            onApply={(pending, review) => act("ask/apply", { pending, review })} onRetry={(pending) => act("ask/retry", { pending })}
+            onRetryJob={() => act("retry", {})}
             onStop={() => act("stop", {})} onPick={pick} onSeek={(x) => { player.current?.pause(); seek(x); }}
             onCompare={(a, b) => go(`${base}/compare?a=${a}&b=${b}${replay ? `&replay=${replay}` : ""}`)}
             onRestore={canEdit ? null : (n) => act("restore", { from: n })} />
@@ -435,6 +443,7 @@ export function Editor({ id, replay, go }: Props) {
         {panel === "media" && <MediaPanel state={state} />}
         {panel === "captions" && (
           <CaptionsPanel v={v} t={t} next={next} canEdit={canEdit} onSeek={seek}
+            onAsk={(c) => { setCapSel({ t_in: c.t_in, t_out: c.t_out, text: c.text }); setPanel("assistant"); setAskNonce((n) => n + 1); }}
             onApply={(edits) => { setPanel("assistant"); act("caption", { edits, from: v?.n }); }} />
         )}
         {panel === "style" && (
