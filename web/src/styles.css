@@ -953,6 +953,7 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 /* phones and narrow windows: the editor becomes a review mode (player, review, chat, export), no timeline or panels */
 .mobile-note { display: none; }
 @media (max-width: 900px) {
+  body { overflow: auto; } /* the stacked review mode and Home are taller than the screen: body's hidden reached the viewport, nothing scrolled on a phone (28/10) */
   .editor {
     min-width: 0; height: auto; min-height: 100vh;
     grid-template-columns: minmax(0, 1fr); grid-template-rows: 52px auto auto auto auto;
