@@ -255,14 +255,29 @@ def set_aside_unrendered(run_dir: Path, after: int, job_id: str) -> list[int]:
     return sorted(moved)
 
 
+def refusal(job: Job) -> str | None:
+    """The one line an edit that refused to run printed (a SystemExit: "no pause over 0.6 s in edl_v9", "punch-ins are
+    already on"), for the chat; None for a crash (a traceback) or a job that printed nothing."""
+    try:
+        text = Path(job.out).read_text(errors="replace") if job.out else ""
+    except OSError:
+        return None
+    lines = [x.strip() for x in text.splitlines() if x.strip()]
+    if not lines or "Traceback (most recent call last)" in text or lines[-1].startswith("[") or len(lines[-1]) > 240:
+        return None
+    return lines[-1]
+
+
 def result_message(st: State, job: Job) -> dict:
     """The agent's chat line when a job ends: the newest version and its score, or the error (after the version on
     screen then, with what the job spent)."""
     d = st.runs / job.run
     if job.rc != 0:
         free = " Nothing was charged." if not job.charged else f" It spent ${job.charged:.3f} before it stopped."
-        what = "was stopped" if job.rc < 0 else f"failed (exit {job.rc}). The log has the details"
-        return {"role": "agent", "text": f"{job.label} {what}.{free}", "kind": "error", "job": job.id,
+        why = refusal(job) if job.rc > 0 else None
+        what = " was stopped" if job.rc < 0 else f": {why.rstrip('.')}" if why \
+            else f" failed (exit {job.rc}). The log has the details"
+        return {"role": "agent", "text": f"{job.label}{what}.{free}", "kind": "error", "job": job.id,
                 "charged_usd": job.charged, "after": latest_cut(d) or None}
     vs = sorted(int(m.group(1)) for p in d.glob("cut_v*.mp4") if (m := re.fullmatch(r"cut_v(\d+)\.mp4", p.name)))
     n = vs[-1] if vs else None

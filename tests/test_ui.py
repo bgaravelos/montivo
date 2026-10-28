@@ -640,3 +640,17 @@ def test_the_ui_page_is_never_cached_and_its_hashed_assets_are(tmp_path):
     assert "etag" not in page.headers and "last-modified" not in page.headers
     again = c.get("/", headers={"If-None-Match": '"anything"', "If-Modified-Since": "Thu, 01 Jan 1970 00:00:00 GMT"})
     assert again.status_code == 200 and js in again.text
+
+
+def test_a_refused_edit_says_why_in_the_chat(tmp_path):
+    # bug bash 28/10: "Remove pauses failed (exit 1). The log has the details." where the edit only said "no pause over
+    # 0.6 s in edl_v9" (and "punch-ins are already on", "nothing to change"); the chat now carries that line
+    from montivo.server.app import Job, State, result_message
+    _run_folder(tmp_path)
+    out = tmp_path / "job.out"
+    out.write_text("[ 0.2s] montivo pauses: reading edl_v9\nno pause over 0.6 s in edl_v9\n")
+    job = Job(id="j", run="r1", kind="pauses", label="Remove pauses", cmd=[], out=str(out), rc=1)
+    assert result_message(State(tmp_path), job)["text"] == \
+        "Remove pauses: no pause over 0.6 s in edl_v9. Nothing was charged."
+    out.write_text("Traceback (most recent call last):\n  File \"x.py\", line 1\nKeyError: 'spans'\n")
+    assert "failed (exit 1). The log has the details" in result_message(State(tmp_path), job)["text"]
