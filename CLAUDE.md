@@ -655,8 +655,9 @@ at HEAD and at 8a69087 (then live): every frame and the audio identical (vs the 
 go relayed from another session) as Modal v22 = 6950547 at 22:26, from a clean worktree; no web container was running
 before it; live /api/health 200 (no root, upload 1000 MB), /api/runs 401, /s/nope 404, host spend $2.72 of $15; smoke
 drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 8.9 s; `--music midnight_cruiser` 37.9 s, -14.0 / -1.7, margin 17.1
-dB; `--cover` headline and sticker pass every check (zscale yes). Billy's phone check of the two live Must fixes
-(scroll, Style preview, Export cover) pending; tag `freeze-2026-10-31` waits for his go.
+dB; `--cover` headline and sticker pass every check (zscale yes). Billy checked it live (28/10): phone scroll on Home
+and the review mode, Style preview (desktop only: the rail is hidden under 900 px) and Export cover work. Tag
+`freeze-2026-10-31` on c545d70 (his go): from here only what breaks the demo changes.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
