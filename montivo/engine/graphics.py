@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -49,6 +49,7 @@ CALLOUT_BG = (255, 198, 41, 240)
 TOP_RANGE = (160, 1700)
 ACTIVE_MODES = ("pill", "color", "karaoke", "none")
 CASES = ("as_said", "upper")
+LINE_BREAKS = ("greedy", "phrase")
 
 
 @dataclass
@@ -78,6 +79,7 @@ class Look:
     callout_fg: str = "#000000"
     highlight_add: list[str] = field(default_factory=list)
     highlight_off: list[str] = field(default_factory=list)
+    line_breaks: str = "greedy"  # captions.group_lines; build_edl writes "phrase" into every new EDL's look
 
     def to_json(self) -> dict:
         return asdict(self)
@@ -125,6 +127,8 @@ def normalize_look(d: dict | None) -> Look:
         raise ValueError(f"active must be one of {', '.join(ACTIVE_MODES)}")
     if vals["case"] not in CASES:
         raise ValueError(f"case must be one of {', '.join(CASES)}")
+    if vals["line_breaks"] not in LINE_BREAKS:
+        raise ValueError(f"line_breaks must be one of {', '.join(LINE_BREAKS)}")
     if vals["position"] not in ("auto", "fixed"):
         raise ValueError("position must be auto or fixed")
     for k, lo, hi in (("size", 40, 160), ("stroke_w", 0, 16), ("max_words", 1, 6), ("top", *TOP_RANGE)):
@@ -140,6 +144,13 @@ def normalize_look(d: dict | None) -> Look:
             raise ValueError(f"{k} must be a list of words")
         vals[k] = sorted({w.strip().lower() for w in vals[k] if w.strip()})
     return Look(**vals)
+
+
+def restyle(current: dict | None, new: dict | None) -> Look:
+    """The look a style edit makes: `new` normalized, with the line breaks of the EDL's `current` look. The breaks
+    belong to the version (build_edl writes "phrase" into every new EDL), not to a preset or a saved look: picking one
+    must not move the lines a person retexted."""
+    return replace(normalize_look(new), line_breaks=normalize_look(current).line_breaks)
 
 
 def rgba(hexstr: str) -> tuple[int, int, int, int]:

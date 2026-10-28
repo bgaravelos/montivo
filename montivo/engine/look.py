@@ -20,7 +20,7 @@ from PIL import Image
 
 from .captions import OUT_H, OUT_W, build_overlays
 from .frame import frame_for
-from .graphics import _HEX, ACTIVE_MODES, CASES, FONTS, PRESET_NAMES, PRESETS, TOP_RANGE, Look, normalize_look
+from .graphics import _HEX, ACTIVE_MODES, CASES, FONTS, PRESET_NAMES, PRESETS, TOP_RANGE, Look, normalize_look, restyle
 from .render import load_reframe_track, load_speaker_ids, load_track, plan_paths
 
 
@@ -46,7 +46,7 @@ def with_style(edl: dict, look: dict | None, callouts: dict[str, list[float] | N
     a bad look."""
     out = copy.deepcopy(edl)
     if look is not None:
-        out["look"] = normalize_look(look).to_json()
+        out["look"] = restyle(edl.get("look"), look).to_json()
     by_id = {s["id"]: s for s in out["spans"]}
     for sid, xy in (callouts or {}).items():
         if sid in by_id:

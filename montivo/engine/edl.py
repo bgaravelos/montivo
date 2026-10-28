@@ -155,6 +155,8 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
         "reframe_concept": reframe_concept,  # the SAM concept the 9:16 crop follows (falls back to person)
         "glossary": {},  # this run's caption name fixes {"heard": "written"} and highlighted names (captions.py)
         "highlight": [],
+        # caption lines break where a phrase allows (captions.phrase_breaks); an EDL without it keeps the greedy lines
+        "look": {"line_breaks": "phrase"},
         "captions": [],  # filled by the caption step (evening 3)
         "reframe": [],  # filled by the reframe step (evening 2)
     }

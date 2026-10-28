@@ -7,8 +7,9 @@ segment are exactly as long as each other and no drift builds up across cuts.
 
 Video: per segment, accurate input seek on the source, crop x driven per frame by a sendcmd file from the reframe
 path, full-height crop scaled to 1080x1920 (or the EDL's other aspect, frame.py), libx264 crf 18, no audio; then the concat demuxer joins the segments
-with stream copy. Audio: atrim per segment over the source, a 20 ms fade in and out against clicks, the concat filter,
-then loudness in two passes: loudnorm measures the joined audio first, the second pass applies one fixed gain to
+with stream copy. Audio: atrim per segment over the source with 10 ms handles past each cut, an equal-power 20 ms
+crossfade centred on every cut (the joined audio keeps the frames' length; the old 20 ms fade out + fade in dipped
+40 ms at every cut), then loudness in two passes: loudnorm measures the joined audio first, the second pass applies one fixed gain to
 -14 LUFS (loudnorm linear mode with the measured values), so room tone stays as far under speech as in the source
 (single-pass loudnorm is a dynamic AGC and lifted the room tone at cut starts by up to 28 dB). When that gain would
 push the true peak over -1.5 dBTP, a 4x oversampled lookahead limiter takes the peaks off after the gain and the
@@ -69,7 +70,8 @@ from .speakers import follow_ids
 
 OUT_W, OUT_H = FRAME_916.w, FRAME_916.h
 AUDIO_RATE = 48000
-AUDIO_FADE_S = 0.02
+AUDIO_FADE_S = 0.02  # fade in at the cut's first in point, out at its last out point
+AUDIO_XFADE_S = 0.02  # every cut: an equal-power crossfade this long, centred on the cut (10 ms of handle each side)
 CONTIGUOUS_GAP_S = 0.05
 TITLE_S = 1.5
 TITLE_FADE_S = 0.3
@@ -571,10 +573,59 @@ def _loudness_encoded(source: Path | list[Path], joined: str, out: Path) -> dict
     return rec
 
 
+def handles(segments: list[Segment], source_s: float | None = None, xfade_s: float = AUDIO_XFADE_S) -> list[tuple[int, int]]:
+    """(samples before t_in, samples after t_out) each segment's audio reads past its edges for the crossfades: half the
+    crossfade on each side of every cut, none at the cut's first in point and last out point, never outside the
+    source (0 .. source_s)."""
+    half = int(xfade_s * AUDIO_RATE / 2)
+    out = []
+    for i, seg in enumerate(segments):
+        before = 0 if i == 0 else min(half, int(seg.t_in * AUDIO_RATE))
+        after = 0 if i == len(segments) - 1 else half
+        if after and source_s is not None:
+            after = max(0, min(after, int((source_s - seg.t_out) * AUDIO_RATE)))
+        out.append((before, after))
+    return out
+
+
+def cut_graph(segments: list[Segment], source_s: float | None = None, xfade_s: float = AUDIO_XFADE_S) -> list[str]:
+    """The filter lines that cut the source audio into the segments and join them as [cut]: each segment read with
+    its handles (handles()), every cut an equal-power crossfade (quarter-sine both ways, sin^2 + cos^2 = 1) centred on
+    the cut over both handles, so the joined audio is exactly as long as the segments' frames and room tone runs
+    through the cut instead of dipping; a short fade in at the first in point and out at the last out point. The old
+    join (a 20 ms fade out, then a 20 ms fade in) dropped the level for 40 ms at every cut."""
+    fmt = f"aformat=sample_fmts=fltp:sample_rates={AUDIO_RATE}:channel_layouts=stereo"
+    hs = handles(segments, source_s, xfade_s)
+    lines = []
+    for i, (seg, (before, after)) in enumerate(zip(segments, hs)):
+        start = round(seg.t_in * AUDIO_RATE) - before
+        n = round(seg.duration * AUDIO_RATE) + before + after
+        fades = []
+        if i == 0:
+            fades.append(f"afade=t=in:st=0:d={AUDIO_FADE_S}")
+        if i == len(segments) - 1:
+            fades.append(f"afade=t=out:st={max(0.0, n / AUDIO_RATE - AUDIO_FADE_S):.6f}:d={AUDIO_FADE_S}")
+        lines.append(f"[0:a]aresample={AUDIO_RATE},atrim=start={start / AUDIO_RATE:.9f}:duration={n / AUDIO_RATE:.9f},"
+                     f"asetpts=PTS-STARTPTS,{','.join(fades + [fmt])}[s{i}]")
+    cur = "[s0]"
+    for i in range(1, len(segments)):
+        ns = hs[i - 1][1] + hs[i][0]
+        nxt = "[cut]" if i == len(segments) - 1 else f"[x{i}]"
+        if ns >= 2:
+            lines.append(f"{cur}[s{i}]acrossfade=ns={ns}:c1=qsin:c2=qsin{nxt}")
+        else:  # both edges at the source's ends: nothing to overlap
+            lines.append(f"{cur}[s{i}]concat=n=2:v=0:a=1{nxt}")
+        cur = nxt
+    if len(segments) == 1:
+        lines[-1] = lines[-1][:-len("[s0]")] + "[cut]"
+    return lines
+
+
 def render_audio(source: Path, segments: list[Segment], render_dir: Path, lead_s: float = 0.0,
                  loudnorm: bool = True, music: dict | None = None, words: list[dict] | None = None, audio=None,
-                 stem_name: str = "cut") -> tuple[Path, dict | None, dict | None]:
-    """All segments' audio: atrim per segment, 20 ms fades, `lead_s` of silence in front (title card), concat, then
+                 stem_name: str = "cut", source_s: float | None = None) -> tuple[Path, dict | None, dict | None]:
+    """All segments' audio: cut with equal-power crossfades at every cut (cut_graph; `source_s` keeps the handles
+    inside the source), `lead_s` of silence in front (title card), concat, then
     two-pass loudness (see the module docstring), AAC. Returns the file, a record of the loudness passes and, with a
     `music` bed (engine/music.py), the bed's record: the normalised speech is kept as a float WAV, the ducked bed is
     rendered against the speech intervals (Voice `words`, else `audio`'s speech runs), the two are mixed and the mix
@@ -588,11 +639,8 @@ def render_audio(source: Path, segments: list[Segment], render_dir: Path, lead_s
     if lead_s > 0:
         parts.append(f"anullsrc=r={AUDIO_RATE}:cl=stereo,atrim=duration={lead_s:.6f},{fmt}[lead]")
         labels.append("[lead]")
-    for i, seg in enumerate(segments):
-        d = seg.duration
-        parts.append(f"[0:a]aresample={AUDIO_RATE},atrim=start={seg.t_in:.6f}:duration={d:.6f},asetpts=PTS-STARTPTS,"
-                     f"afade=t=in:st=0:d={AUDIO_FADE_S},afade=t=out:st={max(0.0, d - AUDIO_FADE_S):.6f}:d={AUDIO_FADE_S},{fmt}[a{i}]")
-        labels.append(f"[a{i}]")
+    parts += cut_graph(segments, source_s)
+    labels.append("[cut]")
     joined = ";".join(parts) + ";" + "".join(labels) + f"concat=n={len(labels)}:v=0:a=1"
     speech = render_dir / "speech.wav" if music else out
     rec = None
@@ -928,11 +976,13 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
             vpath = run_dir / "voice" / "voice.json"
             words = json.loads(vpath.read_text())["words"] if vpath.is_file() else None
         stem_name = Path(out_name).stem
+        source_s = (edl.get("source") or {}).get("duration_s")
         akey = audio_key(source, segments, title_s, loudnorm, music, words, run_dir) if cache_dir is not None else None
 
         def make_audio():
             return render_audio(source, segments, render_dir, lead_s=title_s, loudnorm=loudnorm, music=music,
-                                words=words, audio=Audio.load(run_dir) if music else None, stem_name=stem_name)
+                                words=words, audio=Audio.load(run_dir) if music else None, stem_name=stem_name,
+                                source_s=source_s)
         # the audio needs only the segment times: it runs beside the video encodes
         with ThreadPoolExecutor(max_workers=1) as audio_pool:
             audio_job = audio_pool.submit(cached_audio, cache_dir, akey, render_dir, stem_name, make_audio)

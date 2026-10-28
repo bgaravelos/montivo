@@ -9,7 +9,9 @@ Pipeline, all offline:
 4. `group_lines`: 1 to 4 words per line, never across a cut, a pause over 0.45 s or end punctuation, never wider than the
    frame allows; a line that would be up under LINE_MIN_S joins a neighbour of the same phrase when the two fit on one
    line (a one-word line joins the next across end punctuation: "Hi. I'm Billy."), and `hold_short_lines` keeps any
-   line still that short up LINE_MIN_S, starting the next one later.
+   line still that short up LINE_MIN_S, starting the next one later. With the look's `line_breaks` "phrase" (every new
+   EDL) the breaks inside a phrase are the cheapest set (`phrase_breaks`): no line ends on "and" / "a" / "in" when it
+   can be helped, a pause is a good place to break.
 5. `build_overlays`: cut times for every line and word, the head boxes (SAM head track, interpolated, mapped through the
    segment's crop path into output pixels) over each line's interval, the caption pushed below or above the head when
    the lower-third default would touch it; the plan's per-span callouts anchored to the SAM person box. Returns the
@@ -176,13 +178,76 @@ def apply_glossary(words: list[CWord], glossary: dict[str, str]) -> tuple[list[C
     return out, fixes
 
 
+# words a caption line should not end on: articles, conjunctions, prepositions, possessives and subject pronouns lean
+# on the word after them ("agency in Athens and | ...", "raw footage in a | ..." on run 015 v5)
+FUNCTION_WORDS = frozenset("""
+a an the and or but nor so yet if because while although though whether than as of in on at to for with from by into
+onto about over under after before between through without within upon via my your our their his her its i we they he
+she i'm we're they're you're it's that's there's i've we've i'll we'll i'd we'd
+""".split())
+BREAK_LINE = 1.0  # every line costs this: fewer, fuller lines
+BREAK_ONE_WORD = 1.5  # a one-word line inside a phrase of several
+BREAK_FUNCTION = 3.0  # a line ending on a function word
+BREAK_PAUSE = 1.0  # taken off for a break at a pause, scaled up to a pause of BREAK_PAUSE_S
+BREAK_PAUSE_S = 0.3
+BREAK_SHORT = 1.0  # a line up under min_tail_s
+BREAK_TOO_SHORT = 3.0  # a line up under LINE_MIN_S
+
+
+def phrase_breaks(run: list[CWord], style: CaptionStyle, max_words: int, min_tail_s: float = 0.8) -> list[list[CWord]]:
+    """The lines of one phrase (words between two hard breaks) by the cheapest set of break points (a shortest path
+    over the word gaps): each line 1 to max_words words and never wider than the frame, costed by BREAK_* (a line
+    ending on a FUNCTION_WORDS word, a one-word line, a line up under min_tail_s or LINE_MIN_S; a break at a pause is
+    cheaper). A
+    name the glossary produced is never split."""
+    n = len(run)
+    best: list[tuple[float, int]] = [(0.0, 0)] + [(math.inf, 0)] * n  # best[j]: cost of lines over run[:j], last break
+    for j in range(1, n + 1):
+        for i in range(max(0, j - max_words), j):
+            ln = run[i:j]
+            if j - i > 1 and line_width([x.w for x in ln], style) > style.max_w:
+                continue
+            if j < n and run[j - 1].src and run[j - 1].src == run[j].src:
+                continue  # inside a glossary name
+            cost = BREAK_LINE + (BREAK_ONE_WORD if j - i == 1 and n > 1 else 0.0)
+            up = (run[j].t_in if j < n else ln[-1].t_out) - ln[0].t_in  # inside a phrase a line holds to the next
+            if n > 1 and up < min_tail_s:
+                cost += BREAK_TOO_SHORT if up < LINE_MIN_S else BREAK_SHORT
+            if j < n:
+                if norm(run[j - 1].w) in FUNCTION_WORDS:
+                    cost += BREAK_FUNCTION
+                cost -= BREAK_PAUSE * min(1.0, max(0.0, run[j].t_in - run[j - 1].t_out) / BREAK_PAUSE_S)
+            if best[i][0] + cost < best[j][0]:
+                best[j] = (best[i][0] + cost, i)
+    lines: list[list[CWord]] = []
+    j = n
+    while j > 0:
+        i = best[j][1] if best[j][0] < math.inf else j - 1  # a word wider than the frame alone
+        lines.insert(0, run[i:j])
+        j = i
+    return lines
+
+
 def group_lines(words: list[CWord], style: CaptionStyle, max_words: int = LINE_MAX_WORDS,
-                break_gap_s: float = LINE_BREAK_GAP_S, min_tail_s: float = 0.8) -> list[list[CWord]]:
+                break_gap_s: float = LINE_BREAK_GAP_S, min_tail_s: float = 0.8, breaks: str = "greedy") -> list[list[CWord]]:
     """1 to max_words words per line; a new line on a pause, after end punctuation, at a span boundary (the planner
     splits a long turn into spans at sentence ends, and Voice gives no punctuation inside a turn) or when the line would
     get too wide. A name the glossary produced ("Muse Voice") is never split across two lines, a short last line
     borrows words from the line before so it does not flash by, and a line that would be up under min_line_s joins a
-    neighbour of the same phrase when they fit together (merge_short_lines)."""
+    neighbour of the same phrase when they fit together (merge_short_lines).
+
+    `breaks` is the look's `line_breaks`: "greedy" fills each line up to max_words (every EDL from before the flag, so
+    the lines a person retexted keep their place), "phrase" places the breaks inside each phrase by phrase_breaks."""
+    if breaks == "phrase":
+        runs: list[list[CWord]] = []
+        for w in words:
+            if runs and not (w.t_in - runs[-1][-1].t_out > break_gap_s or _END.search(runs[-1][-1].w)
+                             or w.span != runs[-1][-1].span):
+                runs[-1].append(w)
+            else:
+                runs.append([w])
+        lines = [ln for run in runs for ln in phrase_breaks(run, style, max_words, min_tail_s)]
+        return merge_short_lines(lines, style, max_words, break_gap_s)
     lines: list[list[CWord]] = []
     cur: list[CWord] = []
     for w in words:
@@ -584,7 +649,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
     if captions:
         for i, ws in sorted(seg_words.items()):
             seg = segments[i]
-            grouped, forced = apply_overrides(group_lines(ws, style, max_words=look.max_words), overrides)
+            grouped, forced = apply_overrides(group_lines(ws, style, max_words=look.max_words, breaks=look.line_breaks), overrides)
             lines = [Line(words=lw, segment=i) for lw in grouped]
             for ln in lines:
                 ln.word_times = [(cut_t(i, w.t_in), cut_t(i, w.t_out)) for w in ln.words]

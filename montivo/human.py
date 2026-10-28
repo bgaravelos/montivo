@@ -58,7 +58,7 @@ from .engine import broll
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, reset_edges, tighten_edges
 from .engine.edl import build_edl, carry_run_words, edl_summary, normalize_roles
-from .engine.graphics import Look, normalize_look
+from .engine.graphics import Look, normalize_look, restyle
 from .engine.music import DUCK_DB as MUSIC_DUCK_DB, LEVEL_DB as MUSIC_LEVEL_DB, normalize_music
 from .engine.punch import parse_key
 from .engine.render import TITLE_S, merge_segments
@@ -380,7 +380,7 @@ def style_fixes(edl: dict, look: dict | None, callouts: dict[str, list[float] | 
     new_look = None
     if look is not None:
         try:
-            now = normalize_look(look)
+            now = restyle(edl.get("look"), look)
             was = normalize_look(edl.get("look"))
         except ValueError as e:
             raise SystemExit(f"look: {e}")
