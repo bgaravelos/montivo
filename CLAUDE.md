@@ -477,6 +477,8 @@ First real design (015-demo v5): still 1.54 s smiling, "AI That Fixes Itself", h
 The mask decodes with Meta's `meta-sam-parser==0.1.0` (Billy's yes, 28/10; in pyproject and modal_app). First real
 mask (015-demo v5 at 1.54 s, $0.010, 2.4 s): one person, clean edge; the cutout keeps every word at least 80 % visible
 (`WORD_VISIBLE`: "Self-reviewing AI" used to hide "AI" whole behind the head while 89 % of the pixels showed).
+Deployed to Modal 28/10 (commit b214930 + the smoke option): `modal run modal_app.py::smoke --cover` renders the
+newest version's headline and sticker covers on a copy ($0) and imports the parser; old web container stopped.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

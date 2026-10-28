@@ -93,10 +93,12 @@ def budget():
 
 
 @app.function(image=image, volumes={DATA: volume}, cpu=4.0, memory=8192, timeout=900)
-def smoke(run: str = "015", span: str = "s4", music: str = ""):
+def smoke(run: str = "015", span: str = "s4", music: str = "", cover: bool = False):
     """`modal run modal_app.py::smoke`: a $0 drop on a copy of a sample outside the Volume, so this image's ffmpeg is
     checked end to end (render, captions, loudness) without changing what the judges see. `--music ID` puts that
-    bundled music bed under the speech instead (the mix, its loudness and the speech stem)."""
+    bundled music bed under the speech instead (the mix, its loudness and the speech stem). `--cover` renders the
+    newest version's headline and sticker covers instead (engine/thumb.py, $0) and checks Meta's SAM mask parser
+    imports for the cutout."""
     import shutil
     import subprocess
     import sys
@@ -106,6 +108,15 @@ def smoke(run: str = "015", span: str = "s4", music: str = ""):
     (root / "runs").mkdir(parents=True)
     shutil.copytree(Path(DATA) / "runs" / run, root / "runs" / run)
     (root / "footage").symlink_to(Path(DATA) / "footage")
+    if cover:
+        code = ("import json, sys; from pathlib import Path; import meta_sam_parser; from montivo.engine.thumb import cover_image; "
+                "d = Path(sys.argv[1]); n = max(int(p.stem[5:]) for p in d.glob('edl_v*.json')); "
+                "[print(t, json.dumps({k: v for k, v in cover_image(d, n, {'t_s': 2.0, 'template': t, 'text': 'AI that fixes itself', "
+                "'highlight': 'fixes'})[1].items() if k in ('lines', 'size', 'checks')})) for t in ('headline', 'sticker')]")
+        r = subprocess.run([sys.executable, "-c", code, f"runs/{run}"], cwd=root, capture_output=True, text=True,
+                           env={**os.environ, "MODEL_API_KEY": ""})
+        print(r.stdout[-3000:], r.stderr[-3000:], f"exit {r.returncode}", sep="\n", flush=True)
+        return
     op = ["music", f"runs/{run}", "--track", music] if music else ["drop", f"runs/{run}", "--span", span]
     r = subprocess.run([sys.executable, "-m", "montivo.human", *op], cwd=root,
                        capture_output=True, text=True, env={**os.environ, "MODEL_API_KEY": ""})
