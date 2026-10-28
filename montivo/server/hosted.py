@@ -138,7 +138,7 @@ button { padding: 12px 14px; border: 0; border-radius: 8px; background: var(--ma
 </style></head>
 <body><form method="post" action="/api/login">
 <h1>montivo <span>[v]</span></h1>
-<p>The hosted demo for the Meta hackathon judges. The password is in the submission and the README.</p>
+<p>The hosted demo for the Meta hackathon judges. The password is in the submission form.</p>
 __ERROR__
 <input type="password" name="password" placeholder="Password" autocomplete="current-password" autofocus required>
 <button type="submit">Sign in</button>
