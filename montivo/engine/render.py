@@ -915,13 +915,15 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
             title_frames = int(round(TITLE_S * fps))
             title_s = title_frames / fps
         overlays: dict[int, list[Overlay]] = {}
-        if (captions and words) or callouts:
+        if words or callouts:
+            # without captions (the clean export) the lines are still laid out, not drawn: the callouts, punch-ins
+            # and a pip go where the captioned version has them; the EDL then records no caption lines
             fields, overlays = build_overlays(edl, words or [], segments, paths, load_track(run_dir, edl, "head"),
                                               load_track(run_dir, edl, "person"), ov_dir, title_s=title_s,
-                                              captions=bool(captions and words), callouts=callouts,
-                                              reframe_concept=concept)
+                                              captions=bool(words), callouts=callouts, reframe_concept=concept,
+                                              draw_captions=captions)
             edl.update(fields)
-            log(f"render: {len(fields['captions'])} caption lines "
+            log(f"render: {len(fields['captions'])} caption lines{'' if captions else ' laid out, not drawn'} "
                 f"({sum(1 for c in fields['captions'] if c['placement'] in ('below_head', 'above_head'))} moved off the head, "
                 f"{sum(1 for c in fields['captions'] if c['over_face'])} over it), {len(fields['callouts'])} callouts, "
                 f"{len(fields['caption_corrections'])} corrections: "
@@ -951,6 +953,8 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
             log(f"render: {len(edl['punch_ins'])} punch-ins" + "".join(
                 f"{'; ' if k else ': '}{e['t_in']:.1f}s {e.get('word') or 'jump cut'} x{e['zoom']}"
                 for k, e in enumerate(edl["punch_ins"])))
+        if not captions:
+            edl.update({"captions": [], "caption_corrections": []})
         encodes: list[Encode] = []
         owner: list[int] = []  # the segment index of each encode, -1 for the title clip
         if title_png is not None:

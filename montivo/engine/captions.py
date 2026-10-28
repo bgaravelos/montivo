@@ -610,7 +610,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                    person_track: dict | None, out_dir: Path, title_s: float = 0.0, captions: bool = True,
                    callouts: bool = True, glossary: dict[str, str] | None = None,
                    style: CaptionStyle | None = None, reframe_concept: str | None = None,
-                   draw_at: float | None = None) -> tuple[dict, dict[int, list[Overlay]]]:
+                   draw_at: float | None = None, draw_captions: bool = True) -> tuple[dict, dict[int, list[Overlay]]]:
     """Caption lines and callouts for the rendered segments.
 
     `segments` are render.Segment (frame-aligned), `paths` the reframe SegmentPath of each (crop x per source frame).
@@ -624,6 +624,8 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
     keeps every line off the head from the look's `top`, fixed puts every line at `top` (placement "fixed", a person's
     choice: the review loop does not move it). A span's `callout_xy` [x, y] pins its callout there (placement
     "pinned"). `draw_at` (cut seconds) draws only the PNGs on screen at that time, for the editor's preview still.
+    `draw_captions` False lays the lines out (their boxes keep the callouts, punch-ins and a pip where the captioned
+    version has them) but draws none: the clean export.
     The frame is the EDL's aspect (frame.frame_for): the look's top, a forced top and a pinned callout are 1920-frame
     y's, scaled to it; the boxes in the returned entries are in its pixels.
     """
@@ -735,7 +737,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                     png = out_dir / f"cap_{n_line:03d}_{k + 1}.png"
                     ka = la if k == 0 else ln.word_times[k][0] - seg_cut[i]
                     kb = lb if k == len(texts) - 1 else ln.word_times[k + 1][0] - seg_cut[i]
-                    if kb > ka and on_screen(seg_cut[i] + ka, seg_cut[i] + kb):
+                    if draw_captions and kb > ka and on_screen(seg_cut[i] + ka, seg_cut[i] + kb):
                         draw_caption(texts, k, hl, lstyle, png)
                         overlays[i].append(Overlay(png=png, x=x, y=y, t_in=round(ka, 4), t_out=round(kb, 4)))
                 cap_entries.append({

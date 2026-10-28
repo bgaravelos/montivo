@@ -413,7 +413,7 @@ def render_run(run_dir: Path, edl_path: Path | None = None, source: Path | None 
     log(f"montivo render: {edl_path} -> {run_dir / out_name}")
     words = None
     vpath = run_dir / "voice" / "voice.json"
-    if captions and vpath.is_file():
+    if vpath.is_file():  # without captions too: the clean export lays them out for the punch-ins, pip and callouts
         words = json.loads(vpath.read_text())["words"]
     elif captions:
         log(f"render: {vpath} missing, no captions")
