@@ -180,3 +180,21 @@ def test_saved_looks(tmp_path, monkeypatch):
     assert len(c.get("/api/looks").json()["saved"]) == 1 and (tmp_path / "looks" / "saved.json").is_file()
     assert c.delete("/api/looks/saved/nocta-brand").json()["saved"] == []
     assert c.delete("/api/looks/saved/nocta-brand").status_code == 404
+
+
+def test_layout_and_preview_pass_the_reframe_concept(tmp_path, monkeypatch):
+    # bug bash 28/10: Batch F's reframe_inputs left look.layout and look.preview reading a `concept` they no longer
+    # set: every cover render, the feed pre-flight and the Style preview answered 500 (NameError)
+    from montivo.engine import look as L
+    seen = []
+    monkeypatch.setattr(L, "reframe_inputs", lambda run_dir, edl: ("head", None, {}, None))
+    monkeypatch.setattr(L, "plan_paths", lambda edl, track, ids, fallback=None: ([SimpleNamespace(duration=1.0, index=0)], []))
+    monkeypatch.setattr(L, "load_track", lambda run_dir, edl, concept: None)
+    monkeypatch.setattr(L, "frame_at", lambda run_dir, edl, t, plan=None: Image.new("RGBA", (8, 8)))
+    def fake_overlays(*a, **kw):
+        seen.append(kw["reframe_concept"])
+        return {"captions": [], "callouts": [], "caption_style": {"look": {}}}, {}
+    monkeypatch.setattr(L, "build_overlays", fake_overlays)
+    assert L.layout(tmp_path, {}) == {"captions": [], "callouts": [], "caption_style": {"look": {}}}
+    L.preview(tmp_path, {}, 0.5)
+    assert seen == ["head", "head"]

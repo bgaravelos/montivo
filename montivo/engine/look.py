@@ -109,7 +109,7 @@ def preview(run_dir: Path, edl: dict, t: float, cut: Path | None = None) -> tupl
         vf = (f"scale={OUT_W}:{OUT_H}" if (fr.w, fr.h) == (OUT_W, OUT_H) else
               f"scale={fr.w}:{fr.h}:force_original_aspect_ratio=increase,crop={fr.w}:{fr.h}")
         return grab(cut, t, vf), {"captions": [], "callouts": [], "title": True}
-    _, track, speaker_ids, fallback = reframe_inputs(run_dir, edl)
+    concept, track, speaker_ids, fallback = reframe_inputs(run_dir, edl)
     segments, paths = plan_paths(edl, track, speaker_ids, fallback=fallback)
     vpath = run_dir / "voice" / "voice.json"
     words = json.loads(vpath.read_text())["words"] if vpath.is_file() else []
@@ -144,7 +144,7 @@ def preview(run_dir: Path, edl: dict, t: float, cut: Path | None = None) -> tupl
 def layout(run_dir: Path, edl: dict) -> dict:
     """The caption and callout entries a render of `edl` would write (boxes in its frame's pixels), without drawing or
     rendering anything: the Export page's pre-flight for a feed aspect."""
-    _, track, speaker_ids, fallback = reframe_inputs(run_dir, edl)
+    concept, track, speaker_ids, fallback = reframe_inputs(run_dir, edl)
     segments, paths = plan_paths(edl, track, speaker_ids, fallback=fallback)
     vpath = run_dir / "voice" / "voice.json"
     words = json.loads(vpath.read_text())["words"] if vpath.is_file() else []
