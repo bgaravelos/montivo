@@ -15,14 +15,18 @@ const RULER_H = 30;
 export const ZOOM_MIN = 6;
 export const ZOOM_MAX = 240;
 const THUMB = { w: 54, h: 96, step: 0.5 }; // the server's filmstrip sprite
+const SNAP_PX = 8; // a dragged edge or clip within this many pixels of the playhead, a clip edge or an issue lands on it
 
 type Props = {
   id: string; v: Version | null; blocks: Block[]; words: Record<string, Word[]>; t: number; playing: boolean;
-  selected: string | null; zoom: number | null; setZoom: (z: number | null) => void;
+  selected: string | null; selection: string[]; zoom: number | null; setZoom: (z: number | null) => void;
+  /** The timeline's pixels per second right now (the fit when zoom is null), for ⌘+ / ⌘− in the editor. */
+  ppsRef: React.MutableRefObject<number>; snap: boolean; setSnap: (on: boolean) => void;
   mode: "timeline" | "transcript"; setMode: (m: "timeline" | "transcript") => void; canTrim: boolean;
-  onSelect: (key: string | null) => void; onSeek: (a: number, b?: number) => void; onScrub: (t: number) => void;
+  onSelect: (key: string | null, how?: "toggle" | "range") => void; onSeek: (a: number, b?: number) => void; onScrub: (t: number) => void;
   onMenu: (m: ClipMenu) => void; onTrim: (t: TrimAsk) => void; onMove: (m: MoveAsk) => void;
-  onDelete: (span: string) => void; onAsk: (span: string) => void;
+  onDelete: (span: string) => void; onDeleteClips: (spans: string[]) => void; onAsk: (span: string) => void;
+  onSplit: () => void;
   wordSel: WordSel | null; onWordSel: (s: WordSel | null) => void; onCutWords: () => void;
   /** The faders: the staged mix, the version's own, the live player's state, and what to do with them. */
   mix: Mix | null; base: Mix | null; live: { ready: boolean; active: boolean; failed: string | null };
@@ -48,6 +52,7 @@ export function Timeline(p: Props) {
   const dur = v ? Math.max(v.duration_s ?? v.runtime_s + v.title_s, 1) : 30;
   const fit = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, (width - 40) / dur));
   const pps = zoom ?? fit;
+  p.ppsRef.current = pps;
   const zoomTo = (z: number) => setZoom(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)));
 
   return (
@@ -59,13 +64,16 @@ export function Timeline(p: Props) {
         </div>
         {v && mode === "timeline" && (() => {
           const b = p.blocks.find((x) => x.key === p.selected && x.kind === "span");
-          const pick = b ? `clip ${b.span!.id}` : "Select a clip first";
-          const del = !b ? pick : !p.canTrim ? "Not while an edit runs or in replay" : v.spans.length < 2 ? "That is the only clip" : null;
+          const many = p.selection.filter((k) => v.spans.some((s) => s.id === k));
+          const pick = many.length > 1 ? `${many.length} clips` : b ? `clip ${b.span!.id}` : "Select a clip first";
+          const locked = !p.canTrim ? "Not while an edit runs or in replay" : null;
+          const del = !b && many.length < 2 ? pick : locked ?? (many.length >= v.spans.length || v.spans.length < 2 ? "That is every clip" : null);
           return (
             <span className="tl-tools">
+              <button className="icon-btn" disabled={!!locked} onClick={p.onSplit} title={locked ?? "Split the clip at the playhead (S · ⌘K)"}><Icon name="scissors" /></button>
               <button className="icon-btn" disabled={!b} onClick={() => b && p.onSeek(b.t0, b.t1)} title={b ? `Play ${pick} on a loop` : pick}><Icon name="repeat" /></button>
               <button className="icon-btn" disabled={!b} onClick={() => b && p.onAsk(b.span!.id)} title={b ? `Ask Montivo about ${pick}` : pick}><Icon name="spark" /></button>
-              <button className="icon-btn" disabled={!!del} onClick={() => b && p.onDelete(b.span!.id)} title={del ?? `Delete ${pick} (⌫)`}><Icon name="trash" /></button>
+              <button className="icon-btn" disabled={!!del} onClick={() => (many.length > 1 ? p.onDeleteClips(many) : b && p.onDelete(b.span!.id))} title={del ?? `Delete ${pick} (⌫)`}><Icon name="trash" /></button>
             </span>
           );
         })()}
@@ -79,6 +87,12 @@ export function Timeline(p: Props) {
             <button className="btn small" disabled={!!p.canEdit} title={p.canEdit ?? `Makes Version ${p.next} with this mix ($0, a re-render)`}
               onClick={p.onApplyMix}>Make Version {p.next}</button>
           </span>
+        )}
+        {mode === "timeline" && (
+          <button className={`icon-btn ${p.snap ? "on" : ""}`} onClick={() => p.setSnap(!p.snap)} aria-pressed={p.snap}
+            title={`Snapping ${p.snap ? "on" : "off"}: a dragged edge or clip lands on the playhead, clip edges and review issues (N). Hold ⇧ while dragging to move freely. Trims always land on a word.`}>
+            <Icon name="magnet" />
+          </button>
         )}
         {mode === "timeline" && (
           <span className="zoom">
@@ -143,6 +157,9 @@ function Canvas(p: Props & { v: Version; pps: number; dur: number; scroller: Rea
     const x = t * pps;
     if (x < el.scrollLeft || x > el.scrollLeft + el.clientWidth - 30) el.scrollLeft = Math.max(0, x - el.clientWidth * 0.2);
   }, [t, pps, playing, scroller]);
+  const tNow = useRef(t);
+  tNow.current = t;
+  const getT = useCallback(() => tNow.current, []);
   const prevPps = useRef(pps);
   useLayoutEffect(() => { // zoom around the playhead
     const el = scroller.current;
@@ -156,7 +173,8 @@ function Canvas(p: Props & { v: Version; pps: number; dur: number; scroller: Rea
   return (
     <div className="tl-canvas" ref={canvas} style={{ width }}>
       <Ruler pps={pps} dur={dur} issues={v.review?.issues ?? []} onScrub={scrub} onSeek={p.onSeek} />
-      <Tracks id={p.id} v={v} blocks={p.blocks} words={p.words} selected={p.selected} canTrim={p.canTrim} pps={pps} dur={dur}
+      <Tracks id={p.id} v={v} blocks={p.blocks} words={p.words} selected={p.selected} selection={p.selection} canTrim={p.canTrim} pps={pps} dur={dur}
+        snap={p.snap} getT={getT}
         timeAt={timeAt} onSelect={p.onSelect} onSeek={p.onSeek} onMenu={p.onMenu} onTrim={p.onTrim} onMove={p.onMove}
         mix={p.mix} base={p.base} onMusicPanel={p.onMusicPanel} />
       <div className="playhead" style={{ transform: `translateX(${t * pps}px)` }}>
@@ -229,17 +247,17 @@ function usePeaks(url: string | null): { rate: number; peaks: number[] } | null 
   return d;
 }
 
-type Drag = { key: string; edge: "in" | "out"; snaps: Snap[]; snap: Snap | null; current: number };
-type Move = { key: string; slot: number; t: number }; // a clip being dragged: its insertion slot among the others
+type Drag = { key: string; edge: "in" | "out"; snaps: Snap[]; snap: Snap | null; current: number; target: number | null };
+type Move = { key: string; slot: number; t: number; target: number | null }; // a clip being dragged: its insertion slot among the others
 const MOVE_PX = 6; // a press that travels further than this is a drag, not a click
 
-type TrackProps = Pick<Props, "id" | "blocks" | "words" | "selected" | "canTrim" | "onSelect" | "onSeek" | "onMenu" | "onTrim" | "onMove"
-  | "mix" | "base" | "onMusicPanel"> & {
-  v: Version; pps: number; dur: number; timeAt: (x: number) => number;
+type TrackProps = Pick<Props, "id" | "blocks" | "words" | "selected" | "selection" | "canTrim" | "onSelect" | "onSeek" | "onMenu" | "onTrim" | "onMove"
+  | "mix" | "base" | "onMusicPanel" | "snap"> & {
+  v: Version; pps: number; dur: number; timeAt: (x: number) => number; getT: () => number;
 };
 
 const Tracks = memo(function Tracks(p: TrackProps) {
-  const { id, v, blocks, words, pps, selected, canTrim, onSelect, onSeek, onMenu, onTrim, onMove, timeAt } = p;
+  const { id, v, blocks, words, pps, selected, selection, canTrim, onSelect, onSeek, onMenu, onTrim, onMove, timeAt, getT } = p;
   const q = v.bytes ? `&b=${v.bytes}` : "";
   const sprite = v.cut ? `/api/runs/${id}/filmstrip?v=${v.n}${q}` : null;
   const frames = useSprite(sprite);
@@ -252,20 +270,31 @@ const Tracks = memo(function Tracks(p: TrackProps) {
   const [move, setMove] = useState<Move | null>(null);
   const live = blocks.filter((b) => b.kind !== "ghost");
   const tileW = (TRACK_H.video - 6) * (9 / 16);
+  const multi = selection.length > 1;
+  // snapping: the nearest of the playhead, the other clips' edges and the review's issues within SNAP_PX (⇧: free)
+  const snapTo = (x: number, skip: string, free: boolean): number | null => {
+    if (!p.snap || free) return null;
+    const targets = [getT(), ...live.filter((b) => b.key !== skip).flatMap((b) => [b.t0, b.t1]), ...(v.review?.issues ?? []).map((i) => i.t_s)];
+    let best: number | null = null;
+    for (const g of targets) if (Math.abs(g - x) * pps <= SNAP_PX && (best == null || Math.abs(g - x) < Math.abs(best - x))) best = g;
+    return best;
+  };
 
   const startTrim = (e: React.PointerEvent, b: Block, edge: "in" | "out") => {
     e.stopPropagation();
     e.preventDefault();
     const snaps = edgeSnaps(b, edge, v, words);
     const cur = edge === "out" ? b.span!.word_to : b.span!.word_from;
-    let d: Drag = { key: b.key, edge, snaps, snap: null, current: cur };
+    let d: Drag = { key: b.key, edge, snaps, snap: null, current: cur, target: null };
     setDrag(d);
     onSelect(b.key);
     const move = (ev: PointerEvent) => {
-      const x = timeAt(ev.clientX);
+      const raw = timeAt(ev.clientX);
+      const target = snapTo(raw, b.key, ev.shiftKey);
+      const x = target ?? raw;
       let best: Snap | null = null;
       for (const s of snaps) if (!best || Math.abs(s.t - x) < Math.abs(best.t - x)) best = s;
-      d = { ...d, snap: best };
+      d = { ...d, snap: best, target };
       setDrag(d);
     };
     const up = () => {
@@ -290,14 +319,16 @@ const Tracks = memo(function Tracks(p: TrackProps) {
     const from = spans.findIndex((x) => x.key === b.key);
     const x0 = e.clientX;
     let m: Move | null = null;
-    const slotAt = (cx: number) => {
-      const at = timeAt(cx);
+    const slotAt = (cx: number, free: boolean) => {
+      const raw = timeAt(cx);
+      const target = snapTo(raw, b.key, free);
+      const at = target ?? raw;
       const slot = others.filter((o) => (o.t0 + o.t1) / 2 < at).length;
-      return { slot, t: slot < others.length ? others[slot].t0 : others.at(-1)?.t1 ?? 0 };
+      return { slot, t: slot < others.length ? others[slot].t0 : others.at(-1)?.t1 ?? 0, target };
     };
     const mv = (ev: PointerEvent) => {
       if (!m && Math.abs(ev.clientX - x0) < MOVE_PX) return;
-      m = { key: b.key, ...slotAt(ev.clientX) };
+      m = { key: b.key, ...slotAt(ev.clientX, ev.shiftKey) };
       setMove(m);
     };
     const up = () => {
@@ -343,15 +374,17 @@ const Tracks = memo(function Tracks(p: TrackProps) {
         {live.map((b) => {
           const w = Math.max(2, (b.t1 - b.t0) * pps - 2);
           const n = Math.ceil(w / tileW);
-          const sel = selected === b.key;
+          const sel = selected === b.key || selection.includes(b.key);
           const isDrag = drag?.key === b.key;
           return (
-            <div key={b.key} className={`clip ${b.kind} ${b.span?.role ?? ""} ${sel ? "sel" : ""}`} style={{ left: b.t0 * pps + 1, width: w }}
-              onPointerDown={(e) => {
+            <div key={b.key} className={`clip ${b.kind} ${b.span?.role ?? ""} ${sel ? "sel" : ""} ${sel && multi ? "multi" : ""}`} style={{ left: b.t0 * pps + 1, width: w }}
+              onPointerDown={(e) => { // a click selects and leaves the playhead where it is (double-click: seek there)
                 if (e.button !== 0) return;
-                onSelect(b.key); onSeek(b.kind === "title" ? 0 : b.t0 + 0.02);
+                if (b.kind === "span" && (e.shiftKey || e.metaKey || e.ctrlKey)) { onSelect(b.key, e.shiftKey ? "range" : "toggle"); return; }
+                onSelect(b.key);
                 if (b.kind === "span" && canTrim) startMove(e, b);
               }}
+              onDoubleClick={(e) => onSeek(b.kind === "title" ? 0 : timeAt(e.clientX))}
               onContextMenu={(e) => { e.preventDefault(); if (b.kind === "span") { onSelect(b.key); onMenu({ x: e.clientX, y: e.clientY, span: b.span!.id }); } }}
               title={b.kind === "span" ? `${b.span!.id} · ${b.span!.role} · ${(b.t1 - b.t0).toFixed(1)} s\n${spanText(v, b.span!)}` : "Title card"}>
               <div className="film">
@@ -366,7 +399,7 @@ const Tracks = memo(function Tracks(p: TrackProps) {
                 <b>{b.kind === "title" ? "Title" : b.span!.id}</b>
                 {b.kind === "span" && w > 70 && <span className="cl-words">{spanText(v, b.span!)}</span>}
               </span>
-              {b.kind === "span" && canTrim && (sel || isDrag) && <>
+              {b.kind === "span" && canTrim && ((sel && !multi) || isDrag) && <>
                 <span className="trim-h in" onPointerDown={(e) => startTrim(e, b, "in")} title="Drag to trim or extend the start (snaps to words)" />
                 <span className="trim-h out" onPointerDown={(e) => startTrim(e, b, "out")} title="Drag to trim or extend the end (snaps to words)" />
               </>}
@@ -393,6 +426,7 @@ const Tracks = memo(function Tracks(p: TrackProps) {
           const spans = live.filter((x) => x.kind === "span");
           const same = move.slot === spans.findIndex((x) => x.key === move.key);
           return <>
+            {move.target != null && <span className="snap-line" style={{ left: move.target * pps }} />}
             <span className="move-ghost" style={{ left: b.t0 * pps + 1, width: Math.max(2, (b.t1 - b.t0) * pps - 2) }} />
             <span className={`move-mark ${same ? "same" : ""}`} style={{ left: move.t * pps - 1 }} />
             <span className="trim-tip" style={{ left: move.t * pps }}>
@@ -406,10 +440,12 @@ const Tracks = memo(function Tracks(p: TrackProps) {
           const a = Math.min(edgeT, drag.snap.t), z = Math.max(edgeT, drag.snap.t);
           const grow = drag.edge === "out" ? drag.snap.t > edgeT : drag.snap.t < edgeT;
           const n = Math.abs(drag.snap.word - drag.current);
+          const end = grow && drag.snap.end ? ` · the ${drag.edge === "out" ? "end" : "start"} of the speaker's turn` : "";
           return <>
+            {drag.target != null && <span className="snap-line" style={{ left: drag.target * pps }} />}
             <span className={`trim-zone ${grow ? "grow" : "cut"}`} style={{ left: a * pps, width: Math.max(1, (z - a) * pps) }} />
             <span className="trim-tip" style={{ left: drag.snap.t * pps }}>
-              {n === 0 ? "no change" : `${grow ? "+" : "−"}${n} word${n === 1 ? "" : "s"} · ${drag.edge === "out" ? "ends on" : "starts on"} “${drag.snap.label}”`}
+              {n === 0 ? "no change" : `${grow ? "+" : "−"}${n} word${n === 1 ? "" : "s"} · ${drag.edge === "out" ? "ends on" : "starts on"} “${drag.snap.label}”${end}`}
             </span>
           </>;
         })()}

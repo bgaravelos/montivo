@@ -23,14 +23,17 @@ function Modal({ title, onClose, children, wide }: { title: string; onClose: () 
 
 /** Delete clip, trim, move and delete words share one confirm: what changes, the version it makes, and what it costs
  *  before you commit. */
-export function EditDialog({ kind, state, v, span, trim, move, cut, next, onCancel, onConfirm }: {
-  kind: "delete" | "trim" | "move" | "words"; state: RunState; v: Version; span: string; trim?: TrimAsk; move?: MoveAsk; cut?: CutAsk; next: number;
+export function EditDialog({ kind, state, v, span, trim, move, cut, next, newest, onCancel, onConfirm }: {
+  kind: "delete" | "trim" | "move" | "words" | "title"; state: RunState; v: Version; span: string; trim?: TrimAsk; move?: MoveAsk; cut?: CutAsk; next: number;
+  newest?: number | null; // the newest version: an edit on an older one (after undo) forks from it
   onCancel: () => void; onConfirm: (review: boolean) => void;
 }) {
   const [review, setReview] = useState(false);
   const sp = v.spans.find((s) => s.id === span);
   const canReview = state.has_key;
-  const title = kind === "words" ? `Delete ${cut!.n} word${cut!.n === 1 ? "" : "s"}?` : kind === "delete" ? `Delete clip ${span}?` : kind === "move" ? `Move clip ${span} ${move!.label}?`
+  const clips = cut?.clips;
+  const title = kind === "title" ? "Turn the title card off?" : clips ? `Delete ${clips.length} clips?`
+    : kind === "words" ? `Delete ${cut!.n} word${cut!.n === 1 ? "" : "s"}?` : kind === "delete" ? `Delete clip ${span}?` : kind === "move" ? `Move clip ${span} ${move!.label}?`
     : `${trim!.words > 0 ? "Extend" : "Trim"} clip ${span}?`;
   const roleNote = kind === "move" && move ? (() => { // the clip that ends up first is the hook, the last the payoff
     const ids = v.spans.map((s) => s.id).filter((x) => x !== span);
@@ -43,7 +46,13 @@ export function EditDialog({ kind, state, v, span, trim, move, cut, next, onCanc
   return (
     <Modal title={title} onClose={onCancel}>
       <div className="modal-body">
-        {kind === "words" ? (<>
+        {kind === "title" ? (
+          <p>Removes the {v.title_s.toFixed(1)} s title card “{v.title_card_text}” from the start; the cut opens on its first clip. The Text panel turns it back on.</p>
+        ) : clips ? (<>
+          <p>Removes clips <b>{clips.join(", ")}</b> (−{cut!.seconds.toFixed(1)} s) in one version.</p>
+          <ul className="cut-lines">{cut!.lines.map((l) => <li key={l}>{l}</li>)}</ul>
+          {cut!.error && <p className="err">{cut!.error}</p>}
+        </>) : kind === "words" ? (<>
           <p>Removes <b>{cut!.n} word{cut!.n === 1 ? "" : "s"}</b> (−{cut!.seconds.toFixed(2)} s): <s className="w cut">“{cut!.text.slice(0, 160)}{cut!.text.length > 160 ? "…" : ""}”</s></p>
           <ul className="cut-lines">{cut!.lines.map((l) => <li key={l}>{l}</li>)}</ul>
           {cut!.error && <p className="err">{cut!.error}</p>}
@@ -56,6 +65,7 @@ export function EditDialog({ kind, state, v, span, trim, move, cut, next, onCanc
             Like the reviewer's own trims, the edge may settle on a sentence end one or two words away and on the quietest frame nearby.</p>
         )}
         <p className="mute">Version {v.n} stays as it is. This makes <b>Version {next}</b> and renders it with ffmpeg.</p>
+        {newest != null && newest > v.n && <ForkNote from={v.n} newest={newest} next={next} />}
         <label className={`check ${canReview ? "" : "off"}`} title={canReview ? "" : "needs MODEL_API_KEY"}>
           <input type="checkbox" checked={review && canReview} disabled={!canReview} onChange={(e) => setReview(e.target.checked)} />
           then review it blind <span className="mute">~{usd(state.costs.review)}</span>
@@ -65,11 +75,19 @@ export function EditDialog({ kind, state, v, span, trim, move, cut, next, onCanc
         <span className="cost">{review && canReview ? `~${usd(state.costs.review)}` : "render only · $0"}</span>
         <span className="grow" />
         <button className="btn quiet" onClick={onCancel}>Cancel</button>
-        <button className={`btn ${kind === "delete" || kind === "words" ? "danger" : ""}`} autoFocus disabled={!!cut?.error} onClick={() => onConfirm(review && canReview)}>
-          {kind === "words" ? "Delete words" : kind === "delete" ? "Delete clip" : kind === "move" ? "Move clip" : trim!.words > 0 ? "Extend clip" : "Trim clip"}
+        <button className={`btn ${kind === "delete" || kind === "words" || kind === "title" ? "danger" : ""}`} autoFocus disabled={!!cut?.error} onClick={() => onConfirm(review && canReview)}>
+          {kind === "title" ? "Turn it off" : clips ? `Delete ${clips.length} clips` : kind === "words" ? "Delete words" : kind === "delete" ? "Delete clip" : kind === "move" ? "Move clip" : trim!.words > 0 ? "Extend clip" : "Trim clip"}
         </button>
       </div>
     </Modal>
+  );
+}
+
+/** An edit on a version older than the newest (after an undo): it branches from there, nothing after it is lost. */
+export function ForkNote({ from, newest, next }: { from: number; newest: number; next: number }) {
+  return (
+    <p className="fork-note">You stepped back to Version {from}: Version {next} branches from it. Versions {from + 1}–{newest} stay in Versions,
+      and Undo from Version {next} leads back to {from}.</p>
   );
 }
 
@@ -97,9 +115,13 @@ export function LedgerDialog({ state, onClose }: { state: RunState; onClose: () 
 export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
   const keys: [string, string][] = [
     ["Space", "Play / pause"], ["J · K · L", "Shuttle back · stop · forward (press again for 2×, 4×)"],
-    ["← →", "One frame back / forward"], ["⇧ ← →", "One second back / forward"], ["⌫ / Delete", "Delete the selected clip, or the selected transcript words"],
+    ["← →", "One frame back / forward"], ["⇧ ← →", "One second back / forward"], ["↑ ↓", "Previous / next cut"],
+    ["S · ⌘K", "Split the clip at the playhead"], ["[ · ]", "Select the clip to the left / right"],
+    ["⇧ click · ⌘ click", "Select a run of clips · add or remove one"], ["⌘A", "Select every clip"],
+    ["⌫ / Delete", "Delete the selected clips, or the selected transcript words"],
+    ["N", "Snapping on / off (hold ⇧ while dragging: free)"],
     ["⌘Z · ⇧⌘Z", "Previous version · next version"], ["⌘+ · ⌘−", "Zoom the timeline"], ["Esc", "Clear the selection"],
-    ["N · ⇧N", "Next · previous reviewer issue"], ["G", "Safe-area guides: Reels, TikTok, Shorts, off"], ["M", "Mute the viewer"], ["F", "Full screen"],
+    [". · ,", "Next · previous reviewer issue"], ["G", "Safe-area guides: Reels, TikTok, Shorts, off"], ["⇧M", "Mute the viewer"], ["F", "Full screen"],
   ];
   return (
     <Modal title="Keyboard shortcuts" onClose={onClose}>

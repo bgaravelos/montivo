@@ -20,7 +20,7 @@ const RATES = [1, 1.5, 2, 0.5];
 export type PlayerHandle = {
   seek: (a: number, b?: number) => void; play: () => void; pause: () => void; toggle: () => void;
   step: (dt: number) => void; shuttle: (dir: -1 | 0 | 1) => void; el: () => HTMLVideoElement | null;
-  toggleMute: () => void; fullscreen: () => void;
+  toggleMute: () => void; fullscreen: () => void; skip: (dir: 1 | -1) => void; // to the previous / next cut
 };
 type Band = { a: number; b: number; sev: string };
 
@@ -96,6 +96,7 @@ export const Player = forwardRef<PlayerHandle, {
       }
     },
     el: () => video.current,
+    skip: (dir) => skip(dir),
     toggleMute: () => setMute((m) => !m),
     fullscreen() {
       const f = frame.current;
@@ -195,16 +196,16 @@ export const Player = forwardRef<PlayerHandle, {
             <b>{timecode(t, mode)}</b><span>/ {timecode(d, mode)}</span>{mode === "frames" && <i>fr</i>}
           </button>
           <span className="tp-mid">
-            <button className="tp-icon" onClick={() => skip(-1)} title="Previous cut"><Icon name="skipBack" /></button>
+            <button className="tp-icon" onClick={() => skip(-1)} title="Previous cut (↑)"><Icon name="skipBack" /></button>
             <button className="tp-icon" onClick={() => api.step(-1 / FPS)} title="Back one frame (←)"><Icon name="frameBack" /></button>
             <button className="tp-play" onClick={api.toggle} title="Play / pause (Space)"><Icon name={playing || rate < 0 ? "pause" : "play"} /></button>
             <button className="tp-icon" onClick={() => api.step(1 / FPS)} title="Forward one frame (→)"><Icon name="frameFwd" /></button>
-            <button className="tp-icon" onClick={() => skip(1)} title="Next cut"><Icon name="skipFwd" /></button>
+            <button className="tp-icon" onClick={() => skip(1)} title="Next cut (↓)"><Icon name="skipFwd" /></button>
           </span>
           <span className="tp-right">
             <button className={`tp-tool tp-rate ${rate !== 1 ? "on" : ""}`} onClick={nextRate} title="Playback speed (J · K · L shuttle)">{rate < 0 ? `◀ ${-rate}×` : `${rate}×`}</button>
             <button className={`tp-tool ${looping || whole ? "on" : ""}`} onClick={loopBtn} title={looping ? "Stop looping the clip" : whole ? "Stop looping the cut" : "Loop the cut"}><Icon name="repeat" /></button>
-            <button className={`tp-tool ${mute ? "on" : ""}`} onClick={() => setMute(!mute)} title={mute ? "Unmute (M)" : "Mute (M)"}><Icon name={mute ? "mute" : "volume"} /></button>
+            <button className={`tp-tool ${mute ? "on" : ""}`} onClick={() => setMute(!mute)} title={mute ? "Unmute (⇧M)" : "Mute (⇧M)"}><Icon name={mute ? "mute" : "volume"} /></button>
             {safe && <button className={`tp-tool ${safe.on ? "on" : ""}`} onClick={safe.next} title={`Safe-area guides: ${safe.label} (G cycles Reels, TikTok, Shorts, off)`}><Icon name="safe" /></button>}
             <button className="tp-tool" onClick={api.fullscreen} title="Full screen (F)"><Icon name="fit" /></button>
           </span>

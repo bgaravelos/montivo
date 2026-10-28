@@ -60,6 +60,7 @@ const P: Record<string, string> = {
   target: "M12 3.5a8.5 8.5 0 110 17 8.5 8.5 0 010-17zM12 7.5a4.5 4.5 0 110 9 4.5 4.5 0 010-9zM12 11a1 1 0 110 2 1 1 0 010-2z",
   move: "M5 9l-3 3 3 3M19 9l3 3-3 3M2 12h20",
   callout: "M5 4.5h14a2 2 0 012 2v8a2 2 0 01-2 2h-7l-4.5 3.5v-3.5H5a2 2 0 01-2-2v-8a2 2 0 012-2z",
+  magnet: "M5 4h4.5v8a2.5 2.5 0 005 0V4H19v8a7 7 0 01-14 0zM5 8.5h4.5M14.5 8.5H19",
   info: "M12 3.5a8.5 8.5 0 110 17 8.5 8.5 0 010-17zM12 11v5.5M12 7.8v.2",
 };
 const FILLED = new Set(["play", "pause", "stop", "dot", "more"]);

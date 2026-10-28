@@ -3,7 +3,7 @@ import { api, dur, fileUrl, tc, usd, useRun } from "./api";
 import { Assistant } from "./Assistant";
 import { EditDialog, LedgerDialog, ShortcutsDialog } from "./Dialogs";
 import { ExportPage } from "./Export";
-import { childOf, cutAsk, flatWords, layout, parentOf, projectName, type CutAsk, type WordSel } from "./edit";
+import { childOf, clipsAsk, cutAsk, flatWords, layout, parentOf, projectName, splitAt, type CutAsk, type WordSel } from "./edit";
 import { Icon } from "./icons";
 import { Inspector, type PunchAsk } from "./Inspector";
 import { mixOf, sameMix, useLiveMix, type Mix } from "./Mix";
@@ -19,7 +19,7 @@ import type { LogLine, RunState } from "./types";
 
 type Props = { id: string; replay: number; go: (hash: string) => void };
 type PanelId = "assistant" | "media" | "captions" | "style" | "text" | "music" | "speakers" | "versions";
-type Dialog = { kind: "delete"; span: string } | { kind: "words"; ask: CutAsk } | { kind: "trim"; ask: TrimAsk } | { kind: "move"; ask: MoveAsk } | { kind: "export" } | { kind: "ledger" } | { kind: "keys" };
+type Dialog = { kind: "delete"; span: string } | { kind: "title" } | { kind: "words"; ask: CutAsk } | { kind: "trim"; ask: TrimAsk } | { kind: "move"; ask: MoveAsk } | { kind: "export" } | { kind: "ledger" } | { kind: "keys" };
 
 const PANELS: { id: PanelId; label: string; icon: string }[] = [
   { id: "assistant", label: "Assistant", icon: "assistant" },
@@ -31,6 +31,12 @@ const PANELS: { id: PanelId; label: string; icon: string }[] = [
   { id: "speakers", label: "Speakers", icon: "speakers" },
   { id: "versions", label: "Versions", icon: "versions" },
 ];
+
+/** Where undo / redo left the editor: the version, and the newest version then (a newer one since makes it stale). */
+type Current = { version: number | null; newest: number | null };
+const currentKey = (id: string) => `montivo.current.${id}`;
+// the requests that make a version from the one on screen: after an undo they branch from an older version
+const MAKES_VERSION = ["drop", "trim", "reorder", "cut", "split", "punch", "caption", "text", "style", "music", "pin", "ask", "review", "hook"];
 
 const typing = (el: EventTarget | null) => {
   const e = el as HTMLElement | null;
@@ -44,6 +50,12 @@ export function Editor({ id, replay, go }: Props) {
   const { state, error, lines, job, seen, progress } = useRun(id, replay);
   const [sel, setSel] = useState<number | null>(null);
   const [selKey, setSelKey] = useState<string | null>(null); // a span id or "title"
+  const [selKeys, setSelKeys] = useState<string[]>([]); // the clips selected together (Shift / ⌘ click, ⌘A)
+  const [snap, setSnapState] = useState<boolean>(() => { try { return localStorage.getItem("montivo.timeline.snap") !== "off"; } catch { return true; } });
+  const setSnap = (on: boolean) => { setSnapState(on); try { localStorage.setItem("montivo.timeline.snap", on ? "on" : "off"); } catch { /* this tab only */ } };
+  const ppsRef = useRef(30);
+  const splitFrom = useRef<number | null>(null); // a split asked from this version: select its second piece when it lands
+  const [current, setCurrent] = useState<Current | null | undefined>(replay ? null : undefined); // undefined: still loading
   const [wordSel, setWordSel] = useState<WordSel | null>(null); // words selected in the transcript view
   const [t, setT] = useState(0);
   const tRef = useRef(0);
@@ -81,7 +93,15 @@ export function Editor({ id, replay, go }: Props) {
     return ok.length ? Math.max(...ok) : null;
   }, [visible]);
   const best = state?.loop?.best?.version;
-  const opening = kept ?? (best && visible.some((v) => v.n === best) ? best : newest);
+  // a reload opens where undo / redo left the editor, while no version was made since
+  const resumed = current?.version != null && current.newest === newest && visible.some((x) => x.n === current.version) ? current.version : null;
+  const opening = resumed ?? kept ?? (best && visible.some((v) => v.n === best) ? best : newest);
+  useEffect(() => { // ui/current.json, else this browser's own (a hosted sample is shared: the server keeps none there)
+    if (replay) return setCurrent(null);
+    let local: Current | null = null;
+    try { local = JSON.parse(localStorage.getItem(currentKey(id)) ?? "null"); } catch { /* none */ }
+    api<Current>(`/api/runs/${id}/current`).then((c) => setCurrent(c?.version != null ? c : local)).catch(() => setCurrent(local));
+  }, [id, replay]);
   // when a hook A/B finishes, show the version it kept (B renders first, the verdict lands on it later)
   const last = visible.at(-1);
   const hookKept = last?.origin.source === "hook_ab" ? last.origin.result?.kept ?? null : null;
@@ -93,18 +113,33 @@ export function Editor({ id, replay, go }: Props) {
   const seenNewest = useRef<number | null>(null);
   useEffect(() => { // open on `opening`; follow every version that appears after that (a job, the replay)
     if (!visible.length) return setSel(null);
+    if (current === undefined) return; // wait for where undo left the editor
     const grew = seenNewest.current != null && newest != null && newest > seenNewest.current;
     seenNewest.current = newest;
     if (grew || replay) return setSel(newest);
     setSel((s) => (s != null && visible.some((v) => v.n === s) ? s : opening));
-  }, [visible.length, newest, opening, replay]); // eslint-disable-line
+  }, [visible.length, newest, opening, replay, current === undefined]); // eslint-disable-line
 
   const v = visible.find((x) => x.n === sel) ?? null;
   const parent = v && state ? parentOf(v, state.versions) : undefined;
   const blocks = useMemo(() => (v && state ? layout(v, parent, state.words) : []), [v, parent, state]);
   const block = blocks.find((b) => b.key === selKey && b.kind !== "ghost") ?? null;
   const punch = v && selKey?.startsWith("punch:") ? v.punch_ins.find((x) => `punch:${x.key}` === selKey) ?? null : null;
-  useEffect(() => { if (selKey && v && !blocks.some((b) => b.key === selKey && b.kind !== "ghost")) setSelKey(null); }, [v?.n]); // eslint-disable-line
+  useEffect(() => { // a selection the new version no longer has goes; a split just made selects its second piece
+    if (!v) return;
+    const fx = v.origin.action === "split" && splitFrom.current === v.origin.from ? v.origin.fixes?.[0] : undefined;
+    const ids = (fx?.args as { ids?: string[] } | undefined)?.ids;
+    if (ids?.length === 2) {
+      splitFrom.current = null;
+      setSelKey(ids[1]); setSelKeys([ids[1]]);
+      const b = blocks.find((x) => x.key === ids[1]);
+      if (b) window.setTimeout(() => player.current?.seek(b.t0 + 0.01), 50);
+      flash(`Split: ${ids[0]} | ${ids[1]}. The cut plays the same; select a piece to move or delete it.`);
+      return;
+    }
+    if (selKey && !blocks.some((b) => b.key === selKey && b.kind !== "ghost")) setSelKey(null);
+    setSelKeys((ks) => ks.filter((k) => v.spans.some((sp) => sp.id === k)));
+  }, [v?.n]); // eslint-disable-line
   useEffect(() => setWordSel(null), [v?.n, tlMode]);
   useEffect(() => setStyleDraft(EMPTY_DRAFT), [v?.n]);
   // the timeline's faders: staged against the version's own mix and heard live through its stems (Mix.ts)
@@ -126,13 +161,16 @@ export function Editor({ id, replay, go }: Props) {
   const canEdit = replay ? "Replay is on" : busy ? `${job!.label} is running` : null;
 
   const flash = useCallback((text: string, tone?: string) => { setToast({ text, tone }); window.setTimeout(() => setToast(null), 4500); }, []);
+  const forkFrom = v && newest != null && v.n < newest && !replay ? v.n : null;
   const act = useCallback(async (path: string, body: unknown) => {
     if (["ask", "review", "hook"].includes(path)) askToNotify(); // the jobs that take a minute or more
+    if (forkFrom != null && MAKES_VERSION.includes(path) && state)
+      flash(`Version ${nextN(state)} branches from Version ${forkFrom}, the one you stepped back to; Versions ${forkFrom + 1}–${newest} stay in Versions.`);
     try {
       const r = await api<{ job?: { run?: string } }>(`/api/runs/${id}/${path}`, body);
       if (r.job?.run && r.job.run !== id) go(`#/run/${r.job.run}`); // the hosted demo edits the judge's own copy of a sample
     } catch (e) { flash(String((e as Error).message), "error"); }
-  }, [id, flash, go]);
+  }, [id, flash, go, forkFrom, newest, state]);
   const shareLink = async (n: number) => {
     try {
       const r = await api<{ path: string }>(`/api/runs/${id}/share`, { version: n });
@@ -146,8 +184,30 @@ export function Editor({ id, replay, go }: Props) {
   const scrub = useCallback((x: number) => { player.current?.pause(); player.current?.seek(x); }, []);
   const onTime = useCallback((x: number) => { tRef.current = x; setT(x); }, []);
   const getTime = useCallback(() => tRef.current, []);
-  const select = useCallback((k: string | null) => { setSelKey(k); setCtx(null); setWordSel(null); }, []);
-  const pickWords = useCallback((w: WordSel | null) => { setWordSel(w); if (w) { setSelKey(null); setCtx(null); } }, []);
+  // the playhead for a key: the video's own clock (onTime follows it on animation frames, which stall in a hidden tab)
+  const playhead = () => player.current?.el()?.currentTime ?? tRef.current;
+  const blocksRef = useRef(blocks);
+  blocksRef.current = blocks;
+  const selRef = useRef({ key: selKey, keys: selKeys });
+  selRef.current = { key: selKey, keys: selKeys };
+  /** A click selects one clip; ⌘ click adds or removes one, ⇧ click selects the run from the last clicked one. */
+  const select = useCallback((k: string | null, how?: "toggle" | "range") => {
+    setCtx(null); setWordSel(null);
+    const spans = blocksRef.current.filter((b) => b.kind === "span").map((b) => b.key);
+    if (k == null) { setSelKey(null); setSelKeys([]); return; }
+    if (!how || !spans.includes(k)) { setSelKey(k); setSelKeys(spans.includes(k) ? [k] : []); return; }
+    const cur = selRef.current;
+    const have = cur.keys.length ? cur.keys : cur.key && spans.includes(cur.key) ? [cur.key] : [];
+    if (how === "toggle") {
+      const next = have.includes(k) ? have.filter((x) => x !== k) : [...have, k];
+      setSelKeys(next); setSelKey(next.includes(k) ? k : next.at(-1) ?? null);
+      return;
+    }
+    const anchor = cur.key && spans.includes(cur.key) ? cur.key : k;
+    const [a, z] = [spans.indexOf(anchor), spans.indexOf(k)].sort((x, y) => x - y);
+    setSelKeys(spans.slice(a, z + 1)); setSelKey(anchor);
+  }, []);
+  const pickWords = useCallback((w: WordSel | null) => { setWordSel(w); if (w) { setSelKey(null); setSelKeys([]); setCtx(null); } }, []);
   const askCut = () => { // the transcript selection -> the confirm: drop, trim or cut, whichever the words need
     if (!v || !state || !wordSel) return;
     if (canEdit) return flash(`Cannot delete now: ${canEdit.toLowerCase()}.`);
@@ -156,15 +216,52 @@ export function Editor({ id, replay, go }: Props) {
   };
   const ask = useCallback((span: string) => { setSelKey(span); setPanel("assistant"); setAskNonce((n) => n + 1); setCtx(null); }, []);
   const askDelete = useCallback((span: string) => { setCtx(null); setDialog({ kind: "delete", span }); }, []);
+  const askDeleteClips = (ids: string[]) => { // several whole clips: one version through the transcript delete's cut
+    if (!v || !state) return;
+    if (canEdit) return flash(`Cannot delete now: ${canEdit.toLowerCase()}.`);
+    const order = v.spans.map((s) => s.id).filter((x) => ids.includes(x));
+    if (order.length === 1) return askDelete(order[0]);
+    setCtx(null);
+    setDialog({ kind: "words", ask: clipsAsk(v, order, state.words) });
+  };
+  const doSplit = () => { // S / ⌘K: the clip under the playhead, in front of the nearest word boundary
+    if (!v) return;
+    if (canEdit) return flash(`Cannot split now: ${canEdit.toLowerCase()}.`);
+    const r = splitAt(blocks, playhead());
+    if ("error" in r) return flash(r.error);
+    splitFrom.current = v.n;
+    flash(`Splitting clip ${r.span} in front of “${r.label}” (Version ${nextN(state!)}, $0, a re-render)…`);
+    act("split", { span: r.span, word: r.word, from: v.n, text: r.label });
+  };
+  const selectStep = (dir: -1 | 1) => { // [ and ]: the clip left / right of the selection, else of the playhead
+    const spans = blocks.filter((b) => b.kind === "span");
+    if (!spans.length) return;
+    const at = spans.findIndex((b) => b.key === selKey);
+    const now = playhead();
+    const here = at >= 0 ? at : spans.findIndex((b) => now >= b.t0 && now < b.t1);
+    const to = here < 0 ? (dir > 0 ? 0 : spans.length - 1) : Math.max(0, Math.min(spans.length - 1, here + (at >= 0 ? dir : 0)));
+    select(spans[to].key);
+    player.current?.pause();
+    seek(spans[to].t0 + 0.01);
+  };
   const askTrim = useCallback((a: TrimAsk) => setDialog({ kind: "trim", ask: a }), []);
   const askMove = useCallback((a: MoveAsk) => setDialog({ kind: "move", ask: a }), []);
-  const pick = useCallback((n: number) => setSel(n), []);
+  /** Keep where the editor is for a reload (ui/current.json): the newest version needs no record. */
+  const remember = useCallback((n: number) => {
+    if (replay || newest == null) return;
+    const c: Current = n === newest ? { version: null, newest: null } : { version: n, newest };
+    setCurrent(c);
+    try { localStorage.setItem(currentKey(id), JSON.stringify(c)); } catch { /* this tab only */ }
+    api(`/api/runs/${id}/current`, c).catch(() => { /* the browser's copy still holds */ });
+  }, [id, replay, newest]);
+  const pick = useCallback((n: number) => { setSel(n); remember(n); }, [remember]);
   const onPunch = (a: PunchAsk) => { setSelKey(null); setPanel("assistant"); act("punch", { ...a, from: v?.n }); };
   const step = (dir: -1 | 1) => {
     const to = dir < 0 ? undoTo : redoTo;
     if (!to) return flash(dir < 0 ? "Nothing to undo: this is the first version." : "Nothing to redo.");
     setSel(to.n);
-    flash(`${dir < 0 ? "Undo" : "Redo"}: Version ${to.n}`);
+    remember(to.n);
+    flash(`${dir < 0 ? "Undo" : "Redo"}: Version ${to.n}${to.n !== newest ? ` of ${newest}. A reload opens here; an edit now branches from Version ${to.n}` : ""}`);
   };
 
   // keyboard, through a ref so the listener sees the current state without re-subscribing
@@ -174,8 +271,16 @@ export function Editor({ id, replay, go }: Props) {
     const p = player.current;
     const mod = e.metaKey || e.ctrlKey;
     if (mod && (e.key === "z" || e.key === "Z")) { e.preventDefault(); step(e.shiftKey ? 1 : -1); return; }
-    if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); setZoom((z) => Math.min(ZOOM_MAX, (z ?? 30) * 1.4)); return; }
-    if (mod && e.key === "-") { e.preventDefault(); setZoom((z) => Math.max(ZOOM_MIN, (z ?? 30) / 1.4)); return; }
+    if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); setZoom((z) => Math.min(ZOOM_MAX, (z ?? ppsRef.current) * 1.4)); return; }
+    if (mod && e.key === "-") { e.preventDefault(); setZoom((z) => Math.max(ZOOM_MIN, (z ?? ppsRef.current) / 1.4)); return; }
+    if (mod && (e.key === "k" || e.key === "K")) { e.preventDefault(); doSplit(); return; }
+    if (mod && (e.key === "a" || e.key === "A") && tlMode === "timeline" && v) {
+      e.preventDefault();
+      const all = blocks.filter((b) => b.kind === "span").map((b) => b.key);
+      setSelKeys(all); setSelKey(all[0] ?? null); setWordSel(null);
+      flash(`${all.length} clips selected`);
+      return;
+    }
     if (mod) return;
     switch (e.key) {
       case " ": e.preventDefault(); p?.toggle(); break;
@@ -184,10 +289,22 @@ export function Editor({ id, replay, go }: Props) {
       case "l": case "L": p?.shuttle(1); break;
       case "ArrowLeft": e.preventDefault(); p?.step(e.shiftKey ? -1 : -1 / FPS); break;
       case "ArrowRight": e.preventDefault(); p?.step(e.shiftKey ? 1 : 1 / FPS); break;
+      case "ArrowUp": e.preventDefault(); p?.skip(-1); break;
+      case "ArrowDown": e.preventDefault(); p?.skip(1); break;
+      case "s": case "S": e.preventDefault(); doSplit(); break;
+      case "[": selectStep(-1); break;
+      case "]": selectStep(1); break;
       case "Delete": case "Backspace":
         if (wordSel) {
           e.preventDefault();
           askCut();
+        } else if (selKeys.length > 1) {
+          e.preventDefault();
+          askDeleteClips(selKeys);
+        } else if (block?.kind === "title") {
+          e.preventDefault();
+          if (canEdit) flash(`Cannot change it now: ${canEdit.toLowerCase()}.`);
+          else setDialog({ kind: "title" });
         } else if (punch) {
           e.preventDefault();
           if (canEdit) flash(`Cannot remove it now: ${canEdit.toLowerCase()}.`);
@@ -199,16 +316,18 @@ export function Editor({ id, replay, go }: Props) {
           else askDelete(block.span!.id);
         }
         break;
-      case "Escape": if (ctx) setCtx(null); else if (menu) setMenu(false); else if (wordSel) setWordSel(null); else setSelKey(null); break;
+      case "Escape": if (ctx) setCtx(null); else if (menu) setMenu(false); else if (wordSel) setWordSel(null); else { setSelKey(null); setSelKeys([]); } break;
       case "g": case "G": nextGuide(); break;
-      case "m": case "M": p?.toggleMute(); break;
+      case "m": case "M": if (e.shiftKey) p?.toggleMute(); break; // M alone stays free for markers (Premiere, Resolve)
       case "f": case "F": p?.fullscreen(); break;
-      case "n": case "N": { // the next (Shift: previous) reviewer issue of this version
+      case "n": case "N": setSnap(!snap); flash(`Snapping ${snap ? "off" : "on"}${snap ? "" : ": the playhead, clip edges and review issues"} (hold ⇧ while dragging for free)`); break;
+      case ".": case ",": { // the next (,: previous) reviewer issue of this version
+        const back = e.key === ",";
         const iss = [...(v?.review?.issues ?? [])].sort((a, b) => a.t_s - b.t_s);
         if (!iss.length) { flash(v?.review ? "The reviewer raised no issue on this version." : "This version has not been reviewed."); break; }
-        const now = tRef.current;
-        const to = e.shiftKey ? [...iss].reverse().find((i) => i.t_s < now - 0.25) : iss.find((i) => i.t_s > now + 0.05);
-        if (!to) { flash(e.shiftKey ? "No issue before the playhead." : "No issue after the playhead."); break; }
+        const now = playhead();
+        const to = back ? [...iss].reverse().find((i) => i.t_s < now - 0.25) : iss.find((i) => i.t_s > now + 0.05);
+        if (!to) { flash(back ? "No issue before the playhead." : "No issue after the playhead."); break; }
         p?.pause(); p?.seek(to.t_s); setSelKey(null);
         flash(`Issue ${iss.indexOf(to) + 1} of ${iss.length} at ${tc(to.t_s)} · ${to.severity}: ${to.what}`);
         break;
@@ -363,14 +482,15 @@ export function Editor({ id, replay, go }: Props) {
 
       <aside className="insp">
         <Inspector id={id} state={state} versions={visible} v={v} block={block} punch={punch} next={next} words={state.words} busy={busy}
-          canEdit={canEdit} onSeek={seek} onPick={pick} onDelete={askDelete} onAsk={ask} onPunch={onPunch} onClear={() => setSelKey(null)}
+          canEdit={canEdit} onSeek={seek} onPick={pick} onDelete={askDelete} onAsk={ask} onPunch={onPunch} onClear={() => { setSelKey(null); setSelKeys([]); }}
           onReview={() => v && act("review", { from: v.n, passes: 1 })}
           onHook={() => { if (v) { setPanel("assistant"); act("hook", { from: v.n }); } }} />
       </aside>
 
       <footer className="tl-wrap">
-        <Timeline id={id} v={v} blocks={blocks} words={state.words} t={t} playing={playing} selected={selKey}
-          zoom={zoom} setZoom={setZoom} mode={tlMode} setMode={setTlMode} canTrim={!canEdit}
+        <Timeline id={id} v={v} blocks={blocks} words={state.words} t={t} playing={playing} selected={selKey} selection={selKeys}
+          zoom={zoom} setZoom={setZoom} mode={tlMode} setMode={setTlMode} canTrim={!canEdit} ppsRef={ppsRef} snap={snap} setSnap={setSnap}
+          onDeleteClips={askDeleteClips} onSplit={doSplit}
           onSelect={select} onSeek={seek} onScrub={scrub} onMenu={setCtx} onTrim={askTrim} onMove={askMove}
           wordSel={wordSel} onWordSel={pickWords} onCutWords={askCut} onDelete={askDelete} onAsk={ask}
           mix={mix} base={mixBase} live={live} next={next} canEdit={canEdit} onMix={setMixDraft} onResetMix={() => setMixDraft(null)}
@@ -393,19 +513,23 @@ export function Editor({ id, replay, go }: Props) {
         </div>
       )}
       {dialog?.kind === "delete" && v && (
-        <EditDialog kind="delete" state={state} v={v} span={dialog.span} next={next} onCancel={() => setDialog(null)}
+        <EditDialog kind="delete" state={state} v={v} span={dialog.span} next={next} newest={newest} onCancel={() => setDialog(null)}
           onConfirm={(review) => { setDialog(null); setPanel("assistant"); act("drop", { span: dialog.span, from: v.n, review: review ? 1 : 0 }); }} />
       )}
       {dialog?.kind === "words" && v && (
-        <EditDialog kind="words" state={state} v={v} span={dialog.ask.ranges[0].span} cut={dialog.ask} next={next} onCancel={() => setDialog(null)}
-          onConfirm={(review) => { setDialog(null); setWordSel(null); setPanel("assistant"); act(dialog.ask.path, { ...dialog.ask.body, from: v.n, review: review ? 1 : 0 }); }} />
+        <EditDialog kind="words" state={state} v={v} span={dialog.ask.ranges[0].span} cut={dialog.ask} next={next} newest={newest} onCancel={() => setDialog(null)}
+          onConfirm={(review) => { setDialog(null); setWordSel(null); setSelKeys([]); setPanel("assistant"); act(dialog.ask.path, { ...dialog.ask.body, from: v.n, review: review ? 1 : 0 }); }} />
+      )}
+      {dialog?.kind === "title" && v && (
+        <EditDialog kind="title" state={state} v={v} span="title" next={next} newest={newest} onCancel={() => setDialog(null)}
+          onConfirm={(review) => { setDialog(null); setSelKey(null); setPanel("assistant"); act("text", { title_card: false, from: v.n, review: review ? 1 : 0 }); }} />
       )}
       {dialog?.kind === "trim" && v && (
-        <EditDialog kind="trim" state={state} v={v} span={dialog.ask.span} trim={dialog.ask} next={next} onCancel={() => setDialog(null)}
+        <EditDialog kind="trim" state={state} v={v} span={dialog.ask.span} trim={dialog.ask} next={next} newest={newest} onCancel={() => setDialog(null)}
           onConfirm={(review) => { setDialog(null); setPanel("assistant"); act("trim", { span: dialog.ask.span, edge: dialog.ask.edge, word: dialog.ask.word, from: v.n, review: review ? 1 : 0 }); }} />
       )}
       {dialog?.kind === "move" && v && (
-        <EditDialog kind="move" state={state} v={v} span={dialog.ask.span} move={dialog.ask} next={next} onCancel={() => setDialog(null)}
+        <EditDialog kind="move" state={state} v={v} span={dialog.ask.span} move={dialog.ask} next={next} newest={newest} onCancel={() => setDialog(null)}
           onConfirm={(review) => { setDialog(null); setPanel("assistant"); act("reorder", { span: dialog.ask.span, before: dialog.ask.before, from: v.n, review: review ? 1 : 0 }); }} />
       )}
       {dialog?.kind === "export" && <ExportPage id={id} versions={visible} initial={sel} onClose={() => setDialog(null)}

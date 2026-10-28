@@ -178,8 +178,8 @@ export function nameOf(titleCardText: string | null | undefined, brief: string |
 }
 
 /** Cut-time positions an edge of a span block can snap to while dragging: the word boundaries of its turn, from two
- *  words inside the clip out to the words no other clip keeps. */
-export type Snap = { word: number; t: number; label: string };
+ *  words inside the clip out to the words no other clip keeps, as far as the turn goes (`end`: its last word). */
+export type Snap = { word: number; t: number; label: string; end?: boolean };
 
 export function edgeSnaps(b: Block, edge: "in" | "out", v: Version, words: Record<string, Word[]>): Snap[] {
   const sp = b.span!;
@@ -187,21 +187,37 @@ export function edgeSnaps(b: Block, edge: "in" | "out", v: Version, words: Recor
   const taken = new Set<number>();
   for (const s of v.spans) if (s.id !== sp.id && s.turn_id === sp.turn_id) for (let i = s.word_from; i <= s.word_to; i++) taken.add(i);
   const out: Snap[] = [];
-  const at = (src: number) => b.t0 + (src - sp.t_in);
+  const f = sp.duration > 0 ? (b.t1 - b.t0) / sp.duration : 1; // the layout's per-cut scale (frame alignment)
+  const at = (src: number) => b.t0 + (src - sp.t_in) * f;
   if (edge === "out") {
     for (let i = sp.word_from + 1; i < tw.length; i++) {
       if (i > sp.word_to && taken.has(i)) break;
-      if (i > sp.word_to + 25) break;
-      out.push({ word: i, t: i === sp.word_to ? b.t1 : at(tw[i].e), label: tw[i].w });
+      out.push({ word: i, t: i === sp.word_to ? b.t1 : at(tw[i].e), label: tw[i].w, end: i === tw.length - 1 });
     }
   } else {
     for (let i = sp.word_to - 1; i >= 0; i--) {
       if (i < sp.word_from && taken.has(i)) break;
-      if (i < sp.word_from - 25) break;
-      out.push({ word: i, t: i === sp.word_from ? b.t0 : at(tw[i].t), label: tw[i].w });
+      out.push({ word: i, t: i === sp.word_from ? b.t0 : at(tw[i].t), label: tw[i].w, end: i === 0 });
     }
   }
   return out;
+}
+
+/** Where a split at cut time `t` goes: in front of the kept word whose boundary is nearest, each piece keeping at
+ *  least two words (the engine's rule). */
+export function splitAt(blocks: Block[], t: number): { span: string; word: number; label: string; at: number } | { error: string } {
+  const b = blocks.find((x) => x.kind === "span" && t >= x.t0 && t < x.t1);
+  if (!b) return { error: blocks.some((x) => x.kind === "title" && t < x.t1) ? "The playhead is on the title card: move it into a clip to split." : "Put the playhead inside a clip to split it." };
+  const sp = b.span!;
+  const f = sp.duration > 0 ? (b.t1 - b.t0) / sp.duration : 1;
+  const at = (src: number) => b.t0 + Math.max(0, src - sp.t_in) * f;
+  let best: { word: number; at: number } | null = null;
+  for (let k = 2; k <= b.kept.length - 2; k++) { // the second piece starts at kept[k]
+    const x = (at(b.kept[k - 1].e) + at(b.kept[k].t)) / 2;
+    if (!best || Math.abs(x - t) < Math.abs(best.at - t)) best = { word: b.kept[k].i, at: x };
+  }
+  if (!best) return { error: `Clip ${sp.id} is too short to split: each piece keeps at least two words.` };
+  return { span: sp.id, word: best.word, label: b.kept.find((w) => w.i === best!.word)?.w ?? "", at: best.at };
 }
 
 /** A word selection in the transcript: anchor and focus, each `${span id}:${turn word index}`. */
@@ -234,6 +250,7 @@ export type CutRange = { span: string; from: number; to: number };
 export type CutAsk = {
   n: number; seconds: number; text: string; ranges: CutRange[]; lines: string[]; error: string | null;
   path: "drop" | "trim" | "cut"; body: Record<string, unknown>;
+  clips?: string[]; // a group delete of whole clips (multi-select on the timeline)
 };
 
 export function cutAsk(v: Version, flat: FlatWord[], sel: WordSel, words: Record<string, Word[]>): CutAsk | null {
@@ -261,6 +278,10 @@ export function cutAsk(v: Version, flat: FlatWord[], sel: WordSel, words: Record
     seconds += kind === "whole" ? sp.duration : kind === "in" ? tw[g.to + 1].t - sp.t_in
       : kind === "out" ? sp.t_out - tw[g.from - 1].e : tw[g.to + 1].t - tw[g.from - 1].e;
     if ((kind === "in" || kind === "out") && kept < 2) error ??= `Clip ${sp.id} would keep one word: a clip keeps at least two. Select the whole clip to delete it.`;
+    if (kind === "middle" && (g.from - sp.word_from < 2 || sp.word_to - g.to < 2)) {
+      const lone = g.from - sp.word_from < 2 ? tw[sp.word_from] : tw[sp.word_to];
+      error ??= `Clip ${sp.id} would keep “${lone?.w ?? ""}” alone: each piece keeps at least two words. Delete that word too, or keep one more.`;
+    }
     lines.push(kind === "whole" ? `${sp.id}: the whole clip is deleted, the cuts on either side tightened to the speech.`
       : kind === "middle" ? `${sp.id}: splits in two around the deleted words, both new cuts tightened to the speech.`
       : `${sp.id}: trimmed at the ${kind === "in" ? "start" : "end"}; like the reviewer's own trims, the edge may settle on a sentence end one or two words away, never back into the deleted words.`);
@@ -274,4 +295,19 @@ export function cutAsk(v: Version, flat: FlatWord[], sel: WordSel, words: Record
   const text = picked.map((x) => x.w.w).join(" ");
   if (route.path === "cut") route.body.text = text.slice(0, 120);
   return { n: picked.length, seconds, text, ranges, lines, error, ...route };
+}
+
+/** Deleting several whole clips (Shift / ⌘ click on the timeline): one version through the transcript delete's `cut`
+ *  path, which drops each whole clip and tightens the cuts that now meet. */
+export function clipsAsk(v: Version, ids: string[], words: Record<string, Word[]>): CutAsk {
+  const spans = v.spans.filter((s) => ids.includes(s.id));
+  const ranges = spans.map((s) => ({ span: s.id, from: s.word_from, to: s.word_to }));
+  const text = spans.map((s) => (words[String(s.turn_id)] ?? []).slice(s.word_from, s.word_to + 1).map((w) => w.w).join(" ")).join(" … ");
+  const n = spans.reduce((a, s) => a + s.word_to - s.word_from + 1, 0);
+  return {
+    n, seconds: spans.reduce((a, s) => a + s.duration, 0), text, ranges, clips: spans.map((s) => s.id),
+    lines: spans.map((s) => `${s.id}: the whole clip is deleted (${s.duration.toFixed(1)} s).`).concat("The cuts that now meet are tightened to the speech; roles follow the position."),
+    error: spans.length >= v.spans.length ? "That deletes every clip." : null,
+    path: "cut", body: { words: ranges, text: text.slice(0, 120) },
+  };
 }
