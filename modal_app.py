@@ -106,3 +106,23 @@ def smoke(run: str = "015", span: str = "s4"):
     print(r.stdout[-1500:], r.stderr[-3000:], f"exit {r.returncode}", sep="\n", flush=True)
     log = (root / "runs" / run / "run.log").read_text().splitlines()
     print("\n".join(log[-6:]), flush=True)
+
+
+@app.function(image=image, volumes={DATA: volume}, secrets=[modal.Secret.from_name("montivo-keys")], cpu=4.0,
+              memory=8192, timeout=1800)
+def rereview(run: str, version: int, passes: int = 3):
+    """`modal run modal_app.py::rereview --run ID --version N`: render cut_vN again with today's code (an engine fix that
+    changes how vN looks, like the caption retext of 28/10) and run the review loop from it; the spend goes to the run's
+    ledger, so the cap counts it. Stop the web container first (`modal container stop`): it does not see another
+    container's writes until it starts again."""
+    import subprocess
+    import sys
+
+    volume.reload()
+    for args in (["render", f"runs/{run}", "--edl", f"runs/{run}/edl_v{version}.json", "--out", f"cut_v{version}.mp4"],
+                 ["review", f"runs/{run}", "--edl", f"runs/{run}/edl_v{version}.json", "--passes", str(passes)]):
+        r = subprocess.run([sys.executable, "-m", "montivo.cli", *args], cwd=DATA, capture_output=True, text=True)
+        print(r.stdout[-4000:], r.stderr[-2000:], f"exit {r.returncode}", sep="\n", flush=True)
+        if r.returncode:
+            break
+    volume.commit()

@@ -234,3 +234,40 @@ def test_bundled_font_wins(monkeypatch):
     from montivo.engine.graphics import BUNDLED_FONT, font_path
     monkeypatch.delenv("MONTIVO_FONT", raising=False)
     assert BUNDLED_FONT.is_file() and font_path() == str(BUNDLED_FONT)
+
+
+def _line(words, t0, span="s2", step=0.2):
+    return [CWord(w=w, t_in=round(t0 + k * step, 3), t_out=round(t0 + (k + 1) * step, 3), span=span)
+            for k, w in enumerate(words.split())]
+
+
+def test_a_retext_takes_the_next_lines_words_it_already_says():
+    from montivo.engine.captions import apply_overrides, covered
+    # live run ui-1027-2252: Voice doubled "wrote down" across the break; the reviewer's text is the whole phrase
+    a, b, c = _line("I wrote down wrote", 15.0), _line("down the letters of", 15.8), _line("the station and we", 16.6)
+    assert covered(a, "I wrote down the letters of", b) == 4
+    ov = [{"span": "s2", "src_t": 15.01, "text": "I wrote down the letters of", "why": "review"}]
+    lines, forced = apply_overrides([a, b, c], ov)
+    assert [" ".join(w.w for w in ln) for ln in lines] == ["I wrote down the letters of", "the station and we"]
+    assert lines[0][0].t_in == 15.0 and lines[0][-1].t_out == pytest.approx(16.6) and forced == {}
+    assert lines[0][0].src == "I wrote down wrote down the letters of"  # what Voice heard, for the Captions panel
+    # the words between can go too: "we have we've had | it we had enough" -> "we had enough" takes the whole next line
+    a, b = _line("we have we've had", 23.0, "s4"), _line("it we had enough", 23.8, "s4")
+    assert covered(a, "we had enough", b) == 4
+    # part of the next line: it keeps the rest and starts later
+    a, b = _line("so after about after", 57.3, "s4"), _line("about 20 30 minutes we", 58.1, "s4")
+    lines, _ = apply_overrides([a, b], [{"span": "s4", "src_t": 57.31, "text": "so after about 20 30 minutes"}])
+    assert [" ".join(w.w for w in ln) for ln in lines] == ["so after about 20 30 minutes", "we"]
+    assert lines[1][0].t_in == pytest.approx(58.9)
+
+
+def test_a_retext_of_its_own_words_leaves_the_next_line_alone():
+    from montivo.engine.captions import apply_overrides, covered
+    # run 015's hand edits: the corrected words are the line's own
+    a, b = _line("meta models do all", 36.6, "s5"), _line("the work Muse Voice", 37.4, "s5")
+    assert covered(a, "Four Meta models do all", b) == 0
+    a, b = _line("we did short form", 24.9), _line("videos every", 25.7)
+    assert covered(a, "we edit short form", b) == 0
+    assert covered(_line("and I said", 1.0), "and I said the", _line("the end", 1.6, span="s3")) == 0  # another span
+    lines, forced = apply_overrides([a, b], [{"span": "s2", "src_t": 25.71, "top": 500}])
+    assert [" ".join(w.w for w in ln) for ln in lines] == ["we did short form", "videos every"] and list(forced) == [1]

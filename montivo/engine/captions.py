@@ -18,6 +18,7 @@ Pipeline, all offline:
 """
 from __future__ import annotations
 
+import difflib
 import math
 import re
 from dataclasses import dataclass, field
@@ -383,6 +384,44 @@ def retext(words: list[CWord], text: str) -> list[CWord]:
     return out
 
 
+def covered(line: list[CWord], text: str, nxt: list[CWord]) -> int:
+    """How many leading words of the next line a retext of `line` already says. Voice can double a phrase across a
+    line break (live run ui-1027-2252: "I wrote down wrote | down the letters of"); the reviewer's text for the first
+    line is then the whole phrase ("I wrote down the letters of") and the next line must give those words up, or the
+    cut shows them twice. The new text is aligned against the line's heard words followed by the next line's; every
+    next-line word up to the last one the text matches is covered. Lines of different spans never share words."""
+    if not nxt or nxt[0].span != line[0].span:
+        return 0
+    own = [norm(w.w) for w in line]
+    both = own + [norm(w.w) for w in nxt]
+    sm = difflib.SequenceMatcher(None, both, [norm(x) for x in text.split()], autojunk=False)
+    last = max((m.a + m.size - 1 for m in sm.get_matching_blocks() if m.size), default=-1)
+    return max(0, last - len(own) + 1)
+
+
+def apply_overrides(lines: list[list[CWord]], overrides: list[dict]) -> tuple[list[list[CWord]], dict[int, dict]]:
+    """The caption overrides on a segment's lines: a `text` retexts its line (taking over the next line's words it
+    covers, so nothing shows twice; a next line left empty goes) and a `top` forces its position. Returns the lines and
+    {line index: override} of the forced ones."""
+    out: list[list[CWord]] = []
+    forced: dict[int, dict] = {}
+    todo = [list(ln) for ln in lines]
+    while todo:
+        ws = todo.pop(0)
+        ov = override_for(ws, overrides)
+        if ov and ov.get("text"):
+            n = covered(ws, ov["text"], todo[0]) if todo else 0
+            if n:
+                ws, todo[0] = ws + todo[0][:n], todo[0][n:]
+                if not todo[0]:
+                    todo.pop(0)
+            ws = retext(ws, ov["text"])
+        if ov and ov.get("top") is not None:
+            forced[len(out)] = ov
+        out.append(ws)
+    return out, forced
+
+
 # --------------------------------------------------------------------------- the stage
 
 @dataclass
@@ -473,16 +512,8 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
     if captions:
         for i, ws in sorted(seg_words.items()):
             seg = segments[i]
-            lines = [Line(words=lw, segment=i) for lw in group_lines(ws, style)]
-            forced: dict[int, dict] = {}
-            for k, ln in enumerate(lines):
-                ov = override_for(ln.words, overrides)
-                if ov is None:
-                    continue
-                if ov.get("text"):
-                    ln.words = retext(ln.words, ov["text"])
-                if ov.get("top") is not None:
-                    forced[k] = ov
+            grouped, forced = apply_overrides(group_lines(ws, style), overrides)
+            lines = [Line(words=lw, segment=i) for lw in grouped]
             for ln in lines:
                 ln.word_times = [(cut_t(i, w.t_in), cut_t(i, w.t_out)) for w in ln.words]
                 ln.t_in, ln.t_out = ln.word_times[0][0], ln.word_times[-1][1]
