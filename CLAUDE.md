@@ -4,7 +4,7 @@ This folder (`~/Documents/montivo`, public repo https://github.com/bgaravelos/mo
 hackathon project lives. Work here, not in `~/Documents/nocta-digital` (Nocta's agency work, off limits for this project).
 
 ## What this is
-Montivo is Nocta Digital's entry for the Meta Global AI Developer Hackathon (build window 26/10 to 4/11/2026, kickoff 26/10 18:00 Athens,
+Montivo is Billy Gkaravelos's own Indie entry (as an individual, not Nocta Digital's) for the Meta Global AI Developer Hackathon (build window 26/10 to 4/11/2026, kickoff 26/10 18:00 Athens,
 submission on cerebralvalley.ai by Wed 4/11 evening, deadline Thu 5/11 04:00 Athens). An agent-first video editor:
 Muse Spark 1.3 watches the footage and plans a paper edit, Muse Voice gives turns and word timings, SAM 3.1 tracks
 the speaker for the 9:16 reframe and callouts, ffmpeg renders, then Spark reviews its own render against a rubric and
@@ -17,9 +17,16 @@ reposts + comments on the one X post linked in the submission, counted through 8
 count, build-in-public posts are fine, it can go up any time during the event); the submission stays editable after
 Submit until Wed 4/11 9:00 PM ET, early submission gives no edge. Still open: which repo commit is judged, Open Weight
 with one Spark Open stage.
-Track decision (Billy, 28/10): Nocta Digital is a Greek OE (general partnership, can employ people), so by the bot's rule
-it fits Startup; Billy prefers Indie, which holds only if the entry is his own as an individual, not the agency's
-(team name, README credit and brand cards still say Nocta Digital: see the Board card «Αποφάσεις form»).
+Track decision (Billy, 28/10, FINAL): Indie, as Billy's own entry as an individual. Nocta Digital is a Greek OE
+(general partnership, can employ people), so by the bot's rule the agency would fit Startup: every public credit
+(team name "Montivo", README, brand title/end cards, demo end card, submission drafts, X post) must name Billy, not
+Nocta Digital; the open list is in the Board card «Credit από Nocta Digital στον Billy (Indie)». Follow-up
+in thread 4 (28/10): the bot would not rule on our case and passed it to the organizers; their answer is pending there.
+Event pages (read 28/10): Indie = "individual builders and students", judged on creativity, technical ambition and
+whether it works; Startup = "teams and founders building a real product", judged on technical execution and whether it
+holds up in production, and startups may build on existing products. Stage 2 rubric is the same for both tracks
+(impact 30, Meta tooling 25, technical depth 20, demo 25), top 5 per track go to the live final on 9/11. Prizes: Indie
+150/100/75/50/25k, Startup 250/150/75/50/25k. Most Viral asks for the project demo posted on X.
 
 ## Hard rules
 - At run time the application calls Meta models only (`muse-spark-1.3`, `muse-voice-transcribe-1.0`, `sam-3.1`,

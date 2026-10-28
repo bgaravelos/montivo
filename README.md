@@ -631,4 +631,4 @@ during the event, on top of `montivo` (it plants three faults in a run's EDL and
 
 ## Licence
 
-MIT. Built by Nocta Digital (Athens).
+MIT. Built by Billy Gkaravelos (Athens).
