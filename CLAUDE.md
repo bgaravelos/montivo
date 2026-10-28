@@ -585,7 +585,7 @@ renders byte for byte as before. Left: the Text track still shows a callout a fu
 ignores stills. UI build of both batches: commit `492d324`. Deployed to Modal 28/10 17:18 on Billy's go, from a clean
 worktree of main at 57298c0 (the last job, a hook A/B on 012-dd516021, ended 16:52; the 16:33 container stopped); live
 /s/nope 404, /api/runs and /shares 401 without the cookie; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 8.2 s.
-Batch F, picture and sound (28/10, $0, commits `fe4c27b`, `6c5dbe5`, `4d36bdc`, `441387e`, not deployed): E13 every cut
+Batch F, picture and sound (28/10, $0, commits `fe4c27b`, `6c5dbe5`, `4d36bdc`, `441387e`): E13 every cut
 is a 20 ms equal-power crossfade centred on it over 10 ms handles (`render.cut_graph`, length kept): the deepest 2 ms
 window at 015 v5's cuts 26-31 dB under the room tone -> 10-12 dB (uncut room tone dips 9-22), -14.0 LUFS. E12 the
 look's `line_breaks` greedy | phrase (`captions.phrase_breaks`, cheapest breaks: no line ending on and / a / in, pauses
@@ -599,7 +599,10 @@ E11 `ingest.detect_shots` (scdet 10 on the proxy; talking heads peak 3.3, cuts ~
 fps (DJI 600/19 -> 30), > 60 fps, 10-bit, HDR (zscale + hable where it exists, HLG via colorspace here, PQ refused
 without zscale; `modal run modal_app.py::smoke` prints which). E15 an end-to-end `render()` test and `human.drop`
 (dropping the hook used to write an identical version, now refused). 015 v5: E12 / E13 leave the video bit-identical,
-E8 changes 368 of 1138 frames (the pans), E10 / E11 change nothing on any local run. 384 tests.
+E8 changes 368 of 1138 frames (the pans), E10 / E11 change nothing on any local run. 384 tests. Deployed to Modal
+28/10 17:51 on Billy's go, from a clean worktree of main at 8a69087 (the last job, ui-1028-1227's review loop, ended
+17:42; the 17:18 container stopped); the image HAS zscale (HDR HLG / PQ tone-mapped live); smoke drop on 015: 34.3 s,
+-14.0 LUFS / -1.7 dBTP, render 8.6 s; /s/nope 404, /api/runs 401, /api/health 200.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
