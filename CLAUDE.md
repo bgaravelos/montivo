@@ -579,7 +579,9 @@ the reviewer may extend a dramatic pause back. B-roll stills with Muse Image (`h
 `overlays[]`, placements full / card / corner, under the captions with a short fade, tied to their words, a B-roll track
 with a prompt box; move / resize / placement / remove $0); Ask Montivo adds one only when asked. 015 v5 without overlays
 renders byte for byte as before. Left: the Text track still shows a callout a full still hides; the Style preview
-ignores stills. UI build of both batches: commit `492d324`. Not deployed yet (needs Billy's explicit go).
+ignores stills. UI build of both batches: commit `492d324`. Deployed to Modal 28/10 17:18 on Billy's go, from a clean
+worktree of main at 57298c0 (the last job, a hook A/B on 012-dd516021, ended 16:52; the 16:33 container stopped); live
+/s/nope 404, /api/runs and /shares 401 without the cookie; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 8.2 s.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
