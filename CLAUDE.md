@@ -668,6 +668,16 @@ fixes are in the Captions panel too. Deployed on Billy's go at 23:33 from a clea
 23:22; the 22:26 container stopped); `judge.key` made on the Volume, so every judge cookie from before is void (new id at
 the next request; Billy's own test copies no longer show for him); live /api/health 200, /api/runs 401, /s/nope 404,
 host spend $2.79 of $15; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 8.3 s.
+Codex follow-up review (28/10 night, $0, brief `docs/notes/codex-review-brief-3_2026-10-28.md`: budget admission,
+Ask Montivo chains, stopped renders): 3 musts + 2 shoulds, each checked and fixed with a test (commit `3b903fe`, 432
+tests): request paid calls (cover, post text, mask) and engine jobs share one slot (`State.paid`, `refuse_beside_paid_call`;
+on the host none beside any job; the mask route now waits for a job on its run); jobs run in their own process group,
+Stop SIGTERMs the group, `end_group` SIGKILLs it after 5 s and the slot frees only then (the ffmpeg encodes used to keep
+writing into render/); a stopped paid job holds up to $0.05 on the hosted budget (`stop_hold`, `Budget.hold`,
+budget.json `held`); the hosted server sets aside at start the unrendered edl_vN past each run's newest cut (a container
+stop never ran the job's clean-up); Ask Montivo refuses a re-plan while part of the cut is selected. Deployed on Billy's
+go at 23:46 (no job since 23:22; the 23:33 container stopped); live /api/health 200, /api/runs 401, /s/nope 404, host spend
+$2.79 of $15; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 10.1 s.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
