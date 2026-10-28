@@ -201,3 +201,87 @@ def test_music_routes(tmp_path, monkeypatch):
     assert r.status_code == 400 and "no music track" in r.json()["error"]
     assert c.post("/api/runs/r1/music", json={"track": "apple_cider", "level_db": 0}).status_code == 400
     assert c.post("/api/runs/r1/music", json={"track": "apple_cider", "review": 1}).status_code == 409  # review needs the key
+
+
+def test_the_voice_gain_is_checked_and_kept_only_when_not_zero():
+    assert M.normalize_music({"track": "ukulele", "voice_db": 0}) == {"track": "ukulele", "level_db": -20.0, "duck_db": -12.0}
+    assert M.normalize_music({"track": "ukulele", "voice_db": 2.04})["voice_db"] == 2.0
+    for bad in (7, -13, "3", True):
+        with pytest.raises(ValueError):
+            M.normalize_music({"track": "ukulele", "voice_db": bad})
+    edl = {"music": {"track": "ukulele", "level_db": -20.0, "duck_db": -12.0}}
+    now, fix = human.music_fix(edl, "ukulele", None, None, 3)  # the timeline's Voice fader alone
+    assert now["voice_db"] == 3.0 and fix["note"] == "music voice_db 0.0 -> 3.0"
+    edl["music"] = now
+    now, fix = human.music_fix(edl, "ukulele", -24, None, None)  # a level change keeps the voice gain
+    assert now == {"track": "ukulele", "level_db": -24.0, "duck_db": -12.0, "voice_db": 3.0}
+    now, fix = human.music_fix(edl, "ukulele", None, None, 0)
+    assert "voice_db" not in now and fix["note"] == "music voice_db 3.0 -> 0.0"
+    with pytest.raises(SystemExit, match="voice \\+3 dB"):
+        human.music_fix(edl, "ukulele", None, None, 3)
+    with pytest.raises(SystemExit, match="no level"):
+        human.music_fix(edl, None, None, None, 1)
+
+
+def test_the_bed_is_kept_as_a_stem_and_the_voice_gain_moves_the_balance(tmp_path):
+    src = speech_source(tmp_path / "src.wav")
+    words = [{"w": "a", "t_start": 0.5, "t_end": 3.5}, {"w": "b", "t_start": 5.0, "t_end": 8.0}]
+    segs = [SimpleNamespace(t_in=0.0, t_out=9.0, duration=9.0)]
+    base = {"track": "raspberry_jam", "level_db": -20.0, "duck_db": -12.0}
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir(), b.mkdir()
+    _, _, flat = render_audio(src, segs, a, music=base, words=words, stem_name="cut_v2")
+    out, _, up = render_audio(src, segs, b, music={**base, "voice_db": 4.0}, words=words, stem_name="cut_v3")
+    assert flat["music_stem"] == (a / "cut_v2.music.m4a").as_posix() and (a / "cut_v2.music.m4a").is_file()
+    assert flat["voice_db"] == 0.0 and up["voice_db"] == 4.0
+    assert up["measured"]["margin_db"] == pytest.approx(flat["measured"]["margin_db"] + 4.0, abs=0.2)
+    loud = measure_loudness(out)  # the mix is normalised after the gain: still -14 LUFS
+    assert abs(loud["integrated_lufs"] + 14.0) <= 0.5 and loud["true_peak_dbtp"] <= -1.0
+
+
+def test_an_older_version_gets_its_bed_rebuilt(tmp_path):
+    from montivo.engine.render import Segment, music_stem
+    d = tmp_path / "r"
+    (d / "voice").mkdir(parents=True)
+    (d / "voice" / "voice.json").write_text(json.dumps({"words": [{"w": "a", "t_start": 0.5, "t_end": 3.5}]}))
+    edl = {"music": {"track": "ukulele", "level_db": -20.0, "duck_db": -12.0},
+           "render": {"title": {"seconds": 1.0}, "segments": [{"index": 0, "t_in": 0.0, "t_out": 4.0, "duration": 4.0, "spans": ["s1"]},
+                                                              {"index": 1, "t_in": 6.0, "t_out": 8.5, "duration": 2.5, "spans": ["s2"]}]}}
+    out = music_stem(d, edl, d / "ui" / "cache" / "music_v2.m4a")
+    dur = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(out)],
+                               capture_output=True, text=True, check=True).stdout)
+    assert abs(dur - 7.5) < 0.06 and not list(out.parent.glob("*.tmp*"))
+    with pytest.raises(ValueError):
+        music_stem(d, {"render": edl["render"]}, out)
+    assert Segment(index=0, t_in=6.0, t_out=8.5, span_ids=[], frames=1, fps=1 / 2.5).duration == 2.5
+
+
+def test_the_stem_and_track_peak_routes(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from montivo.server.app import create_app
+    from tests.test_ui import _run_folder
+    _run_folder(tmp_path)
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    c = TestClient(create_app(tmp_path))
+    d = tmp_path / "runs" / "r1"
+    n = max(int(p.stem.split("_v")[1]) for p in d.glob("edl_v*.json"))
+    src = speech_source(tmp_path / "src.wav")
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-c:a", "aac", str(d / f"cut_v{n}.mp4")], check=True)
+    r = c.get(f"/api/runs/r1/stem?v={n}&track=music")
+    assert r.status_code == 404 and "no music" in r.json()["error"]
+    edl = json.loads((d / f"edl_v{n}.json").read_text())
+    (d / "render").mkdir(exist_ok=True)
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-c:a", "aac", str(d / "render" / f"cut_v{n}.speech.m4a")], check=True)
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-c:a", "aac", str(d / "render" / f"cut_v{n}.music.m4a")], check=True)
+    edl["music"] = {"track": "ukulele", "level_db": -20.0, "duck_db": -12.0}
+    edl.setdefault("render", {})["music"] = {"ducked": [[1.0, 2.0]]}
+    (d / f"edl_v{n}.json").write_text(json.dumps(edl))
+    for track in ("voice", "music"):
+        r = c.get(f"/api/runs/r1/stem?v={n}&track={track}")
+        assert r.status_code == 200 and r.headers["content-type"] == "audio/mp4"
+        pk = c.get(f"/api/runs/r1/peaks?v={n}&track={track}").json()
+        assert pk["rate"] == 100 and max(pk["peaks"]) > 0.1
+    assert c.get(f"/api/runs/r1/stem?v={n}&track=drums").status_code == 400
+    mu = next(x for x in c.get("/api/runs/r1").json()["versions"] if x["n"] == n)["music"]
+    assert mu["voice_db"] == 0.0 and mu["ducked"] == [[1.0, 2.0]]

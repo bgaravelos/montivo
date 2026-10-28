@@ -133,8 +133,9 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
         : o.action === "reorder" ? `Move clip ${f?.target ?? ""}${(f?.args as { before?: string | null } | null)?.before ? ` before ${(f!.args as { before: string }).before}` : " to the end"}.`
         : o.action === "cut" ? `Delete words in ${[...new Set((o.fixes ?? []).map((x) => x.target))].join(", ")}.`
         : o.action === "music" ? (f?.op === "music_off" ? "Take the music out." : (() => {
-          const m = (f?.args as { music?: { track: string; level_db: number } } | null)?.music;
-          return m ? `Music: ${m.track.replace("_", " ")} at ${m.level_db} LUFS.` : "Put music under the speech."; })())
+          const m = (f?.args as { music?: { track: string; level_db: number; voice_db?: number } } | null)?.music;
+          const voice = m?.voice_db ? `, voice ${m.voice_db > 0 ? "+" : ""}${m.voice_db} dB` : "";
+          return m ? `Music: ${m.track.replace(/_/g, " ")} at ${m.level_db} LUFS${voice}.` : "Put music under the speech."; })())
         : o.action === "pin" ? `Follow ${(f?.args as { head?: string | null } | null)?.head != null ? `head ${(f!.args as { head: string }).head}` : "the speaker map"} when speaker ${f?.target ?? ""} talks.`
         : (o.instruction ?? "Ask Montivo.");
       out.push({ kind: "you", text: what, chips: [`from v${o.from}`] });

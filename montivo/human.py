@@ -12,7 +12,7 @@
     python -m montivo.human pin runs/014 --speaker A --head 3 (or --head none to drop the pin)
     python -m montivo.human edges runs/015
     python -m montivo.human style runs/015 [--look '{"preset": "box", "position": "fixed", "top": 1180}'] [--callout s5=120,300] [--callout s5=auto]
-    python -m montivo.human music runs/015 --track chill_lofi [--level -20] [--duck -12] (or --off)
+    python -m montivo.human music runs/015 --track chill_lofi [--level -20] [--duck -12] [--voice 0] (or --off)
 
 Each writes the next edl_vN.json (N = one past the highest version in the run folder, so no version is ever
 overwritten) with a `patches` entry marked `source: "human"`, renders cut_vN.mp4 and, with --review, runs the blind
@@ -438,12 +438,14 @@ def style(run_dir: Path, look: dict | None = None, callouts: dict[str, list[floa
     return _finish(run_dir, edl_path, n, passes, budget, ledger, log)
 
 
-def music_fix(edl: dict, track: str | None, level_db: float | None = None, duck_db: float | None = None) -> tuple[dict | None, dict]:
-    """The EDL's next `music` and the patch entry: track None = off; a level or duck left out keeps the current one
-    (else the defaults). Raises SystemExit for an unknown track, a value out of range or an edit that changes nothing."""
+def music_fix(edl: dict, track: str | None, level_db: float | None = None, duck_db: float | None = None,
+              voice_db: float | None = None) -> tuple[dict | None, dict]:
+    """The EDL's next `music` and the patch entry: track None = off; a level, duck or voice gain left out keeps the
+    current one (else the defaults; voice 0 dB). Raises SystemExit for an unknown track, a value out of range or an
+    edit that changes nothing."""
     was = edl.get("music") or None
     if track is None:
-        if level_db is not None or duck_db is not None:
+        if level_db is not None or duck_db is not None or voice_db is not None:
             raise SystemExit("--off takes no level")
         if not was:
             raise SystemExit("there is no music to take out")
@@ -451,7 +453,8 @@ def music_fix(edl: dict, track: str | None, level_db: float | None = None, duck_
                       "note": f"music {was['track']} off"}
     want = {"track": track,
             "level_db": level_db if level_db is not None else (was or {}).get("level_db", MUSIC_LEVEL_DB),
-            "duck_db": duck_db if duck_db is not None else (was or {}).get("duck_db", MUSIC_DUCK_DB)}
+            "duck_db": duck_db if duck_db is not None else (was or {}).get("duck_db", MUSIC_DUCK_DB),
+            "voice_db": voice_db if voice_db is not None else (was or {}).get("voice_db", 0.0)}
     try:
         now = normalize_music(want)
     except ValueError as e:
@@ -461,20 +464,23 @@ def music_fix(edl: dict, track: str | None, level_db: float | None = None, duck_
     except ValueError:
         pass  # a hand-written music entry the bundled tracks no longer know: replaced as it is
     if was and was == now:
-        raise SystemExit(f"the music is already {now['track']} at {now['level_db']:g} LUFS, ducked {now['duck_db']:g} dB")
-    changed = ", ".join(f"{k} {was.get(k)!r} -> {now[k]!r}" for k in now if was.get(k) != now[k]) if was else None
+        raise SystemExit(f"the music is already {now['track']} at {now['level_db']:g} LUFS, ducked {now['duck_db']:g} dB"
+                         + (f", voice {now['voice_db']:+g} dB" if now.get("voice_db") else ""))
+    val = lambda m, k: m.get(k, 0.0 if k == "voice_db" else None)  # noqa: E731 (voice_db is only kept when not 0)
+    changed = ", ".join(f"{k} {val(was, k)!r} -> {val(now, k)!r}" for k in ("track", "level_db", "duck_db", "voice_db")
+                        if val(was, k) != val(now, k)) if was else None
     note = f"music {changed}" if changed else (f"music {now['track']} under the speech at {now['level_db']:g} LUFS, "
                                               f"ducked {now['duck_db']:g} dB while anyone speaks")
     return now, {"op": "music", "target": "audio", "issue": -1, "severity": "human", "args": {"music": now}, "note": note}
 
 
 def music(run_dir: Path, track: str | None, level_db: float | None = None, duck_db: float | None = None,
-          from_v: int | None = None, passes: int = 0, budget: float = 0.15) -> dict:
+          from_v: int | None = None, passes: int = 0, budget: float = 0.15, voice_db: float | None = None) -> dict:
     """A music bed under edl_v{from}'s speech, another track or level, or none -> edl_vN, rendered, $0 (ffmpeg only).
     The EDL's `music` travels with later versions like `look` (review patches deep-copy the EDL, replan carries it)."""
     log = RunLog(run_dir / "run.log")
     from_v, edl, n = _new_version(run_dir, from_v)
-    now, fix = music_fix(edl, track, level_db, duck_db)
+    now, fix = music_fix(edl, track, level_db, duck_db, voice_db)
     log(f"montivo music: {fix['note']} in edl_v{from_v} -> edl_v{n}")
     new, _ = apply_fixes(edl, [], _words(run_dir))
     if now:
@@ -1004,6 +1010,7 @@ def main(argv: list[str] | None = None) -> int:
     mg.add_argument("--off", action="store_true", help="take the music out")
     mu.add_argument("--level", type=float, default=None, help="the bed's loudness in LUFS where nobody speaks (default -20)")
     mu.add_argument("--duck", type=float, default=None, help="dB the bed drops while anyone speaks (default -12)")
+    mu.add_argument("--voice", type=float, default=None, help="dB on the speech against the bed, -12..6 (default 0)")
     for p in (d, t, r, pu, c, tx, ro, pn, cu, ed, sy, mu):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
@@ -1055,7 +1062,7 @@ def main(argv: list[str] | None = None) -> int:
             ap.error("give --look or --prompt, not both")
         out = style(a.run_dir, look, places, a.from_v, a.review, a.budget, prompt=a.prompt)
     elif a.cmd == "music":
-        out = music(a.run_dir, None if a.off else a.track, a.level, a.duck, a.from_v, a.review, a.budget)
+        out = music(a.run_dir, None if a.off else a.track, a.level, a.duck, a.from_v, a.review, a.budget, a.voice)
     elif a.cmd == "pin":
         out = pin(a.run_dir, a.speaker, None if a.head.lower() == "none" else a.head, a.from_v, a.review, a.budget)
     else:

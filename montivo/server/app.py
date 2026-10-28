@@ -412,12 +412,54 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(500, "filmstrip extraction failed")
         return FileResponse(out, headers={"Cache-Control": "no-cache", "X-Thumb": f"{media.THUMB_W}x{media.THUMB_H}@{media.THUMB_STEP_S}"})
 
-    @app.get("/api/runs/{run_id}/peaks")
-    def peaks(run_id: str, v: int):
-        """The audio track's waveform: the absolute peak of every 10 ms of cut_vN.mp4 (cached in ui/cache/)."""
-        d, src = cut_of(run_id, v)
+    def stem_of(run_id: str, v: int, track: str) -> tuple[Path, Path]:
+        """A version with music: its speech stem (`voice`) or its ducked bed (`music`), as the render kept them; a bed
+        rendered before the render kept it is rebuilt once into ui/cache/ ($0)."""
+        d, cut = cut_of(run_id, v)
         try:
-            return media.peaks(src, d / "ui" / "cache" / f"peaks_v{v}.json")
+            edl = json.loads((d / f"edl_v{v}.json").read_text())
+        except (OSError, ValueError):
+            raise HTTPException(404, "no EDL for this version")
+        rec = (edl.get("render") or {}).get("music") or {}
+        if not edl.get("music") or not rec:
+            raise HTTPException(404, "this version has no music, so the cut's own audio is the voice")
+        if track == "voice":
+            p = d / "render" / f"cut_v{v}.speech.m4a"
+        elif track == "music":
+            p = d / "render" / f"cut_v{v}.music.m4a"
+            if not p.is_file():
+                p = d / "ui" / "cache" / f"music_v{v}.m4a"
+                with media._lock(p):
+                    if not media.fresh(p, cut):
+                        from ..engine.render import music_stem
+                        try:
+                            music_stem(d, edl, p)
+                        except (ValueError, RuntimeError) as e:
+                            raise HTTPException(500, f"could not rebuild the music bed: {e}")
+        else:
+            raise HTTPException(400, "track is voice or music")
+        if not p.is_file():
+            raise HTTPException(404, f"no {track} stem for this version")
+        return d, p
+
+    @app.get("/api/runs/{run_id}/stem")
+    def stem(run_id: str, v: int, track: str):
+        """One audio track of a version with music, for the editor's live faders."""
+        _, p = stem_of(run_id, v, track)
+        return FileResponse(p, media_type="audio/mp4", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/api/runs/{run_id}/peaks")
+    def peaks(run_id: str, v: int, track: str = "cut"):
+        """An audio track's waveform: the absolute peak of every 10 ms of cut_vN.mp4, or of its voice or music stem
+        (cached in ui/cache/)."""
+        if track == "cut":
+            d, src = cut_of(run_id, v)
+            name = f"peaks_v{v}.json"
+        else:
+            d, src = stem_of(run_id, v, track)
+            name = f"peaks_v{v}_{track}.json"
+        try:
+            return media.peaks(src, d / "ui" / "cache" / name)
         except subprocess.CalledProcessError:
             raise HTTPException(500, "no audio stream in this cut")
 
@@ -977,8 +1019,8 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/runs/{run_id}/music")
     async def music_edit(run_id: str, request: Request):
-        """A music bed under the speech ({"track": id, "level_db": -20, "duck_db": -12}), another track or level, or
-        none ({"track": null}): the next version, ffmpeg only."""
+        """A music bed under the speech ({"track": id, "level_db": -20, "duck_db": -12, "voice_db": 0}), another track
+        or level, or none ({"track": null}): the next version, ffmpeg only. "mix": true names it the timeline faders'."""
         from ..engine.music import normalize_music
         run_id = await own(run_id, request)
         d = st.run_dir(run_id)
@@ -992,11 +1034,17 @@ def create_app(root: Path) -> FastAPI:
             flag, label, text = ["--off"], "Music off", f"Take the music out of v{frm}."
         else:
             try:
-                m = normalize_music({k: b[k] for k in ("track", "level_db", "duck_db") if b.get(k) is not None})
+                m = normalize_music({k: b[k] for k in ("track", "level_db", "duck_db", "voice_db") if b.get(k) is not None})
             except ValueError as e:
                 raise HTTPException(400, str(e))
             flag = ["--track", m["track"], "--level", f"{m['level_db']:g}", "--duck", f"{m['duck_db']:g}"]
-            label, text = "Music", f"Music in v{frm}: {m['track'].replace('_', ' ')} at {m['level_db']:g} LUFS, ducked {m['duck_db']:g} dB."
+            voice = ""
+            if b.get("voice_db") is not None:  # the timeline's Voice fader; left out keeps the version's own
+                flag += ["--voice", f"{m.get('voice_db', 0.0):g}"]
+                voice = f", voice {m.get('voice_db', 0.0):+g} dB"
+            label = "Mix" if b.get("mix") else "Music"
+            text = (f"Mix in v{frm}: music at {m['level_db']:g} LUFS{voice}." if b.get("mix") else
+                    f"Music in v{frm}: {m['track'].replace('_', ' ')} at {m['level_db']:g} LUFS, ducked {m['duck_db']:g} dB{voice}.")
         args = ["-m", "montivo.human", "music", f"runs/{run_id}", *flag, "--from", str(frm), "--review", str(passes)]
         job = start_job(st, run_id, "music", label, args, chat={"role": "user", "text": text, "chips": [f"v{frm}"], "kind": "music"})
         return {"job": job.public()}

@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { crit, tc } from "./api";
 import { blockAt, edgeSnaps, flatWords, punchLabel, selRange, sevRank, type Block, type Snap, type WordSel } from "./edit";
 import { Icon } from "./icons";
+import { LEVEL_RANGE, VOICE_RANGE, type Mix } from "./Mix";
 import type { Issue, Version, Word } from "./types";
 
 export type TrimAsk = { span: string; edge: "in" | "out"; word: number; words: number; dt: number; label: string };
@@ -9,7 +10,7 @@ export type ClipMenu = { x: number; y: number; span: string };
 /** A clip dragged to a new place: in front of `before`, or to the end (null). */
 export type MoveAsk = { span: string; before: string | null; label: string };
 
-const TRACK_H = { text: 24, captions: 24, video: 58, audio: 42 };
+const TRACK_H = { text: 24, captions: 24, video: 58, audio: 40, music: 40 };
 const RULER_H = 30;
 export const ZOOM_MIN = 6;
 export const ZOOM_MAX = 240;
@@ -23,6 +24,10 @@ type Props = {
   onMenu: (m: ClipMenu) => void; onTrim: (t: TrimAsk) => void; onMove: (m: MoveAsk) => void;
   onDelete: (span: string) => void; onAsk: (span: string) => void;
   wordSel: WordSel | null; onWordSel: (s: WordSel | null) => void; onCutWords: () => void;
+  /** The faders: the staged mix, the version's own, the live player's state, and what to do with them. */
+  mix: Mix | null; base: Mix | null; live: { ready: boolean; active: boolean; failed: string | null };
+  next: number; canEdit: string | null; onMix: (m: Mix) => void; onResetMix: () => void; onApplyMix: () => void;
+  onMusicPanel: () => void;
 };
 
 /** The bottom of the editor: a read-mostly multi-track timeline of the selected version (select, seek, delete from the
@@ -66,6 +71,15 @@ export function Timeline(p: Props) {
         })()}
         {v && <span className="tl-info">Version {v.n} · {v.spans.length} clips · {tc(v.duration_s ?? v.runtime_s)}</span>}
         <span className="grow" />
+        {v && p.mix && p.base && (p.mix.voice_db !== p.base.voice_db || p.mix.level_db !== p.base.level_db) && (
+          <span className="mix-apply" title="The mix is normalised to −14 LUFS after the faders, so what moves is the balance between the tracks">
+            <span className={`mix-live ${p.live.active ? "on" : ""}`}>{p.live.active ? "live" : p.live.failed ? "no preview" : "loading…"}</span>
+            <span>Voice {dbs(p.mix.voice_db)} · Music {p.mix.level_db} LUFS</span>
+            <button className="btn quiet small" onClick={p.onResetMix}>Reset</button>
+            <button className="btn small" disabled={!!p.canEdit} title={p.canEdit ?? `Makes Version ${p.next} with this mix ($0, a re-render)`}
+              onClick={p.onApplyMix}>Make Version {p.next}</button>
+          </span>
+        )}
         {mode === "timeline" && (
           <span className="zoom">
             <button className="icon-btn" onClick={() => zoomTo(pps / 1.4)} title="Zoom out (⌘−)"><Icon name="zoomOut" /></button>
@@ -85,7 +99,15 @@ export function Timeline(p: Props) {
               <div className="tl-head" style={{ height: TRACK_H.text }}><Icon name="text" size={13} />Text</div>
               <div className="tl-head" style={{ height: TRACK_H.captions }}><Icon name="captions" size={13} />Captions</div>
               <div className="tl-head video" style={{ height: TRACK_H.video }}><Icon name="film" size={13} />Video</div>
-              <div className="tl-head" style={{ height: TRACK_H.audio }}><Icon name="wave" size={13} />Audio</div>
+              <Fader label="Voice" icon="wave" height={TRACK_H.audio} unit="dB" range={VOICE_RANGE}
+                value={p.mix?.voice_db ?? 0} base={p.base?.voice_db ?? 0} none={!p.mix} disabled={!p.mix || !!p.canEdit}
+                title={!p.mix ? "The cut is normalised to −14 LUFS for Reels, TikTok and Shorts: with one track there is nothing to balance. Add music to set the voice against it."
+                  : p.canEdit ?? "The voice against the music, heard live (double-click: back to this version's)"}
+                onChange={(x) => p.mix && p.onMix({ ...p.mix, voice_db: x })} />
+              <Fader label="Music" icon="music" height={TRACK_H.music} unit="LUFS" range={LEVEL_RANGE}
+                value={p.mix?.level_db ?? -20} base={p.base?.level_db ?? -20} none={!p.mix} disabled={!p.mix || !!p.canEdit}
+                title={!p.mix ? "No music in this version: add a track in the Music panel" : p.canEdit ?? "The bed's level where nobody speaks, heard live; it still ducks under the voice (double-click: back to this version's)"}
+                onChange={(x) => p.mix && p.onMix({ ...p.mix, level_db: x })} />
             </div>
             <div className="tl-scroll" ref={scroller}>
               <Canvas {...p} v={v} pps={pps} dur={dur} scroller={scroller} />
@@ -135,7 +157,8 @@ function Canvas(p: Props & { v: Version; pps: number; dur: number; scroller: Rea
     <div className="tl-canvas" ref={canvas} style={{ width }}>
       <Ruler pps={pps} dur={dur} issues={v.review?.issues ?? []} onScrub={scrub} onSeek={p.onSeek} />
       <Tracks id={p.id} v={v} blocks={p.blocks} words={p.words} selected={p.selected} canTrim={p.canTrim} pps={pps} dur={dur}
-        timeAt={timeAt} onSelect={p.onSelect} onSeek={p.onSeek} onMenu={p.onMenu} onTrim={p.onTrim} onMove={p.onMove} />
+        timeAt={timeAt} onSelect={p.onSelect} onSeek={p.onSeek} onMenu={p.onMenu} onTrim={p.onTrim} onMove={p.onMove}
+        mix={p.mix} base={p.base} onMusicPanel={p.onMusicPanel} />
       <div className="playhead" style={{ transform: `translateX(${t * pps}px)` }}>
         <span className="ph-handle" onPointerDown={scrub} />
         <span className="ph-line" />
@@ -210,7 +233,8 @@ type Drag = { key: string; edge: "in" | "out"; snaps: Snap[]; snap: Snap | null;
 type Move = { key: string; slot: number; t: number }; // a clip being dragged: its insertion slot among the others
 const MOVE_PX = 6; // a press that travels further than this is a drag, not a click
 
-type TrackProps = Pick<Props, "id" | "blocks" | "words" | "selected" | "canTrim" | "onSelect" | "onSeek" | "onMenu" | "onTrim" | "onMove"> & {
+type TrackProps = Pick<Props, "id" | "blocks" | "words" | "selected" | "canTrim" | "onSelect" | "onSeek" | "onMenu" | "onTrim" | "onMove"
+  | "mix" | "base" | "onMusicPanel"> & {
   v: Version; pps: number; dur: number; timeAt: (x: number) => number;
 };
 
@@ -219,7 +243,11 @@ const Tracks = memo(function Tracks(p: TrackProps) {
   const q = v.bytes ? `&b=${v.bytes}` : "";
   const sprite = v.cut ? `/api/runs/${id}/filmstrip?v=${v.n}${q}` : null;
   const frames = useSprite(sprite);
-  const peaks = usePeaks(v.cut ? `/api/runs/${id}/peaks?v=${v.n}${q}` : null);
+  // with music the cut's audio is two stems: the voice lane draws the speech alone, the music lane the ducked bed
+  const peaks = usePeaks(v.cut ? `/api/runs/${id}/peaks?v=${v.n}${v.music ? "&track=voice" : ""}${q}` : null);
+  const bedPeaks = usePeaks(v.cut && v.music ? `/api/runs/${id}/peaks?v=${v.n}&track=music${q}` : null);
+  const top = peaks ? Math.max(...peaks.peaks, 0.01) : 1; // both lanes on the voice's scale: the bed looks as loud as it is
+  const gain = (a?: number, b?: number) => 10 ** (((a ?? 0) - (b ?? 0)) / 20);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [move, setMove] = useState<Move | null>(null);
   const live = blocks.filter((b) => b.kind !== "ghost");
@@ -386,15 +414,50 @@ const Tracks = memo(function Tracks(p: TrackProps) {
           </>;
         })()}
       </div>
-      {/* audio: waveform of the rendered cut */}
+      {/* audio: the voice (the cut's own audio, or its speech stem when there is music) and the music bed under it */}
       <div className="track audio" style={{ height: TRACK_H.audio }} onPointerDown={(e) => { onSelect(null); onSeek(timeAt(e.clientX)); }}>
-        <Wave peaks={peaks} pps={pps} height={TRACK_H.audio} width={Math.ceil(p.dur * pps)} />
+        <Wave peaks={peaks} pps={pps} height={TRACK_H.audio} width={Math.ceil(p.dur * pps)} top={top}
+          gain={gain(p.mix?.voice_db, p.base?.voice_db)} />
+      </div>
+      <div className="track audio music" style={{ height: TRACK_H.music }} onPointerDown={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).tagName === "CANVAS") { onSelect(null); onSeek(timeAt(e.clientX)); } }}>
+        {v.music ? <>
+          <Wave peaks={bedPeaks} pps={pps} height={TRACK_H.music} width={Math.ceil(p.dur * pps)} top={top} color="--wave-music"
+            gain={gain(p.mix?.level_db, p.base?.level_db)} />
+          <button className="music-tag" onPointerDown={(e) => e.stopPropagation()} onClick={p.onMusicPanel} title="Change the track or the duck in the Music panel">
+            <Icon name="music" size={11} /><span className="mt-name">{v.music.track.replace(/_/g, " ")}</span> · ducked {v.music.duck_db} dB under the voice
+          </button>
+        </> : (
+          <button className="music-add" onPointerDown={(e) => e.stopPropagation()} onClick={p.onMusicPanel}>
+            <Icon name="plus" size={11} /> Add music
+          </button>
+        )}
       </div>
     </div>
   );
 });
 
-function Wave({ peaks, pps, height, width }: { peaks: { rate: number; peaks: number[] } | null; pps: number; height: number; width: number }) {
+const dbs = (x: number) => `${x > 0 ? "+" : x < 0 ? "−" : "±"}${Math.abs(x)} dB`;
+
+/** A track head with its fader: the value moves the track live; double-click puts it back on the version's own. */
+function Fader({ label, icon, height, unit, range, value, base, none, disabled, title, onChange }: {
+  label: string; icon: string; height: number; unit: "dB" | "LUFS"; range: [number, number]; value: number; base: number;
+  none: boolean; disabled: boolean; title: string; onChange: (x: number) => void; // none: the version has no music
+}) {
+  const moved = value !== base;
+  return (
+    <div className={`tl-head fader-head ${disabled ? "off" : ""}`} style={{ height }} title={title}>
+      <div className="fh-top"><Icon name={icon} size={13} />{label}
+        <span className={`fh-val ${moved ? "moved" : ""}`}>{none ? "" : unit === "dB" ? dbs(value) : `${value}`}</span>
+      </div>
+      <input type="range" className="fader" min={range[0]} max={range[1]} step={0.5} value={value} disabled={disabled}
+        aria-label={`${label} level`} onChange={(e) => onChange(Number(e.target.value))} onDoubleClick={() => onChange(base)} />
+    </div>
+  );
+}
+
+function Wave({ peaks, pps, height, width, top: topIn, gain = 1, color = "--wave" }: {
+  peaks: { rate: number; peaks: number[] } | null; pps: number; height: number; width: number; top?: number; gain?: number; color?: string;
+}) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const c = ref.current;
@@ -408,17 +471,17 @@ function Wave({ peaks, pps, height, width }: { peaks: { rate: number; peaks: num
     g.scale(dpr, dpr);
     g.clearRect(0, 0, w, height);
     const css = getComputedStyle(c);
-    g.fillStyle = css.getPropertyValue("--wave").trim() || "#4f8a6b";
-    const top = Math.max(...peaks.peaks, 0.01);
+    g.fillStyle = css.getPropertyValue(color).trim() || "#4f8a6b";
+    const top = topIn ?? Math.max(...peaks.peaks, 0.01);
     const mid = height / 2;
     for (let x = 0; x < w; x++) {
       const a = Math.floor((x / pps) * peaks.rate), b = Math.max(a + 1, Math.floor(((x + 1) / pps) * peaks.rate));
       let m = 0;
       for (let i = a; i < b && i < peaks.peaks.length; i++) if (peaks.peaks[i] > m) m = peaks.peaks[i];
-      const h = Math.max(0.5, (Math.sqrt(m / top) * (height - 6)) / 2);
+      const h = Math.max(0.5, (Math.min(1, Math.sqrt((m * gain) / top)) * (height - 6)) / 2);
       g.fillRect(x, mid - h, 1, h * 2);
     }
-  }, [peaks, pps, height, width]);
+  }, [peaks, pps, height, width, topIn, gain, color]);
   return peaks ? <canvas ref={ref} className="wave" /> : <span className="wave-wait mute">waveform…</span>;
 }
 

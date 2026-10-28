@@ -535,7 +535,8 @@ def _music(edl: dict, render: dict) -> dict | None:
     if not edl.get("music"):
         return None
     m = (render.get("music") or {}).get("measured") or {}
-    return {**edl["music"], "margin_db": m.get("margin_db"), "ducked_s": m.get("under_s")}
+    return {"voice_db": 0.0, **edl["music"], "margin_db": m.get("margin_db"), "ducked_s": m.get("under_s"),
+            "ducked": (render.get("music") or {}).get("ducked") or []}
 
 
 def _look(edl: dict) -> dict | None:

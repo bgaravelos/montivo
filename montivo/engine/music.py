@@ -1,9 +1,12 @@
 """Music bed: a bundled loop under the cut's speech, ducked while someone talks.
 
-The EDL's `music` = {"track": id, "level_db": -20, "duck_db": -12} (absent = no music). The tracks are files in
+The EDL's `music` = {"track": id, "level_db": -20, "duck_db": -12, "voice_db": 0} (absent = no music; `voice_db`
+only when not 0). The tracks are files in
 montivo/music/ (CC0 tracks from OpenGameArt cut into loops by build.py; tracks.json holds each loop's measured
 loudness, author and source page), so the bed is plain DSP: no model is called. `level_db` is the bed's loudness in LUFS where nobody speaks (the speech sits at the
-render's -14 LUFS); under speech it drops by `duck_db`, so the defaults keep the bed 18 LU under the voice.
+render's -14 LUFS); under speech it drops by `duck_db`, so the defaults keep the bed 18 LU under the voice. `voice_db`
+moves the speech against the bed before the mix (the editor's Voice fader); the mix is normalised to -14 LUFS after
+it, so +3 dB on the voice ends up as the bed 3 dB lower against it.
 
 Ducking follows the Voice words in cut time (speech_intervals): every word of a segment is mapped through the
 segment's place in the cut, pauses shorter than HOLD_GAP_S stay ducked, and the gain ramps down ATTACK_S before a
@@ -24,6 +27,7 @@ MUSIC_DIR = Path(__file__).resolve().parent.parent / "music"
 LEVEL_DB, DUCK_DB = -20.0, -12.0
 LEVEL_RANGE = (-36.0, -10.0)
 DUCK_RANGE = (-30.0, 0.0)
+VOICE_RANGE = (-12.0, 6.0)
 ATTACK_S, RELEASE_S = 0.15, 0.45
 HOLD_GAP_S = 0.8  # a pause shorter than this keeps the bed down (>= ATTACK_S + RELEASE_S: the ramps never overlap)
 FADE_IN_S, FADE_OUT_S = 0.5, 1.5
@@ -45,24 +49,27 @@ def track(track_id: str) -> dict:
 
 
 def normalize_music(m: dict | None) -> dict | None:
-    """The EDL's `music` checked and filled in: a known track, level and duck in range (defaults -20 / -12).
-    None or {} = no music. Raises ValueError for anything else."""
+    """The EDL's `music` checked and filled in: a known track, level and duck in range (defaults -20 / -12), `voice_db`
+    in range and kept only when not 0. None or {} = no music. Raises ValueError for anything else."""
     if not m:
         return None
     if not isinstance(m, dict):
-        raise ValueError("music: an object {track, level_db, duck_db}")
-    extra = set(m) - {"track", "level_db", "duck_db"}
+        raise ValueError("music: an object {track, level_db, duck_db, voice_db}")
+    extra = set(m) - {"track", "level_db", "duck_db", "voice_db"}
     if extra:
         raise ValueError(f"music: unknown keys {', '.join(sorted(extra))}")
     t = track(str(m.get("track") or ""))
     out = {"track": t["id"]}
-    for key, default, (lo, hi) in (("level_db", LEVEL_DB, LEVEL_RANGE), ("duck_db", DUCK_DB, DUCK_RANGE)):
+    for key, default, (lo, hi) in (("level_db", LEVEL_DB, LEVEL_RANGE), ("duck_db", DUCK_DB, DUCK_RANGE),
+                                   ("voice_db", 0.0, VOICE_RANGE)):
         v = m.get(key, default)
         if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
             raise ValueError(f"music: {key} is a number")
         if not lo <= v <= hi:
             raise ValueError(f"music: {key} {v:g} is outside {lo:g}..{hi:g} dB")
         out[key] = round(float(v), 1)
+    if not out["voice_db"]:
+        del out["voice_db"]
     return out
 
 
@@ -171,10 +178,12 @@ def rms_db(samples: array.array, rate: int, ch: int, spans: list[tuple[float, fl
     return round(10 * math.log10(acc / n), 1)
 
 
-def measure_windows(speech: Path, bed: Path, intervals: list[tuple[float, float]], duration_s: float) -> dict:
+def measure_windows(speech: Path, bed: Path, intervals: list[tuple[float, float]], duration_s: float,
+                    voice_db: float = 0.0) -> dict:
     """The listen check, measured: speech and bed levels under speech (inside the ducked intervals, ramps left out)
     and the bed where nobody speaks (between them, ramps and fades left out). Both stems go through the same final
-    gain in the mix, so `margin_db` (speech minus bed under it) is what a listener gets."""
+    gain in the mix, so `margin_db` (speech minus bed under it) is what a listener gets; `voice_db` is the gain the
+    mix gives the speech (the stem on disk is without it)."""
     s, rate, ch = read_f32(speech)
     m, rate_m, ch_m = read_f32(bed)
     under = [(a, b) for a, b in intervals if b > a]
@@ -187,6 +196,8 @@ def measure_windows(speech: Path, bed: Path, intervals: list[tuple[float, float]
     if end - cur > 0.2:
         gaps.append((cur, end))
     speech_db, bed_under = rms_db(s, rate, ch, under), rms_db(m, rate_m, ch_m, under)
+    if speech_db is not None and voice_db:
+        speech_db = round(speech_db + voice_db, 1)
     return {"speech_rms_db": speech_db, "bed_under_speech_rms_db": bed_under,
             "bed_open_rms_db": rms_db(m, rate_m, ch_m, gaps),
             "margin_db": round(speech_db - bed_under, 1) if speech_db is not None and bed_under is not None else None,

@@ -22,7 +22,8 @@ the title card (image.py) is its own 1.5 s segment in front, with a short fade t
 Music (EDL `music`, engine/music.py): the normalised speech is kept as a float WAV, a bundled loop is ducked along the
 Voice words in cut time, the two are mixed and the mix goes through the same two-pass loudness, then the AAC file's own
 true peak is measured and the pass runs again with a lower TP while the encode overshoots -1 dBTP. The speech alone is
-kept as render/<cut>.speech.m4a for the review's silences and heard words.
+kept as render/<cut>.speech.m4a for the review's silences and heard words, the bed as render/<cut>.music.m4a for the
+editor's live faders.
 """
 from __future__ import annotations
 
@@ -348,8 +349,9 @@ def render_audio(source: Path, segments: list[Segment], render_dir: Path, lead_s
     two-pass loudness (see the module docstring), AAC. Returns the file, a record of the loudness passes and, with a
     `music` bed (engine/music.py), the bed's record: the normalised speech is kept as a float WAV, the ducked bed is
     rendered against the speech intervals (Voice `words`, else `audio`'s speech runs), the two are mixed and the mix
-    goes through the same two-pass loudness; the speech alone is kept as render/<stem_name>.speech.m4a (the review
-    measures silences and heard words on it) and the record carries the measured speech-vs-bed levels."""
+    goes through the same two-pass loudness (the speech moved by the music's `voice_db` first); the speech alone is
+    kept as render/<stem_name>.speech.m4a (the review measures silences and heard words on it), the ducked bed as
+    render/<stem_name>.music.m4a (the editor's live faders) and the record carries the measured speech-vs-bed levels."""
     out = render_dir / "audio.m4a"
     fmt = f"aformat=sample_fmts=fltp:sample_rates={AUDIO_RATE}:channel_layouts=stereo"
     parts = []
@@ -377,7 +379,9 @@ def render_audio(source: Path, segments: list[Segment], render_dir: Path, lead_s
     bed = render_dir / "music_bed.wav"
     mrec = bed_mod.render_bed(music, duration, intervals, bed, AUDIO_RATE, fmt)
     mrec["duck_source"] = src
-    mix = f"[0:a]{fmt}[s];[1:a]{fmt}[m];[s][m]amix=inputs=2:normalize=0:duration=first:dropout_transition=0"
+    voice_db = float(music.get("voice_db") or 0.0)
+    gain = f",volume={voice_db:.2f}dB" if voice_db else ""
+    mix = f"[0:a]{fmt}{gain}[s];[1:a]{fmt}[m];[s][m]amix=inputs=2:normalize=0:duration=first:dropout_transition=0"
     if loudnorm:
         mixed = _loudness_encoded([speech, bed], mix, out)
         mixed["speech"] = rec
@@ -387,10 +391,39 @@ def render_audio(source: Path, segments: list[Segment], render_dir: Path, lead_s
     stem = render_dir / f"{stem_name}.speech.m4a"
     _run_audio(speech, "[0:a]anull[a]", stem)
     mrec["speech_stem"] = stem.as_posix()
-    mrec["measured"] = bed_mod.measure_windows(speech, bed, intervals, duration)
+    bed_stem = render_dir / f"{stem_name}.music.m4a"  # the editor plays both stems to move the faders live
+    _run_audio(bed, "[0:a]anull[a]", bed_stem)
+    mrec["music_stem"] = bed_stem.as_posix()
+    mrec["voice_db"] = voice_db
+    mrec["measured"] = bed_mod.measure_windows(speech, bed, intervals, duration, voice_db)
     speech.unlink(missing_ok=True)
     bed.unlink(missing_ok=True)
     return out, rec, mrec
+
+
+def music_stem(run_dir: Path, edl: dict, out: Path) -> Path:
+    """The ducked bed of a rendered version as AAC, rebuilt from its render block (segments, title seconds) and the
+    Voice words, as render_audio made it: for versions rendered before the bed was kept as render/<cut>.music.m4a."""
+    music = normalize_music(edl.get("music"))
+    rec = edl.get("render") or {}
+    if not music or not rec.get("segments"):
+        raise ValueError("this version has no rendered music bed")
+    from . import music as bed_mod
+    segments = [Segment(index=s["index"], t_in=s["t_in"], t_out=s["t_out"], span_ids=s.get("spans") or [],
+                        frames=1, fps=1 / s["duration"]) for s in rec["segments"]]  # duration = frames / fps
+    lead = float((rec.get("title") or {}).get("seconds") or 0.0)
+    vpath = run_dir / "voice" / "voice.json"
+    words = json.loads(vpath.read_text()).get("words") if vpath.is_file() else None
+    intervals, _ = bed_mod.speech_intervals(segments, words, lead, None if words else Audio.load(run_dir))
+    fmt = f"aformat=sample_fmts=fltp:sample_rates={AUDIO_RATE}:channel_layouts=stereo"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    wav = out.with_suffix(".tmp.wav")
+    bed_mod.render_bed(music, round(lead + sum(s.duration for s in segments), 6), intervals, wav, AUDIO_RATE, fmt)
+    tmp = out.with_name(out.stem + ".tmp" + out.suffix)
+    _run_audio(wav, "[0:a]anull[a]", tmp)
+    wav.unlink(missing_ok=True)
+    tmp.replace(out)
+    return out
 
 
 def normalize_plan(first: dict, measure, targets: dict | None = None) -> tuple[dict, str]:

@@ -494,6 +494,18 @@ Checked on a throwaway copy of 015 (removed): "Βάλε μουσική, κάτι
 + Bold pop in one render (22.8 s); a score question answered with no version; keyless in the browser: ukulele + karaoke.
 Commit 4f4d601, deployed to Modal 28/10 14:56 (the last job, 015-dd516021 v9, had finished; the old container was
 already stopped); smoke 015 v6 34.3 s, -14.0 LUFS / -1.7 dBTP; host spend $2.46 of $15. Not yet asked live with the key.
+Music track + live faders (28/10, $0, Billy's ask, not committed yet): the timeline has two audio lanes, Voice (the cut's
+audio, or its speech stem when there is music) and Music (the ducked bed, its track name opens the Music panel; "Add
+music" when none), both waveforms on the voice's scale. Each head has a fader: Voice = new EDL `music.voice_db` (-12..+6,
+kept only when not 0, applied to the speech before the mix), Music = `music.level_db`. Moving one plays the version's
+two stems through Web Audio gains on the video's clock (`web/src/Mix.ts` `useLiveMix`: video volume 0, restart on
+seek / speed / drift over 80 ms) with the -14 LUFS normalisation simulated (`liveGains`, from the render's margin), so
+raising the voice brings the bed down as the export will; "Make Version N" -> POST /music {voice_db, mix: true} ->
+`montivo.human music --voice`. With no music the faders are off (one track, nothing to balance). The render now keeps
+the bed as `render/cut_vN.music.m4a` (`render.music` `music_stem`, `voice_db`); older versions get it rebuilt into
+ui/cache/ on the first GET `/api/runs/{id}/stem?v=N&track=voice|music` (`render.music_stem`, bit-identical to the
+render's); GET /peaks takes `track`. Checked keyless on a throwaway copy of 015 (removed): live stems start at the seek
+point, restart at 1.5x, v7 = level -16 / voice +3, -14.0 LUFS / -1.8 dBTP, margin 16.9 -> 15.9 dB.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

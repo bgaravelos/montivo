@@ -23,6 +23,7 @@
   --caption: #5b4a8a;
   --textclip: #7a5a2c;
   --wave: #5fae86;
+  --wave-music: #c7a24a;
   --punch: #ff9ad5;
   --sans: "Inter", ui-sans-serif, -apple-system, "Helvetica Neue", sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -84,7 +85,7 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .editor {
   display: grid; height: 100vh; min-width: 1100px;
   grid-template-columns: 64px 330px minmax(300px, 1fr) 360px;
-  grid-template-rows: 52px minmax(0, 1fr) 248px;
+  grid-template-rows: 52px minmax(0, 1fr) 262px;
   grid-template-areas: "top top top top" "rail panel viewer insp" "rail tl tl tl";
 }
 .top { grid-area: top; display: flex; align-items: center; gap: 10px; padding: 0 12px 0 8px; border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; }
@@ -461,7 +462,7 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .zoom input { width: 120px; accent-color: var(--text-2); }
 .tl-empty { display: grid; place-items: center; flex: 1; }
 .tl-body { flex: 1; min-height: 0; display: flex; }
-.tl-heads { width: 96px; flex-shrink: 0; border-right: 1px solid var(--line); background: var(--panel); }
+.tl-heads { width: 132px; flex-shrink: 0; border-right: 1px solid var(--line); background: var(--panel); }
 .tl-head { display: flex; align-items: center; gap: 7px; padding-left: 12px; font-size: 11px; font-weight: 600; color: var(--mute); border-top: 1px solid var(--line); }
 .tl-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; position: relative; background: var(--bg); }
 .tl-canvas { position: relative; min-height: 100%; }
@@ -533,6 +534,25 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .switch:disabled { opacity: 0.5; }
 .ghost-mark { position: absolute; top: 4px; bottom: 4px; width: 3px; margin-left: -2px; background: var(--blocker); border-radius: 2px; opacity: 0.8; z-index: 1; }
 .track.audio { background: #0e1311; cursor: text; }
+.track.audio.music { background: #13110c; }
+.music-tag, .music-add {
+  position: absolute; left: 6px; top: 3px; z-index: 2; display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px;
+  border-radius: 4px; font-size: 10.5px; color: var(--text-2); background: #000a; white-space: nowrap;
+}
+.mt-name { text-transform: capitalize; }
+.music-tag:hover, .music-add:hover { color: var(--text); background: #000d; }
+.music-add { top: 50%; transform: translateY(-50%); color: var(--mute); background: transparent; border: 1px dashed var(--line-2); }
+.fader-head { flex-direction: column; align-items: stretch; justify-content: center; gap: 2px; padding: 0 8px 0 12px; }
+.fh-top { display: flex; align-items: center; gap: 7px; }
+.fh-val { margin-left: auto; font-family: var(--mono); font-size: 10px; font-weight: 500; color: var(--dim); }
+.fh-val.moved { color: var(--accent); }
+.fader { width: 100%; height: 12px; margin: 0; accent-color: var(--wave); cursor: ew-resize; }
+.fader-head:last-child .fader { accent-color: var(--wave-music); }
+.fader-head.off .fader { opacity: 0.35; cursor: not-allowed; }
+.mix-apply { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); padding: 3px 4px 3px 10px;
+  border: 1px solid var(--accent); border-radius: 7px; background: #ffc6290f; }
+.mix-live { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--dim); }
+.mix-live.on { color: var(--accent); }
 .wave { display: block; pointer-events: none; }
 .wave-wait { position: absolute; left: 8px; top: 12px; font-size: 11px; }
 .playhead { position: absolute; top: 0; bottom: 0; left: 0; width: 0; z-index: 8; pointer-events: none; }

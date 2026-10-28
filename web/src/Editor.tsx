@@ -6,6 +6,7 @@ import { ExportPage } from "./Export";
 import { childOf, cutAsk, flatWords, layout, parentOf, projectName, type CutAsk, type WordSel } from "./edit";
 import { Icon } from "./icons";
 import { Inspector, type PunchAsk } from "./Inspector";
+import { mixOf, sameMix, useLiveMix, type Mix } from "./Mix";
 import { MusicPanel } from "./Music";
 import { ProgressInline } from "./Progress";
 import { GUIDE_NAME, GUIDES, SafeArea, type Guide } from "./SafeArea";
@@ -106,6 +107,14 @@ export function Editor({ id, replay, go }: Props) {
   useEffect(() => { if (selKey && v && !blocks.some((b) => b.key === selKey && b.kind !== "ghost")) setSelKey(null); }, [v?.n]); // eslint-disable-line
   useEffect(() => setWordSel(null), [v?.n, tlMode]);
   useEffect(() => setStyleDraft(EMPTY_DRAFT), [v?.n]);
+  // the timeline's faders: staged against the version's own mix and heard live through its stems (Mix.ts)
+  const mixBase = mixOf(v);
+  const [mixDraft, setMixDraft] = useState<Mix | null>(null);
+  useEffect(() => setMixDraft(null), [v?.n]);
+  const mix = mixDraft ?? mixBase;
+  const mixStaged = !!mixDraft && !sameMix(mixDraft, mixBase);
+  const getVideo = useCallback(() => player.current?.el() ?? null, []);
+  const live = useLiveMix(id, v, getVideo, mix, mixStaged);
   const styling = panel === "style" && !!v?.cut && !replay;
   const staged = draftCount(styleDraft, v);
   const { p: stylePreview, busy: previewBusy } = usePreview(id, v, t, styleDraft, styling && staged > 0 && !playing);
@@ -344,7 +353,15 @@ export function Editor({ id, replay, go }: Props) {
         <Timeline id={id} v={v} blocks={blocks} words={state.words} t={t} playing={playing} selected={selKey}
           zoom={zoom} setZoom={setZoom} mode={tlMode} setMode={setTlMode} canTrim={!canEdit}
           onSelect={select} onSeek={seek} onScrub={scrub} onMenu={setCtx} onTrim={askTrim} onMove={askMove}
-          wordSel={wordSel} onWordSel={pickWords} onCutWords={askCut} onDelete={askDelete} onAsk={ask} />
+          wordSel={wordSel} onWordSel={pickWords} onCutWords={askCut} onDelete={askDelete} onAsk={ask}
+          mix={mix} base={mixBase} live={live} next={next} canEdit={canEdit} onMix={setMixDraft} onResetMix={() => setMixDraft(null)}
+          onMusicPanel={() => setPanel("music")}
+          onApplyMix={() => {
+            if (!v?.music || !mixDraft) return;
+            const m = mixDraft;
+            setMixDraft(null); setPanel("assistant");
+            act("music", { track: v.music.track, level_db: m.level_db, duck_db: v.music.duck_db, voice_db: m.voice_db, mix: true, from: v.n });
+          }} />
       </footer>
 
       {ctx && (
