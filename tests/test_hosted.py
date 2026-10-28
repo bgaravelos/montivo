@@ -212,3 +212,31 @@ def test_each_judge_sees_the_seeded_clips_and_their_own_uploads(tmp_path, hosted
     (tmp_path / "runs" / r1["id"] / "run.json").write_text("{}")  # the job would write it
     r2 = a.post("/api/runs", json={"footage": "footage/mine.mp4", "brief": "b"}).json()
     assert r2["id"] != r1["id"]  # two judges in the same minute get two run ids
+
+
+def test_a_judge_never_reads_another_judges_project(tmp_path, hosted_env):
+    d = _run_folder(tmp_path)  # r1: a seeded sample
+    ledger(d, 0.36)
+    hosted_env.setenv("MONTIVO_BUDGET_USD", "15")
+    hosted_env.setenv("MONTIVO_PASSWORD", "pw")
+    for rid, judge in (("ra", "aaaa"), ("rb", "bbbb")):
+        own = tmp_path / "runs" / rid
+        A.shutil.copytree(d, own)
+        (own / "ui").mkdir(exist_ok=True)
+        (own / "ui" / "owner").write_text(judge)
+    clients = {}
+    for judge in ("aaaa", "bbbb"):
+        c = TestClient(A.create_app(tmp_path))
+        c.post("/api/login", data={"password": "pw"})
+        c.cookies.set(H.JUDGE, judge)
+        clients[judge] = c
+    a, b = clients["aaaa"], clients["bbbb"]
+    for path in ("", "/file/edl_v2.json", "/log", "/heads", "/frame?t=0.5", "/export", "/events"):
+        r = b.get(f"/api/runs/ra{path}")
+        assert r.status_code == 404 and r.json() == {"error": "no such run"}, path
+    assert b.post("/api/runs/ra/drop", json={"span": "s1"}).status_code == 404
+    assert a.get("/api/runs/ra").status_code == 200 and b.get("/api/runs/rb").status_code == 200
+    assert a.get("/api/runs/r1").status_code == 200 and b.get("/api/runs/r1").status_code == 200  # the sample
+    assert b.get("/api/runs/nope").json() == b.get("/api/runs/ra").json()  # absent and foreign look the same
+    signed_out = TestClient(A.create_app(tmp_path))
+    assert signed_out.get("/api/runs/r1").status_code == 401  # the sign-in gate still comes first

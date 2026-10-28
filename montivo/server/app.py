@@ -34,6 +34,7 @@ from .runs import fingerprint, heads, list_runs, parse_log, progress, read_json,
 STATIC = Path(__file__).parent / "static"
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm"}
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
+RUN_PATH = re.compile(r"^/api/runs/([^/]+)")  # every route of one run (state, files, media, events, edits)
 ARCHIVE = "_archive"  # runs/_archive/<id>: archived run folders (list_runs skips it: it has no run.json)
 PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 
@@ -235,6 +236,19 @@ def create_app(root: Path) -> FastAPI:
     budget = hosted.Budget(st.root, cap) if cap is not None else None
     max_footage_s = hosted.env_float("MONTIVO_MAX_FOOTAGE_S")
     max_upload_mb = hosted.env_float("MONTIVO_MAX_UPLOAD_MB")
+
+    @app.middleware("http")
+    async def only_their_runs(request: Request, call_next):
+        """On the hosted demo every /api/runs/<id>/... route, read or write, serves a judge the samples and their own
+        projects only; another judge's run answers exactly like a run that does not exist. Added before the sign-in
+        gate, so the gate runs first."""
+        m = RUN_PATH.match(request.url.path)
+        if budget is not None and m:
+            d = st.runs / m.group(1)
+            if not (SAFE_NAME.match(m.group(1)) and d.is_dir() and (is_sample(d) or owner(d) == judge_of(request))):
+                return JSONResponse({"error": "no such run"}, status_code=404)
+        return await call_next(request)
+
     hosted.install(app, os.environ.get("MONTIVO_PASSWORD"))
 
     def key_ok() -> bool:
