@@ -642,6 +642,21 @@ server refuses a Content-Length over the limit unread. Billy's iPhone clips: the
 over USB-C); clip 1 tone-maps clean (skin right, captions under the face, run 70 -> 74); tips take 2 (future 017) is
 160.5 s with a second ending and Greek at the end, so the sample needs a trim to 90 s, and its planner cut dropped the
 payoff (28 s). Not deployed: day 3 ships the fixes with Billy's go.
+Debugging day 3 (28/10 night, $0, commits 5819589 4ada665 6950547, findings in `docs/notes/debugging-day3_2026-10-29.md`):
+the clean export (no captions) now lays the caption lines out without drawing them (`build_overlays(draw_captions=
+False)`, render_run always loads the Voice words, the clean EDL records 0 lines), so its punch-ins, pip and callouts
+match the video (012-open v4: 9 / 9 punch-ins, both callouts, same pixels outside the captions); an upload over
+MONTIVO_MAX_FOOTAGE_S is probed and refused before it lands (no quota slot), `/api/health` names no root on the host; a
+new project's brief bubble reads the job's chat line until run.json lands, no suggestions before v1. The chat queue
+was never lost (localStorage per project, sent on return); phrase break on "I", Text track / Style preview vs stills
+Parked. 419 -> 423 tests; combo_check on a fresh clone of 016: 44 versions + 6 exports, 0 failures; 016 v3 re-rendered
+at HEAD and at 8a69087 (then live): every frame and the audio identical (vs the stored 17:22 cut_v3: 373 frames of the
+22.8-35.2 s pan differ from E8, the audio from E13). Deployed on Billy's go in this session (the classifier refuses a
+go relayed from another session) as Modal v22 = 6950547 at 22:26, from a clean worktree; no web container was running
+before it; live /api/health 200 (no root, upload 1000 MB), /api/runs 401, /s/nope 404, host spend $2.72 of $15; smoke
+drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 8.9 s; `--music midnight_cruiser` 37.9 s, -14.0 / -1.7, margin 17.1
+dB; `--cover` headline and sticker pass every check (zscale yes). Billy's phone check of the two live Must fixes
+(scroll, Style preview, Export cover) pending; tag `freeze-2026-10-31` waits for his go.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
