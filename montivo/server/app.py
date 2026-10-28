@@ -343,6 +343,7 @@ def create_app(root: Path) -> FastAPI:
     budget = hosted.Budget(st.root, cap) if cap is not None else None
     max_footage_s = hosted.env_float("MONTIVO_MAX_FOOTAGE_S")
     max_upload_mb = hosted.env_float("MONTIVO_MAX_UPLOAD_MB")
+    max_uploads = hosted.env_float("MONTIVO_MAX_UPLOADS")
 
     @app.middleware("http")
     async def only_their_runs(request: Request, call_next):
@@ -920,6 +921,17 @@ def create_app(root: Path) -> FastAPI:
         first free name (clip.mp4, clip-2.mp4, ...) once it is complete and within the size limit."""
         if not SAFE_NAME.match(name) or Path(name).suffix.lower() not in VIDEO_EXT:
             raise HTTPException(400, "name: letters, digits, . _ - and a video extension")
+
+        def check_quota() -> None:
+            """Asked before the body (no 400 MB for nothing) and again before the rename (two uploads at once)."""
+            if budget is None or not max_uploads:
+                return
+            mine = judge_of(request)
+            if sum(o == mine for o in (read_json(owners_file) or {}).values()) >= max_uploads:
+                raise HTTPException(429, f"the demo server takes {max_uploads:.0f} uploads per judge: "
+                                         "start a new project from a clip you already uploaded")
+
+        check_quota()
         st.footage.mkdir(exist_ok=True)
         part = st.footage / f".upload-{os.urandom(6).hex()}.part"
         size, limit = 0, (max_upload_mb or 0) * 1e6
@@ -930,6 +942,7 @@ def create_app(root: Path) -> FastAPI:
                     if limit and size > limit:
                         raise HTTPException(413, f"the demo server takes uploads up to {max_upload_mb:.0f} MB")
                     fh.write(chunk)
+            check_quota()
             out = free_name(st.footage, name)  # no await from here on: two uploads cannot take the same name
             part.rename(out)
         finally:

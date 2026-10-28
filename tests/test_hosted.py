@@ -17,7 +17,7 @@ def ledger(d, usd):
 @pytest.fixture
 def hosted_env(monkeypatch):
     for k in ("MONTIVO_PASSWORD", "MONTIVO_BUDGET_USD", "MONTIVO_ONE_JOB", "MONTIVO_MAX_FOOTAGE_S",
-              "MONTIVO_MAX_UPLOAD_MB"):
+              "MONTIVO_MAX_UPLOAD_MB", "MONTIVO_MAX_UPLOADS"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("MODEL_API_KEY", "test")
     return monkeypatch
@@ -213,6 +213,18 @@ def test_each_judge_sees_the_seeded_clips_and_their_own_uploads(tmp_path, hosted
     (tmp_path / "runs" / r1["id"] / "run.json").write_text("{}")  # the job would write it
     r2 = a.post("/api/runs", json={"footage": "footage/mine.mp4", "brief": "b"}).json()
     assert r2["id"] != r1["id"]  # two judges in the same minute get two run ids
+
+
+def test_each_judge_has_an_upload_quota(tmp_path, hosted_env):
+    hosted_env.setenv("MONTIVO_BUDGET_USD", "15")
+    hosted_env.setenv("MONTIVO_MAX_UPLOADS", "2")
+    a, b = TestClient(A.create_app(tmp_path)), TestClient(A.create_app(tmp_path))
+    a.cookies.set(H.JUDGE, "aaaa")
+    b.cookies.set(H.JUDGE, "bbbb")
+    assert [a.put(f"/api/footage/c{i}.mp4", content=b"x" * 100).status_code for i in range(3)] == [200, 200, 429]
+    assert not (tmp_path / "footage" / "c2.mp4").exists()
+    assert "2 uploads per judge" in a.put("/api/footage/c3.mp4", content=b"x").json()["error"]
+    assert b.put("/api/footage/c0.mp4", content=b"x" * 100).status_code == 200  # another judge has their own
 
 
 def test_a_judge_never_reads_another_judges_project(tmp_path, hosted_env):

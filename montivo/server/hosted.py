@@ -7,6 +7,7 @@ Both switch on from the environment only, so `montivo serve` on a laptop is unch
     MONTIVO_ONE_JOB=1           one engine job at a time across all runs (one container, one CPU budget)
     MONTIVO_MAX_FOOTAGE_S=95    a new run's clip may be at most this long
     MONTIVO_MAX_UPLOAD_MB=400   an upload stops past this size
+    MONTIVO_MAX_UPLOADS=5       clips one judge may upload (with the budget on)
 
 The budget is read from the ledgers every run writes (runs/<id>/ledger.json `total_cost_usd`), counted from a baseline
 taken the first time the host saw each run (budget.json next to runs/): the seeded sample runs bring their own Mac
