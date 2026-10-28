@@ -16,8 +16,9 @@ limited audio is measured again before the linear pass. AAC 192k 48 kHz. The two
 
 Finishing (evening 3), still one video encode per segment: caption lines and callouts are transparent PNGs
 (captions.py / graphics.py) burned in with `overlay` after the crop and scale, each gated by its segment-local time;
-the title card (image.py) is its own 1.5 s segment in front, with a short fade to black, and the audio gets the same
-1.5 s of silence in front before loudnorm.
+B-roll stills (broll.py, EDL `overlays`, a person's ask only) go in the same overlay graph under them; the title card
+(image.py) is its own 1.5 s segment in front, with a short fade to black, and the audio gets the same 1.5 s of silence
+in front before loudnorm.
 
 Music (EDL `music`, engine/music.py): the normalised speech is kept as a float WAV, a bundled loop is ducked along the
 Voice words in cut time, the two are mixed and the mix goes through the same two-pass loudness, then the AAC file's own
@@ -57,6 +58,7 @@ from pathlib import Path
 from ..config import REFRAME_CONCEPT
 from ..ledger import Entry, Ledger, Timer
 from .api import dump_json
+from . import broll
 from .captions import Overlay, build_overlays
 from .edges import Audio
 from .frame import FRAME_916, Frame, frame_for
@@ -252,8 +254,8 @@ def _overlay_graph(base: str, overlays: list[Overlay], first_input: int, fps: fl
         idx = first_input + n
         if ov.fade_s > 0:
             args += ["-loop", "1", "-framerate", f"{fps:g}", "-t", f"{ov.t_out + 0.1:.4f}", "-i", str(ov.png)]
-            fade = f"fade=t=in:st={ov.t_in:.4f}:d={ov.fade_s}:alpha=1," \
-                   f"fade=t=out:st={max(ov.t_in, ov.t_out - ov.fade_s):.4f}:d={ov.fade_s}:alpha=1,"
+            fade = (f"fade=t=in:st={ov.t_in:.4f}:d={ov.fade_s}:alpha=1," if ov.fade_in else "") + \
+                   (f"fade=t=out:st={max(ov.t_in, ov.t_out - ov.fade_s):.4f}:d={ov.fade_s}:alpha=1," if ov.fade_out else "")
         else:
             args += ["-i", str(ov.png)]
             fade = ""
@@ -852,6 +854,20 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
                 + "; ".join(f"{f['from']} -> {f['to']}" for f in fields["caption_corrections"]))
         else:
             edl.update({"captions": [], "callouts": [], "caption_corrections": []})
+        broll_records: list[dict] = []
+        if edl.get("overlays"):  # B-roll stills go under the captions and callouts (drawn first)
+            stills, broll_records = broll.place(edl, segments, title_s, run_dir, ov_dir, frame)
+            full = {r["png"] for r in broll_records if r["shown"] and r["placement"] == "full"}
+            hidden: list[str] = []
+            for k, ovs in stills.items():  # a callout pill does not sit on a full-frame still
+                rest, cut = broll.clear_callouts(overlays.get(k, []), [(o.t_in, o.t_out) for o in ovs
+                                                                       if o.png.as_posix() in full])
+                overlays[k] = ovs + rest
+                hidden += cut
+            log(f"render: {sum(r['shown'] for r in broll_records)} of {len(broll_records)} B-roll stills"
+                + "".join(f"; {r['id']} {r['placement']} {r['t_in']:.2f}-{r['t_out']:.2f}s" if r["shown"]
+                          else f"; {r['id']} not shown: {r['why']}" for r in broll_records)
+                + (f"; kept off the full-frame stills: {', '.join(dict.fromkeys(hidden))}" if hidden else ""))
         zooms: dict[int, dict] = {}
         edl["punch_ins"] = []
         if punch:
@@ -947,6 +963,7 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
                      "color": {"source": color, "output": {"range": "tv", "matrix": "bt709"}},
                      "loudnorm": loud, "loudness_ebur128": measured, "music": bed,
                      "captions": len(edl.get("captions") or []), "callouts": len(edl.get("callouts") or []),
+                     **({"overlays": broll_records} if broll_records else {}),
                      "audio": audio.as_posix(), "seconds": t.seconds, "bytes": out.stat().st_size,
                      "segcache": {"on": cache_dir is not None, "cached": sum(cached), "encoded": len(cached) - sum(cached),
                                   "audio_cached": audio_hit, "workers": ENCODE_WORKERS, "x264_threads": X264_THREADS}}

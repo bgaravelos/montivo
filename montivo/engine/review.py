@@ -212,7 +212,8 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
                edges: list[dict] | None = None, timeline: list[dict] | None = None,
                heard: list[dict] | None = None, edge_words: dict | None = None, head: dict | None = None,
                diff_heard: list[dict] | None = None, music: dict | None = None,
-               not_in_source: list[str] | None = None) -> str:
+               not_in_source: list[str] | None = None, broll: list[dict] | None = None,
+               pauses: list[dict] | None = None) -> str:
     """The facts handed to the reviewer, numbered. `music` (the render's music record) says a bed is mixed in on
     purpose and that the silences and heard words come from the speech without it. `heard` adds the heard phrases and the caption diff (a reviewer that
     cannot hear); `diff_heard` adds only the caption diff (Spark 1.3: in the benchmark the phrases cost it the weak
@@ -308,6 +309,15 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
                    f"anyone speaks" + (f" (measured: the speech sits {m['margin_db']:g} dB over it)" if m.get("margin_db")
                    is not None else "") + ". The silence gaps and the words heard above come from the speech alone. "
                    "The music is a fault only where it covers or competes with the words.")
+    if broll:
+        out.append(f"{len(out) + 1}. B-roll stills a person asked for are laid over the cut on purpose (the speaker's "
+                   "voice goes on under them; a full-frame still hides the speaker for its seconds, so judge "
+                   "subject_framed outside them): " + "; ".join(f"{b['t_in']:.2f}-{b['t_out']:.2f} s {b['placement']} "
+                                                                f"(\"{(b.get('prompt') or '')[:60]}\")" for b in broll) + ".")
+    if pauses:
+        out.append(f"{len(out) + 1}. Pauses a person shortened (at these cuts the silence between two words was cut down): "
+                   + "; ".join(f"{p['t']:.2f} s, {p['was_s']:.2f} s -> {p['kept_s']:.2f} s" for p in pauses)
+                   + ". If one was a dramatic pause that mattered, extend_span on the clip before that cut gives it back whole.")
     if not_in_source:
         out.append(f"{len(out) + 1}. The source footage was searched for everything the brief asks for; these are not "
                    "in it, so no cut of this footage can contain them: " + "; ".join(f"\"{x}\"" for x in not_in_source)
@@ -1181,6 +1191,7 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
     for f in sorted(fixes, key=lambda f: f.op in STRUCTURAL):
         s = by_id.get(f.target)
         note = ""
+        rejoined = False
         if why := conflict(new, f):
             log.append({**asdict(f), "fingerprint": f.fingerprint, "note": f"not applied: {why}", "skipped": True})
             continue
@@ -1209,6 +1220,8 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
             note = (f"{n} words trimmed at the {f.args['edge']} end, keeps: "
                     f"{' '.join(w['w'] for w in words.turn(s['turn_id'])[s['word_from']:s['word_to'] + 1])[:60]}"
                     + settle(s, words, f.args["edge"], audio, kept_elsewhere(new, s)))
+        elif f.op == "extend_span" and (note := rejoin_pause(new, s, f.args["edge"])):
+            rejoined = True
         elif f.op == "extend_span":
             orig = (s["word_from"], s["word_to"])
             blocked = kept_elsewhere(new, s)
@@ -1266,7 +1279,7 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
                 if x["id"] in seg:
                     x["reframe_bias_px"] = int(x.get("reframe_bias_px") or 0) + step
             note = f"crop bias {s['reframe_bias_px']:+d} px" + (f" ({len(seg)} spans of the segment)" if len(seg) > 1 else "")
-        if f.op in ("trim_span", "extend_span") or (f.op == "move_cut" and f.args["mode"] in ("snap", "words")):
+        if (f.op in ("trim_span", "extend_span") and not rejoined) or (f.op == "move_cut" and f.args["mode"] in ("snap", "words")):
             # trim_at / shift_words / resnap put BOTH edges back on Voice boundaries (012-ktb: a trim at the start
             # re-opened the end tightened out of the next word), so both are tightened again
             for e in ("in", "out"):
@@ -1280,6 +1293,42 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
         for s in new["spans"]:
             refresh_span(s, words)
     return new, log
+
+
+def shortened_pauses(edl: dict) -> list[dict]:
+    """The pauses a person shortened that are still cuts of this EDL: {t (cut second of the cut), was_s, kept_s}."""
+    cmap = {c.span: c for c in cut_map(edl)} if edl.get("render") else {}
+    out = []
+    for left, right in zip(edl["spans"], edl["spans"][1:]):
+        a, b = left.get("pause_out"), right.get("pause_in")
+        if a and b and left["id"] in cmap and (a["from"], a["to"]) == (b["from"], b["to"]):
+            out.append({"t": cmap[left["id"]].cut_out, "was_s": round(a["to"] - a["from"], 2),
+                        "kept_s": round((left["t_out"] - a["from"]) + (a["to"] - right["t_in"]), 2)})
+    return out
+
+
+def rejoin_pause(edl: dict, s: dict, edge: str) -> str:
+    """A pause a person shortened (montivo.human pauses: `pause_out` on the clip before it, `pause_in` on the one after)
+    given back whole when the review extends either side of it: the two clips meet again where they met before, so the
+    render plays them as one segment (a dramatic pause the reviewer wants kept). Returns a note, "" when that edge holds
+    no shortened pause."""
+    k = next((i for i, x in enumerate(edl["spans"]) if x["id"] == s["id"]), None)
+    j = None if k is None else k + 1 if edge == "out" else k - 1
+    if j is None or not 0 <= j < len(edl["spans"]):
+        return ""
+    left, right = (s, edl["spans"][j]) if edge == "out" else (edl["spans"][j], s)
+    a, b = left.get("pause_out"), right.get("pause_in")
+    if not a or not b or (a["from"], a["to"]) != (b["from"], b["to"]):
+        return ""
+    t = float(a["join"])
+    was = (left["t_out"] - a["from"]) + (a["to"] - right["t_in"])  # the silence the two edges kept
+    left["t_out"] = right["t_in"] = t
+    left.setdefault("edge_tuned", {})["out"] = t
+    right.setdefault("edge_tuned", {})["in"] = t
+    left.pop("pause_out")
+    right.pop("pause_in")
+    return (f"the {a['to'] - a['from']:.2f} s pause between {left['id']} and {right['id']} given back whole "
+            f"(it was cut to {was:.2f} s)")
 
 
 def finalize(edl: dict, words: Words) -> None:
@@ -1330,7 +1379,9 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
         head = head_frame_facts(run_dir, edl)
         facts = facts_text(sil, caps, duration, edges, timeline, words_heard if heard else None, edge_words=edge_words,
                            head=head, diff_heard=words_heard, music=(edl.get("render") or {}).get("music"),
-                           not_in_source=edl.get("brief_missing"))
+                           not_in_source=edl.get("brief_missing"),
+                           broll=[b for b in (edl.get("render") or {}).get("overlays") or [] if b.get("shown")],
+                           pauses=shortened_pauses(edl))
         gate = gate_check(caps, edges, edge_words, head)
         gate["checked_captions"] = [[c["t_in"], c["t_out"]] for c in timeline if c.get("checked")]
         copy_path = review_copy(cut, rdir, clock=clock)

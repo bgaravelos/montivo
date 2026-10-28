@@ -971,6 +971,118 @@ def create_app(root: Path) -> FastAPI:
                               "text": f"Split clip {span} of v{frm}" + (f" in front of “{quote}”." if quote else ".")})
         return {"job": job.public()}
 
+    # ---- Batch D: add back a passage, remove pauses, B-roll stills (montivo.human insert / pauses / overlay)
+
+    @app.post("/api/runs/{run_id}/insert")
+    async def insert(run_id: str, request: Request):
+        """A passage the cut does not use back in ({"turn": 2, "word_from": 11, "word_to": 20}, Voice turn word
+        indices; "before": a clip id or "end", else placed by source time): the next version, $0. A clip deleted in
+        an earlier version (the timeline's ghost clips) comes back the same way."""
+        run_id = await own(run_id, request)
+        d = st.run_dir(run_id)
+        b = await request.json()
+        frm = int(b.get("from") or latest_version(d))
+        try:
+            turn, a, z = int(b["turn"]), int(b["word_from"]), int(b["word_to"])
+        except (KeyError, TypeError, ValueError):
+            raise HTTPException(400, "turn, word_from, word_to: the Voice turn and its word indices")
+        before = b.get("before")
+        if before is not None and not re.fullmatch(r"s\d+|end", str(before)):
+            raise HTTPException(400, "before: a clip id like s3, or end")
+        place = ["--end"] if before == "end" else ["--before", str(before)] if before else []
+        args = ["-m", "montivo.human", "insert", f"runs/{run_id}", "--words", f"{turn}:{a}-{z}", *place,
+                "--from", str(frm), "--review", "0"]
+        quote = str(b.get("text") or "").strip()[:60]
+        job = start_job(st, run_id, "insert", "Add a passage back", args,
+                        chat={"role": "user", "chips": [f"v{frm}"], "kind": "insert",
+                              "text": f"Add back “{quote}”." if quote else f"Add back words {a}-{z} of turn {turn}."})
+        return {"job": job.public()}
+
+    pause_cache: dict[tuple, dict] = {}
+
+    @app.get("/api/runs/{run_id}/pauses")
+    def pauses_plan(run_id: str, v: int, over: float = 0.6, keep: float = 0.3):
+        """What "Remove pauses" would shorten in version v: {count, saved_s, pauses: [{t_cut, was_s, ...}]}, $0."""
+        from .. import human
+        d = st.run_dir(run_id)
+        p = d / f"edl_v{v}.json"
+        if not p.is_file():
+            raise HTTPException(404, f"no version {v}")
+        key = (run_id, v, round(over, 2), round(keep, 2), p.stat().st_mtime_ns)
+        if key not in pause_cache:
+            try:
+                pause_cache[key] = human.pauses(d, over, keep, from_v=v, dry_run=True)
+            except SystemExit as e:
+                raise HTTPException(409, str(e))
+        return pause_cache[key]
+
+    @app.post("/api/runs/{run_id}/pauses")
+    async def pauses_run(run_id: str, request: Request):
+        """Shorten every pause over {"over": 0.6} s to about {"keep": 0.3} s: the next version, $0, no word removed."""
+        run_id = await own(run_id, request)
+        d = st.run_dir(run_id)
+        b = await request.json()
+        frm = int(b.get("from") or latest_version(d))
+        try:
+            over, keep = float(b.get("over", 0.6)), float(b.get("keep", 0.3))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "over and keep: seconds")
+        if not 0.2 <= over <= 5.0 or not 0.0 <= keep < over:
+            raise HTTPException(400, "over is 0.2..5 s and keep is under it")
+        args = ["-m", "montivo.human", "pauses", f"runs/{run_id}", "--over", f"{over:g}", "--keep", f"{keep:g}",
+                "--from", str(frm), "--review", "0"]
+        job = start_job(st, run_id, "pauses", "Remove pauses", args,
+                        chat={"role": "user", "chips": [f"v{frm}"], "kind": "pauses",
+                              "text": f"Shorten the pauses over {over:g} s in v{frm}."})
+        return {"job": job.public()}
+
+    @app.post("/api/runs/{run_id}/overlay")
+    async def overlay(run_id: str, request: Request):
+        """A B-roll still over the cut: a new one ({"at": cut s, "prompt": "...", "dur", "placement", "style"}: one Muse
+        Image call, $0.01, so it needs the key), one moved or re-placed ({"set": "b1", "at" / "dur" / "placement"}, $0)
+        or taken out ({"remove": "b1"}, $0): the next version."""
+        from ..engine import broll
+        run_id = await own(run_id, request)
+        d = st.run_dir(run_id)
+        b = await request.json()
+        frm = int(b.get("from") or latest_version(d))
+        opts: list[str] = []
+        for k, flag in (("at", "--at"), ("dur", "--dur")):
+            if b.get(k) is not None:
+                try:
+                    opts += [flag, f"{float(b[k]):.2f}"]
+                except (TypeError, ValueError):
+                    raise HTTPException(400, f"{k}: seconds")
+        if b.get("placement") is not None:
+            if b["placement"] not in broll.PLACEMENTS:
+                raise HTTPException(400, f"placement: {', '.join(broll.PLACEMENTS)}")
+            opts += ["--placement", b["placement"]]
+        oid = b.get("remove") or b.get("set")
+        if oid is not None and not re.fullmatch(r"b\d+", str(oid)):
+            raise HTTPException(400, "an overlay id like b1")
+        if b.get("remove"):
+            what, label, text = ["--remove", oid], "Remove a B-roll still", f"Take B-roll {oid} out of v{frm}."
+        elif b.get("set"):
+            if not opts:
+                raise HTTPException(400, "at, dur or placement: what to change")
+            what, label, text = ["--set", oid, *opts], "Move a B-roll still", f"Move B-roll {oid} in v{frm}."
+        else:
+            prompt = " ".join(str(b.get("prompt") or "").split())[:300]
+            if not prompt or b.get("at") is None:
+                raise HTTPException(400, "prompt and at: what the still shows and the cut second it starts")
+            style = b.get("style") or "auto"
+            if style not in ("auto", *broll.STYLES):
+                raise HTTPException(400, f"style: auto, {', '.join(broll.STYLES)}")
+            need_key("A B-roll still (Muse Image)", 0.01)
+            what, label = ["--prompt", prompt, "--style", style, *opts], "Add a B-roll still"
+            text = f"Show “{prompt[:80]}” at {float(b['at']):.1f} s."
+        args = ["-m", "montivo.human", "overlay", f"runs/{run_id}", *what, "--from", str(frm), "--review", "0"]
+        job = start_job(st, run_id, "overlay", label, args,
+                        chat={"role": "user", "chips": [f"v{frm}"], "kind": "overlay", "text": text})
+        return {"job": job.public()}
+
+    # ---- end Batch D
+
     @app.get("/api/runs/{run_id}/current")
     def current_get(run_id: str):
         """The version the editor was left on by undo / redo (ui/current.json), while no newer version came since."""

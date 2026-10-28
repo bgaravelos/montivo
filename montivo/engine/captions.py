@@ -486,6 +486,8 @@ class Overlay:
     t_in: float  # segment-local seconds
     t_out: float
     fade_s: float = 0.0
+    fade_in: bool = True  # with fade_s: a B-roll still running across a cut fades only at its own start and end
+    fade_out: bool = True
 
 
 def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, head_track: dict | None,

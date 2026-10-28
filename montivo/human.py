@@ -14,6 +14,10 @@
     python -m montivo.human edges runs/015
     python -m montivo.human style runs/015 [--look '{"preset": "box", "position": "fixed", "top": 1180}'] [--callout s5=120,300] [--callout s5=auto]
     python -m montivo.human music runs/015 --track chill_lofi [--level -20] [--duck -12] [--voice 0] (or --off)
+    python -m montivo.human insert runs/012 --words 2:11-20 [--before s3 | --end]
+    python -m montivo.human pauses runs/012 [--over 0.6] [--keep 0.3] [--dry-run]
+    python -m montivo.human overlay runs/015 --at 12.4 --prompt "a flow diagram ..." [--dur 2.5] [--placement full|upper|pip]
+    python -m montivo.human overlay runs/015 --set b1 [--at 14] [--dur 3] [--placement pip] (or --remove b1)
 
 Each writes the next edl_vN.json (N = one past the highest version in the run folder, so no version is ever
 overwritten) with a `patches` entry marked `source: "human"`, renders cut_vN.mp4 and, with --review, runs the blind
@@ -32,7 +36,11 @@ Voice word boundaries with today's rules, for a version made before a rule chang
 captions and callouts (graphics.normalize_look: a preset, font, colours, words per line, the caption position auto or
 fixed) and pins callouts where a person dragged them on the canvas (span `callout_xy`), or back to auto; $0.
 `music` puts a bundled music bed under the speech, ducked while anyone talks (engine/music.py, EDL `music`), changes
-its track or level, or takes it out; $0.
+its track or level, or takes it out; $0. `insert` adds a passage the cut does not use back (words of a Voice turn, placed
+by source time or in front of a clip), the way a clip deleted earlier comes back; $0. `pauses` shortens every pause
+longer than --over to about --keep seconds by splitting the clip there, never removing a word; $0. `overlay` lays a
+Muse Image still (B-roll: full frame, the upper part or a corner card) over a few seconds of the cut, only when a
+person asks for one; one Muse Image call, $0.01 (moving, resizing or removing one is $0).
 """
 from __future__ import annotations
 
@@ -46,12 +54,14 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+from .engine import broll
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, reset_edges, tighten_edges
 from .engine.edl import build_edl, carry_run_words, edl_summary, normalize_roles
 from .engine.graphics import Look, normalize_look
 from .engine.music import DUCK_DB as MUSIC_DUCK_DB, LEVEL_DB as MUSIC_LEVEL_DB, normalize_music
 from .engine.punch import parse_key
+from .engine.render import merge_segments
 from .engine.review import (REACH_S, Fix, _caption_at, _src_time, apply_fixes, cut_map, finalize, kept_elsewhere,
                             refresh_span, review_loop)
 from .engine.voice import VoiceResult
@@ -844,6 +854,298 @@ def split(run_dir: Path, span_id: str, word: int, from_v: int | None = None, pas
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
 
 
+def insert_plan(edl: dict, words: Words, turn: int, a: int, b: int, before: str | None) -> tuple[dict, int]:
+    """A passage the cut does not use (turn word indices a..b) as a new span, and the index it goes in at: in front of
+    `before` (a span id, "end" for the end), else by source time, right after the clip that comes before it in the
+    recording (in front of the earliest clip when none does). Every word stays in the cut once (kept_elsewhere's rule)
+    and a clip keeps at least two words."""
+    tw = words.turn(turn)
+    if not tw:
+        raise SystemExit(f"turn {turn} is not in voice.json")
+    if not 0 <= a <= b < len(tw):
+        raise SystemExit(f"words {a}-{b} are outside turn {turn} (0..{len(tw) - 1})")
+    if b == a:
+        raise SystemExit("a clip keeps at least two words: select one more")
+    ids = [s["id"] for s in edl["spans"]]
+    for s in edl["spans"]:
+        if s["turn_id"] == turn and s["word_from"] <= b and a <= s["word_to"]:
+            lo, hi = max(a, s["word_from"]), min(b, s["word_to"])
+            raise SystemExit(f"words {lo}-{hi} ({' '.join(w['w'] for w in tw[lo:hi + 1])[:40]!r}) are already in {s['id']}: "
+                             "every word plays once")
+    span = {"id": f"s{next_span_id(edl)}", "order": 0, "turn_id": turn, "speaker": tw[a].get("speaker") or "",
+            "role": "body", "words": "", "t_in": tw[a]["t_start"], "t_out": tw[b]["t_end"], "duration": 0.0,
+            "verbatim": True, "match_ratio": 1.0, "word_from": a, "word_to": b, "callout": "",
+            "why": "added back by hand", "contiguous_with_previous": False}
+    refresh_span(span, words)
+    if before == "end":
+        return span, len(ids)
+    if before is not None:
+        if before not in ids:
+            raise SystemExit(f"{before} is not a span of this EDL ({', '.join(ids)})")
+        return span, ids.index(before)
+    earlier = [k for k, s in enumerate(edl["spans"]) if s["t_in"] < span["t_in"]]
+    if earlier:
+        return span, max(earlier, key=lambda k: edl["spans"][k]["t_in"]) + 1
+    return span, min(range(len(ids)), key=lambda k: edl["spans"][k]["t_in"])
+
+
+def join_at_dip(left: dict, right: dict, words: Words, audio: Audio | None) -> float:
+    """Two clips that continue each other in the recording (right's first word follows left's last) meet on one
+    point, the quietest 40 ms between the two words, so the render plays them as one segment again (as split does)."""
+    tw = words.turn(left["turn_id"])
+    lo, hi = tw[left["word_to"]]["t_end"], tw[right["word_from"]]["t_start"]
+    t = round((lo + hi) / 2, 3)
+    if audio is not None:
+        t = round(audio.quietest(lo - SPLIT_SETTLE_S, hi + SPLIT_SETTLE_S, step=0.01)[0], 3)
+    t = min(max(t, tw[left["word_to"]]["t_start"] + 0.02), tw[right["word_from"]]["t_end"] - 0.02)
+    left["t_out"] = right["t_in"] = t
+    left.setdefault("edge_tuned", {})["out"] = t
+    right.setdefault("edge_tuned", {})["in"] = t
+    for s, edge in ((left, "out"), (right, "in")):
+        (s.get("edges") or {}).pop(edge, None)
+    return t
+
+
+def insert(run_dir: Path, turn: int, a: int, b: int, before: str | None = None, from_v: int | None = None,
+           passes: int = 0, budget: float = 0.15) -> dict:
+    """Add a passage the cut does not use back into edl_v{from} -> edl_vN, rendered, $0: words a..b of a Voice turn
+    as a new clip (placed by source time unless `before` says where), its edges and the cuts that now meet tightened to
+    the speech (a neighbour that continues it in the recording joins it on the dip between the words instead), roles
+    by position. A clip deleted in an earlier version comes back the same way (the editor's ghost clips)."""
+    log = RunLog(run_dir / "run.log")
+    from_v, edl, n = _new_version(run_dir, from_v)
+    words, audio = _words(run_dir), Audio.load(run_dir)
+    span, at = insert_plan(edl, words, turn, a, b, before)
+    log(f"montivo insert: turn {turn} words {a}-{b} as {span['id']} at position {at + 1} in edl_v{from_v} -> edl_v{n}")
+    new, _ = apply_fixes(edl, [], words)
+    new["spans"].insert(at, span)
+    meet: set[tuple[str, str]] = {(span["id"], "in"), (span["id"], "out")}
+    joined = []
+    for k, edge in ((at - 1, "in"), (at + 1, "out")):
+        if not 0 <= k < len(new["spans"]):
+            continue
+        o = new["spans"][k]
+        left, right = (o, span) if edge == "in" else (span, o)
+        if left["turn_id"] == right["turn_id"] and right["word_from"] == left["word_to"] + 1:
+            joined.append(f"{left['id']}|{right['id']} at {join_at_dip(left, right, words, audio):.3f}")
+            meet -= {(span["id"], edge)}
+        else:
+            meet.add((o["id"], "out" if edge == "in" else "in"))
+    finalize(new, words)
+    note = f"{span['id']} added back before {new['spans'][at + 1]['id']}" if at + 1 < len(new["spans"]) \
+        else f"{span['id']} added back at the end"
+    note += f": {span['words'][:60]!r}"
+    if joined:
+        note += f"; joined to the clip it continues ({', '.join(joined)})"
+    if audio is not None and meet:
+        for m in tighten_edges(new, words, audio, only=meet)["moves"]:
+            note += f"; {m['span']} {m['edge']} edge tightened to the speech {m['from']:.3f} -> {m['to']:.3f}"
+        for s in new["spans"]:
+            refresh_span(s, words)
+        new["runtime_s"] = round(sum(s["duration"] for s in new["spans"]), 2)
+    roles = roles_by_position(new["spans"])
+    if roles:
+        note += f"; roles by position: {', '.join(roles)}"
+    fix = {"op": "insert_span", "target": span["id"], "issue": -1, "severity": "human", "t_s": 0.0,
+           "args": {"turn": turn, "word_from": a, "word_to": b, "before": before, "at": at}, "note": note}
+    edl_path = _save(run_dir, new, n, from_v, "insert", [fix], log)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
+PAUSE_OVER_S = 0.6  # pauses longer than this are shortened (OpusClip's default is 0.8 s)
+PAUSE_KEEP_S = 0.3  # ... to about this much silence
+PAUSE_TAIL_SHARE = 0.6  # of the kept silence after the words before the pause (edges.TAIL_S 0.15 / LEAD_S 0.10)
+PAUSE_REACH_S = 0.35  # Voice's word boundary may sit this far outside the silence (run 012: "work | MuseSpark" 0.17 s
+#                       before it; Voice words abut and stretch over the pauses)
+
+
+def pause_plan(edl: dict, words: Words, audio: Audio, over: float = PAUSE_OVER_S,
+               keep: float = PAUSE_KEEP_S) -> dict:
+    """Every pause inside the cut longer than `over`: a silence between two runs of speech (audio.wav, the edge pass's
+    threshold) inside one rendered segment, on the Voice word boundary nearest it (a boundary inside a clip, or the
+    junction of two clips that play as one). Never a word: a pause with no boundary near it (Voice stretched a word
+    over it) or one that would leave a one-word clip is skipped. Returns {pauses, skipped, count, saved_s}; each pause
+    has its cut second `t_cut` when the EDL is rendered."""
+    by_id = {s["id"]: s for s in edl["spans"]}
+    cmap = {c.span: c for c in cut_map(edl)} if edl.get("render") else {}
+    pauses, skipped, seen = [], [], set()
+    for seg in merge_segments(edl["spans"]):
+        spans = [by_id[i] for i in seg.span_ids]
+        bounds = []  # (source time, the span left of it, its last word, the span right of it when it is a junction)
+        for k, s in enumerate(spans):
+            tw = words.turn(s["turn_id"])
+            bounds += [(tw[j]["t_end"], s, j, None) for j in range(s["word_from"], s["word_to"])]
+            if k + 1 < len(spans):
+                bounds.append((s["t_out"], s, s["word_to"], spans[k + 1]))
+        runs = audio.speech_runs(seg.t_in, seg.t_out)
+        for (_, g0), (g1, _) in zip(runs, runs[1:]):
+            if g1 - g0 <= over:
+                continue
+            dist = lambda t: 0.0 if g0 <= t <= g1 else min(abs(t - g0), abs(t - g1))  # noqa: E731
+            near = [x for x in bounds if dist(x[0]) <= PAUSE_REACH_S]
+            rec = {"from": round(g0, 3), "to": round(g1, 3), "was_s": round(g1 - g0, 2)}
+            if not near:
+                skipped.append({**rec, "span": spans[0]["id"], "why": "no word boundary at the pause"})
+                continue
+            _, s, j, right = min(near, key=lambda x: (dist(x[0]), abs(x[0] - (g0 + g1) / 2)))
+            tw = words.turn(s["turn_id"])
+            if right is None and (j - s["word_from"] + 1 < 2 or s["word_to"] - j < 2):
+                skipped.append({**rec, "span": s["id"], "why": "a clip keeps at least two words"})
+                continue
+            if (s["id"], j) in seen:
+                continue
+            seen.add((s["id"], j))
+            c = cmap.get(s["id"])
+            nxt = words.turn(right["turn_id"])[right["word_from"]] if right else tw[j + 1]
+            pauses.append({**rec, "span": s["id"], "word": j, "next": right["id"] if right else None,
+                           "after": tw[j]["w"], "before": nxt["w"], "keep_s": keep, "saved_s": round(g1 - g0 - keep, 2),
+                           "t_cut": round(c.cut_in + g0 - s["t_in"], 2) if c else None})
+    return {"over_s": over, "keep_s": keep, "pauses": pauses, "skipped": skipped, "count": len(pauses),
+            "saved_s": round(sum(p["saved_s"] for p in pauses), 2)}
+
+
+def apply_pauses(new: dict, words: Words, plan: dict, turns: dict[str, int]) -> list[str]:
+    """Cut every pause of `plan` (pause_plan on the EDL `new` was copied from) down to its kept silence, in place: a
+    pause inside a clip splits it there (split_pieces, the second piece a new id), a pause at a junction moves the two
+    edges apart. Both edges are tuned (edge_tuned) and carry the pause (`pause_out` / `pause_in`: its silence and the
+    point the two clips met) so a review's extend_span can give it back whole (review.rejoin_pause). `turns`: span id ->
+    turn id of the planned EDL. Returns one note per pause."""
+    next_id = next_span_id(new)
+    notes = []
+    for p in plan["pauses"]:
+        tid, j = turns[p["span"]], p["word"]
+        left = next(s for s in new["spans"] if s["turn_id"] == tid and s["word_from"] <= j <= s["word_to"])
+        if left["word_to"] == j:
+            right = new["spans"][new["spans"].index(left) + 1]
+            join = left["t_out"]
+        else:
+            (left, right), next_id = split_pieces(new, words, left["id"], [(left["word_from"], j), (j + 1, left["word_to"])],
+                                                  next_id, set())
+            join = round(words.turn(tid)[j]["t_end"], 3)
+        keep = float(p["keep_s"])
+        left["t_out"] = round(min(p["to"], p["from"] + keep * PAUSE_TAIL_SHARE), 3)
+        right["t_in"] = round(max(p["from"], p["to"] - keep * (1 - PAUSE_TAIL_SHARE)), 3)
+        rec = {"from": p["from"], "to": p["to"], "join": join}
+        for s, edge in ((left, "out"), (right, "in")):
+            s.setdefault("edge_tuned", {})[edge] = s["t_out" if edge == "out" else "t_in"]
+            (s.get("edges") or {}).pop(edge, None)
+            s[f"pause_{edge}"] = dict(rec)
+            refresh_span(s, words)
+        notes.append(f"{p['was_s']:.2f} s pause after {p['after']!r} -> {keep:.2f} s ({left['id']} | {right['id']})")
+    return notes
+
+
+def pauses(run_dir: Path, over: float = PAUSE_OVER_S, keep: float = PAUSE_KEEP_S, from_v: int | None = None,
+           passes: int = 0, budget: float = 0.15, dry_run: bool = False) -> dict:
+    """Shorten every pause of edl_v{from} longer than `over` to about `keep` seconds -> edl_vN, rendered, $0. No word
+    is removed: the clip splits at the pause and the two pieces meet `keep` seconds of silence apart. `dry_run` only
+    returns the plan (what the timeline's button says: "3 pauses, -1.4 s")."""
+    if not 0.2 <= over <= 5.0 or not 0.0 <= keep < over:
+        raise SystemExit("--over is 0.2..5 s and --keep is under it")
+    from_v, edl, n = _new_version(run_dir, from_v)
+    words, audio = _words(run_dir), Audio.load(run_dir)
+    if audio is None:
+        raise SystemExit(f"{run_dir / 'audio.wav'} not found (ingest writes it)")
+    plan = pause_plan(edl, words, audio, over, keep)
+    if dry_run:
+        return {"from": from_v, **plan}
+    if not plan["pauses"]:
+        raise SystemExit(f"no pause over {over:g} s in edl_v{from_v}" + (f" ({len(plan['skipped'])} sit inside a word or "
+                                                                        "would leave a one-word clip)" if plan["skipped"] else ""))
+    log = RunLog(run_dir / "run.log")
+    log(f"montivo pauses: {plan['count']} over {over:g} s -> {keep:g} s in edl_v{from_v} -> edl_v{n} (-{plan['saved_s']:.2f} s)")
+    new, _ = apply_fixes(edl, [], words)
+    notes = apply_pauses(new, words, plan, {s["id"]: s["turn_id"] for s in edl["spans"]})
+    finalize(new, words)
+    roles = roles_by_position(new["spans"])
+    fix = {"op": "tighten_gaps", "target": "cut", "issue": -1, "severity": "human", "t_s": 0.0,
+           "args": {"over_s": over, "keep_s": keep, "pauses": plan["pauses"], "skipped": plan["skipped"]},
+           "note": f"{plan['count']} pause{'s' if plan['count'] != 1 else ''} shortened, -{plan['saved_s']:.2f} s: "
+                   + "; ".join(notes) + (f"; roles by position: {', '.join(roles)}" if roles else "")}
+    edl_path = _save(run_dir, new, n, from_v, "pauses", [fix], log)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
+def overlay_anchor(edl: dict, at: float) -> tuple[str, float]:
+    """A cut second of a rendered EDL as (span id, source second): where an overlay is anchored."""
+    if not edl.get("render"):
+        raise SystemExit("this EDL is not rendered yet: an overlay is placed on a rendered cut")
+    cmap = cut_map(edl)
+    c = next((c for c in cmap if c.cut_in <= at < c.cut_out), None)
+    if c is None:
+        raise SystemExit(f"{at:.2f} s is not inside a clip of the cut ({cmap[0].cut_in:.2f}-{cmap[-1].cut_out:.2f} s; "
+                         "the title card takes the start)")
+    return c.span, round(_src_time(edl, cmap, c.span, at), 3)
+
+
+def overlay(run_dir: Path, prompt: str | None = None, at: float | None = None, dur: float | None = None,
+            placement: str | None = None, style: str = "auto", set_id: str | None = None, remove: str | None = None,
+            from_v: int | None = None, passes: int = 0, budget: float = 0.15) -> dict:
+    """A B-roll still over the cut of edl_v{from} -> edl_vN, rendered (engine/broll.py): a new one from `prompt` at
+    cut second `at` (one Muse Image call, $0.01, broll/<id>.png), or `set_id` moved (`at`), resized (`dur`) or
+    re-placed (`placement`) with the same picture, or `remove`d; $0 without a new picture. The EDL's `overlays` travel
+    with later versions like `look` (review patches deep-copy the EDL, replan carries them)."""
+    log = RunLog(run_dir / "run.log")
+    from_v, edl, n = _new_version(run_dir, from_v)
+    items = [dict(o) for o in edl.get("overlays") or []]
+    by_id = {o["id"]: o for o in items}
+    ledger = Ledger.resume(run_dir / "ledger.json")
+    if remove is not None or set_id is not None:
+        oid = remove or set_id
+        if oid not in by_id:
+            raise SystemExit(f"{oid} is not an overlay of edl_v{from_v} ({', '.join(by_id) or 'none'})")
+    if remove is not None:
+        items = [o for o in items if o["id"] != remove]
+        fix = {"op": "overlay_remove", "target": remove, "issue": -1, "severity": "human",
+               "note": f"B-roll {remove} removed ({(by_id[remove].get('prompt') or '')[:50]!r})"}
+    elif set_id is not None:
+        o, was = by_id[set_id], dict(by_id[set_id])
+        if at is not None:
+            o["span"], o["src_t"] = overlay_anchor(edl, at)
+        if dur is not None:
+            o["dur"] = round(dur, 2)
+        if placement is not None:
+            o["placement"] = placement
+        changed = [k for k in ("src_t", "dur", "placement") if o.get(k) != was.get(k)]
+        if not changed:
+            raise SystemExit(f"{set_id} is already there")
+        fix = {"op": "overlay_set", "target": set_id, "issue": -1, "severity": "human",
+               "args": {k: o[k] for k in changed},
+               "note": f"B-roll {set_id}: " + ", ".join(f"{k} {was.get(k)!r} -> {o[k]!r}" for k in changed)}
+    else:
+        prompt = " ".join((prompt or "").split())
+        if not prompt:
+            raise SystemExit("the overlay needs a prompt: what the still shows")
+        span, src_t = overlay_anchor(edl, at)
+        oid = broll.next_id(edl, run_dir)
+        style = broll.style_for(prompt) if style in (None, "auto") else style
+        placement = placement or "full"
+        o = {"id": oid, "span": span, "src_t": src_t, "dur": round(dur if dur is not None else broll.DEFAULT_DUR_S, 2),
+             "placement": placement, "style": style, "prompt": prompt, "image": f"broll/{oid}.png", "at_cut": round(at, 2)}
+        log(f"montivo overlay: {oid} at {at:.2f} s ({span} @ {src_t:.2f}) {placement}, {style}: {prompt!r}")
+        try:
+            broll.generate(run_dir, oid, prompt, style, placement, ledger, log)
+        except RuntimeError as e:
+            raise SystemExit(f"Muse Image failed: {e}")
+        items.append(o)
+        fix = {"op": "overlay_add", "target": oid, "issue": -1, "severity": "human",
+               "args": {k: o[k] for k in ("at_cut", "dur", "placement", "style", "prompt")},
+               "note": f"B-roll {oid} at {at:.2f} s for {o['dur']:g} s, {placement}, {style}: {prompt[:60]!r} "
+                       f"(Muse Image, $0.01)"}
+    try:
+        items = [broll.normalize(o) for o in items]
+    except ValueError as e:
+        raise SystemExit(str(e))
+    log(f"montivo overlay: {fix['note']} in edl_v{from_v} -> edl_v{n}")
+    new, _ = apply_fixes(edl, [], _words(run_dir))
+    if items:
+        new["overlays"] = sorted(items, key=lambda o: o["id"])
+    else:
+        new.pop("overlays", None)
+    edl_path = _save(run_dir, new, n, from_v, "overlay", [fix], log)
+    return _finish(run_dir, edl_path, n, passes, budget, ledger, log)
+
+
 def head_ids(run_dir: Path) -> list[str]:
     p = run_dir / "track" / "head" / "tracks.json"
     return sorted((json.loads(p.read_text()).get("objects") or {}) if p.is_file() else {}, key=lambda x: int(x) if x.isdigit() else 0)
@@ -1010,6 +1312,8 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
         new["look"] = dict(prev["look"])
     if prev.get("music"):
         new["music"] = dict(prev["music"])
+    if prev.get("overlays"):  # each stays on its source second, shown where the new plan keeps those words
+        new["overlays"] = [dict(o) for o in prev["overlays"]]
     carry_run_words(prev, new)
     if pinned := carry_callout_places(prev, new):
         log(f"callout places carried from v{from_v}: " + ", ".join(repr(t) for t in pinned))
@@ -1121,7 +1425,29 @@ def main(argv: list[str] | None = None) -> int:
     mu.add_argument("--voice", type=float, default=None, help="dB on the speech against the bed, -12..6 (default 0)")
     rs = sub.add_parser("restore", help="an earlier version back as the newest -> edl_vN -> cut_vN ($0)")
     rs.add_argument("run_dir", type=Path)
-    for p in (d, t, r, pu, c, tx, ro, pn, cu, sp, ed, sy, mu, rs):
+    ins = sub.add_parser("insert", help="add a passage the cut does not use back -> edl_vN -> cut_vN ($0)")
+    ins.add_argument("run_dir", type=Path)
+    ins.add_argument("--words", required=True, metavar="TURN:FROM-TO", help="Voice turn id and word indices, inclusive")
+    ig = ins.add_mutually_exclusive_group()
+    ig.add_argument("--before", default=None, help="the clip it goes in front of (default: by source time)")
+    ig.add_argument("--end", action="store_true", help="at the end of the cut")
+    pa = sub.add_parser("pauses", help="shorten every pause over --over seconds -> edl_vN -> cut_vN ($0)")
+    pa.add_argument("run_dir", type=Path)
+    pa.add_argument("--over", type=float, default=PAUSE_OVER_S, help=f"pauses longer than this (default {PAUSE_OVER_S})")
+    pa.add_argument("--keep", type=float, default=PAUSE_KEEP_S, help=f"seconds of silence kept (default {PAUSE_KEEP_S})")
+    pa.add_argument("--dry-run", action="store_true", help="print what it would shorten, write nothing")
+    ov = sub.add_parser("overlay", help="a Muse Image still over the cut -> edl_vN -> cut_vN ($0.01 per new image)")
+    ov.add_argument("run_dir", type=Path)
+    og = ov.add_mutually_exclusive_group(required=True)
+    og.add_argument("--prompt", default=None, help="what the still shows (one Muse Image call)")
+    og.add_argument("--set", dest="set_id", default=None, metavar="ID", help="move, resize or re-place an overlay ($0)")
+    og.add_argument("--remove", default=None, metavar="ID", help="take an overlay out ($0)")
+    ov.add_argument("--at", type=float, default=None, help="cut second it starts at")
+    ov.add_argument("--dur", type=float, default=None, help=f"seconds on screen (default {broll.DEFAULT_DUR_S})")
+    ov.add_argument("--placement", choices=broll.PLACEMENTS, default=None, help="full frame, upper part or corner card")
+    ov.add_argument("--style", choices=("auto", *broll.STYLES), default="auto", help="photo, diagram or icon (default: "
+                                                                                     "from the prompt)")
+    for p in (d, t, r, pu, c, tx, ro, pn, cu, sp, ed, sy, mu, rs, ins, pa, ov):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
         p.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
@@ -1179,6 +1505,19 @@ def main(argv: list[str] | None = None) -> int:
         out = style(a.run_dir, look, places, a.from_v, a.review, a.budget, prompt=a.prompt)
     elif a.cmd == "music":
         out = music(a.run_dir, None if a.off else a.track, a.level, a.duck, a.from_v, a.review, a.budget, a.voice)
+    elif a.cmd == "insert":
+        m = re.fullmatch(r"(\d+):(\d+)-(\d+)", a.words)
+        if not m:
+            ap.error("--words TURN:FROM-TO, like 2:11-20")
+        out = insert(a.run_dir, int(m.group(1)), int(m.group(2)), int(m.group(3)), "end" if a.end else a.before,
+                     a.from_v, a.review, a.budget)
+    elif a.cmd == "pauses":
+        out = pauses(a.run_dir, a.over, a.keep, a.from_v, a.review, a.budget, dry_run=a.dry_run)
+    elif a.cmd == "overlay":
+        if a.prompt is not None and a.at is None:
+            ap.error("a new overlay needs --at CUT_S")
+        out = overlay(a.run_dir, prompt=a.prompt, at=a.at, dur=a.dur, placement=a.placement, style=a.style,
+                      set_id=a.set_id, remove=a.remove, from_v=a.from_v, passes=a.review, budget=a.budget)
     elif a.cmd == "pin":
         out = pin(a.run_dir, a.speaker, None if a.head.lower() == "none" else a.head, a.from_v, a.review, a.budget)
     else:

@@ -525,10 +525,23 @@ def versions(run_dir: Path) -> list[dict]:
                     "speaker_pins": {str(k): str(v) for k, v in (edl.get("reframe_speaker_ids") or {}).items()},
                     "punch_ins": [{k: e.get(k) for k in ("key", "kind", "word", "span", "excess_db", "t_in", "t_out", "zoom")}
                                   for e in edl.get("punch_ins") or [] if e.get("key")],
+                    "overlays": _overlays(edl, render),
                     "bytes": (run_dir / cut).stat().st_size if cut else None,
                     "planner": {"model": planner, "name": planner_name(planner)} if planner else None,
                     "plan_compare": cmp,
                     "review": _review(rv, run_dir) if rv else None})
+    return out
+
+
+def _overlays(edl: dict, render: dict) -> list[dict]:
+    """The version's B-roll stills (EDL `overlays`, engine/broll.py) with the cut seconds its render gave them (None,
+    and why, when not shown)."""
+    shown = {r["id"]: r for r in render.get("overlays") or []}
+    out = []
+    for o in edl.get("overlays") or []:
+        r = shown.get(o.get("id")) or {}
+        out.append({k: o.get(k) for k in ("id", "placement", "style", "prompt", "image", "dur", "span")}
+                   | {"t_in": r.get("t_in"), "t_out": r.get("t_out"), "shown": bool(r.get("shown")), "why": r.get("why")})
     return out
 
 
