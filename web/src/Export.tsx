@@ -9,10 +9,18 @@ import type { Costs, Version } from "./types";
 // only presets are the cut as rendered and a small 720p copy. Feed 4:5 and Square 1:1 render the version again in that
 // frame (the crop narrows and follows the head, the captions are laid out again); the cover maker lays its still out in
 // that frame too, and their pre-flight says the app safe areas are a 9:16 matter. The files come from
-// POST /export/bundle (python -m montivo.export, $0); more than one file downloads as a zip.
+// POST /export/bundle (python -m montivo.export, $0); more than one file downloads as a zip. The post text (UX B6) is one
+// Muse Spark call per version (POST /export/post, about $0.01): a title, description and hashtags per platform, copied
+// from here or put in the bundle as a .txt.
 
 type Check = { id: string; label: string; status: "ok" | "warn" | "fail" | "info"; detail: string };
-type Kind = "video" | "clean" | "srt" | "vtt" | "cover" | "audio" | "transcript";
+type Kind = "video" | "clean" | "srt" | "vtt" | "cover" | "audio" | "transcript" | "post";
+type PostOne = { title: string; description: string; hashtags: string[]; text: string };
+type PostRecord = { version: number; platforms: Record<string, PostOne> | null; cost_usd?: number; created?: string };
+const PLATFORMS: { id: string; name: string; limit: number }[] = [
+  { id: "reels", name: "Reels", limit: 2200 }, { id: "tiktok", name: "TikTok", limit: 4000 },
+  { id: "shorts", name: "Shorts", limit: 5000 }, { id: "linkedin", name: "LinkedIn", limit: 3000 },
+];
 type Aspect = "9:16" | "4:5" | "1:1";
 type Saved = { include: Kind[]; preset: "full" | "720"; grid: boolean; aspect?: Aspect };
 
@@ -31,7 +39,50 @@ const KINDS: { k: Kind; label: string; note: string }[] = [
   { k: "cover", label: "Cover", note: "JPG of the cover and the 3:4 profile-grid crop" },
   { k: "audio", label: "Audio", note: "WAV, loudness as in the cut" },
   { k: "transcript", label: "Transcript", note: "TXT with times" },
+  { k: "post", label: "Post text", note: "TXT with the title, description and hashtags per platform" },
 ];
+
+/** The publish pack: one Spark call writes a post per platform from the brief, the words the cut keeps and the review. */
+function PostText({ id, n, post, setPost, hasKey, keyNote, onErr }: {
+  id: string; n: number; post: PostRecord | null; setPost: (p: PostRecord) => void; hasKey: boolean; keyNote: string | null;
+  onErr: (e: string | null) => void;
+}) {
+  const [tab, setTab] = useState("reels");
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const write = async () => {
+    setBusy(true); onErr(null);
+    try { setPost(await api<PostRecord>(`/api/runs/${id}/export/post`, { v: n })); } catch (e) { onErr(String((e as Error).message)); } finally { setBusy(false); }
+  };
+  const one = post?.platforms?.[tab];
+  const copy = async () => {
+    if (!one) return;
+    try { await navigator.clipboard.writeText(one.text); setCopied(tab); window.setTimeout(() => setCopied(null), 2000); } catch { onErr("The browser did not allow copying: select the text and copy it."); }
+  };
+  const lim = PLATFORMS.find((x) => x.id === tab)!.limit;
+  return (
+    <div className="ex-post">
+      {post?.platforms ? (
+        <>
+          <div className="seg-group ex-post-tabs">{PLATFORMS.map((x) => <button key={x.id} className={`seg ${tab === x.id ? "on" : ""}`} onClick={() => setTab(x.id)}>{x.name}</button>)}</div>
+          {one && <pre className="ex-post-text">{one.text}</pre>}
+          <div className="ex-post-row">
+            <span className="mute small">{one ? `${one.text.length} / ${lim} characters` : ""}{one?.title ? ` · title ${one.title.length} / 100` : ""}</span>
+            <span className="grow" />
+            <button className="btn quiet small" disabled={!hasKey || busy} onClick={write} title={hasKey ? "Write all four again (one Muse Spark call, about $0.01)" : keyNote ?? "Needs MODEL_API_KEY"}>{busy ? <><span className="pulse" /> Writing…</> : "Write again"}</button>
+            <button className="btn small" disabled={!one} onClick={copy}><Icon name={copied === tab ? "check" : "link"} size={12} />{copied === tab ? "Copied" : "Copy"}</button>
+          </div>
+        </>
+      ) : (
+        <div className="ex-post-row">
+          <span className="mute small">A title, a description and hashtags for Reels, TikTok, Shorts and LinkedIn, from the brief, the words the cut keeps and the blind review.</span>
+          <button className="btn small" disabled={!hasKey || busy} onClick={write} title={hasKey ? "One Muse Spark call, about $0.01" : keyNote ?? "Needs MODEL_API_KEY"}>
+            {busy ? <><span className="pulse" /> Writing…</> : <><Icon name="spark" size={12} />Write with Muse Spark · ~$0.01</>}</button>
+        </div>
+      )}
+    </div>
+  );
+}
 const mb = (b: number | null | undefined) => (b == null ? "–" : `${(b / 1e6).toFixed(1)} MB`);
 
 function load(): Saved {
@@ -64,6 +115,8 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<{ name: string; url: string; bytes: number }[] | null>(null);
+  const [post, setPost] = useState<PostRecord | null>(null);
+  useEffect(() => { setPost(null); api<PostRecord>(`/api/runs/${id}/export/post?v=${n}`).then(setPost).catch(() => {}); }, [id, n]);
   useEffect(() => {
     setRecord(null);
     api<CoverRecord>(`/api/runs/${id}/export/cover?v=${n}`).then((r) => {
@@ -76,13 +129,13 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
   useEffect(() => { setName((x) => x.replace(/-v\d+$/, `-v${n}`)); setChecks(null); setDone(null); setErr(null);
     api<{ checks: Check[] }>(`/api/runs/${id}/export/check?v=${n}&aspect=${encodeURIComponent(saved.aspect ?? "9:16")}`).then((r) => setChecks(r.checks))
       .catch((e) => setChecks([{ id: "err", label: "Pre-flight", status: "info", detail: `could not be read (${(e as Error).message})` }])); }, [id, n, saved.aspect]);
-  useEffect(() => setDone(null), [saved, cover, name]);
+  useEffect(() => setDone(null), [saved, cover, name, post]);
   const aspect: Aspect = saved.aspect ?? "9:16";
   const feed = aspect !== "9:16";
   const [W, H] = SIZE[aspect];
   const bands = gridBands(aspect);
-  const inc = saved.include;
-  const toggle = (k: Kind) => setSaved({ ...saved, include: inc.includes(k) ? inc.filter((x) => x !== k) : [...inc, k] });
+  const inc = saved.include.filter((k) => k !== "post" || post?.platforms); // the post text once it is written
+  const toggle = (k: Kind) => setSaved({ ...saved, include: saved.include.includes(k) ? saved.include.filter((x) => x !== k) : [...saved.include, k] });
   const p720 = saved.preset === "720";
   const est = useMemo(() => {
     const video = (v?.bytes ?? 0) * (p720 ? 0.11 : 1);
@@ -140,13 +193,16 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
             <div className="pn-k">Include</div>
             <div className="ex-kinds">
               {KINDS.map(({ k, label, note }) => (
-                <label key={k} className={`ex-kind ${inc.includes(k) ? "on" : ""}`}>
-                  <input type="checkbox" checked={inc.includes(k)} onChange={() => toggle(k)} />
+                <label key={k} className={`ex-kind ${inc.includes(k) ? "on" : ""} ${k === "post" && !post?.platforms ? "off" : ""}`}
+                  title={k === "post" && !post?.platforms ? "Write the post text below first" : undefined}>
+                  <input type="checkbox" checked={inc.includes(k)} disabled={k === "post" && !post?.platforms} onChange={() => toggle(k)} />
                   <span><b>{label}</b><span className="mute small">{k === "video" && feed ? `MP4 ${W} × ${H} with the captions laid out again · renders, about 30 s`
                     : k === "cover" ? `JPG ${W} × ${H} and the 3:4 profile-grid crop` : note}</span></span>
                 </label>
               ))}
             </div>
+            <div className="pn-k">Post text</div>
+            <PostText id={id} n={n} post={post} setPost={setPost} hasKey={hasKey} keyNote={keyNote} onErr={setErr} />
             <div className="pn-k">Pre-flight {checks && <span className={`ex-sum s-${worst}`}>{worst === "ok" ? "ready" : worst === "fail" ? "fix first" : worst === "info" ? "–" : "check these"}</span>}</div>
             <div className="ex-checks">
               {!checks && <span className="mute small"><span className="pulse" /> checking…</span>}

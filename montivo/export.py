@@ -20,6 +20,11 @@ and transcript are the same in every aspect.
 (engine/thumb.py: a clean still with the headline laid out around the head; `cutout` needs its person mask made first
 with `--cover-mask`). `--design-cover` (about $0.03-0.05) and `--cover-mask` (about $0.01) are the two paid entries: the
 agent's design into cover_vN.json, and SAM 3.1's person mask of the still at --cover-t.
+
+`--post-text` (one muse-spark-1.3 call, strict json_schema, about $0.01) writes the publish pack into post_vN.json: a
+title, a description and hashtags per platform (Reels, TikTok, Shorts, LinkedIn) from the brief, the words the cut
+keeps (its caption lines, hand fixes included) and the blind review's summary; `post` in --include puts them in the
+bundle as post.txt, one block per platform, exactly as the Export page copies them.
 """
 from __future__ import annotations
 
@@ -30,6 +35,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -37,7 +43,97 @@ from .engine.frame import FRAME_916, Frame, frame_of, with_aspect
 from .ledger import Ledger
 from .run import render_run
 
-KINDS = ("video", "clean", "srt", "vtt", "cover", "audio", "transcript")
+KINDS = ("video", "clean", "srt", "vtt", "cover", "audio", "transcript", "post")
+PLATFORMS = {"reels": "Instagram Reels", "tiktok": "TikTok", "shorts": "YouTube Shorts", "linkedin": "LinkedIn"}
+# what each platform shows (Meta, TikTok, YouTube help pages): a Shorts title up to 100 characters, a Reels caption
+# up to 2,200, TikTok's caption up to 4,000 but read in its first line, LinkedIn's post cut after about 210 characters
+LIMITS = {"reels": {"title": 0, "description": 2200, "tags": 5}, "tiktok": {"title": 0, "description": 300, "tags": 5},
+          "shorts": {"title": 100, "description": 1000, "tags": 3}, "linkedin": {"title": 0, "description": 1300, "tags": 3}}
+POST_ONE = {"type": "object", "additionalProperties": False, "required": ["title", "description", "hashtags"],
+            "properties": {"title": {"type": "string", "description": "Shorts: the video title, at most 100 characters; "
+                                                                        "the other platforms: empty"},
+                           "description": {"type": "string", "description": "the caption or post text, no hashtags in it"},
+                           "hashtags": {"type": "array", "items": {"type": "string"}, "description": "without #, no spaces"}}}
+POST_SCHEMA = {"type": "object", "additionalProperties": False, "required": list(PLATFORMS),
+               "properties": {k: POST_ONE for k in PLATFORMS}}
+POST_PROMPT = """You write the post that goes with a short vertical video, for four platforms. Write only from what \
+the video says (its words below) and the brief; never promise or claim anything the words do not say. Write in the \
+language the video is spoken in.
+
+- reels (Instagram Reels caption): the first line is a hook that makes people tap "more"; then two or three short \
+lines on what the video shows; a question or call to comment at the end. 3 to 5 hashtags. title empty.
+- tiktok: one or two short lines, conversational, under 150 characters. 3 to 5 hashtags. title empty.
+- shorts (YouTube Shorts): title at most 100 characters, plain, searchable, no clickbait; description two or three \
+sentences. Up to 3 hashtags (Shorts is added for you). 
+- linkedin: a professional post: a first line that stands alone (LinkedIn cuts after about 210 characters), then \
+three or four short paragraphs on the idea and why it matters, first person as the speaker. 3 hashtags. title empty.
+
+Hashtags: specific to the topic, a mix of one broad and the rest narrow; no spaces; no # sign. No emoji walls: at \
+most one emoji per platform.
+
+Brief from the editor: {brief}
+Title card: {title}
+Length: {seconds:.0f} s
+The words of the video, in order:
+{words}
+{review}"""
+
+
+def compose(platform: str, p: dict) -> str:
+    """One platform's post as it is pasted: Shorts' title on its own line, the text, the hashtags."""
+    tags = " ".join(f"#{t}" for t in p.get("hashtags") or [])
+    head = f"{p['title']}\n\n" if p.get("title") else ""
+    return f"{head}{p.get('description', '').strip()}" + (f"\n\n{tags}" if tags else "")
+
+
+def settle_post(parsed: dict) -> dict:
+    """The model's answer kept to each platform's limits: hashtags without # or spaces, deduplicated and counted,
+    Shorts gets #Shorts, a title only where the platform has one, text cut at the limit on a word."""
+    out = {}
+    for k in PLATFORMS:
+        p, lim = parsed.get(k) or {}, LIMITS[k]
+        tags = []
+        for t in p.get("hashtags") or []:
+            t = "".join(ch for ch in str(t).lstrip("#") if ch.isalnum() or ch == "_")
+            if t and t.lower() not in {x.lower() for x in tags}:
+                tags.append(t)
+        tags = tags[:lim["tags"]]
+        if k == "shorts" and "shorts" not in {x.lower() for x in tags}:
+            tags.append("Shorts")
+        cut = lambda text, n: text if len(text) <= n else text[:n - 1].rsplit(" ", 1)[0].rstrip(",;:") + "…"  # noqa: E731
+        one = {"title": cut(" ".join(str(p.get("title") or "").split()), lim["title"]) if lim["title"] else "",
+               "description": cut(str(p.get("description") or "").strip(), lim["description"]), "hashtags": tags}
+        out[k] = {**one, "text": compose(k, one)}
+    return out
+
+
+def post_text(run_dir: Path, n: int, ledger: Ledger, log=print) -> dict:
+    """The publish pack of version n (one Spark call) -> post_vN.json."""
+    from .engine.api import dump_json
+    from .engine.spark import Spark
+    edl = json.loads((run_dir / f"edl_v{n}.json").read_text())
+    run = json.loads((run_dir / "run.json").read_text()) if (run_dir / "run.json").is_file() else {}
+    words = " ".join(text for _, _, text in caption_cues(edl)) or " ".join(s.get("words", "") for s in edl["spans"])
+    rv = run_dir / f"review_v{n}.json"
+    review = ""
+    if rv.is_file():
+        r = json.loads(rv.read_text()).get("review") or {}
+        review = f"A blind reviewer scored it {r.get('overall')}/100: {r.get('summary', '')}"
+    prompt = POST_PROMPT.format(brief=run.get("brief") or "", title=edl.get("title_card_text") or "none",
+                                seconds=float((edl.get("render") or {}).get("duration_s") or edl.get("runtime_s") or 0),
+                                words=words[:6000], review=review)
+    call = Spark(run_dir, ledger, log=log).call(f"post_v{n}", prompt, POST_SCHEMA, max_output_tokens=4000,
+                                                reasoning_effort="low", stage="spark.post", schema_name="post_text")
+    rec = {"version": n, "platforms": settle_post(call.parsed), "cost_usd": call.cost_usd, "seconds": call.seconds,
+           "created": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    dump_json(run_dir / f"post_v{n}.json", rec)
+    log(f"post: v{n} title {rec['platforms']['shorts']['title']!r}, ${call.cost_usd:.4f} in {call.seconds:.1f} s")
+    return rec
+
+
+def post_file(rec: dict) -> str:
+    """post.txt: one block per platform, as the Export page copies it."""
+    return "\n\n".join(f"== {PLATFORMS[k]} ==\n{rec['platforms'][k]['text']}" for k in PLATFORMS if k in rec["platforms"]) + "\n"
 
 
 def grid_crop(w: int, h: int) -> str:
@@ -181,6 +277,12 @@ def export(run_dir: Path, n: int, out: Path, name: str, include: list[str], pres
         grid = out / f"{name}{tag}-cover-grid.jpg"
         ffmpeg("-i", str(dst), "-vf", grid_crop(frame.w, frame.h), "-q:v", "2", str(grid))
         files += [dst, grid]
+    if "post" in include:
+        rec_p = run_dir / f"post_v{n}.json"
+        if not rec_p.is_file():
+            raise SystemExit(f"post: no post_v{n}.json yet; write it with --post-text first")
+        (dst := out / f"{name}-post.txt").write_text(post_file(json.loads(rec_p.read_text())), encoding="utf-8")
+        files.append(dst)
     if "audio" in include:
         dst = out / f"{name}.wav"
         ffmpeg("-i", str(cut), "-vn", "-c:a", "pcm_s16le", "-ar", "48000", str(dst))
@@ -212,11 +314,19 @@ def main(argv: list[str] | None = None) -> int:
                     help='JSON {"template": frame|headline|sticker|cutout, "text": ..., "highlight": ...} for the cover')
     ap.add_argument("--design-cover", action="store_true",
                     help="only let Muse Spark design the cover: still, headline, template, check (about $0.04) -> cover_vN.json")
+    ap.add_argument("--post-text", action="store_true",
+                    help="only write the post text per platform with Muse Spark (one call, about $0.01) -> post_vN.json")
     ap.add_argument("--cover-mask", action="store_true",
                     help="only make SAM 3.1's person mask of the still at --cover-t for the cutout cover (about $0.01)")
     a = ap.parse_args(sys.argv[1:] if argv is None else argv)
     if not a.run_dir.is_dir():
         ap.error(f"{a.run_dir} is not a run folder")
+    if a.post_text:
+        from .run import RunLog
+        with contextlib.redirect_stdout(sys.stderr):  # stdout is the one JSON record the server reads
+            rec = post_text(a.run_dir, a.version, Ledger.resume(a.run_dir / "ledger.json"), RunLog(a.run_dir / "run.log"))
+        print(json.dumps(rec, indent=2, ensure_ascii=False))
+        return 0
     if a.suggest_cover or a.design_cover or a.cover_mask:
         if a.cover_mask and a.cover_t is None:
             ap.error("--cover-mask needs --cover-t")

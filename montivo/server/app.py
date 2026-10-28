@@ -533,12 +533,30 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(500, f"cover failed: {(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")
         return json.loads(proc.stdout)
 
+    @app.get("/api/runs/{run_id}/export/post")
+    def post_get(run_id: str, v: int):
+        """The post text of version v per platform, when it was written before (post_vN.json)."""
+        d, _ = cut_of(run_id, v)
+        return read_json(d / f"post_v{v}.json") or {"platforms": None}
+
+    @app.post("/api/runs/{run_id}/export/post")
+    def post_post(run_id: str, b: dict):
+        """{"v": N}: the publish pack, a title, description and hashtags per platform from one Muse Spark call (about
+        $0.01, 5-15 s; python -m montivo.export --post-text) -> post_vN.json."""
+        v = int(b.get("v") or 0)
+        d, _ = cut_of(run_id, v)
+        need_key("Writing the post text (Muse Spark)", 0.01)
+        if st.busy(run_id):
+            raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: write the post text after it")
+        return export_cmd(d, v, "--post-text")
+
     def export_cmd(d: Path, v: int, *extra: str) -> dict:
         args = [sys.executable, "-m", "montivo.export", str(d.relative_to(st.root)) if d.is_relative_to(st.root) else str(d),
                 "--version", str(v), *extra]
         proc = subprocess.run(args, cwd=st.root, capture_output=True, text=True)
         if proc.returncode != 0:
-            raise HTTPException(500, f"cover failed: {(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")
+            raise HTTPException(500, f"{'post text' if '--post-text' in extra else 'cover'} failed: "
+                                     f"{(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")
         return json.loads(proc.stdout)
 
     def cover_body(b: dict) -> tuple[int, str, dict]:
@@ -642,7 +660,8 @@ def create_app(root: Path) -> FastAPI:
                                      f"{'copy without captions' if 'clean' in inc else aspect + ' video'} renders after it")
         edl = d / f"edl_v{v}.json"
         key_in = [v, inc, preset, name, cover, edl.stat().st_mtime_ns] + ([aspect] if aspect != "9:16" else []) \
-            + ([design] if design else [])
+            + ([design] if design else []) \
+            + ([(d / f"post_v{v}.json").stat().st_mtime_ns] if "post" in inc and (d / f"post_v{v}.json").is_file() else [])
         key = hashlib.sha1(json.dumps(key_in).encode()).hexdigest()[:12]
         out = d / "ui" / "cache" / "exports" / key
         rec_p = out / "export.json"
