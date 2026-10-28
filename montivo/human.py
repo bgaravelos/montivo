@@ -12,7 +12,7 @@
     python -m montivo.human pin runs/014 --speaker A --head 3 (or --head none to drop the pin)
     python -m montivo.human edges runs/015
     python -m montivo.human style runs/015 [--look '{"preset": "box", "position": "fixed", "top": 1180}'] [--callout s5=120,300] [--callout s5=auto]
-    python -m montivo.human music runs/015 --track low_light [--level -20] [--duck -12] (or --off)
+    python -m montivo.human music runs/015 --track chill_lofi [--level -20] [--duck -12] (or --off)
 
 Each writes the next edl_vN.json (N = one past the highest version in the run folder, so no version is ever
 overwritten) with a `patches` entry marked `source: "human"`, renders cut_vN.mp4 and, with --review, runs the blind

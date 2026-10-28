@@ -1,8 +1,8 @@
 """Music bed: a bundled loop under the cut's speech, ducked while someone talks.
 
 The EDL's `music` = {"track": id, "level_db": -20, "duck_db": -12} (absent = no music). The tracks are files in
-montivo/music/ (synthesised there by build.py, CC0; tracks.json holds each loop's measured loudness), so the bed is
-plain DSP: no model is called. `level_db` is the bed's loudness in LUFS where nobody speaks (the speech sits at the
+montivo/music/ (CC0 tracks from OpenGameArt cut into loops by build.py; tracks.json holds each loop's measured
+loudness, author and source page), so the bed is plain DSP: no model is called. `level_db` is the bed's loudness in LUFS where nobody speaks (the speech sits at the
 render's -14 LUFS); under speech it drops by `duck_db`, so the defaults keep the bed 18 LU under the voice.
 
 Ducking follows the Voice words in cut time (speech_intervals): every word of a segment is mapped through the

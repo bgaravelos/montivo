@@ -162,9 +162,9 @@ captions; dragging a clip's body on the video track moves it (the reviewer's reo
 tightened again, roles by position); the Speakers panel shows every Voice speaker with the head the speaker map
 gave it and every SAM head as a thumbnail, and pins another head for a speaker (EDL `reframe_speaker_ids`). All three
 are `python -m montivo.human text | reorder | pin` and render the next version. The Music panel puts a music bed
-under the speech: four loops bundled in `montivo/music/` (lo-fi keys, an upbeat pluck, ambient pads, a bouncy
-marimba), synthesised for Montivo by `montivo/music/build.py` and dedicated to the public domain (CC0), so no model and
-no licence is involved; a preview of each loop, the level where nobody speaks (default -20 LUFS) and how far it drops
+under the speech: eight CC0 tracks from OpenGameArt bundled in `montivo/music/` as loops (lo-fi, hip hop, funk,
+city-pop, acoustic, ukulele, new jack swing; authors and pages in the README there), so no model and no licence fee is
+involved; a preview of each loop, the level where nobody speaks (default -20 LUFS) and how far it drops
 while anyone speaks (default -12 dB), staged into one version ($0, `python -m montivo.human music RUN --track ID
 [--level -20] [--duck -12] | --off`); the panel shows what the render measured, the speech's level over the bed. The Transcript view edits like a
 document: click or drag over words (Shift-click extends) and press Backspace; the confirm shows the words, the seconds
@@ -571,9 +571,10 @@ loudnorm figures and the ebur128 measurement of the finished file).
   compressor: the duck is exact, the same on every render and testable offline. The speech is normalised first, the
   bed mixed in, the mix normalised again. Peaks: the first mix measured -1.95 dBTP as PCM and -0.5 dBTP as AAC (the
   encode overshot on a plosive at 0.97 s), so the render now measures the AAC file and runs the pass again with TP
-  lowered by the overshoot: -2.2 dBTP after one retry. Speech over the bed (RMS, the speech stem against the bed rendered
-  alone, 3 s windows): Low Light at -20 / -12, 14 to 17 dB; Forward at -18, 11 to 14 dB; Still Air at -22, 17 to 20
-  dB; all three -14.0 LUFS. Run 015's cut has no pause of 0.8 s and no title card, so the bed stays down for the whole cut;
+  lowered by the overshoot: -2.2 dBTP after one retry. With the eight CC0 tracks at the defaults (-20 / -12), one version
+  each: -14.0 LUFS, -1.7 to -2.0 dBTP, the speech 15.8 to 17.8 dB (RMS) over the bed as the render measures it (the
+  speech stem against the bed alone); a first set of synthesised loops gave 14 to 17 dB and was dropped for its sound.
+  Hand-checked in 3 s windows: 14 to 17 dB at -20, 11 to 14 dB at -18, 17 to 20 dB at -22. Run 015's cut has no pause of 0.8 s and no title card, so the bed stays down for the whole cut;
   it rises only in longer pauses and under a title card. The review listens to the speech stem the render keeps
   (`render/cut_vN.speech.m4a`) for silencedetect and Voice on the cut, since the bed would fill every silence gap, and
   tells the reviewer the music is there on purpose.
@@ -615,7 +616,7 @@ loudnorm figures and the ebur128 measurement of the finished file).
 |---|---|
 | 26/10 evening (kickoff day) | engine skeleton, run to `edl_v1.json` with a ledger; reframe and render to `cut_v1.mp4`; kill test (a) on the NASA clip; captions, callouts, the Muse Image title card, loudness; the blind review loop; kill test (b) 3 of 3 in 3 of 3 |
 | 27/10 | the edge pass (loops 76 to 100 and 65 to 85); two-pass loudness and a minimum caption duration; a second source (run 013) and its three fixes; SAM at 5 fps for every concept; the API and the review room, then the NLE editor with trim by drag; the bundled caption font and CI; speaker to head mapping; the Open Weight planner; punch-ins, then their switch, markers and removal in the editor; the hook A/B; the brand (logo, tokens in the editor and the render, social preview, title and end cards, logo sting) |
-| 28/10 | caption looks and the Style panel, the Export page with a pre-flight, style by prompt, a music bed with ducking (four CC0 loops made for Montivo) |
+| 28/10 | caption looks and the Style panel, the Export page with a pre-flight, style by prompt, a music bed with ducking (eight CC0 tracks from OpenGameArt) |
 | 28/10 to 4/11 | runs on more footage, the planner A/B, polish, the demo video, the submission |
 
 Design rules fixed on 26/10:

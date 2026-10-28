@@ -3,7 +3,7 @@ import { api } from "./api";
 import { Icon } from "./icons";
 import type { MusicInfo, MusicSetting, Version } from "./types";
 
-// The Music panel: a bundled bed (montivo/music, CC0) under the speech, ducked while anyone talks (engine/music.py).
+// The Music panel: a bundled CC0 bed (montivo/music, from OpenGameArt) under the speech, ducked while anyone talks (engine/music.py).
 // The choice is staged here and "Make Version N" renders it ($0, ffmpeg only); the preview plays the loop alone at
 // roughly the bed's level against speech at -14 LUFS.
 
@@ -68,8 +68,9 @@ export function MusicPanel({ v, next, canEdit, onApply }: {
               <button className="icon-btn mu-play" title={playing === t.id ? "Stop the preview" : "Preview the loop at this level"}
                 onClick={(e) => { e.stopPropagation(); preview(t.id, t.url); }}>
                 <Icon name={playing === t.id ? "pause" : "play"} size={13} /></button>
-              <span className="lr-txt"><b>{t.name}</b><span className="mu-mood">{t.mood} · {Math.round(t.loop_s)} s loop</span></span>
-              <span className="lr-end"><span className="lr-flag">{t.licence}</span></span>
+              <span className="lr-txt"><b>{t.name}</b><span className="mu-mood">{t.mood} · by {t.author}</span></span>
+              <span className="lr-end"><a className="lr-flag" href={t.source} target="_blank" rel="noreferrer"
+                onClick={(e) => e.stopPropagation()} title="The track's page on OpenGameArt">{t.licence}</a></span>
             </div>
           ))}
         </div>
@@ -81,8 +82,8 @@ export function MusicPanel({ v, next, canEdit, onApply }: {
           <input type="range" min={info.duck_range[0]} max={info.duck_range[1]} step={1} value={duck} disabled={!want}
             onChange={(e) => want && set({ ...want, duck_db: Number(e.target.value) })} />
         </label>
-        <p className="mute small">Synthesised for Montivo, public domain (CC0). The bed fades in and out, ramps down
-          0.15 s before each word and back up after pauses of 0.8 s or more; the mix stays at -14 LUFS.</p>
+        <p className="mute small">CC0 tracks from OpenGameArt (the licence tag opens each one's page). The bed fades in
+          and out, ramps down 0.15 s before each word and back up after pauses of 0.8 s or more; the mix stays at -14 LUFS.</p>
       </div>
       {staged && (
         <div className="cap-apply">

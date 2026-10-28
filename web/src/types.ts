@@ -81,7 +81,7 @@ export type Look = {
 /** A music bed (EDL `music`): a bundled track, its level where nobody speaks (LUFS) and the drop under speech (dB). */
 export type MusicSetting = { track: string; level_db: number; duck_db: number };
 export type MusicInfo = {
-  tracks: { id: string; name: string; mood: string; bpm: number; loop_s: number; licence: string; url: string }[];
+  tracks: { id: string; name: string; mood: string; loop_s: number; licence: string; author: string; source: string; url: string }[];
   default: { level_db: number; duck_db: number }; level_range: [number, number]; duck_range: [number, number];
 };
 export type LooksInfo = { presets: { id: string; name: string; look: Look }[]; fonts: { id: string; name: string }[]; default: Look };

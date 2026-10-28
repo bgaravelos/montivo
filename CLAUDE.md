@@ -381,9 +381,11 @@ field + why, reasoning low, 6000 output tokens: 1500 came back incomplete), fact
 behind the caption rows), `look.face_note` (median head rows from the EDL); `settle` clamps / keeps bad colours,
 a fixed top on the face -> auto. 015-style v8: upper, 2 words, yellow, auto from 1200, off the face; $0.008-0.010 each.
 Music bed (28/10, $0, branch `music-bed`): EDL `music` = {"track", "level_db" -20, "duck_db" -12} (absent = none,
-`engine/music.py` normalize_music); four loops in `montivo/music/` (low_light, forward, still_air, snap, AAC .m4a,
-`tracks.json` with each loop's measured LUFS) synthesised from scratch by `montivo/music/build.py` (pure Python FM / additive
-synth, seeded) and dedicated CC0 (README there): no download, no model. `render_audio` keeps the normalised speech as a
+`engine/music.py` normalize_music); eight CC0 tracks from OpenGameArt in `montivo/music/` (chill_lofi, lofi_hip_hop,
+funky_jam, midnight_cruiser, apple_cider, ukulele, raspberry_jam, cup_of_tea; AAC .m4a loops 55-97 s, `tracks.json` with
+LUFS, author, source page; README there). Downloaded on Billy's go (28/10, he rejected a first set of synthesised loops;
+FreePD.com is closed); `montivo/music/build.py DOWNLOADS_DIR` cuts them (lead-in trimmed, loop point by onset-envelope
+match to the first 8 s, 0.25 s crossfade; Chill Lofi is a loop edit kept whole). No model. `render_audio` keeps the normalised speech as a
 float WAV, renders the bed (looped, gain to level_db, a `volume` expression ducking along the Voice words in cut time:
 -0.15 s attack, +0.45 s release, pauses < 0.8 s stay ducked; audio.wav speech runs without words), mixes, normalises the
 mix again and measures the AAC file's own true peak (the first mix: -1.95 dBTP PCM, -0.5 AAC), re-running with a lower TP
@@ -393,9 +395,9 @@ bed, the ducked stretches and `measured` (speech vs bed RMS: margin_db). The spe
 reviewer the music is on purpose. `python -m montivo.human music RUN --track ID [--level] [--duck] | --off` -> next
 edl_vN; review patches and hook keep it (deep copy), replan carries it. GET `/api/music`, `/api/music/{id}` (the loop for
 the preview), POST `/api/runs/{id}/music`; the Music panel in the rail (`web/src/Music.tsx`). Run 015 copy (deleted):
--14.0 LUFS, -2.2 / -1.7 / -1.4 dBTP; speech over the bed 14-17 dB (Low Light -20), 11-14 (Forward -18), 17-20 (Still Air
--22); 015's cut never pauses 0.8 s, so the bed stays ducked throughout. Checked keyless in the browser (v8 Still Air, v9
-off from the panel). Real CC0 tracks from the web need Billy's yes to download.
+one version per track at -20 / -12: -14.0 LUFS, -1.7 to -2.0 dBTP, speech 15.8-17.8 dB over the bed; 015's cut never
+pauses 0.8 s, so the bed stays ducked throughout. Checked keyless in the browser (track change, music off, previews);
+Billy listened to all eight under his 015 cut and kept all eight (commit below).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

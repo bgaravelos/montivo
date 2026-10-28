@@ -796,9 +796,10 @@ def create_app(root: Path) -> FastAPI:
 
     @app.get("/api/music")
     def music_tracks():
-        """The Music panel's choices: the bundled tracks (montivo/music/tracks.json, CC0), the defaults and ranges."""
+        """The Music panel's choices: the bundled CC0 tracks (montivo/music/tracks.json, each with its author and source
+        page), the defaults and ranges."""
         from ..engine import music as bed
-        return {"tracks": [{k: t[k] for k in ("id", "name", "mood", "bpm", "loop_s", "licence")} | {"url": f"/api/music/{t['id']}"}
+        return {"tracks": [{k: t.get(k) for k in ("id", "name", "mood", "loop_s", "licence", "author", "source")} | {"url": f"/api/music/{t['id']}"}
                            for t in bed.tracks()],
                 "default": {"level_db": bed.LEVEL_DB, "duck_db": bed.DUCK_DB},
                 "level_range": list(bed.LEVEL_RANGE), "duck_range": list(bed.DUCK_RANGE)}
