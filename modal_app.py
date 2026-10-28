@@ -24,7 +24,7 @@ import modal
 
 DATA = "/data"
 HOSTED = {"MONTIVO_BUDGET_USD": "15", "MONTIVO_ONE_JOB": "1", "MONTIVO_MAX_FOOTAGE_S": "95",
-          "MONTIVO_MAX_UPLOAD_MB": "400", "MONTIVO_MAX_UPLOADS": "5","PYTHONPATH": "/root/app"}
+          "MONTIVO_MAX_UPLOAD_MB": "1000", "MONTIVO_MAX_UPLOADS": "5","PYTHONPATH": "/root/app"}
 
 app = modal.App("montivo")
 volume = modal.Volume.from_name("montivo-data", create_if_missing=True)

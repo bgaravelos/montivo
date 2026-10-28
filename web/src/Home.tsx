@@ -47,6 +47,22 @@ function usePref<T extends string>(key: string, fallback: T, ok: readonly T[]): 
 const bestOf = (r: RunCard) => Math.max(-1, ...(r.card?.scores ?? []).map((s) => s.overall));
 const nameFor = (r: RunCard) => nameOf(r.card?.title_card_text, r.brief);
 
+type Limits = { footage_s: number | null; upload_mb: number | null; uploads: number | null };
+
+/** A local clip's length from its metadata, or null when the browser cannot read it (the server checks it again). */
+function clipSeconds(file: File): Promise<number | null> {
+  return new Promise((resolve) => {
+    const v = document.createElement("video");
+    const url = URL.createObjectURL(file);
+    const done = (x: number | null) => { URL.revokeObjectURL(url); v.removeAttribute("src"); resolve(x); };
+    const timer = window.setTimeout(() => done(null), 5000);
+    v.preload = "metadata";
+    v.onloadedmetadata = () => { window.clearTimeout(timer); done(Number.isFinite(v.duration) ? v.duration : null); };
+    v.onerror = () => { window.clearTimeout(timer); done(null); };
+    v.src = url;
+  });
+}
+
 /** All run folders, and the new-run form (footage, brief, target, review loop). */
 export function Home({ go }: { go: (h: string) => void }) {
   const [runs, setRuns] = useState<RunCard[] | null>(null);
@@ -67,6 +83,7 @@ export function Home({ go }: { go: (h: string) => void }) {
   const [hookAb, setHookAb] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [upload, setUpload] = useState<string | null>(null);
+  const [limits, setLimits] = useState<Limits | null>(null);
   const [sort, setSort] = usePref<Sort>("montivo.home.sort", "newest", ["newest", "best", "name"]);
   const [only, setOnly] = usePref<Only>("montivo.home.only", "all", ["all", "reviewed", "passed"]);
   const [q, setQ] = useState("");
@@ -74,11 +91,11 @@ export function Home({ go }: { go: (h: string) => void }) {
   const [showArchived, setShowArchived] = useState(false);
   const [toast, setToast] = useState<{ text: string; undo?: string; tone?: string } | null>(null);
 
-  const loadRuns = () => api<{ runs: RunCard[]; has_key: boolean; has_open_key: boolean; costs: Costs; key_note?: string | null; budget?: Budget | null }>("/api/runs").then((r) => {
+  const loadRuns = () => api<{ runs: RunCard[]; has_key: boolean; has_open_key: boolean; costs: Costs; key_note?: string | null; budget?: Budget | null; limits?: Limits | null }>("/api/runs").then((r) => {
     const recv = performance.now();
     setRuns(r.runs.map((x) => (x.progress ? { ...x, progress: { ...x.progress, recv } } : x)));
     setHasKey(r.has_key); setHasOpen(r.has_open_key); if (r.costs) setCosts(r.costs);
-    setKeyNote(r.key_note ?? null); setBudget(r.budget ?? null);
+    setKeyNote(r.key_note ?? null); setBudget(r.budget ?? null); setLimits(r.limits ?? null);
   });
   const loadArchived = () => api<{ runs: RunCard[] }>("/api/archive").then((r) => setArchived(r.runs)).catch(() => setArchived([]));
   const load = () => {
@@ -94,6 +111,17 @@ export function Home({ go }: { go: (h: string) => void }) {
   }, [anyRunning]); // eslint-disable-line
 
   const put = async (file: File) => {
+    // the hosted limits, checked before the upload: an 847 MB iPhone clip used to go up whole before the server said no
+    const mb = file.size / 1e6;
+    if (limits?.upload_mb && mb > limits.upload_mb) {
+      setUpload(`${file.name} is ${Math.round(mb)} MB: the demo server takes clips up to ${limits.upload_mb} MB. Record in 1080p or trim it first.`);
+      return;
+    }
+    const secs = limits?.footage_s ? await clipSeconds(file) : null;
+    if (limits?.footage_s && secs && secs > limits.footage_s + 0.5) {
+      setUpload(`${file.name} is ${Math.round(secs)} s: the demo server takes clips up to ${limits.footage_s} s. Trim it first.`);
+      return;
+    }
     setUpload(`uploading ${file.name}…`);
     const safe = file.name.replace(/[^A-Za-z0-9._-]/g, "_").slice(-80);
     const name = /^[A-Za-z0-9]/.test(safe) ? safe : `clip${safe}`;
@@ -245,7 +273,9 @@ export function Home({ go }: { go: (h: string) => void }) {
             </div>
           )}
           <label className="drop-zone" onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); const file = e.dataTransfer.files[0]; if (file) put(file); }}>
-            {upload ?? "or drop a clip here (it goes to footage/)"}
+            {upload ?? (limits?.upload_mb || limits?.footage_s
+              ? `or drop a clip here (up to ${[limits.footage_s && `${limits.footage_s} s`, limits.upload_mb && `${limits.upload_mb} MB`].filter(Boolean).join(", ")})`
+              : "or drop a clip here (it goes to footage/)")}
             <input type="file" accept="video/*" onChange={(e) => { const file = e.target.files?.[0]; if (file) put(file); }} />
           </label>
           <div className="presets">

@@ -6,7 +6,7 @@ Both switch on from the environment only, so `montivo serve` on a laptop is unch
     MONTIVO_BUDGET_USD=15       paid actions stop once the runs' ledgers have spent this much since the host started
     MONTIVO_ONE_JOB=1           one engine job at a time across all runs (one container, one CPU budget)
     MONTIVO_MAX_FOOTAGE_S=95    a new run's clip may be at most this long
-    MONTIVO_MAX_UPLOAD_MB=400   an upload stops past this size
+    MONTIVO_MAX_UPLOAD_MB=1000  an upload stops past this size (95 s of iPhone 4K HDR is about 600 MB)
     MONTIVO_MAX_UPLOADS=5       clips one judge may upload (with the budget on)
 
 The budget is read from the ledgers every run writes (runs/<id>/ledger.json `total_cost_usd`), counted from a baseline

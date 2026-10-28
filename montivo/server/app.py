@@ -414,7 +414,9 @@ def create_app(root: Path) -> FastAPI:
 
     def key_info() -> dict:
         return {"has_key": key_ok(), "key_note": budget.note() if budget else None,
-                "budget": budget.public() if budget else None}
+                "budget": budget.public() if budget else None,
+                # the hosted limits, so the browser refuses a clip before minutes of upload (None: no limit)
+                "limits": {"footage_s": max_footage_s, "upload_mb": max_upload_mb, "uploads": max_uploads}}
 
     @app.get("/api/health")
     def health():
@@ -937,9 +939,12 @@ def create_app(root: Path) -> FastAPI:
                                          "start a new project from a clip you already uploaded")
 
         check_quota()
+        size, limit = 0, (max_upload_mb or 0) * 1e6
+        declared = request.headers.get("content-length", "")
+        if limit and declared.isdigit() and int(declared) > limit:  # refused before a byte is read
+            raise HTTPException(413, f"the demo server takes uploads up to {max_upload_mb:.0f} MB")
         st.footage.mkdir(exist_ok=True)
         part = st.footage / f".upload-{os.urandom(6).hex()}.part"
-        size, limit = 0, (max_upload_mb or 0) * 1e6
         try:
             with part.open("wb") as fh:
                 async for chunk in request.stream():

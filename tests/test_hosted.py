@@ -390,3 +390,23 @@ def test_an_edit_the_one_job_rule_refuses_makes_no_copy_of_the_sample(tmp_path, 
     assert r.status_code == 409 and "one job at a time" in r.json()["error"]
     assert not (tmp_path / "runs" / "r1-bb22").exists()
     assert [x["id"] for x in c.get("/api/runs").json()["runs"]] == ["r1"]
+
+
+def test_an_upload_over_the_limit_is_refused_before_its_body_and_the_limits_are_public(tmp_path, hosted_env):
+    # bug bash 28/10: a judge's 847 MB iPhone clip went up whole before the 413 (minutes on a home uplink); the
+    # browser now checks size and length before it sends, so the state names the limits, and a declared length over
+    # the limit is refused before a byte is read
+    (tmp_path / "footage").mkdir()
+    hosted_env.setenv("MONTIVO_MAX_UPLOAD_MB", "1")
+    hosted_env.setenv("MONTIVO_MAX_FOOTAGE_S", "95")
+    c = TestClient(A.create_app(tmp_path))
+    assert c.get("/api/runs").json()["limits"] == {"footage_s": 95.0, "upload_mb": 1.0, "uploads": None}
+    read = []
+
+    def body():
+        read.append(1)
+        yield b"x" * 10
+
+    r = c.put("/api/footage/big.mov", content=body(), headers={"content-length": str(2_000_000)})
+    assert r.status_code == 413 and "1 MB" in r.json()["error"] and read == []
+    assert c.get("/api/health").json()["limits"]["upload_mb"] == 1.0
