@@ -546,8 +546,9 @@ def _overlays(edl: dict, render: dict) -> list[dict]:
 
 
 def _music(edl: dict, render: dict) -> dict | None:
-    """The version's music bed (EDL `music`) and what its render measured (speech over the bed, in dB)."""
-    if not edl.get("music"):
+    """The version's music bed (EDL `music`) and what its render measured (speech over the bed, in dB). None until the
+    render block records the bed: the cut lands a few seconds before it, and stems asked for then answered 404."""
+    if not edl.get("music") or not render.get("music"):
         return None
     m = (render.get("music") or {}).get("measured") or {}
     return {"voice_db": 0.0, **edl["music"], "margin_db": m.get("margin_db"), "ducked_s": m.get("under_s"),

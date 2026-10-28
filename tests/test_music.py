@@ -315,3 +315,15 @@ def test_a_replan_keeps_the_versions_line_breaks_and_run_words(tmp_path, monkeyp
     e = done["edl"]
     assert e.get("look") == want
     assert e["glossary"] == {"newspark": "Muse Spark"} and e["highlight"] == ["Montivo"]
+
+
+def test_a_version_shows_its_music_once_the_render_recorded_the_bed():
+    # bug bash 28/10: the render writes cut_vN.mp4, measures it, then the EDL's render block; the editor asked for the
+    # stems in between, got 404 and kept "waveform…" and dead faders until a reload. Before the render block names the
+    # bed, the version plays the cut's own audio, and the stems' URLs appear (and load) with it.
+    from montivo.server.runs import _music
+    edl = {"music": {"track": "chill_lofi", "level_db": -20.0, "duck_db": -12.0}}
+    assert _music(edl, {}) is None
+    got = _music(edl, {"music": {"measured": {"margin_db": 16.9, "under_s": 30.1}, "ducked": [[0.2, 3.1]]}})
+    assert got["track"] == "chill_lofi" and got["margin_db"] == 16.9 and got["ducked"] == [[0.2, 3.1]]
+    assert _music({}, {"music": {"measured": {}}}) is None
