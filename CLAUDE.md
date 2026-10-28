@@ -445,12 +445,12 @@ cut, mute (M), safe area (the "Safe area" chip shows only while on), full screen
 (`icons.tsx`, `CRIT_ICON` per criterion), track headers, Timeline / Transcript tabs, clip tools (loop, Ask, Delete) in
 the timeline bar, inspector heads and sections. No eye / lock / split / snap: nothing in the engine backs them. Checked
 keyless on 015 and replay 4x; the composer and suggestions with a key not clicked yet.
-Waiting view (28/10, $0, commit `b9674af`, deployed to Modal): while no version has a cut (a new project's first run,
-or a replay before v1) the viewer is `web/src/Waiting.tsx` instead of "Waiting for the first render": the footage
-(`/api/footage/<name>`, then `proxy.mp4` once the log says `ingest: proxy`) muted, Voice's words as captions, chips for
-the finished steps, Watch's moves at their seconds, then the paper edit played clip by clip from the source with role
-and why; gated on run.log lines so replay matches live. Edits on a project with a cut keep the player. Checked keyless on
-015 replay; first live run with it not watched yet. `modal container stop` needs `-y` when run from Claude Code.
+Waiting view (28/10, $0, commits `b9674af` then `4ac96b0`, Billy's pick A from
+`docs/notes/wait-mark-options_2026-10-28.html`): while no version has a cut (a new project's first run, or a replay
+before v1) the viewer is `web/src/Waiting.tsx`: the Montivo mark doing the logo sting's motion on a loop (in/out points
+close in, the V fills down, holds, opens), the running step's title with a shimmer and one sentence on what the step
+does (`STEPS`, keyed by `runs.progress` stage). Billy rejected the first version (footage, captions and chips behind):
+no video there. Edits on a project with a cut keep the player. `modal container stop` needs `-y` from Claude Code.
 New-deploy check (28/10, $0, commit `9d74697`): `web/src/main.tsx` reads index.html every minute and when the tab comes
 back into view; a bundle name other than its own reloads the page at the next route change and shows a Reload pill until
 then (none on the Vite dev server). Live as Modal v12 = 15d14e0 + 9d74697, built in a clean worktree: the Cover maker
@@ -459,7 +459,7 @@ check and needs one manual reload.
 Stale page after deploys, the real cause (28/10, commit `6d15e28`): Modal's image stamps every file 1970-01-01 and
 index.html is always 1066 bytes, so Starlette's ETag never changed and a revalidating browser got 304 and kept its old
 page (and old bundle) through reloads. `WebFiles` now never answers 304 for HTML and drops ETag / Last-Modified. Live as
-Modal v13 (15d14e0 + 9d74697 + 6d15e28, still without the Cover maker). Before `modal container stop` after a deploy,
+Modal v13 (15d14e0 + 9d74697 + 6d15e28), then v14 (14:26, + 4ac96b0's web/src), both still without the Cover maker. Before `modal container stop` after a deploy,
 check no job is running (the newest runs' run.log on the Volume): stopping v12's container cut Billy's ui-1028-1209 in
 its review_v1 call (cut_v1 kept, no review).
 Cover maker (28/10, $0.011, Billy's pick A + D + E after research in `docs/notes/cover-maker-*_2026-10-28`): the cover was
