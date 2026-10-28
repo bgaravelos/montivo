@@ -560,6 +560,26 @@ de893e3 (the checkout had uncommitted work of another session); no job was runni
 container stopped; /s/nope 404 and /api/runs 401 live; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 9.0 s
 cold on Modal (was 17.2 s), 16.7 MB. Next batches: `docs/notes/next-batches_2026-10-28.md` (C chat, D add back / pauses / overlays,
 E publish pack, F quality).
+Batch C, chat as a collaborator (28/10, $0.034, side session, commits `d577d5a` + `7e24b75`): Ask Montivo previews a
+structural or > $0.02 change (re-plan, drop, reorder, a new `cut` op for words inside a clip) as a chat card ("8 -> 6
+clips, about 25 s, s3 goes") with cost and time, Apply / Try something else (one more router call, ~$0.005-0.009);
+proposals wait in `ui/pending/<id>.json`, a re-plan is planned once, on Apply; music, style, captions apply at once.
+Selection = scope (multi-selected clips, Transcript words, a caption line), ops outside it refused. A message typed
+during a job waits in a queue and goes on the newest cut when the job ends ("Send now" stops the job); a failed or
+stopped job gets "Try again" and "Nothing was charged." when the ledger did not grow. Unshare: GET /shares, DELETE
+/share/{token} (403 on a hosted sample, commit `37514fd`). Publish pack: `python -m montivo.export --post-text` (one
+Spark call, ~$0.01) -> `post_vN.json` with title, description, hashtags for Reels, TikTok, Shorts, LinkedIn; "Post text"
+tabs + Copy on the Export page, `post.txt` in the zip. Left: a stopped render leaves an edl_vN without a cut in the run.
+Batch D, edits (28/10, ~$0.08, side session, commits `a7e8ac6` + `a897aa1`): `human insert RUN --words TURN:FROM-TO
+[--before sN | --end]` / POST /insert puts back an unused passage (source order or before a clip, every word once, two
+words min, joins a neighbour at the dip); the Transcript's "Not in the cut" words (Insert / At the playhead) and ghost
+clips ("Bring it back"). `human pauses` / POST /pauses: pauses found in the audio (Voice words abut), cut at the nearest
+word edge, no word lost; 012 v2: 2 pauses (1.01, 0.90 s), -1.31 s; a "N pauses, -X s" button, marks on the video track;
+the reviewer may extend a dramatic pause back. B-roll stills with Muse Image (`human overlay`, POST /overlay, EDL
+`overlays[]`, placements full / card / corner, under the captions with a short fade, tied to their words, a B-roll track
+with a prompt box; move / resize / placement / remove $0); Ask Montivo adds one only when asked. 015 v5 without overlays
+renders byte for byte as before. Left: the Text track still shows a callout a full still hides; the Style preview
+ignores stills. UI build of both batches: commit `492d324`. Not deployed yet (needs Billy's explicit go).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
