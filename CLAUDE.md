@@ -532,6 +532,30 @@ version. On a copy of 015 (removed): re-plan + review 100 pass, no brief_covered
 itself still shows the major until a re-plan. UX batch A, engine hygiene and A3 deployed to Modal 28/10 15:52 (no job
 was running, last run.log write 15:19; the 15:15 web container stopped); smoke drop on 015: 34.3 s, -14.0 LUFS /
 -1.7 dBTP, render 17.2 s (was 22 s), 16.6 MB. The new UI on the live URL not yet opened (needs the sign-in).
+Restore (UX B1, 28/10, $0, commit `685c263`): `python -m montivo.human restore RUN --from N` copies edl_vN forward as the
+next version, renders it and carries review_vN to it (`carried_from`), POST `/restore`; a Restore button on older version
+cards in the chat and under the selected version in Versions. Checked on a copy of 015: v3 -> v6 in ~9 s, 87 carried.
+Share links (UX B4, 28/10, $0, commit `a34a521`, `montivo/server/share.py`): POST `/api/runs/{id}/share {version}` ->
+`/s/<token>` (`<root>/shares.json`, git-ignored, the same version keeps its token): a read-only page with the cut, score,
+the loop's score history, criteria, top 3 notes (click to play), Open Graph / Twitter tags and a 720 px poster; the token
+reaches only that version's video and poster; `/s/` is an open path on the hosted demo, creating a link needs the
+sign-in (checked with a local hosted server: /s 200, video Range 206, /api 401). Share button in the top bar. No
+Unshare yet.
+Editing batch 2 (28/10, $0, side session, commits `373b049` + `5a03755`): split at the playhead (S / Cmd+K, `human
+split --span --word`, POST /split; same render, the second piece selected), snapping on trim / move (playhead, clip
+edges, issue markers; N toggles, Shift free), the 8 editor bugs of the engine research, multi-select (Shift / Cmd click,
+Backspace -> one /cut), keys Up/Down prev/next cut, [ ] select left/right, Cmd+A, next issue `.` / `,`, mute Shift+M,
+undo position kept in `ui/current.json` (localStorage on hosted samples), a fork after undo is said aloud.
+Segment cache (engine batch 3, 28/10, $0, side session, commit `bd0778a`): `render/cache/` keyed on the ffmpeg args with
+inputs replaced by their content (source path+mtime+size, sendcmd text, overlay PNG bytes, the ffmpeg build), hard
+links on a hit, LRU of about 4 renders, `MONTIVO_SEGCACHE=0` turns it off; segments over 8 s split into 4 s chunks (not
+punch-in segments), parallel encodes (4 workers on the Mac, 2 on Modal, x264 threads fixed per machine and in the key),
+audio in its own thread and cached; `-movie_timescale 90000` fixes a sub-ms shift at every concat edge. 015 v5 on the
+Mac: cold 8.8 s, unchanged 0.85 s, one caption edit 2.4-2.7 s (was ~10 s); cached = uncached byte for byte.
+B1, B4, batch 2 and batch 3 are on main, NOT deployed: the auto-mode classifier refused `modal deploy` (28/10 16:30), it
+needs Billy's explicit go; deploy from a clean worktree of main (the checkout had another session's uncommitted
+`export.py` change). Next batches: `docs/notes/next-batches_2026-10-28.md` (C chat, D add back / pauses / overlays,
+E publish pack, F quality).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
