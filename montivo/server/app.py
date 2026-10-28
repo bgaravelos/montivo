@@ -54,6 +54,19 @@ COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "revie
         "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175}
 
 
+class WebFiles(StaticFiles):
+    """The UI build. index.html is never cached: a browser holding the old page after a deploy asks for the old asset
+    names and shows the old UI. The assets carry a content hash in their names, so they may be cached for good."""
+
+    async def get_response(self, path: str, scope):
+        r = await super().get_response(path, scope)
+        if path.startswith("assets/") and r.status_code == 200:
+            r.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        elif r.headers.get("content-type", "").startswith("text/html") or r.status_code == 304:
+            r.headers["Cache-Control"] = "no-cache"
+        return r
+
+
 @dataclass
 class Job:
     id: str
@@ -1224,7 +1237,7 @@ def create_app(root: Path) -> FastAPI:
         return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
 
     if STATIC.is_dir():
-        app.mount("/", StaticFiles(directory=STATIC, html=True), name="web")
+        app.mount("/", WebFiles(directory=STATIC, html=True), name="web")
     else:
         @app.get("/")
         def no_build():

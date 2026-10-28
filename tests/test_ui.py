@@ -621,3 +621,17 @@ def test_a_gated_review_serves_its_reasons_and_measured_issues(tmp_path):
     (d / "review_v1.json").write_text(json.dumps({"name": "review_v1", "pass_gate": gate, "review": {"overall": 88, "pass": False, "issues": [issue]}}))
     g = versions(d)[0]["review"]["gate"]
     assert g["checks"] == g["reasons"] and g["open_majors"] == []
+
+
+def test_the_ui_page_is_never_cached_and_its_hashed_assets_are(tmp_path):
+    # after a deploy a cached index.html asked for the old asset names, so the old UI stayed on screen (28/10)
+    import re
+
+    from fastapi.testclient import TestClient
+
+    from montivo.server.app import create_app
+    c = TestClient(create_app(tmp_path))
+    page = c.get("/")
+    assert page.status_code == 200 and page.headers["cache-control"] == "no-cache"
+    js = re.search(r'assets/[^"]+\.js', page.text).group(0)
+    assert "immutable" in c.get(f"/{js}").headers["cache-control"]
