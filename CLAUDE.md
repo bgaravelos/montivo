@@ -345,7 +345,8 @@ missing track concepts (commit 36540de). No edge moves on any run folder (old vs
 the one-liner, the "16 editors we looked at", the pass gate bullet, the benchmark and the TEDx upload rows, the first
 two rows marked as scored before the gate, hook A/B and punch-ins with their real runs. Deployed to Modal 28/10 (smoke: 015
 v6 34.3 s, -14.0 LUFS); the TEDx clip is deleted from the Volume (Billy, 28/10) and its run moved to runs/_archive/ui-1027-2252, so its
-$0.40 stays in the cap; a judge now edits, archives, lists and restores only their own projects (commit abb969c).
+$0.40 stays in the cap; a judge now edits, archives, lists and restores only their own projects (commit abb969c) and reads only
+the samples and their own (one middleware over /api/runs/<id>/..., another judge's run answers like a missing one, commit b780b56).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
