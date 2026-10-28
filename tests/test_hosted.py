@@ -157,8 +157,15 @@ def test_a_judges_first_edit_on_a_sample_goes_to_their_own_copy(tmp_path, hosted
     other = TestClient(A.create_app(tmp_path))
     other.cookies.set(H.JUDGE, "bb22")
     assert [r["id"] for r in other.get("/api/runs").json()["runs"]] == ["r1"]  # the sample, untouched
+    # another judge can neither edit nor archive this judge's copy, nor see or restore it once archived
+    assert other.post("/api/runs/r1-aa11/drop", json={"span": "s1"}).status_code == 404
+    assert other.post("/api/runs/r1-aa11/archive").status_code == 404
     assert c.post("/api/runs/r1-aa11/archive").status_code == 200  # their own copy may go, the sample may not
     assert c.post("/api/runs/r1/archive").status_code == 403
+    assert [r["id"] for r in c.get("/api/archive").json()["runs"]] == ["r1-aa11"]
+    assert other.get("/api/archive").json()["runs"] == []
+    assert other.post("/api/archive/r1-aa11/restore").status_code == 404
+    assert c.post("/api/archive/r1-aa11/restore").status_code == 200
 
 
 def test_sign_in_gives_each_browser_a_judge_id(tmp_path, hosted_env):

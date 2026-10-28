@@ -259,6 +259,8 @@ def create_app(root: Path) -> FastAPI:
         their first edit, runs/<id>-<judge>), so one judge's edits never become the next judge's opening version."""
         d = st.run_dir(run_id)
         if not is_sample(d):
+            if budget is not None and owner(d) != judge_of(request):
+                raise HTTPException(404, "no such run")  # another judge's project
             return run_id
         judge = judge_of(request)
         mine = f"{run_id}-{judge}"
@@ -882,18 +884,24 @@ def create_app(root: Path) -> FastAPI:
         """The logs a run left next to its folder (runs/014.stdout.log, runs/002_300s.log): they move with it."""
         return [p for p in folder.glob(f"{run_id}.*log") if p.is_file() and p.name.split(".")[0] == run_id]
 
+    def judges(d: Path, request: Request) -> bool:
+        """On the hosted demo a judge archives, lists and restores only their own projects."""
+        return budget is None or owner(d) == judge_of(request)
+
     @app.get("/api/archive")
-    def archived():
-        return {"runs": list_runs(st.runs / ARCHIVE)}
+    def archived(request: Request):
+        return {"runs": [r for r in list_runs(st.runs / ARCHIVE) if judges(st.runs / ARCHIVE / r["id"], request)]}
 
     @app.post("/api/runs/{run_id}/archive")
-    def archive(run_id: str):
+    def archive(run_id: str, request: Request):
         """Move runs/<id> (and its side logs) to runs/_archive/<id>: off the project list, restorable, nothing deleted."""
         d = st.run_dir(run_id)
         if st.busy(run_id):
             raise HTTPException(409, f"{st.jobs[run_id].label} is still running on this run")
         if is_sample(d):
             raise HTTPException(403, "the sample projects stay on the demo server for everyone")
+        if not judges(d, request):
+            raise HTTPException(404, "no such run")
         dest = st.runs / ARCHIVE / run_id
         if dest.exists():
             raise HTTPException(409, f"runs/{ARCHIVE}/{run_id} already exists: restore or rename that one first")
@@ -905,11 +913,11 @@ def create_app(root: Path) -> FastAPI:
         return {"archived": run_id}
 
     @app.post("/api/archive/{run_id}/restore")
-    def restore(run_id: str):
+    def restore(run_id: str, request: Request):
         if not SAFE_NAME.match(run_id):
             raise HTTPException(404, "no such run")
         src = st.runs / ARCHIVE / run_id
-        if not (src / "run.json").is_file():
+        if not (src / "run.json").is_file() or not judges(src, request):
             raise HTTPException(404, f"no archived run {run_id}")
         if (st.runs / run_id).exists():
             raise HTTPException(409, f"runs/{run_id} exists again: rename one of the two first")
