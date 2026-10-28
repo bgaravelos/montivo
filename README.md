@@ -19,7 +19,7 @@ the loop.
 | Ears and clock | **Muse Voice Transcribe 1.0** | one streaming diarization call per clip: turns, speakers and word-level timings from the delta stream |
 | Camera operator | **SAM 3.1** | tracks the speaker's head (5 fps) for the 9:16 reframe and the person plus any callout concept per frame over raw SSE |
 | Art department | **Muse Image 1.0** | title card and thumbnail |
-| Hands | ffmpeg + Pillow | proxies, audio, trims, crop path, caption and callout overlays, loudness, H.264 |
+| Hands | ffmpeg + Pillow | proxies, audio, trims, crop path, caption and callout overlays, the music bed and its ducking, loudness, H.264 |
 
 Every runtime model is a Meta model. Every call's request and response JSON lands in the run folder next to a
 ledger of tokens, dollars and seconds per stage.
@@ -173,7 +173,12 @@ the title card off or on ($0) or gives it new words (one Muse Image call, $0.01)
 captions; dragging a clip's body on the video track moves it (the reviewer's reorder op, the cuts that now meet
 tightened again, roles by position); the Speakers panel shows every Voice speaker with the head the speaker map
 gave it and every SAM head as a thumbnail, and pins another head for a speaker (EDL `reframe_speaker_ids`). All three
-are `python -m montivo.human text | reorder | pin` and render the next version. The Transcript view edits like a
+are `python -m montivo.human text | reorder | pin` and render the next version. The Music panel puts a music bed
+under the speech: eight CC0 tracks from OpenGameArt bundled in `montivo/music/` as loops (lo-fi, hip hop, funk,
+city-pop, acoustic, ukulele, new jack swing; authors and pages in the README there), so no model and no licence fee is
+involved; a preview of each loop, the level where nobody speaks (default -20 LUFS) and how far it drops
+while anyone speaks (default -12 dB), staged into one version ($0, `python -m montivo.human music RUN --track ID
+[--level -20] [--duck -12] | --off`); the panel shows what the render measured, the speech's level over the bed. The Transcript view edits like a
 document: click or drag over words (Shift-click extends) and press Backspace; the confirm shows the words, the seconds
 and what happens to each clip, and the selection becomes one version through the engine's own ops: a whole clip is
 dropped, words at a clip's start or end are trimmed like a timeline drag (reviewer rules), and words inside a clip
@@ -226,7 +231,8 @@ montivo run footage.mp4 --brief "..." --out runs/001
   render   ffmpeg from the SOURCE: 1.5 s title segment with a fade, then frame-aligned segments, sendcmd-driven crop, overlays
            burned in after the scale, 1080x1920 H.264; audio cut in one pass, 1.5 s of silence in front, two-pass loudness
            (measure, then one fixed gain to -14 LUFS, a 4x oversampled limiter when the peaks need it) -> cut_v1.mp4,
-           measured again with ebur128
+           measured again with ebur128; with EDL `music` a bundled loop under the normalised speech, ducked along the
+           Voice words in cut time, the mix normalised again (-14 LUFS, true peak of the AAC file under -1 dBTP)
   review   (--review) Spark 1.3 watches cut_vN blind -> rubric scores + fix ops -> EDL patch -> edl_vN+1 -> render cut_vN+1, repeat
 montivo render runs/001 --out cut_v3.mp4   re-render from edl_v1.json + voice.json + tracks, ffmpeg only (the title card is
                                            generated once if missing, --no-title to skip it)
@@ -572,6 +578,18 @@ loudnorm figures and the ebur128 measurement of the finished file).
   -18.2, ktb v1 -17.8 / -6.7 / -17.8; the longest pause (1.0 s) -17.8 / -17.5 / -17.7 (012), -17.1 / -16.9 / -17.1 (ktb v2),
   -17.7 / -18.0 / -17.6 (ktb v1). The new gain is flat on quiet frames (+15.2 dB median and 90th percentile); the limiter
   takes more than 1 dB off 8 to 9% of the speech frames (5th percentile 1.6 to 1.9 dB). A/V lengths match (44.667 s).
+- Music bed (28/10, $0, a throwaway copy of run 015 v5, 37.9 s). The bed is ducked by a `volume` envelope from the Voice
+  words in cut time (down 0.15 s before a word, back up 0.45 s after, pauses under 0.8 s stay down), not by a sidechain
+  compressor: the duck is exact, the same on every render and testable offline. The speech is normalised first, the
+  bed mixed in, the mix normalised again. Peaks: the first mix measured -1.95 dBTP as PCM and -0.5 dBTP as AAC (the
+  encode overshot on a plosive at 0.97 s), so the render now measures the AAC file and runs the pass again with TP
+  lowered by the overshoot: -2.2 dBTP after one retry. With the eight CC0 tracks at the defaults (-20 / -12), one version
+  each: -14.0 LUFS, -1.7 to -2.0 dBTP, the speech 15.8 to 17.8 dB (RMS) over the bed as the render measures it (the
+  speech stem against the bed alone); a first set of synthesised loops gave 14 to 17 dB and was dropped for its sound.
+  Hand-checked in 3 s windows: 14 to 17 dB at -20, 11 to 14 dB at -18, 17 to 20 dB at -22. Run 015's cut has no pause of 0.8 s and no title card, so the bed stays down for the whole cut;
+  it rises only in longer pauses and under a title card. The review listens to the speech stem the render keeps
+  (`render/cut_vN.speech.m4a`) for silencedetect and Voice on the cut, since the bed would fill every silence gap, and
+  tells the reviewer the music is there on purpose.
   Captions: "Hi." showed 0.15 s and "Meta models" 0.24 s on run 012 (0.24 s on ktb too). A line that would be up under
   0.4 s joins a neighbour of the same phrase when they fit on one line (4 words, frame width); neither could ("Hi." ends a
   sentence, "then the four" + "Meta models" is 5 words and "four Meta models" too wide), so both are held 0.4 s and the
@@ -610,7 +628,7 @@ loudnorm figures and the ebur128 measurement of the finished file).
 |---|---|
 | 26/10 evening (kickoff day) | engine skeleton, run to `edl_v1.json` with a ledger; reframe and render to `cut_v1.mp4`; kill test (a) on the NASA clip; captions, callouts, the Muse Image title card, loudness; the blind review loop; kill test (b) 3 of 3 in 3 of 3 |
 | 27/10 | the edge pass (loops 76 to 100 and 65 to 85); two-pass loudness and a minimum caption duration; a second source (run 013) and its three fixes; SAM at 5 fps for every concept; the API and the review room, then the NLE editor with trim by drag; the bundled caption font and CI; speaker to head mapping; the Open Weight planner; punch-ins, then their switch, markers and removal in the editor; the hook A/B; the brand (logo, tokens in the editor and the render, social preview, title and end cards, logo sting) |
-| 28/10 | the hosted demo on Modal and its first upload; the Codex review fixes; caption looks and the canvas drag; the Export page with its pre-flight; style by prompt; saved looks; the Spark cover; Feed 4:5 and Square 1:1 exports |
+| 28/10 | the hosted demo on Modal and its first upload; the Codex review fixes; caption looks and the canvas drag; the Export page with its pre-flight; style by prompt; saved looks; the Spark cover; Feed 4:5 and Square 1:1 exports; a music bed with ducking (eight CC0 tracks from OpenGameArt) |
 | 28/10 to 4/11 | runs on more footage, the planner A/B, polish, the demo video, the submission |
 
 Design rules fixed on 26/10:
@@ -644,4 +662,4 @@ during the event, on top of `montivo` (it plants three faults in a run's EDL and
 
 ## Licence
 
-MIT. Built by Vasileios (Billy) Gkaravelos, Athens.
+MIT. Built by Vasileios (Billy) Gkaravelos, Athens. The music beds in `montivo/music/` are CC0 (see the README there).

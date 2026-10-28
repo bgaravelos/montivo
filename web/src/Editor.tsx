@@ -6,6 +6,7 @@ import { ExportPage } from "./Export";
 import { childOf, cutAsk, flatWords, layout, parentOf, projectName, type CutAsk, type WordSel } from "./edit";
 import { Icon } from "./icons";
 import { Inspector, type PunchAsk } from "./Inspector";
+import { MusicPanel } from "./Music";
 import { ProgressInline } from "./Progress";
 import { GUIDE_NAME, GUIDES, SafeArea, type Guide } from "./SafeArea";
 import { CaptionsPanel, MediaPanel, SpeakersPanel, TextPanel, VersionsPanel } from "./Panels";
@@ -15,7 +16,7 @@ import { Timeline, ZOOM_MAX, ZOOM_MIN, type ClipMenu, type MoveAsk, type TrimAsk
 import type { LogLine, RunState } from "./types";
 
 type Props = { id: string; replay: number; go: (hash: string) => void };
-type PanelId = "assistant" | "media" | "captions" | "style" | "text" | "speakers" | "versions";
+type PanelId = "assistant" | "media" | "captions" | "style" | "text" | "music" | "speakers" | "versions";
 type Dialog = { kind: "delete"; span: string } | { kind: "words"; ask: CutAsk } | { kind: "trim"; ask: TrimAsk } | { kind: "move"; ask: MoveAsk } | { kind: "export" } | { kind: "ledger" } | { kind: "keys" };
 
 const PANELS: { id: PanelId; label: string; icon: string }[] = [
@@ -24,6 +25,7 @@ const PANELS: { id: PanelId; label: string; icon: string }[] = [
   { id: "captions", label: "Captions", icon: "captions" },
   { id: "style", label: "Style", icon: "style" },
   { id: "text", label: "Text", icon: "text" },
+  { id: "music", label: "Music", icon: "music" },
   { id: "speakers", label: "Speakers", icon: "speakers" },
   { id: "versions", label: "Versions", icon: "versions" },
 ];
@@ -294,6 +296,10 @@ export function Editor({ id, replay, go }: Props) {
         {panel === "text" && (
           <TextPanel state={state} v={v} t={t} next={next} canEdit={canEdit} onSeek={seek}
             onApply={(edit) => { setPanel("assistant"); act("text", { ...edit, from: v?.n }); }} />
+        )}
+        {panel === "music" && (
+          <MusicPanel v={v} next={next} canEdit={canEdit}
+            onApply={(edit) => { setPanel("assistant"); act("music", { ...edit, from: v?.n }); }} />
         )}
         {panel === "speakers" && (
           <SpeakersPanel id={id} v={v} next={next} canEdit={canEdit}

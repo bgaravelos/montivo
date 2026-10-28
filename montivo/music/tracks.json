@@ -1,0 +1,153 @@
+{
+  "tracks": [
+    {
+      "id": "chill_lofi",
+      "name": "Chill Lofi",
+      "mood": "lo-fi keys and soft drums",
+      "file": "chill_lofi.m4a",
+      "loop_s": 97.216,
+      "lufs": -15.6,
+      "true_peak_dbtp": 0.1,
+      "licence": "CC0-1.0",
+      "author": "omfgdude (loop edit by qubodup)",
+      "source": "https://opengameart.org/content/chill-lofi-inspired-loop-edit",
+      "source_file": "chilllofir-loop.ogg",
+      "cut": {
+        "whole": true
+      }
+    },
+    {
+      "id": "lofi_hip_hop",
+      "name": "Lofi Hip Hop",
+      "mood": "lo-fi hip hop beat",
+      "file": "lofi_hip_hop.m4a",
+      "loop_s": 79.99,
+      "lufs": -23.4,
+      "true_peak_dbtp": -5.1,
+      "licence": "CC0-1.0",
+      "author": "omfgdude",
+      "source": "https://opengameart.org/content/lofi-hip-hop",
+      "source_file": "lofihiphop.ogg",
+      "cut": {
+        "start_s": 0.293,
+        "loop_s": 79.99,
+        "xfade_s": 0.25,
+        "match": 0.352
+      }
+    },
+    {
+      "id": "funky_jam",
+      "name": "Funky Jam",
+      "mood": "funky hip hop jam",
+      "file": "funky_jam.m4a",
+      "loop_s": 60.71,
+      "lufs": -21.7,
+      "true_peak_dbtp": -8.4,
+      "licence": "CC0-1.0",
+      "author": "omfgdude",
+      "source": "https://opengameart.org/content/funky-hip-hop-lofi-jam",
+      "source_file": "CVP701Jam_0.ogg",
+      "cut": {
+        "start_s": 1.402,
+        "loop_s": 60.71,
+        "xfade_s": 0.25,
+        "match": 0.277
+      }
+    },
+    {
+      "id": "midnight_cruiser",
+      "name": "Midnight Cruiser",
+      "mood": "upbeat city-pop drive",
+      "file": "midnight_cruiser.m4a",
+      "loop_s": 76.04,
+      "lufs": -13.1,
+      "true_peak_dbtp": -0.2,
+      "licence": "CC0-1.0",
+      "author": "Zane Little Music",
+      "source": "https://opengameart.org/content/midnight-cruiser",
+      "source_file": "midnight_cruiser_0.mp3",
+      "cut": {
+        "start_s": 0.017,
+        "loop_s": 76.04,
+        "xfade_s": 0.25,
+        "match": 0.653
+      }
+    },
+    {
+      "id": "apple_cider",
+      "name": "Apple Cider",
+      "mood": "cozy acoustic",
+      "file": "apple_cider.m4a",
+      "loop_s": 55.8,
+      "lufs": -16.1,
+      "true_peak_dbtp": -0.1,
+      "licence": "CC0-1.0",
+      "author": "Zane Little Music",
+      "source": "https://opengameart.org/content/apple-cider",
+      "source_file": "apple_cider.ogg",
+      "cut": {
+        "start_s": 0.0,
+        "loop_s": 55.8,
+        "xfade_s": 0.25,
+        "match": 0.489
+      }
+    },
+    {
+      "id": "ukulele",
+      "name": "Island Ukulele",
+      "mood": "happy ukulele",
+      "file": "ukulele.m4a",
+      "loop_s": 80.0,
+      "lufs": -18.5,
+      "true_peak_dbtp": -1.7,
+      "licence": "CC0-1.0",
+      "author": "Tarush Singhal",
+      "source": "https://opengameart.org/content/happy-ukelele-island-surfing-theme",
+      "source_file": "ukele.mp3",
+      "cut": {
+        "start_s": 0.022,
+        "loop_s": 80.0,
+        "xfade_s": 0.25,
+        "match": 0.481
+      }
+    },
+    {
+      "id": "raspberry_jam",
+      "name": "Raspberry Jam",
+      "mood": "new jack swing, funky",
+      "file": "raspberry_jam.m4a",
+      "loop_s": 66.28,
+      "lufs": -13.2,
+      "true_peak_dbtp": 3.1,
+      "licence": "CC0-1.0",
+      "author": "congusbongus",
+      "source": "https://opengameart.org/content/raspberry-jam",
+      "source_file": "raspberry_jam.ogg",
+      "cut": {
+        "start_s": 0.011,
+        "loop_s": 66.28,
+        "xfade_s": 0.25,
+        "match": 0.604
+      }
+    },
+    {
+      "id": "cup_of_tea",
+      "name": "A Cup of Tea",
+      "mood": "mellow lo-fi",
+      "file": "cup_of_tea.m4a",
+      "loop_s": 68.57,
+      "lufs": -14.2,
+      "true_peak_dbtp": 0.6,
+      "licence": "CC0-1.0",
+      "author": "TAD",
+      "source": "https://opengameart.org/content/lofi-compilation",
+      "source_file": "A_cup_of_tea_0.mp3",
+      "cut": {
+        "start_s": 0.041,
+        "loop_s": 68.57,
+        "xfade_s": 0.25,
+        "match": 0.457
+      }
+    }
+  ]
+}

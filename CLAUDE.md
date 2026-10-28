@@ -389,8 +389,7 @@ behind the caption rows), `look.face_note` (median head rows from the EDL); `set
 a fixed top on the face -> auto. 015-style v8: upper, 2 words, yellow, auto from 1200, off the face; $0.008-0.010 each.
 Saved looks (28/10, $0): GET /api/looks `saved`, POST /api/looks/saved {name, look} (same name replaces, 24 max),
 DELETE /api/looks/saved/{id}; `<root>/looks/saved.json` (git-ignored; per judge on the hosted demo); "Your looks" row
-+ Save look in the Style panel. Music bed is on branch `music-bed` (f1dd64b, its own session): Billy approved the
-rest but not the synth loops (28/10): better loops first in that session, then merge + `make web`.
++ Save look in the Style panel.
 Spark cover (28/10, $0.018): `engine/cover.py` (prompt on the review copy with the clock, the review's file_id reused
 else a new review copy uploaded, moments outside the cut or on the title dropped, `settle` = sharpest frame +-0.25 s by
 edge variance in the face band), `python -m montivo.export RUN --version N --suggest-cover` -> `cover_vN.json`,
@@ -410,6 +409,24 @@ the grid crop the 3:4 middle (`grid_crop`); POST /export/bundle and /preview tak
 `look.layout`, no render). Export page: Feed 4:5 and Square 1:1 cards, cover still per aspect, grid bands at the sides.
 Checked keyless in the browser pane on a throwaway copy of 015 (removed): 4:5 28 lines below the head, callouts above it;
 1:1 27 below, 1 above; the 1:1 bundle in 12 s.
+Music bed (28/10, $0, merged from branch `music-bed`): EDL `music` = {"track", "level_db" -20, "duck_db" -12} (absent = none,
+`engine/music.py` normalize_music); eight CC0 tracks from OpenGameArt in `montivo/music/` (chill_lofi, lofi_hip_hop,
+funky_jam, midnight_cruiser, apple_cider, ukulele, raspberry_jam, cup_of_tea; AAC .m4a loops 55-97 s, `tracks.json` with
+LUFS, author, source page; README there). Downloaded on Billy's go (28/10, he rejected a first set of synthesised loops;
+FreePD.com is closed); `montivo/music/build.py DOWNLOADS_DIR` cuts them (lead-in trimmed, loop point by onset-envelope
+match to the first 8 s, 0.25 s crossfade; Chill Lofi is a loop edit kept whole). No model. `render_audio` keeps the normalised speech as a
+float WAV, renders the bed (looped, gain to level_db, a `volume` expression ducking along the Voice words in cut time:
+-0.15 s attack, +0.45 s release, pauses < 0.8 s stay ducked; audio.wav speech runs without words), mixes, normalises the
+mix again and measures the AAC file's own true peak (the first mix: -1.95 dBTP PCM, -0.5 AAC), re-running with a lower TP
+up to 2 times (`render.loudnorm` encoded_tp / tp_retries, the speech pass in `loudnorm.speech`); `render.music` records the
+bed, the ducked stretches and `measured` (speech vs bed RMS: margin_db). The speech stem stays as
+`render/<cut>.speech.m4a`: `review.speech_audio` gives it to silencedetect and Voice on the cut, and the facts tell the
+reviewer the music is on purpose. `python -m montivo.human music RUN --track ID [--level] [--duck] | --off` -> next
+edl_vN; review patches and hook keep it (deep copy), replan carries it. GET `/api/music`, `/api/music/{id}` (the loop for
+the preview), POST `/api/runs/{id}/music`; the Music panel in the rail (`web/src/Music.tsx`). Run 015 copy (deleted):
+one version per track at -20 / -12: -14.0 LUFS, -1.7 to -2.0 dBTP, speech 15.8-17.8 dB over the bed; 015's cut never
+pauses 0.8 s, so the bed stays ducked throughout. Checked keyless in the browser (track change, music off, previews);
+Billy listened to all eight under his 015 cut and kept all eight (commits f1dd64b, 2a47ff5).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

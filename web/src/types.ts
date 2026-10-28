@@ -53,6 +53,7 @@ export type Version = {
   callouts: { span: string; text: string; t_in: number; t_out: number; box: number[] | null; placement: string | null;
     head_box: number[] | null; over_face: boolean }[]; review: Review | null;
   look: Look | null; // the caption look this version was rendered with (graphics.normalize_look)
+  music: (MusicSetting & { margin_db: number | null; ducked_s: number | null }) | null; // the bed under the speech (engine/music.py)
   caption_lines: CaptionLine[]; caption_style: CaptionStyle | null; caption_style_note: string | null; bytes: number | null;
   punch: boolean; punch_skip: string[]; punch_ins: PunchIn[];
   speaker_pins: Record<string, string>; // reframe_speaker_ids: Voice speaker -> the head the crop follows (a human pin)
@@ -76,6 +77,12 @@ export type Look = {
   stroke_w: number; shadow: boolean; active: "pill" | "color" | "karaoke" | "none"; active_fg: string; active_bg: string;
   highlight: string; box: string; position: "auto" | "fixed"; top: number; callout_bg: string; callout_fg: string;
   highlight_add: string[]; highlight_off: string[];
+};
+/** A music bed (EDL `music`): a bundled track, its level where nobody speaks (LUFS) and the drop under speech (dB). */
+export type MusicSetting = { track: string; level_db: number; duck_db: number };
+export type MusicInfo = {
+  tracks: { id: string; name: string; mood: string; loop_s: number; licence: string; author: string; source: string; url: string }[];
+  default: { level_db: number; duck_db: number }; level_range: [number, number]; duck_range: [number, number];
 };
 export type SavedLook = { id: string; name: string; look: Look; saved: string };
 export type LooksInfo = { presets: { id: string; name: string; look: Look }[]; fonts: { id: string; name: string }[]; default: Look; saved: SavedLook[] };

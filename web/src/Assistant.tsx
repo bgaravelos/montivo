@@ -119,6 +119,9 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
         : o.action === "text" ? "Edit the title card and callouts."
         : o.action === "reorder" ? `Move clip ${f?.target ?? ""}${(f?.args as { before?: string | null } | null)?.before ? ` before ${(f!.args as { before: string }).before}` : " to the end"}.`
         : o.action === "cut" ? `Delete words in ${[...new Set((o.fixes ?? []).map((x) => x.target))].join(", ")}.`
+        : o.action === "music" ? (f?.op === "music_off" ? "Take the music out." : (() => {
+          const m = (f?.args as { music?: { track: string; level_db: number } } | null)?.music;
+          return m ? `Music: ${m.track.replace("_", " ")} at ${m.level_db} LUFS.` : "Put music under the speech."; })())
         : o.action === "pin" ? `Follow ${(f?.args as { head?: string | null } | null)?.head != null ? `head ${(f!.args as { head: string }).head}` : "the speaker map"} when speaker ${f?.target ?? ""} talks.`
         : (o.instruction ?? "Ask Montivo.");
       out.push({ who: "you", text: what, chips: [`v${o.from}`], v: v.n });

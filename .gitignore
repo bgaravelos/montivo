@@ -18,11 +18,12 @@ footage/
 *.m4a
 *.png
 *.jpg
-# except the brand files and the UI's icons
+# except the brand files, the UI's icons and the bundled music beds
 !assets/brand/**/*.png
 !assets/brand/**/*.mp4
 !web/public/*.png
 !montivo/server/static/*.png
+!montivo/music/*.m4a
 
 # research scripts keep their own results and venv
 experiments/results/

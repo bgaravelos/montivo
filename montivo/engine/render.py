@@ -18,6 +18,11 @@ Finishing (evening 3), still one video encode per segment: caption lines and cal
 (captions.py / graphics.py) burned in with `overlay` after the crop and scale, each gated by its segment-local time;
 the title card (image.py) is its own 1.5 s segment in front, with a short fade to black, and the audio gets the same
 1.5 s of silence in front before loudnorm.
+
+Music (EDL `music`, engine/music.py): the normalised speech is kept as a float WAV, a bundled loop is ducked along the
+Voice words in cut time, the two are mixed and the mix goes through the same two-pass loudness, then the AAC file's own
+true peak is measured and the pass runs again with a lower TP while the encode overshoots -1 dBTP. The speech alone is
+kept as render/<cut>.speech.m4a for the review's silences and heard words.
 """
 from __future__ import annotations
 
@@ -35,6 +40,7 @@ from .api import dump_json
 from .captions import Overlay, build_overlays
 from .edges import Audio
 from .frame import FRAME_916, Frame, frame_for
+from .music import normalize_music
 from .punch import plan_punches, zoom_filter
 from .reframe import ReframeParams, SegmentPath, plan_segment
 from .speakers import follow_ids
@@ -52,6 +58,8 @@ LIMIT_MARGIN_DB = 0.5  # the limiter ceiling sits this far under TP, room for in
 LIMIT_RATE = 192000  # the limiter runs 4x oversampled, so it catches true peaks, not only sample peaks
 LIMIT_ATTACK_MS, LIMIT_RELEASE_MS = 5.0, 50.0
 LIMIT_TRIES = 3
+ENCODED_TP_MAX = -1.0  # the music mix's true peak, measured on the AAC file itself
+ENCODE_TRIES, ENCODE_MARGIN_DB = 2, 0.3
 X264 = ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", "-video_track_timescale", "90000",
         "-map_metadata", "-1", "-movflags", "+faststart"]
 
@@ -284,21 +292,64 @@ def _audio_graph(source_graph: str, chain: str) -> str:
     return source_graph + (f",{chain}" if chain else "") + "[a]"
 
 
-def _run_audio(source: Path, graph: str, out: Path | None) -> str:
-    """One ffmpeg pass over the source with an audio graph ending in [a]; to AAC in `out`, or measure only (None)."""
-    tail = (["-c:a", "aac", "-b:a", "192k", "-ar", str(AUDIO_RATE), "-ac", "2", "-map_metadata", "-1", str(out)]
-            if out else ["-f", "null", "-"])
-    proc = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-nostats", "-loglevel", "info", "-i", str(source),
+def _run_audio(source: Path | list[Path], graph: str, out: Path | None) -> str:
+    """One ffmpeg pass over the input(s) with an audio graph ending in [a]; to `out` (AAC, or float PCM for a .wav),
+    or measure only (None)."""
+    if out is None:
+        tail = ["-f", "null", "-"]
+    elif out.suffix == ".wav":
+        tail = ["-c:a", "pcm_f32le", "-ar", str(AUDIO_RATE), "-ac", "2", "-map_metadata", "-1", str(out)]
+    else:
+        tail = ["-c:a", "aac", "-b:a", "192k", "-ar", str(AUDIO_RATE), "-ac", "2", "-map_metadata", "-1", str(out)]
+    inputs = [x for p in (source if isinstance(source, list) else [source]) for x in ("-i", str(p))]
+    proc = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-nostats", "-loglevel", "info", *inputs,
                            "-filter_complex", graph, "-map", "[a]", *tail], capture_output=True, text=True)
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg audio failed ({proc.returncode})\n{proc.stderr[-2000:]}")
     return proc.stderr
 
 
+def _loudness(source: Path | list[Path], joined: str, out: Path, targets: dict | None = None) -> dict:
+    """The two-pass loudness (normalize_plan) of the audio graph `joined` over source, written to out; the record."""
+    tg = targets or LOUDNORM
+    first = parse_loudnorm(_run_audio(source, _audio_graph(joined, loudnorm_filter(tg["LRA"], targets=tg)), None))
+    if first is None:
+        raise RuntimeError("loudnorm measuring pass printed no JSON")
+    rec, chain = normalize_plan(first, lambda pre: parse_loudnorm(_run_audio(
+        source, _audio_graph(joined, ",".join(x for x in (pre, loudnorm_filter(tg["LRA"], targets=tg)) if x)), None)), tg)
+    final = parse_loudnorm(_run_audio(source, _audio_graph(joined, chain), out)) or {}
+    rec["normalization_type"] = final.get("normalization_type")
+    rec["output"] = {k: final.get(k) for k in ("output_i", "output_tp", "output_lra", "output_thresh")}
+    if rec["normalization_type"] != "linear":
+        rec["mode"] = "dynamic"
+    return rec
+
+
+def _loudness_encoded(source: Path | list[Path], joined: str, out: Path) -> dict:
+    """_loudness, then the true peak of the encoded AAC itself: the encode overshoots on hard transients (the music
+    mix of run 015 measured -1.95 dBTP as PCM and -0.5 as AAC), so while the file is over ENCODED_TP_MAX the pass runs
+    again with TP lowered by the overshoot (ENCODE_TRIES times at most). `encoded_tp` and `tp_retries` record it."""
+    tg, tries = dict(LOUDNORM), 0
+    while True:
+        rec = _loudness(source, joined, out, tg)
+        tp = (measure_loudness(out) or {}).get("true_peak_dbtp")
+        if tp is None or tp <= ENCODED_TP_MAX or tries >= ENCODE_TRIES:
+            break
+        tries += 1
+        tg["TP"] = round(tg["TP"] - (tp - ENCODED_TP_MAX) - ENCODE_MARGIN_DB, 2)
+    rec["encoded_tp"], rec["tp_retries"] = tp, tries
+    return rec
+
+
 def render_audio(source: Path, segments: list[Segment], render_dir: Path, lead_s: float = 0.0,
-                 loudnorm: bool = True) -> tuple[Path, dict | None]:
+                 loudnorm: bool = True, music: dict | None = None, words: list[dict] | None = None, audio=None,
+                 stem_name: str = "cut") -> tuple[Path, dict | None, dict | None]:
     """All segments' audio: atrim per segment, 20 ms fades, `lead_s` of silence in front (title card), concat, then
-    two-pass loudness (see the module docstring), AAC. Returns the file and a record of the loudness passes."""
+    two-pass loudness (see the module docstring), AAC. Returns the file, a record of the loudness passes and, with a
+    `music` bed (engine/music.py), the bed's record: the normalised speech is kept as a float WAV, the ducked bed is
+    rendered against the speech intervals (Voice `words`, else `audio`'s speech runs), the two are mixed and the mix
+    goes through the same two-pass loudness; the speech alone is kept as render/<stem_name>.speech.m4a (the review
+    measures silences and heard words on it) and the record carries the measured speech-vs-bed levels."""
     out = render_dir / "audio.m4a"
     fmt = f"aformat=sample_fmts=fltp:sample_rates={AUDIO_RATE}:channel_layouts=stereo"
     parts = []
@@ -312,20 +363,34 @@ def render_audio(source: Path, segments: list[Segment], render_dir: Path, lead_s
                      f"afade=t=in:st=0:d={AUDIO_FADE_S},afade=t=out:st={max(0.0, d - AUDIO_FADE_S):.6f}:d={AUDIO_FADE_S},{fmt}[a{i}]")
         labels.append(f"[a{i}]")
     joined = ";".join(parts) + ";" + "".join(labels) + f"concat=n={len(labels)}:v=0:a=1"
-    if not loudnorm:
-        _run_audio(source, _audio_graph(joined, ""), out)
-        return out, None
-    first = parse_loudnorm(_run_audio(source, _audio_graph(joined, loudnorm_filter(LOUDNORM["LRA"])), None))
-    if first is None:
-        raise RuntimeError("loudnorm measuring pass printed no JSON")
-    rec, chain = normalize_plan(first, lambda pre: parse_loudnorm(_run_audio(
-        source, _audio_graph(joined, ",".join(x for x in (pre, loudnorm_filter(LOUDNORM["LRA"])) if x)), None)))
-    final = parse_loudnorm(_run_audio(source, _audio_graph(joined, chain), out)) or {}
-    rec["normalization_type"] = final.get("normalization_type")
-    rec["output"] = {k: final.get(k) for k in ("output_i", "output_tp", "output_lra", "output_thresh")}
-    if rec["normalization_type"] != "linear":
-        rec["mode"] = "dynamic"
-    return out, rec
+    speech = render_dir / "speech.wav" if music else out
+    rec = None
+    if loudnorm:
+        rec = _loudness(source, joined, speech)
+    else:
+        _run_audio(source, _audio_graph(joined, ""), speech)
+    if not music:
+        return out, rec, None
+    from . import music as bed_mod
+    duration = round(lead_s + sum(s.duration for s in segments), 6)
+    intervals, src = bed_mod.speech_intervals(segments, words, lead_s, audio)
+    bed = render_dir / "music_bed.wav"
+    mrec = bed_mod.render_bed(music, duration, intervals, bed, AUDIO_RATE, fmt)
+    mrec["duck_source"] = src
+    mix = f"[0:a]{fmt}[s];[1:a]{fmt}[m];[s][m]amix=inputs=2:normalize=0:duration=first:dropout_transition=0"
+    if loudnorm:
+        mixed = _loudness_encoded([speech, bed], mix, out)
+        mixed["speech"] = rec
+        rec = mixed
+    else:
+        _run_audio([speech, bed], _audio_graph(mix, ""), out)
+    stem = render_dir / f"{stem_name}.speech.m4a"
+    _run_audio(speech, "[0:a]anull[a]", stem)
+    mrec["speech_stem"] = stem.as_posix()
+    mrec["measured"] = bed_mod.measure_windows(speech, bed, intervals, duration)
+    speech.unlink(missing_ok=True)
+    bed.unlink(missing_ok=True)
+    return out, rec, mrec
 
 
 def normalize_plan(first: dict, measure, targets: dict | None = None) -> tuple[dict, str]:
@@ -487,7 +552,19 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
                                 if seg.index in zooms else {})})
             log(f"render: seg {seg.index + 1} {seg.t_in:.3f}-{seg.t_out:.3f}s ({seg.frames} frames, {'+'.join(seg.span_ids)}) "
                 f"track {'/'.join(f'{p['speaker']}:{p['track_id']}' for p in path.pieces) if path.pieces else path.track_id} crop {path.crop_w}x{path.crop_h} x {min(path.xs)}..{max(path.xs)}, {len(ovs)} overlays")
-        audio, loud = render_audio(source, segments, render_dir, lead_s=title_s, loudnorm=loudnorm)
+        music = normalize_music(edl.get("music"))
+        if music and words is None:
+            vpath = run_dir / "voice" / "voice.json"
+            words = json.loads(vpath.read_text())["words"] if vpath.is_file() else None
+        audio, loud, bed = render_audio(source, segments, render_dir, lead_s=title_s, loudnorm=loudnorm, music=music,
+                                        words=words, audio=Audio.load(run_dir) if music else None,
+                                        stem_name=Path(out_name).stem)
+        if bed:
+            m = bed["measured"]
+            log(f"render: music {bed['name']} at {bed['level_db']} LUFS, ducked {bed['duck_db']} dB over "
+                f"{len(bed['ducked'])} speech stretches ({bed['duck_source']}); measured speech {m['speech_rms_db']} dB, "
+                f"bed under it {m['bed_under_speech_rms_db']} dB (margin {m['margin_db']} dB), bed in the open "
+                f"{m['bed_open_rms_db']} dB")
         out = mux(files, audio, run_dir / out_name, render_dir)
     measured = measure_loudness(out)
     size_mb = out.stat().st_size / 1e6
@@ -496,7 +573,7 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     edl["render"] = {"output": out.as_posix(), "aspect": frame.aspect, "width": frame.w, "height": frame.h, "duration_s": total, "segments": seg_info,
                      "title": {"png": title_png.as_posix(), "seconds": round(title_s, 4), "frames": title_frames,
                                "fade_out_s": TITLE_FADE_S, "text": edl.get("title_card_text", "")} if title_png else None,
-                     "loudnorm": loud, "loudness_ebur128": measured,
+                     "loudnorm": loud, "loudness_ebur128": measured, "music": bed,
                      "captions": len(edl.get("captions") or []), "callouts": len(edl.get("callouts") or []),
                      "audio": audio.as_posix(), "seconds": t.seconds, "bytes": out.stat().st_size}
     if edl_path:
@@ -504,6 +581,8 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     loud_note = f", {measured['integrated_lufs']} LUFS / {measured['true_peak_dbtp']} dBTP" if measured else ""
     if loud:
         loud_note += f" ({loud['mode']}" + (f", limiter +{loud['limiter']['gain_db']} dB" if loud["limiter"] else "") + ")"
+    if bed:
+        loud_note += f", music {bed['track']}"
     ledger.add(Entry(stage="render", model="ffmpeg", seconds=t.seconds, cost_usd=0.0,
                      note=f"{len(segments)} segments{' + title' if title_png else ''}, {total} s, "
                           f"{len(edl.get('captions') or [])} captions, {out.name} {size_mb:.1f} MB{loud_note}"))

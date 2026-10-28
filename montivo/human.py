@@ -12,6 +12,7 @@
     python -m montivo.human pin runs/014 --speaker A --head 3 (or --head none to drop the pin)
     python -m montivo.human edges runs/015
     python -m montivo.human style runs/015 [--look '{"preset": "box", "position": "fixed", "top": 1180}'] [--callout s5=120,300] [--callout s5=auto]
+    python -m montivo.human music runs/015 --track chill_lofi [--level -20] [--duck -12] (or --off)
 
 Each writes the next edl_vN.json (N = one past the highest version in the run folder, so no version is ever
 overwritten) with a `patches` entry marked `source: "human"`, renders cut_vN.mp4 and, with --review, runs the blind
@@ -28,6 +29,8 @@ trimmed like a timeline drag, words inside a clip split it in two; $0. `edges` r
 Voice word boundaries with today's rules, for a version made before a rule changed; $0. `style` sets the look of the
 captions and callouts (graphics.normalize_look: a preset, font, colours, words per line, the caption position auto or
 fixed) and pins callouts where a person dragged them on the canvas (span `callout_xy`), or back to auto; $0.
+`music` puts a bundled music bed under the speech, ducked while anyone talks (engine/music.py, EDL `music`), changes
+its track or level, or takes it out; $0.
 """
 from __future__ import annotations
 
@@ -45,6 +48,7 @@ from .engine.api import dump_json
 from .engine.edges import Audio, Words, reset_edges, tighten_edges
 from .engine.edl import build_edl, edl_summary, normalize_roles
 from .engine.graphics import Look, normalize_look
+from .engine.music import DUCK_DB as MUSIC_DUCK_DB, LEVEL_DB as MUSIC_LEVEL_DB, normalize_music
 from .engine.punch import parse_key
 from .engine.review import (REACH_S, Fix, _caption_at, _src_time, apply_fixes, cut_map, finalize, kept_elsewhere,
                             refresh_span, review_loop)
@@ -426,6 +430,53 @@ def style(run_dir: Path, look: dict | None = None, callouts: dict[str, list[floa
         new["patches"][-1]["instruction"] = prompt
         dump_json(edl_path, new)
     return _finish(run_dir, edl_path, n, passes, budget, ledger, log)
+
+
+def music_fix(edl: dict, track: str | None, level_db: float | None = None, duck_db: float | None = None) -> tuple[dict | None, dict]:
+    """The EDL's next `music` and the patch entry: track None = off; a level or duck left out keeps the current one
+    (else the defaults). Raises SystemExit for an unknown track, a value out of range or an edit that changes nothing."""
+    was = edl.get("music") or None
+    if track is None:
+        if level_db is not None or duck_db is not None:
+            raise SystemExit("--off takes no level")
+        if not was:
+            raise SystemExit("there is no music to take out")
+        return None, {"op": "music_off", "target": "audio", "issue": -1, "severity": "human",
+                      "note": f"music {was['track']} off"}
+    want = {"track": track,
+            "level_db": level_db if level_db is not None else (was or {}).get("level_db", MUSIC_LEVEL_DB),
+            "duck_db": duck_db if duck_db is not None else (was or {}).get("duck_db", MUSIC_DUCK_DB)}
+    try:
+        now = normalize_music(want)
+    except ValueError as e:
+        raise SystemExit(str(e))
+    try:
+        was = normalize_music(was)
+    except ValueError:
+        pass  # a hand-written music entry the bundled tracks no longer know: replaced as it is
+    if was and was == now:
+        raise SystemExit(f"the music is already {now['track']} at {now['level_db']:g} LUFS, ducked {now['duck_db']:g} dB")
+    changed = ", ".join(f"{k} {was.get(k)!r} -> {now[k]!r}" for k in now if was.get(k) != now[k]) if was else None
+    note = f"music {changed}" if changed else (f"music {now['track']} under the speech at {now['level_db']:g} LUFS, "
+                                              f"ducked {now['duck_db']:g} dB while anyone speaks")
+    return now, {"op": "music", "target": "audio", "issue": -1, "severity": "human", "args": {"music": now}, "note": note}
+
+
+def music(run_dir: Path, track: str | None, level_db: float | None = None, duck_db: float | None = None,
+          from_v: int | None = None, passes: int = 0, budget: float = 0.15) -> dict:
+    """A music bed under edl_v{from}'s speech, another track or level, or none -> edl_vN, rendered, $0 (ffmpeg only).
+    The EDL's `music` travels with later versions like `look` (review patches deep-copy the EDL, replan carries it)."""
+    log = RunLog(run_dir / "run.log")
+    from_v, edl, n = _new_version(run_dir, from_v)
+    now, fix = music_fix(edl, track, level_db, duck_db)
+    log(f"montivo music: {fix['note']} in edl_v{from_v} -> edl_v{n}")
+    new, _ = apply_fixes(edl, [], _words(run_dir))
+    if now:
+        new["music"] = now
+    else:
+        new.pop("music", None)
+    edl_path = _save(run_dir, new, n, from_v, "music", [fix], log)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
 
 
 def carry_callout_places(prev: dict, new: dict) -> list[str]:
@@ -842,6 +893,8 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
         new["reframe_speaker_ids"] = dict(prev["reframe_speaker_ids"])
     if prev.get("look"):
         new["look"] = dict(prev["look"])
+    if prev.get("music"):
+        new["music"] = dict(prev["music"])
     if pinned := carry_callout_places(prev, new):
         log(f"callout places carried from v{from_v}: " + ", ".join(repr(t) for t in pinned))
     carried = carry_caption_text(prev, new)
@@ -938,7 +991,14 @@ def main(argv: list[str] | None = None) -> int:
     sy.add_argument("--look", default=None, help='the look as JSON: {"preset": "box", "font": "anton", ...}')
     sy.add_argument("--callout", action="append", default=[], metavar="SPAN=X,Y", help="pin a callout (SPAN=auto unpins it)")
     sy.add_argument("--prompt", default=None, help="describe the look in words: one Spark call (about $0.008) picks it")
-    for p in (d, t, r, pu, c, tx, ro, pn, cu, ed, sy):
+    mu = sub.add_parser("music", help="a music bed under the speech, ducked while anyone talks -> edl_vN -> cut_vN ($0)")
+    mu.add_argument("run_dir", type=Path)
+    mg = mu.add_mutually_exclusive_group(required=True)
+    mg.add_argument("--track", default=None, help="a track id of montivo/music/tracks.json")
+    mg.add_argument("--off", action="store_true", help="take the music out")
+    mu.add_argument("--level", type=float, default=None, help="the bed's loudness in LUFS where nobody speaks (default -20)")
+    mu.add_argument("--duck", type=float, default=None, help="dB the bed drops while anyone speaks (default -12)")
+    for p in (d, t, r, pu, c, tx, ro, pn, cu, ed, sy, mu):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
         p.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
@@ -988,6 +1048,8 @@ def main(argv: list[str] | None = None) -> int:
         if a.prompt and look is not None:
             ap.error("give --look or --prompt, not both")
         out = style(a.run_dir, look, places, a.from_v, a.review, a.budget, prompt=a.prompt)
+    elif a.cmd == "music":
+        out = music(a.run_dir, None if a.off else a.track, a.level, a.duck, a.from_v, a.review, a.budget)
     elif a.cmd == "pin":
         out = pin(a.run_dir, a.speaker, None if a.head.lower() == "none" else a.head, a.from_v, a.review, a.budget)
     else:
