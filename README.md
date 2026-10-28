@@ -8,58 +8,87 @@
 
 # Montivo
 
-An agent-first video editor built on Meta's models. You hand it raw footage and a one-line brief; the agents
-watch it, pick the lines, cut on word boundaries, keep the speaker in a 9:16 frame, render, then review their own
-cut against a rubric and re-cut until the cut passes or a guard (budget, passes, a regression, a repeated fix) stops
-the loop.
+An agent-first video editor built on Meta's models. Give it spoken footage and a one-line brief: it picks the lines,
+cuts on word boundaries, keeps the speaker in a 9:16 frame and captions it, then **watches its own render, turns
+what is wrong into timed edits and renders again**, until the cut passes or a guard (budget, passes, a regression, a
+repeated fix) stops the loop. Every version stays visible, and every edit, the agent's or yours, can be undone.
+
+## See the correction
+
+Run 015, Billy's own 69 s talking head (about $0.30 for the run and its review loop):
+
+1. **Version 1 scored 68.** The blind reviewer, which gets the rendered video but never the plan, found the title card
+   sitting on 1.5 s of silence and a caption that read "Soundtracks me so" where Billy says "SAM tracks me so" (Muse
+   Voice had misheard it).
+2. **The agent fixed both itself.** The two issues came back with a time in the cut and a fix op; the patcher dropped
+   the card and retexted the line, rendered version 2 and reviewed it again: **81**.
+3. **A person fixed the rest.** The reviewer still flagged two captions where Voice misheard Billy; he retyped those
+   lines in the editor (four in all). Version 5 scores **87 with the measured checks clear** (`runs/015/review_v5.json`).
+
+The Loop view shows exactly that: each version's frame and score, and between two versions what made the second one,
+the reviewer's fix or a human edit, labelled. When a fix makes things worse the agent keeps the earlier cut: on a
+hosted test upload the reviewer's own hook swap scored 48 against 74, and the regression guard kept the 74.
+
+**Judges:** the hosted link and password are in the submission. Open a finished sample, press **Loop**, compare the
+issue, the fix and the result, then make an edit of your own. Details under [Try it](#try-it).
+
+## Built on Meta models
 
 | Role | Model | What it does |
 |---|---|---|
-| Eyes and judgement | **Muse Spark 1.3** | shot log and speaker map (`watch`), paper edit by turn id with verbatim words (`plan`), rubric review with fix ops (`review`) |
+| Eyes and judgement | **Muse Spark 1.3** | shot log and speaker map (`watch`), paper edit by turn id with verbatim words (`plan`), the blind rubric review with fix ops (`review`), the Ask Montivo router |
 | Open-weight planner | **Muse Spark Open** (on Baseten) | the paper edit (`plan`) when you pick it, in place of Spark 1.3: see [Open weight](#open-weight-muse-spark-open) |
-| Ears and clock | **Muse Voice Transcribe 1.0** | one streaming diarization call per clip: turns, speakers and word-level timings from the delta stream |
-| Camera operator | **SAM 3.1** | tracks the speaker's head (5 fps) for the 9:16 reframe and the person plus any callout concept per frame over raw SSE |
-| Art department | **Muse Image 1.0** | title card and thumbnail |
+| Ears and clock | **Muse Voice Transcribe 1.0** | turns, speakers and word timings of the footage, and each rendered cut transcribed again so the review can check its edge words |
+| Camera operator | **SAM 3.1** | tracks the speaker's head (5 fps) for the 9:16 reframe and the person plus any callout concept per frame; the cutout on a cover |
+| Art department | **Muse Image 1.0** | title card and B-roll stills |
 | Hands | ffmpeg + Pillow | proxies, audio, trims, crop path, caption and callout overlays, the music bed and its ducking, loudness, H.264 |
 
 Every runtime model is a Meta model. Every call's request and response JSON lands in the run folder next to a
 ledger of tokens, dollars and seconds per stage.
 
-## Open weight: Muse Spark Open
+## Evidence and limits
 
-**Where it runs.** One stage runs on Meta's open-weight model: the **plan**, the paper edit that picks the lines, their
-order, the hook and the callouts. Choose "Spark Open" in the planner menu on New project or in Ask Montivo (the hosted
-demo has it), or `--planner open` on `montivo run` / `montivo plan`. The call goes to Muse Spark Open
-(`meta-models/muse-spark-open-1026`) on Baseten Model APIs (`https://inference.baseten.co/v1`) as an OpenAI-compatible
-chat completion with the same prompt and the same strict JSON schema Spark 1.3 gets; its answer is logged in the
-run's ledger like any other call. Everything downstream (the EDL on Voice's word boundaries, the render, the blind
-review loop, the editor) is the same code for both planners.
+- **A development benchmark** (27/10): four fault types planted in three finished cuts, 28 blind reviews. 91 % of the
+  planted faults were flagged as blocker or major; 2 of 22 faulty cuts still passed; 3 of 4 reviews of clean cuts
+  passed. The checks and the planted faults were refined on these same cuts, so this is not a held-out error rate.
+- **Unseen footage does not always pass.** Re-run on 28/10 with that day's code, a 4-astronaut NASA clip (66 at best:
+  they talk over each other at every turn change), a USGS interview (68) and a multi-camera TEDx talk (70) improved or
+  held but never passed. Montivo shows a bounded correction loop you can inspect; it does not promise a publishable
+  cut on any footage.
+- **The reviewer and the planner share a model family.** Withholding the plan removes one source of bias, not all of
+  them; that is why measured checks (cut edges against the re-transcribed audio, the head inside the frame) can hold a
+  pass the reviewer would give.
 
-**Why that stage.** The plan is the one model call that needs no picture and no sound: it reads Muse Voice's turns and
-word timings and the shot log as text and answers in JSON. Watch and review stay on Spark 1.3 because they must see
-and hear the footage. We measured that too: in the reviewer benchmark (27/10, `tools/reviewer_bench.py`) Spark Open
-read the cut's frames but heard nothing, caught the planted faults as often as Spark 1.3 (82 %), but scored clean cuts
-15 to 20 points lower and never passed one, so it does not judge the cuts.
+The full table is under [Measured results](#measured-results).
 
-**Measured A/B, same footage, same brief** (run 012, Billy's 125 s talking head, `plan_compare_v1_v3.json`):
+## Try it
 
-| | Spark 1.3 | Spark Open |
-|---|---|---|
-| Spans, length (target 45 s) | 9, 44.6 s | 9, 45.3 s |
-| Words quoted verbatim, passages left unplaced | 100 %, 0 | 100 %, 0 |
-| Hook | "Hi. I'm Billy. I run a small digital marketing agency in Athens" | the same line |
-| Plan call cost and time | $0.050, 35.3 s | $0.012, 6.8 s |
+**Judges:** Montivo runs hosted for you, with our Meta key on the server. The link and the password are in our
+submission. Two finished projects open there, and you can upload your own clip (up to 90 s) and let the agent plan,
+cut, review and re-cut it; your edits go to your own copy, so every judge starts from the same samples. A shared
+budget caps the Meta model calls; past it, the finished projects and the $0 edits still work.
 
-Same hook and ending and 8 of 9 passages in common; Spark Open opened the body on "for the Meta Hackathon we are
-building Montivo" where Spark 1.3 kept a stumbling take. Its first cut then went through the same blind review and
-passed (88, 27/10). A second run, an Ask Montivo re-plan of run 015 to "about 30 seconds" on Spark Open,
-came back in 14 s for $0.011 and kept both callouts. Two runs are not a benchmark, but on this stage the open model
-plans as well as Spark 1.3 at about a quarter of the cost and five times the speed.
+Locally, without an API key:
 
-## Why it is different
+```bash
+make dev    # Python 3.12 venv, needs ffmpeg and ffprobe on the PATH
+make test   # the offline tests (recorded Voice and SAM streams, no network)
+```
 
-The AI editors we looked at (16 of them, 27/10) stop at the first cut. Montivo watches its own render the way a viewer would, finds what is wrong, fixes the
-edit and renders again:
+With a key (`MODEL_API_KEY`, dev.meta.ai), on your own footage:
+
+```bash
+make dev
+export MODEL_API_KEY=...
+.venv/bin/montivo run footage.mp4 --brief "A 40 second vertical reel: ..." --target 40 --review --out runs/001
+make ui
+```
+
+## How the loop works
+
+Montivo makes the correction loop visible: rendered video, timed issue, edit, new render. (Of the 16 AI video
+editors whose public pages we read on 27/10, none described reviewing its own render; that is a reading of their
+pages, not a test.) In detail:
 
 - **A blind reviewer.** Spark 1.3 gets the rendered vertical cut (with a clock burned in, because it sees about one
   frame per second and no timestamps), the brief, a rubric and four measured facts: the silences in the cut, where
@@ -69,7 +98,8 @@ edit and renders again:
 - **A pass the reviewer cannot give alone.** Muse Voice re-transcribes every cut and two measured checks run on it:
   a kept word at a cut edge that the cut no longer says, and the speaker's head outside the 9:16 frame for 0.5 s. A
   loud cut edge, a caption forced over the head, either check, or a reviewer blocker or major still open holds the
-  pass, and each measured fault becomes a fix of its own. The loop keeps a version that passes over a higher score
+  pass (two exceptions, both on record: brief coverage, since the planner reports a brief line the footage never
+  contains, and a caption a person retexted against the recording), and each measured fault becomes a fix of its own. The loop keeps a version that passes over a higher score
   that does not.
 - **Fix operations, not prose.** Every issue comes back with a time in the cut and one of nine fix ops (`move_cut`,
   `drop_span`, `extend_span`, `swap_hook`, `reorder`, `caption_fix`, `retime_callout`, `reframe_bias`, `none`). The
@@ -113,36 +143,47 @@ flowchart LR
 | Billy's own talking head, 125 s, a lean on camera, ums, a repeated take (run 012) | the full run in 242 s wall; the review loop took v1 from 76 to 100 and passed | $0.50 for the run, $0.06 for the loop |
 | The same clip with a deliberately broken v1: a cut inside a word, a caption over the face, a weak hook | the blind reviewer caught all three faults with a timestamp in 3 runs out of 3; the loop took it from 65 to 85 and passed | $0.08 for the test, $0.06 for the loop |
 | A public-domain USGS interview, 166 s, a noisy atrium, a second speaker, passers-by (run 013) | 62 to 68 to 72, no pass; it exposed three bugs the first clip never hit, all fixed (captions avoided every passer-by's head, a flagged title card stayed, a fast speaker's clipped words) | $0.78 |
-| Reviewer benchmark (27/10 night, today's reviewer with the measured checks and the pass gate): four fault types (a weak hook, a cut inside a word, a wrong caption, the head out of frame) planted in three finished cuts, 28 blind reviews | 91 % of the planted faults caught as blocker or major; 2 of 22 faulty cuts still passed (9 %); 3 of 4 reviews of clean cuts passed (75 %); the same cut reviewed twice differs by 4.3 points (SD) | $0.80 |
+| Reviewer benchmark (27/10 night, the reviewer as of that night, with the measured checks and the pass gate): four fault types (a weak hook, a cut inside a word, a wrong caption, the head out of frame) planted in three finished cuts, 28 blind reviews | 91 % of the planted faults caught as blocker or major; 2 of 22 faulty cuts still passed (9 %); 3 of 4 reviews of clean cuts passed (75 %); the same cut reviewed twice differs by 4.3 points (SD) | $0.80 |
+| Three unseen clips re-run with that day's code (28/10): NASA, 4 astronauts, one mic; the USGS interview; the TEDx talk below | no pass on any: NASA 58 to 66 (the astronauts talk over each other at turn changes), USGS 68, TEDx 62 to 70; the bugs they exposed are fixed | part of $1.67 for the day |
 | A TEDx clip uploaded through the hosted demo, 84 s, multi-camera, the speaker small in the wide shots | upload, run and loop in the container in 209 s: 72 to 76, no pass ($0.32); after a caption fix, a re-review (74) let the loop try the reviewer's swap_hook: that version scored 48 and the regression guard kept v2 ($0.07) | $0.39 |
 
 The first two rows were scored by the reviewer of 26/10, before the measured checks and the pass gate (27/10), and are
-not re-scored here. The benchmark is a small sample (`tools/reviewer_bench.py`, `runs/bench/results.md`): it says
-what the reviewer catches on these cuts, not a general error rate. A 150 s source comes to about $0.48 with the review
+not re-scored here. The benchmark is a small development sample (`tools/reviewer_bench.py`, `runs/bench/results.md`):
+the checks and the planted faults were refined on these cuts, so it says what the reviewer catches on them, not a
+general error rate. A 150 s source comes to about $0.48 with the review
 loop. Every number above is in the run's `ledger.json`; how each one was measured is under "Measured behaviour" below.
 
-## Try it
+## Open weight: Muse Spark Open
 
-**Judges:** Montivo runs hosted for you, with our Meta key on the server. The link and the password are in our
-submission. Two finished projects open there, and you can upload your own clip (up to 90 s) and let the agent plan,
-cut, review and re-cut it; your edits go to your own copy, so every judge starts from the same samples. A shared
-budget caps the Meta model calls; past it, the finished projects and the $0 edits still work.
+**Where it runs.** One stage runs on Meta's open-weight model: the **plan**, the paper edit that picks the lines, their
+order, the hook and the callouts. Choose "Spark Open" in the planner menu on New project or in Ask Montivo (the hosted
+demo has it), or `--planner open` on `montivo run` / `montivo plan`. The call goes to Muse Spark Open
+(`meta-models/muse-spark-open-1026`) on Baseten Model APIs (`https://inference.baseten.co/v1`) as an OpenAI-compatible
+chat completion with the same prompt and the same strict JSON schema Spark 1.3 gets; its answer is logged in the
+run's ledger like any other call. Everything downstream (the EDL on Voice's word boundaries, the render, the blind
+review loop, the editor) is the same code for both planners.
 
-Locally, without an API key:
+**Why that stage.** The plan is the one model call that needs no picture and no sound: it reads Muse Voice's turns and
+word timings and the shot log as text and answers in JSON. Watch and review stay on Spark 1.3 because they must see
+and hear the footage. We measured that too: in the reviewer benchmark (27/10, `tools/reviewer_bench.py`) Spark Open
+read the cut's frames but heard nothing, caught the planted faults as often as Spark 1.3 (82 %), but scored clean cuts
+15 to 20 points lower and never passed one, so it does not judge the cuts.
 
-```bash
-make dev    # Python 3.12 venv, needs ffmpeg and ffprobe on the PATH
-make test   # the offline tests (recorded Voice and SAM streams, no network)
-```
+**Measured A/B, same footage, same brief** (run 012, Billy's 125 s talking head, `plan_compare_v1_v3.json`):
 
-With a key (`MODEL_API_KEY`, dev.meta.ai), on your own footage:
+| | Spark 1.3 | Spark Open |
+|---|---|---|
+| Spans, length (target 45 s) | 9, 44.6 s | 9, 45.3 s |
+| Words quoted verbatim, passages left unplaced | 100 %, 0 | 100 %, 0 |
+| Hook | "Hi. I'm Billy. I run a small digital marketing agency in Athens" | the same line |
+| Plan call cost and time | $0.050, 35.3 s | $0.012, 6.8 s |
 
-```bash
-make dev
-export MODEL_API_KEY=...
-.venv/bin/montivo run footage.mp4 --brief "A 40 second vertical reel: ..." --target 40 --review --out runs/001
-make ui
-```
+Same hook and ending and 8 of 9 passages in common; Spark Open opened the body on "for the Meta Hackathon we are
+building Montivo" where Spark 1.3 kept a stumbling take. Its first cut then went through the same blind review and
+passed (88, 27/10). A second run, an Ask Montivo re-plan of run 015 to "about 30 seconds" on Spark Open,
+came back in 14 s for $0.011 and kept both callouts. Two runs are not a benchmark: on these two the open model
+planned the same structure as Spark 1.3 at about a quarter of the cost and a fifth of the time, and we claim no more
+than that.
 
 ## The editor
 
