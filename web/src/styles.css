@@ -359,6 +359,49 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .band.blocker { background: var(--blocker); } .band.major { background: var(--major); } .band.minor { background: var(--minor); }
 .player-wait { flex: 1; display: grid; place-items: center; color: var(--mute); }
 
+/* the viewer before the first cut (Waiting.tsx): the source plays, the agent's finds land on it */
+.wait-frame { cursor: default; }
+.wait-frame video { object-fit: cover; }
+.wait-frame video.mirror { transform: scaleX(-1); }
+.wait-shade { position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(to bottom, #000a 0%, #0000 26%, #0000 58%, #000c 100%); }
+.wait-brand { position: absolute; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at 50% 45%, #1d1d1f, #0b0b0c 70%); }
+.wait-brand .wb-l { animation: wb-l 1.6s ease-in-out infinite; }
+.wait-brand .wb-r { animation: wb-r 1.6s ease-in-out infinite; }
+.wait-brand .wb-v { transform-origin: 32px 28px; animation: wb-v 1.6s ease-in-out infinite; }
+@keyframes wb-l { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-4px); } }
+@keyframes wb-r { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(4px); } }
+@keyframes wb-v { 0%, 100% { opacity: 0.55; transform: scale(0.92); } 50% { opacity: 1; transform: scale(1); } }
+.wait-top { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.wait-status { background: #0e0e0fcc; backdrop-filter: blur(8px); border: 1px solid #ffffff1a; border-radius: 8px; padding: 8px 10px; min-width: 62%; max-width: 100%; display: flex; flex-direction: column; gap: 5px; }
+.ws-line { display: flex; align-items: center; gap: 7px; font-size: 12.5px; }
+.ws-line b { font-weight: 650; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-line .mono { color: var(--text-2); font-size: 11.5px; }
+.ws-detail { color: var(--text-2); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wait-found { display: flex; flex-wrap: wrap; gap: 4px; }
+.wf-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 550; color: var(--text);
+  background: #0e0e0fb3; border: 1px solid #ffffff14; border-radius: 99px; padding: 2px 8px 2px 6px; animation: rise 0.35s ease-out both; }
+.wf-chip .ico { color: var(--pass); }
+.wait-note { position: absolute; left: 12px; right: 12px; bottom: 30%; font-size: 12.5px; line-height: 1.4; color: var(--text);
+  background: #0e0e0fcc; backdrop-filter: blur(8px); border-left: 3px solid var(--accent); border-radius: 6px; padding: 7px 10px;
+  animation: rise 0.3s ease-out both; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.wn-who { display: block; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); margin-bottom: 2px; }
+.wait-cap { position: absolute; left: 8%; right: 8%; bottom: 15%; text-align: center; font-size: clamp(17px, 4.2cqh, 30px);
+  font-weight: 800; line-height: 1.15; color: #fff; text-shadow: 0 2px 0 #000, 0 0 12px #000c; letter-spacing: -0.01em; }
+.wait-cap span { transition: color 0.08s; }
+.wait-cap span.on { color: var(--accent); }
+.wait-frame { container-type: size; }
+.wait-foot { position: absolute; left: 12px; right: 12px; bottom: 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.wait-tag { font-size: 11px; color: var(--text-2); background: #0e0e0fb3; border-radius: 99px; padding: 3px 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wait-sound { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; color: var(--text); background: #0e0e0fcc; border: 1px solid #ffffff1f; flex: none; }
+.wait-sound:hover { background: #232325; }
+.wait-strip { position: absolute; left: 0; right: 0; bottom: 0; height: 5px; background: #ffffff14; }
+.wait-strip i { position: absolute; top: 0; bottom: 0; }
+.ws-word { width: 1px; background: #ffffff40; }
+.ws-span { background: #ffc62966; }
+.ws-span.on { background: var(--accent); }
+.ws-head { width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 4px #000; }
+
 /* ------------------------------------------------------------- inspector */
 .insp-empty { display: grid; place-items: center; flex: 1; color: var(--mute); }
 .insp-thumb-row { display: grid; grid-template-columns: 74px 1fr; gap: 12px; align-items: start; }

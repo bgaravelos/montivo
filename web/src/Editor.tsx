@@ -13,6 +13,7 @@ import { CaptionsPanel, MediaPanel, SpeakersPanel, TextPanel, VersionsPanel } fr
 import { FPS, Player, type PlayerHandle } from "./Player";
 import { draftCount, EMPTY_DRAFT, StyleCanvas, StylePanel, usePreview, type StyleDraft } from "./Style";
 import { Timeline, ZOOM_MAX, ZOOM_MIN, type ClipMenu, type MoveAsk, type TrimAsk } from "./Timeline";
+import { Waiting } from "./Waiting";
 import type { LogLine, RunState } from "./types";
 
 type Props = { id: string; replay: number; go: (hash: string) => void };
@@ -327,7 +328,8 @@ export function Editor({ id, replay, go }: Props) {
               <SafeArea kind={guide} />
             </>} />
         ) : (
-          <div className="player-wait">{busy || replay ? <span><span className="pulse" /> Waiting for the first render…</span> : "No cut rendered yet."}</div>
+          busy || replay ? <Waiting state={state} lines={lines} progress={progress} />
+            : <div className="player-wait">No cut rendered yet.</div>
         )}
       </main>
 
