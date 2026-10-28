@@ -9,6 +9,7 @@ build/
 
 # run folders and footage never go in the repo
 runs/
+looks/
 footage/
 *.mp4
 *.mov

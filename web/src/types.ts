@@ -77,7 +77,8 @@ export type Look = {
   highlight: string; box: string; position: "auto" | "fixed"; top: number; callout_bg: string; callout_fg: string;
   highlight_add: string[]; highlight_off: string[];
 };
-export type LooksInfo = { presets: { id: string; name: string; look: Look }[]; fonts: { id: string; name: string }[]; default: Look };
+export type SavedLook = { id: string; name: string; look: Look; saved: string };
+export type LooksInfo = { presets: { id: string; name: string; look: Look }[]; fonts: { id: string; name: string }[]; default: Look; saved: SavedLook[] };
 
 export type CaptionStyle = { font?: number; max_words?: number; default_top?: number; font_path?: string; glossary?: Record<string, string> };
 

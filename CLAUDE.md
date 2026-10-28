@@ -387,6 +387,10 @@ Style by prompt (28/10, $0.026 incl. one incomplete call): `montivo.human style 
 field + why, reasoning low, 6000 output tokens: 1500 came back incomplete), facts = current look, `look.backdrop` (luma
 behind the caption rows), `look.face_note` (median head rows from the EDL); `settle` clamps / keeps bad colours,
 a fixed top on the face -> auto. 015-style v8: upper, 2 words, yellow, auto from 1200, off the face; $0.008-0.010 each.
+Saved looks (28/10, $0): GET /api/looks `saved`, POST /api/looks/saved {name, look} (same name replaces, 24 max),
+DELETE /api/looks/saved/{id}; `<root>/looks/saved.json` (git-ignored; per judge on the hosted demo); "Your looks" row
++ Save look in the Style panel. Music bed is on branch `music-bed` (f1dd64b, its own session): Billy approved the
+rest but not the synth loops (28/10): better loops first in that session, then merge + `make web`.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

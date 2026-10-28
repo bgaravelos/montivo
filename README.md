@@ -370,7 +370,7 @@ look's height) or fixed (every line at one height). Callouts take the look's fon
 one where they dragged it (span `callout_xy`). `python -m montivo.human style RUN --look '{"preset": "box"}'
 [--callout s5=120,300 | s5=auto]` makes the next version ($0); the review loop and its pass gate leave a fixed position
 and a pinned callout where the person put them, and a re-plan carries both. The editor's Style panel shows each preset
-on a real frame of the cut and previews every change on the paused viewer with the same Pillow code
+on a real frame of the cut (and the person's own saved looks, kept for every project in `looks/`, one file per judge on the hosted demo) and previews every change on the paused viewer with the same Pillow code
 (`engine/look.py`, about 0.4 s per still): what it shows is the new version's frame.
 A look can also be asked for in words (`--prompt "bold yellow, one word at a time, higher"`, the Style panel's
 Describe it box): one Muse Spark call with a strict schema of the look's fields (about $0.008, 8-12 s) gets the current

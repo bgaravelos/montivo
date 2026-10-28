@@ -747,3 +747,6 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .st-ask { display: flex; flex-direction: column; gap: 6px; }
 .st-ask textarea { background: var(--panel-3); color: var(--text); border: 1px solid var(--line-2); border-radius: 6px; padding: 7px 9px; font: inherit; resize: vertical; }
 .st-ask .btn { align-self: flex-end; }
+.preset-card { position: relative; cursor: pointer; }
+.pc-del { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; background: #000b; border-radius: 50%; opacity: 0; }
+.preset-card:hover .pc-del { opacity: 1; }

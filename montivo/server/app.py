@@ -794,11 +794,54 @@ def create_app(root: Path) -> FastAPI:
                         chat={"role": "user", "text": f"Text in v{frm}: {'; '.join(what)}.", "chips": [f"v{frm}"], "kind": "text"})
         return {"job": job.public()}
 
+    looks_lock = threading.Lock()
+
+    def saved_path(request: Request) -> Path:
+        """A person's saved looks (their brand kit): <root>/looks/saved.json, or one file per judge on the hosted demo."""
+        who = "saved" if budget is None else re.sub(r"[^A-Za-z0-9_-]", "", judge_of(request))[:40] or "guest"
+        return st.root / "looks" / f"{who}.json"
+
+    def saved_looks(request: Request) -> list[dict]:
+        return (read_json(saved_path(request)) or {}).get("looks") or []
+
     @app.get("/api/looks")
-    def looks():
-        """The Style panel's choices: every preset as a full look, the fonts, the default (marker) look."""
+    def looks(request: Request):
+        """The Style panel's choices: every preset as a full look, the fonts, the default (marker) look, and the looks
+        this person saved."""
         return {"presets": [{"id": k, "name": PRESET_NAMES[k], "look": normalize_look({"preset": k}).to_json()} for k in PRESETS],
-                "fonts": [{"id": k, "name": v[0]} for k, v in FONTS.items()], "default": normalize_look(None).to_json()}
+                "fonts": [{"id": k, "name": v[0]} for k, v in FONTS.items()], "default": normalize_look(None).to_json(),
+                "saved": saved_looks(request)}
+
+    @app.post("/api/looks/saved")
+    def save_look(request: Request, b: dict):
+        """{"name": "Nocta", "look": {...}}: kept with the person's looks (same name replaces it, 24 at most)."""
+        name = " ".join(str(b.get("name") or "").split())[:40]
+        if not name:
+            raise HTTPException(400, "name: 1 to 40 characters")
+        try:
+            look = normalize_look(b.get("look")).to_json()
+        except ValueError as e:
+            raise HTTPException(400, f"look: {e}")
+        with looks_lock:
+            items = [x for x in saved_looks(request) if x["name"].lower() != name.lower()]
+            if len(items) >= 24:
+                raise HTTPException(409, "24 saved looks at most: delete one first")
+            sid = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:30] or "look"
+            while any(x["id"] == sid for x in items):
+                sid += "-2"
+            items.append({"id": sid, "name": name, "look": look, "saved": time.strftime("%Y-%m-%d %H:%M")})
+            write_json(saved_path(request), {"looks": items})
+        return {"saved": items}
+
+    @app.delete("/api/looks/saved/{sid}")
+    def delete_look(request: Request, sid: str):
+        with looks_lock:
+            items = saved_looks(request)
+            if not any(x["id"] == sid for x in items):
+                raise HTTPException(404, "no such saved look")
+            items = [x for x in items if x["id"] != sid]
+            write_json(saved_path(request), {"looks": items})
+        return {"saved": items}
 
     def style_body(b: dict) -> tuple[dict | None, dict[str, list[float] | None]]:
         look, places = b.get("look"), b.get("callouts") or {}

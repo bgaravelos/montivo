@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, tc } from "./api";
 import { Icon } from "./icons";
-import type { Look, LooksInfo, Version } from "./types";
+import type { Look, LooksInfo, SavedLook, Version } from "./types";
 
 // The Style panel and its canvas handles. A person's look (font, colours, words per line, the caption position) and
 // callout places are staged here; while the viewer is paused it shows the server's preview still (engine/look.py: the
@@ -52,18 +52,24 @@ function sampleT(v: Version, t: number) {
   return c ? Math.round(((c.t_in + c.t_out) / 2) * 10) / 10 : t;
 }
 
-function PresetCard({ id, v, t, look, on, onPick }: { id: string; v: Version; t: number; look: Look; on: boolean; onPick: () => void }) {
+function PresetCard({ id, v, t, look, name, on, onPick, saved, onDelete }: {
+  id: string; v: Version; t: number; look: Look; name: string; on: boolean; onPick: () => void; saved?: boolean; onDelete?: () => void;
+}) {
   const [src, setSrc] = useState<string | null>(null);
+  const send = saved ? look : { preset: look.preset };
+  const key = JSON.stringify(send);
   useEffect(() => {
     let live = true;
-    api<Preview>(`/api/runs/${id}/preview`, { v: v.n, t, look: { preset: look.preset } }).then((r) => live && setSrc(r.image)).catch(() => {});
+    api<Preview>(`/api/runs/${id}/preview`, { v: v.n, t, look: send }).then((r) => live && setSrc(r.image)).catch(() => {});
     return () => { live = false; };
-  }, [id, v.n, t, look.preset]);
+  }, [id, v.n, t, key]); // eslint-disable-line
   return (
-    <button className={`preset-card ${on ? "on" : ""}`} onClick={onPick} title={`The ${look.preset.replace("_", " ")} preset`}>
+    <div className={`preset-card ${on ? "on" : ""}`} role="button" tabIndex={0} onClick={onPick}
+      onKeyDown={(e) => { if (e.key === "Enter") onPick(); }} title={saved ? `Your look “${name}”` : `The ${name} preset`}>
       <span className="pc-img">{src ? <img src={src} alt="" /> : <span className="pulse" />}</span>
-      <span className="pc-name">{look.preset === "bold_pop" ? "Bold pop" : look.preset[0].toUpperCase() + look.preset.slice(1)}</span>
-    </button>
+      <span className="pc-name">{name}</span>
+      {onDelete && <button className="pc-del icon-btn" title="Delete this saved look" onClick={(e) => { e.stopPropagation(); onDelete(); }}><Icon name="close" size={11} /></button>}
+    </div>
   );
 }
 
@@ -96,6 +102,8 @@ export function StylePanel({ id, v, t, next, canEdit, draft, setDraft, onSeek, o
   const [info, setInfo] = useState<LooksInfo | null>(null);
   const [words, setWords] = useState("");
   const [ask, setAsk] = useState("");
+  const [saveName, setSaveName] = useState("");
+  const setSaved = (saved: SavedLook[]) => setInfo((i) => (i ? { ...i, saved } : i));
   useEffect(() => { getLooks().then(setInfo).catch(() => {}); }, []);
   const base = v?.look ?? info?.default ?? null;
   const look = draft.look ?? base;
@@ -105,6 +113,11 @@ export function StylePanel({ id, v, t, next, canEdit, draft, setDraft, onSeek, o
   const set = (patch: Partial<Look>) => {
     const nl = { ...look, ...patch };
     setDraft({ ...draft, look: sameLook(nl, v.look) ? null : nl });
+  };
+  const saveLook = () => {
+    const name = saveName.trim();
+    if (!name) return;
+    api<{ saved: SavedLook[] }>("/api/looks/saved", { name, look }).then((r) => { setSaved(r.saved); setSaveName(""); looksCache = null; }).catch(() => {});
   };
   const pick = (p: Look) => set({ ...p, position: look.position, top: look.position === "fixed" ? look.top : p.top });
   const n = draftCount(draft, v);
@@ -127,7 +140,21 @@ export function StylePanel({ id, v, t, next, canEdit, draft, setDraft, onSeek, o
         <p className="mute small">Muse Spark reads the current look and how light the picture is behind the captions, then picks fonts and colours from the options below. Tweak the result here after.</p>
         <div className="pn-k">Presets</div>
         <div className="preset-grid">
-          {info.presets.map((p) => <PresetCard key={p.id} id={id} v={v} t={presetT} look={p.look} on={look.preset === p.id} onPick={() => pick(p.look)} />)}
+          {info.presets.map((p) => <PresetCard key={p.id} id={id} v={v} t={presetT} look={p.look} name={p.name}
+            on={look.preset === p.id && !info.saved.some((x) => sameLook(x.look, look))} onPick={() => pick(p.look)} />)}
+        </div>
+        <div className="pn-k">Your looks <span className="mute small">kept for every project</span></div>
+        {info.saved.length > 0 && (
+          <div className="preset-grid">
+            {info.saved.map((x) => <PresetCard key={x.id} id={id} v={v} t={presetT} look={x.look} name={x.name} saved
+              on={sameLook(x.look, look)} onPick={() => set(x.look)}
+              onDelete={() => api<{ saved: SavedLook[] }>(`/api/looks/saved/${x.id}`, undefined, "DELETE").then((r) => setSaved(r.saved)).catch(() => {})} />)}
+          </div>
+        )}
+        <div className="st-row">
+          <input className="st-input grow" value={saveName} maxLength={40} placeholder="Name this look, e.g. Nocta brand"
+            onChange={(e) => setSaveName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveLook(); }} />
+          <button className="btn quiet small" disabled={!saveName.trim()} onClick={saveLook} title="Keep the look as it is now (with your staged changes) for other projects">Save look</button>
         </div>
 
         <div className="pn-k">Text</div>
