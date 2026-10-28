@@ -426,7 +426,10 @@ edl_vN; review patches and hook keep it (deep copy), replan carries it. GET `/ap
 the preview), POST `/api/runs/{id}/music`; the Music panel in the rail (`web/src/Music.tsx`). Run 015 copy (deleted):
 one version per track at -20 / -12: -14.0 LUFS, -1.7 to -2.0 dBTP, speech 15.8-17.8 dB over the bed; 015's cut never
 pauses 0.8 s, so the bed stays ducked throughout. Checked keyless in the browser (track change, music off, previews);
-Billy listened to all eight under his 015 cut and kept all eight (commits f1dd64b, 2a47ff5).
+Billy listened to all eight under his 015 cut and kept all eight (commits f1dd64b, 2a47ff5). Merged into main as 8322446 and
+deployed to Modal 28/10 with the 4:5 / 1:1 exports (`modal run modal_app.py::smoke --music midnight_cruiser`: 37.9 s,
+-14.0 LUFS / -1.7 dBTP, speech 17.1 dB over the bed, same as the Mac; the plain drop smoke 34.3 s, -14.0 / -1.7); host
+spend unchanged at $0.40 of $15.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
