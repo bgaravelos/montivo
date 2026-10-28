@@ -226,6 +226,9 @@ def make_wav(src: Path, dst: Path, rate: int = 24000, start: float | None = None
     return dst
 
 
+UPRIGHT_MAX_H = 1920  # the cut's height: a 9:16 crop of a taller copy is only scaled down again (4:5 and 1:1 too)
+
+
 def make_upright(src: Path, dst: Path, hflip: bool = False, log=None, fps: float | None = None,
                  sdr: str | None = None) -> Probe:
     """Re-encode the footage once, upright (the decoder applies the display rotation) and mirrored when hflip
@@ -233,14 +236,16 @@ def make_upright(src: Path, dst: Path, hflip: bool = False, log=None, fps: float
     untouched so the Voice clock is unchanged. Everything downstream (proxy, wav, SAM, render) reads this file, so
     boxes, crops and the probed size all describe the frame as it is shown. `fps` makes it that constant frame rate
     (a variable or odd rate, see standard_fps), `sdr` is to_sdr_chain's filters for an HDR or 10-bit source (the copy
-    is then tagged BT.709)."""
-    vf = [x for x in (sdr, f"fps={fps:g}" if fps else "", "hflip" if hflip else "") if x]
+    is then tagged BT.709). The copy is at most UPRIGHT_MAX_H tall and encoded veryfast: a 90 s iPhone clip in 4K HDR
+    took 479 s at x264 medium and full size (28/10), the hosted demo's one job holding every judge meanwhile."""
+    vf = [x for x in (sdr, f"fps={fps:g}" if fps else "", "hflip" if hflip else "",
+                      f"scale=-2:'min(ih,{UPRIGHT_MAX_H})':flags=lanczos") if x]
     tags = ["-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709"] if sdr else []
     # camera PCM (10-bit XAVC S, .MOV) cannot be copied into .mp4 by older ffmpeg builds: lossless ALAC instead
     audio = "alac" if ffprobe(src).audio_codec.startswith("pcm_") else "copy"
     run_ffmpeg(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-map", "0:v:0", "-map", "0:a:0?",
                 *(["-vf", ",".join(vf)] if vf else []), *(["-fps_mode", "cfr"] if fps else []),
-                "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p", *tags, "-c:a", audio,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", *tags, "-c:a", audio,
                 "-movflags", "+faststart", str(dst)], "upright copy", log)
     return ffprobe(dst)
 
