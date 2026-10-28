@@ -508,6 +508,16 @@ render's); GET /peaks takes `track`. Checked keyless on a throwaway copy of 015 
 point, restart at 1.5x, v7 = level -16 / voice +3, -14.0 LUFS / -1.8 dBTP, margin 16.9 -> 15.9 dB. Deployed to Modal
 28/10 15:15 (no job was running; old container stopped); smoke `--music midnight_cruiser` 37.9 s, -14.0 / -1.7 dBTP,
 margin 17.1 dB, same as the Mac. The live faders not yet moved on the hosted demo.
+UX batch A (28/10, $0, commit `3a1557e`, research in `docs/notes/ux-research_2026-10-28.md`): under 900 px the editor is
+a review mode (player, review, chat, export; no rail or timeline) and Home one column; review notes say the fix in
+words (`edit.fixText`, the op in the tooltip), LUFS / facts / review cost in a Details fold, the chat's review card
+names the weakest criterion; timeline clips show the caption text (`edit.spanText`), not what Voice heard; the tab
+title carries a job's % and a done mark when it ends hidden, plus a browser notification if allowed
+(`Progress.useJobSignals`, `askToNotify` on run / ask / review / hook); the waiting view says the tab can close and its
+loop can pause (WCAG 2.2.2); on the hosted demo Home opens with a Start here card and the composer shows the budget left.
+Checked keyless in the browser pane at 1440 and 375 px; the tab title not yet seen on a live job. Not deployed.
+Still to do: A3 (the planner names what the brief asks and the footage lacks, said once instead of a reviewer major on
+every review), after the engine-hygiene batch.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
