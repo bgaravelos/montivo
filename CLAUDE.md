@@ -678,6 +678,18 @@ budget.json `held`); the hosted server sets aside at start the unrendered edl_vN
 stop never ran the job's clean-up); Ask Montivo refuses a re-plan while part of the cut is selected. Deployed on Billy's
 go at 23:46 (no job since 23:22; the 23:33 container stopped); live /api/health 200, /api/runs 401, /s/nope 404, host spend
 $2.79 of $15; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 10.1 s.
+Cloud review patches (29/10 evening, $0 Meta, commit `6f2f180`): of the 23 patches the cloud sessions left in Notion, 20
+went in after a check on the Mac: render reads one input per segment, so a clip moved earlier keeps its audio on
+ffmpeg 7.x (a reorder of 015 on a static 7.1: the old code failed, measured_I -inf; now audio = video; on 9.0 015 v5
+audio and frames byte-identical, same render time); ingest refuses cover-art audio, no-duration files and evens an
+odd height (old code: a 90000 fps "video", KeyError, ffmpeg exit 187); hosted review passes 0..3, key / budget checked
+before a sample copy, priced stop holds, Ask fallback on the last cents, exact cents, nan / inf 400; title card cache
+after success; SSE streams end after 300 s and reconnect, serve stops 5 s after SIGTERM; `modal run
+modal_app.py::smoke --reorder` (passed on Modal with the new image); `constraints.txt` (make dev, Modal image);
+UI: Music lane, Space on buttons, modal focus + Esc, contrast, reduced motion, 375 px bar, no Nocta placeholder; CLI
+--from checks. Each new test fails on the old code. Left out: 1a (cover / post / share on a sample would answer "make
+any edit first"), 3d / 3e (iOS only, no Xcode here). Still on ffmpeg 7.1, old and new: a clip that runs past the end
+of the audio stream and is moved first renders no audio (rare). Not deployed yet.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
