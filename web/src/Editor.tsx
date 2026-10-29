@@ -15,6 +15,7 @@ import { FPS, Player, type PlayerHandle } from "./Player";
 import { draftCount, EMPTY_DRAFT, StyleCanvas, StylePanel, usePreview, type StyleDraft } from "./Style";
 import { Timeline, ZOOM_MAX, ZOOM_MIN, type ClipMenu, type MoveAsk, type TrimAsk } from "./Timeline";
 import { Waiting } from "./Waiting";
+import type { LiveData } from "./Live";
 import { ShareMenu } from "./Share";
 import type { LogLine, RunState } from "./types";
 
@@ -84,6 +85,13 @@ export function Editor({ id, replay, go }: Props) {
   const setGuide = (g: Guide) => { setGuideState(g); try { localStorage.setItem("montivo.viewer.guide", g); } catch { /* this tab only */ } };
   const nextGuide = () => setGuide(GUIDES[(GUIDES.indexOf(guide) + 1) % GUIDES.length]);
   const player = useRef<PlayerHandle>(null);
+  // the live preview (Live.ts): the viewer plays the EDL from the source, and the structural edits (split, trim, move,
+  // delete, words, insert, pauses) go to a draft (server/draft.py) that plays at once; "Make Version N" renders it
+  const [liveOn, setLiveOnState] = useState(() => { try { return localStorage.getItem("montivo.live") === "1"; } catch { return false; } });
+  const setLive = (on: boolean) => { setLiveOnState(on); try { localStorage.setItem("montivo.live", on ? "1" : "0"); } catch { /* this tab only */ } };
+  const live0 = liveOn && !replay;
+  const [draftData, setDraftData] = useState<LiveData | null>(null);
+  const [draftSum, setDraftSum] = useState<DraftSum | null>(null);
   const [styleDraft, setStyleDraft] = useState<StyleDraft>(EMPTY_DRAFT);
 
   // in replay, a version exists once the log rendered it; live, once it is on disk
@@ -130,7 +138,8 @@ export function Editor({ id, replay, go }: Props) {
     setSel((s) => (s != null && visible.some((v) => v.n === s) ? s : opening));
   }, [visible.length, newest, opening, replay, current === undefined]); // eslint-disable-line
 
-  const v = visible.find((x) => x.n === sel) ?? null;
+  const draftV = live0 && draftData?.version_entry ? draftData.version_entry : null;
+  const v = draftV ?? visible.find((x) => x.n === sel) ?? null;
   const parent = v && state ? parentOf(v, state.versions) : undefined;
   const blocks = useMemo(() => (v && state ? layout(v, parent, state.words) : []), [v, parent, state]);
   const block = blocks.find((b) => b.key === selKey && b.kind !== "ghost") ?? null;
@@ -188,6 +197,46 @@ export function Editor({ id, replay, go }: Props) {
       return true;
     } catch (e) { flash(String((e as Error).message), "error"); return false; }
   }, [id, flash, go, forkFrom, newest, state]);
+  /** The open draft: GET /draft settles a commit that has ended (its version exists now: no draft), then its preview. */
+  const loadDraft = useCallback(async (settle = true) => {
+    try {
+      if (settle) {
+        const sum = await api<{ draft: DraftSum | null }>(`/api/runs/${id}/draft`);
+        setDraftSum(sum.draft);
+        if (!sum.draft) return setDraftData(null);
+      }
+      setDraftData(await api<LiveData>(`/api/runs/${id}/draft/preview`));
+    } catch (e) { setDraftData(null); flash(String((e as Error).message), "error"); }
+  }, [id, flash]);
+  useEffect(() => { if (live0) loadDraft(); else { setDraftData(null); setDraftSum(null); } }, [live0, newest, loadDraft]);
+  /** One structural edit into the draft (started from the version on screen), in milliseconds and $0. */
+  const draftOp = useCallback(async (op: string, args: Record<string, unknown>) => {
+    try {
+      const r = await api<{ draft: DraftSum | null }>(`/api/runs/${id}/draft`, { op, args, ...(draftSum ? {} : { from: v?.n }) });
+      setDraftSum(r.draft);
+      await loadDraft(false);
+      return true;
+    } catch (e) { flash(String((e as Error).message), "error"); return false; }
+  }, [id, draftSum, v?.n, loadDraft, flash]);
+  /** The editor's edit routes: in live mode the structural ones go to the draft; a draft blocks the rest until it is a
+   *  version (they edit a version, and the draft is not one yet). */
+  const edit = useCallback(async (path: string, body: Record<string, unknown>) => {
+    const to = live0 ? DRAFT_OPS[path] : undefined;
+    if (to) return draftOp(to.op, to.args(body));
+    if (draftV && MAKES_VERSION.includes(path))
+      return (flash(`Make Version ${draftData?.draft?.n ?? ""} first: the draft's ${edits(draftSum?.ops.length ?? 0)} are not a version yet.`), false);
+    return act(path, body);
+  }, [live0, draftOp, draftV, draftData, draftSum, flash, act]);
+  const commitDraft = async () => {
+    try {
+      await api(`/api/runs/${id}/draft/commit`, { review: 0 });
+      flash(`Making Version ${draftData?.draft?.n ?? ""}: one render of the draft's ${edits(draftSum?.ops.length ?? 0)} ($0).`);
+    } catch (e) { flash(String((e as Error).message), "error"); }
+  };
+  const discardDraft = async () => {
+    try { await api(`/api/runs/${id}/draft`, undefined, "DELETE"); setDraftSum(null); setDraftData(null); }
+    catch (e) { flash(String((e as Error).message), "error"); }
+  };
   const shareLink = async (n: number) => {
     try {
       const r = await api<{ path: string }>(`/api/runs/${id}/share`, { version: n });
@@ -202,7 +251,7 @@ export function Editor({ id, replay, go }: Props) {
   const onTime = useCallback((x: number) => { tRef.current = x; setT(x); }, []);
   const getTime = useCallback(() => tRef.current, []);
   // the playhead for a key: the video's own clock (onTime follows it on animation frames, which stall in a hidden tab)
-  const playhead = () => player.current?.el()?.currentTime ?? tRef.current;
+  const playhead = () => player.current?.time() ?? tRef.current;
   const blocksRef = useRef(blocks);
   blocksRef.current = blocks;
   const selRef = useRef({ key: selKey, keys: selKeys });
@@ -229,23 +278,35 @@ export function Editor({ id, replay, go }: Props) {
     if (!v || !state || !wordSel) return;
     if (canEdit) return flash(`Cannot delete now: ${canEdit.toLowerCase()}.`);
     const a = cutAsk(v, flatWords(blocks), wordSel, state.words);
+    if (a && live0) { // live: no confirm, the draft takes it (⌘Z undoes it)
+      if (a.error) return flash(a.error, "error");
+      setWordSel(null);
+      return void edit(a.path, a.body);
+    }
     if (a) setDialog({ kind: "words", ask: a });
   };
   const ask = useCallback((span: string) => { setSelKey(span); setPanel("assistant"); setAskNonce((n) => n + 1); setCtx(null); }, []);
-  const askDelete = useCallback((span: string) => { setCtx(null); setDialog({ kind: "delete", span }); }, []);
+  const askDelete = useCallback((span: string) => {
+    setCtx(null);
+    if (live0) return void edit("drop", { span });
+    setDialog({ kind: "delete", span });
+  }, [live0, edit]);
   const askDeleteClips = (ids: string[]) => { // several whole clips: one version through the transcript delete's cut
     if (!v || !state) return;
     if (canEdit) return flash(`Cannot delete now: ${canEdit.toLowerCase()}.`);
     const order = v.spans.map((s) => s.id).filter((x) => ids.includes(x));
     if (order.length === 1) return askDelete(order[0]);
     setCtx(null);
-    setDialog({ kind: "words", ask: clipsAsk(v, order, state.words) });
+    const a = clipsAsk(v, order, state.words);
+    if (live0) { if (a.error) return flash(a.error, "error"); setSelKeys([]); return void edit(a.path, a.body); }
+    setDialog({ kind: "words", ask: a });
   };
   const doSplit = () => { // S / ⌘K: the clip under the playhead, in front of the nearest word boundary
     if (!v) return;
     if (canEdit) return flash(`Cannot split now: ${canEdit.toLowerCase()}.`);
     const r = splitAt(blocks, playhead());
     if ("error" in r) return flash(r.error);
+    if (live0) return void edit("split", { span: r.span, word: r.word });
     splitFrom.current = v.n;
     flash(`Splitting clip ${r.span} in front of “${r.label}” (Version ${nextN(state!)}, $0, a re-render)…`);
     act("split", { span: r.span, word: r.word, from: v.n, text: r.label });
@@ -261,8 +322,14 @@ export function Editor({ id, replay, go }: Props) {
     player.current?.pause();
     seek(spans[to].t0 + 0.01);
   };
-  const askTrim = useCallback((a: TrimAsk) => setDialog({ kind: "trim", ask: a }), []);
-  const askMove = useCallback((a: MoveAsk) => setDialog({ kind: "move", ask: a }), []);
+  const askTrim = useCallback((a: TrimAsk) => {
+    if (live0) return void edit("trim", { span: a.span, edge: a.edge, word: a.word });
+    setDialog({ kind: "trim", ask: a });
+  }, [live0, edit]);
+  const askMove = useCallback((a: MoveAsk) => {
+    if (live0) return void edit("reorder", { span: a.span, before: a.before });
+    setDialog({ kind: "move", ask: a });
+  }, [live0, edit]);
   /** Keep where the editor is for a reload (ui/current.json): the newest version needs no record. */
   const remember = useCallback((n: number) => {
     if (replay || newest == null) return;
@@ -272,13 +339,23 @@ export function Editor({ id, replay, go }: Props) {
     api(`/api/runs/${id}/current`, c).catch(() => { /* the browser's copy still holds */ });
   }, [id, replay, newest]);
   const pick = useCallback((n: number) => { setSel(n); remember(n); }, [remember]);
-  const onPunch = (a: PunchAsk) => { setSelKey(null); setPanel("assistant"); act("punch", { ...a, from: v?.n }); };
+  const onPunch = (a: PunchAsk) => { setSelKey(null); setPanel("assistant"); edit("punch", { ...a, from: v?.n }); };
   const step = (dir: -1 | 1) => {
+    if (draftSum && (dir < 0 ? draftSum.can_undo : draftSum.can_redo)) return void draftStep(dir);
     const to = dir < 0 ? undoTo : redoTo;
     if (!to) return flash(dir < 0 ? "Nothing to undo: this is the first version." : "Nothing to redo.");
     setSel(to.n);
     remember(to.n);
     flash(`${dir < 0 ? "Undo" : "Redo"}: Version ${to.n}${to.n !== newest ? ` of ${newest}. A reload opens here; an edit now branches from Version ${to.n}` : ""}`);
+  };
+
+  const draftStep = async (dir: -1 | 1) => { // the draft's own undo / redo; undoing its last edit closes it
+    try {
+      const r = await api<{ draft: DraftSum | null }>(`/api/runs/${id}/draft/${dir < 0 ? "undo" : "redo"}`, {});
+      if (r.draft && !r.draft.ops.length && !r.draft.can_redo) return void discardDraft();
+      setDraftSum(r.draft);
+      await loadDraft(false);
+    } catch (e) { flash(String((e as Error).message), "error"); }
   };
 
   // keyboard, through a ref so the listener sees the current state without re-subscribing
@@ -391,8 +468,18 @@ export function Editor({ id, replay, go }: Props) {
         <div className="title-block">
           <span className="proj" title={state.run.brief}>{name}</span>
           <span className="saved">{progress?.active && (busy || replay) ? <ProgressInline p={progress} />
-            : busy ? <><span className="pulse" /> {job!.label}…</> : v ? <>Saved · Version {v.n} of {newest}</> : "No version yet"}</span>
+            : busy ? <><span className="pulse" /> {job!.label}…</> : draftV ? <>{edits(draftSum?.ops.length ?? 0)} on Version {draftSum?.base} · not a version yet</>
+            : v ? <>Saved · Version {v.n} of {newest}</> : "No version yet"}</span>
         </div>
+        {draftV && !busy && (
+          <span className="draft-bar">
+            <button className="btn quiet" onClick={discardDraft} title="Drop the draft's edits: the viewer goes back to the version they started from">Discard</button>
+            <button className="btn primary" onClick={commitDraft} disabled={!draftSum?.ops.length}
+              title="One render of every edit in the draft ($0); the version list gains one version, not one per edit">
+              Make Version {draftData?.draft?.n}
+            </button>
+          </span>
+        )}
         <span className="undo-redo">
           <button className="icon-btn" disabled={!undoTo} onClick={() => step(-1)} title={undoTo ? `Undo: back to Version ${undoTo.n} (⌘Z)` : "Nothing to undo"}><Icon name="undo" /></button>
           <button className="icon-btn" disabled={!redoTo} onClick={() => step(1)} title={redoTo ? `Redo: Version ${redoTo.n} (⇧⌘Z)` : "Nothing to redo"}><Icon name="redo" /></button>
@@ -448,39 +535,39 @@ export function Editor({ id, replay, go }: Props) {
         {panel === "assistant" && (
           <Assistant state={state} versions={visible} lines={lines} job={job} seen={seen} progress={progress} replay={replay} v={v}
             selection={selection} getTime={getTime} focusNonce={askNonce}
-            onSend={(text, chips, review, planner, scope, latest) => act("ask", { message: text, chips, scope, from: latest ? undefined : v?.n, review, planner, preview: true })}
+            onSend={(text, chips, review, planner, scope, latest) => edit("ask", { message: text, chips, scope, from: latest ? undefined : v?.n, review, planner, preview: true })}
             onApply={(pending, review) => act("ask/apply", { pending, review })} onRetry={(pending) => act("ask/retry", { pending })}
             onRetryJob={() => act("retry", {})}
             onStop={() => act("stop", {})} onPick={pick} onSeek={(x) => { player.current?.pause(); seek(x); }}
             onCompare={(a, b) => go(`${base}/compare?a=${a}&b=${b}${replay ? `&replay=${replay}` : ""}`)}
-            onRestore={canEdit ? null : (n) => act("restore", { from: n })} />
+            onRestore={canEdit ? null : (n) => edit("restore", { from: n })} />
         )}
         {panel === "media" && <MediaPanel state={state} />}
         {panel === "captions" && (
           <CaptionsPanel v={v} t={t} next={next} canEdit={canEdit} onSeek={seek}
             onAsk={(c) => { setCapSel({ t_in: c.t_in, t_out: c.t_out, text: c.text }); setPanel("assistant"); setAskNonce((n) => n + 1); }}
-            onApply={(edits) => { setPanel("assistant"); act("caption", { edits, from: v?.n }); }} />
+            onApply={(edits) => { setPanel("assistant"); edit("caption", { edits, from: v?.n }); }} />
         )}
         {panel === "style" && (
           <StylePanel id={id} v={v} t={t} next={next} canEdit={canEdit} draft={styleDraft} setDraft={setStyleDraft} onSeek={(a) => { player.current?.pause(); seek(a); }}
             hasKey={state.has_key} keyNote={state.key_note ?? null} cost={state.costs?.look ?? 0.004}
-            onPrompt={(text) => { setPanel("assistant"); act("style", { prompt: text, from: v?.n }); }}
-            onApply={() => { const d = styleDraft; setPanel("assistant"); act("style", { look: d.look, callouts: d.callouts, from: v?.n }); }} />
+            onPrompt={(text) => { setPanel("assistant"); edit("style", { prompt: text, from: v?.n }); }}
+            onApply={() => { const d = styleDraft; setPanel("assistant"); edit("style", { look: d.look, callouts: d.callouts, from: v?.n }); }} />
         )}
         {panel === "text" && (
           <TextPanel state={state} v={v} t={t} next={next} canEdit={canEdit} onSeek={seek}
-            onApply={(edit) => { setPanel("assistant"); act("text", { ...edit, from: v?.n }); }} />
+            onApply={(e) => { setPanel("assistant"); edit("text", { ...e, from: v?.n }); }} />
         )}
         {panel === "music" && (
           <MusicPanel v={v} next={next} canEdit={canEdit}
-            onApply={(edit) => { setPanel("assistant"); act("music", { ...edit, from: v?.n }); }} />
+            onApply={(e) => { setPanel("assistant"); edit("music", { ...e, from: v?.n }); }} />
         )}
         {panel === "speakers" && (
           <SpeakersPanel id={id} v={v} next={next} canEdit={canEdit}
-            onApply={(speaker, head) => { setPanel("assistant"); act("pin", { speaker, head, from: v?.n }); }} />
+            onApply={(speaker, head) => { setPanel("assistant"); edit("pin", { speaker, head, from: v?.n }); }} />
         )}
         {panel === "versions" && <VersionsPanel id={id} state={state} versions={visible} sel={sel} onPick={pick} go={go} replay={replay} opening={opening}
-          canEdit={canEdit} onRestore={(n) => { setPanel("assistant"); act("restore", { from: n }); }} />}
+          canEdit={canEdit} onRestore={(n) => { setPanel("assistant"); edit("restore", { from: n }); }} />}
       </aside>
 
       <main className="viewer">
@@ -490,10 +577,14 @@ export function Editor({ id, replay, go }: Props) {
             Safe area: {GUIDE_NAME[guide]}
           </button>
         )}
-        {v?.cut ? (
-          <Player ref={player} key={`${v.n}`} src={fileUrl(id, v.cut)} onTime={onTime} onPlaying={setPlaying}
+        {v && (v.cut || live0) ? (
+          <Player ref={player} key={draftV ? `draft-${draftData!.draft!.id}` : `${v.n}${live0 ? "-live" : ""}`}
+            src={v.cut ? fileUrl(id, v.cut) : ""} onTime={onTime} onPlaying={setPlaying}
+            live={draftV ? draftData! : live0 ? `/api/runs/${id}/preview?v=${v.n}` : undefined}
+            liveToggle={replay ? undefined : { on: liveOn, set: setLive }} liveMix={live0 && mixStaged ? mix : null}
             marks={blocks.filter((b) => b.kind !== "ghost").map((b) => b.t0)}
-            label={`v${v.n}`} safe={{ label: GUIDE_NAME[guide], on: guide !== "off", next: nextGuide }} overlay={<>
+            label={draftV ? `Draft · ${edits(draftSum?.ops.length ?? 0)}` : `v${v.n}${live0 ? " · live" : ""}`} labelTone={draftV ? "draft" : undefined}
+            safe={{ label: GUIDE_NAME[guide], on: guide !== "off", next: nextGuide }} overlay={<>
               {v && <StyleCanvas v={v} t={t} draft={styleDraft} setDraft={setStyleDraft} preview={stylePreview} busy={previewBusy}
                 show={styling && !playing} />}
               <SafeArea kind={guide} />
@@ -507,8 +598,8 @@ export function Editor({ id, replay, go }: Props) {
       <aside className="insp">
         <Inspector id={id} state={state} versions={visible} v={v} block={block} punch={punch} next={next} words={state.words} busy={busy}
           canEdit={canEdit} onSeek={seek} onPick={pick} onDelete={askDelete} onAsk={ask} onPunch={onPunch} onClear={() => { setSelKey(null); setSelKeys([]); }}
-          onReview={() => v && act("review", { from: v.n, passes: 1 })}
-          onHook={() => { if (v) { setPanel("assistant"); act("hook", { from: v.n }); } }} />
+          onReview={() => v && edit("review", { from: v.n, passes: 1 })}
+          onHook={() => { if (v) { setPanel("assistant"); edit("hook", { from: v.n }); } }} />
       </aside>
 
       <footer className="tl-wrap">
@@ -522,14 +613,15 @@ export function Editor({ id, replay, go }: Props) {
           onEdit={(path, body, note) => { // add a passage back, remove pauses, B-roll stills (Batch D)
             if (!v) return;
             if (canEdit) return flash(`Cannot edit now: ${canEdit.toLowerCase()}.`);
+            if (live0 && DRAFT_OPS[path]) return void edit(path, body);
             flash(note);
-            act(path, { ...body, from: v.n });
+            edit(path, { ...body, from: v.n });
           }}
           onApplyMix={() => {
             if (!v?.music || !mixDraft) return;
             const m = mixDraft;
             setMixDraft(null); setPanel("assistant");
-            act("music", { track: v.music.track, level_db: m.level_db, duck_db: v.music.duck_db, voice_db: m.voice_db, mix: true, from: v.n });
+            edit("music", { track: v.music.track, level_db: m.level_db, duck_db: v.music.duck_db, voice_db: m.voice_db, mix: true, from: v.n });
           }} />
       </footer>
 
@@ -552,7 +644,7 @@ export function Editor({ id, replay, go }: Props) {
       )}
       {dialog?.kind === "title" && v && (
         <EditDialog kind="title" state={state} v={v} span="title" next={next} newest={newest} onCancel={() => setDialog(null)}
-          onConfirm={(review) => { setDialog(null); setSelKey(null); setPanel("assistant"); act("text", { title_card: false, from: v.n, review: review ? 1 : 0 }); }} />
+          onConfirm={(review) => { setDialog(null); setSelKey(null); setPanel("assistant"); edit("text", { title_card: false, from: v.n, review: review ? 1 : 0 }); }} />
       )}
       {dialog?.kind === "trim" && v && (
         <EditDialog kind="trim" state={state} v={v} span={dialog.ask.span} trim={dialog.ask} next={next} newest={newest} onCancel={() => setDialog(null)}
@@ -590,3 +682,20 @@ function replaySpent(lines: LogLine[]): { usd: number; s: number } {
   }
   return { usd, s: s + sessionEnd };
 }
+
+const edits = (n: number) => `${n} edit${n === 1 ? "" : "s"}`;
+
+/** GET/POST /draft's summary of the open draft (server/draft.py). */
+type DraftSum = { id: string; base: number; latest: number; stale: boolean; ops: { op: string; args: Record<string, unknown>; say?: string }[];
+  can_undo: boolean; can_redo: boolean; runtime_s: number | null; committing?: unknown; commit_failed?: string | null };
+
+/** The editor's edit routes that a draft takes in live mode, and their bodies as the draft's op arguments. */
+const DRAFT_OPS: Record<string, { op: string; args: (b: Record<string, unknown>) => Record<string, unknown> }> = {
+  split: { op: "split", args: (b) => ({ span: b.span, word: b.word }) },
+  drop: { op: "drop", args: (b) => ({ span: b.span }) },
+  trim: { op: "trim", args: (b) => ({ span: b.span, edge: b.edge, word: b.word }) },
+  reorder: { op: "reorder", args: (b) => ({ span: b.span, before: b.before ?? null }) },
+  cut: { op: "cut", args: (b) => ({ ranges: (b.words as { span: string; from: number; to: number }[]).map((r) => [r.span, r.from, r.to]) }) },
+  insert: { op: "insert", args: (b) => ({ turn: b.turn, a: b.word_from, b: b.word_to, before: b.before ?? null }) },
+  pauses: { op: "pauses", args: (b) => ({ over: b.over, keep: b.keep }) },
+};

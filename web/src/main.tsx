@@ -64,6 +64,7 @@ function route(hash: string) {
   const [path, query] = hash.slice(1).split("?");
   const q = new URLSearchParams(query ?? "");
   const replay = Number(q.get("replay") || 0);
+  if (q.has("live")) { try { localStorage.setItem("montivo.live", q.get("live") === "1" ? "1" : "0"); } catch { /* this load only */ } }
   const m = path.match(/^\/run\/([^/]+)(\/compare|\/loop)?$/);
   if (m && m[2] === "/loop") return <LoopFilm id={m[1]} replay={replay} go={go} />;
   if (m && m[2]) return <Compare id={m[1]} a={Number(q.get("a") || 1)} b={Number(q.get("b") || 2)} replay={replay} go={go} />;

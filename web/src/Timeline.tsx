@@ -275,10 +275,12 @@ type TrackProps = Pick<Props, "id" | "blocks" | "words" | "selected" | "selectio
 const Tracks = memo(function Tracks(p: TrackProps) {
   const { id, v, blocks, words, pps, selected, selection, canTrim, onSelect, onSeek, onMenu, onTrim, onMove, timeAt, getT } = p;
   const q = v.bytes ? `&b=${v.bytes}` : "";
-  const sprite = v.cut ? `/api/runs/${id}/filmstrip?v=${v.n}${q}` : null;
+  // a draft (live preview) has no cut: its thumbnails and waveform come from the source through its clips
+  const dq = v.draft ? `draft=1&k=${hashKey(v.spans.map((s) => `${s.id}:${s.t_in}:${s.t_out}`).join("|"))}` : "";
+  const sprite = v.cut ? `/api/runs/${id}/filmstrip?v=${v.n}${q}` : v.draft ? `/api/runs/${id}/filmstrip?${dq}` : null;
   const frames = useSprite(sprite);
   // with music the cut's audio is two stems: the voice lane draws the speech alone, the music lane the ducked bed
-  const peaks = usePeaks(v.cut ? `/api/runs/${id}/peaks?v=${v.n}${v.music ? "&track=voice" : ""}${q}` : null);
+  const peaks = usePeaks(v.cut ? `/api/runs/${id}/peaks?v=${v.n}${v.music ? "&track=voice" : ""}${q}` : v.draft ? `/api/runs/${id}/peaks?${dq}` : null);
   const bedPeaks = usePeaks(v.cut && v.music ? `/api/runs/${id}/peaks?v=${v.n}&track=music${q}` : null);
   const top = peaks ? Math.max(...peaks.peaks, 0.01) : 1; // both lanes on the voice's scale: the bed looks as loud as it is
   const gain = (a?: number, b?: number) => 10 ** (((a ?? 0) - (b ?? 0)) / 20);
@@ -818,4 +820,11 @@ function Placement({ value, onChange, disabled }: { value: string; onChange: (k:
       ))}
     </span>
   );
+}
+
+/** A short stable key for a string (a draft's clips), so a changed draft fetches its media again. */
+function hashKey(x: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < x.length; i++) h = Math.imul(h ^ x.charCodeAt(i), 16777619);
+  return (h >>> 0).toString(36);
 }

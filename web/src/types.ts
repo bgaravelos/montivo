@@ -66,6 +66,7 @@ export type HookResult = {
 };
 
 export type Version = {
+  draft?: boolean; // the live preview's open draft (server/draft.py): no cut yet, the timeline's media come from the source
   n: number; edl: string; cut: string | null; runtime_s: number; duration_s: number | null;
   title_card: boolean; title_card_text: string | null; title_s: number; spans: Span[]; origin: Origin;
   loudness: { integrated_lufs: number; true_peak_dbtp: number; lra_lu: number } | null; captions: number | null;

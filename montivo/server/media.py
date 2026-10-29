@@ -105,3 +105,34 @@ def peaks(src: Path, out: Path) -> dict:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(data, separators=(",", ":")))
         return data
+
+
+def draft_filmstrip(source_strip: Path, segments: list[dict], duration: float, title_s: float, out: Path) -> Path:
+    """A draft's filmstrip without a render: the cut's sprite (one tile every THUMB_STEP_S of cut time) put together
+    from a filmstrip of the source (`filmstrip` run on the edit proxy, tile k = source time k * THUMB_STEP_S) through
+    the draft's segments (engine/preview.py: t_in, cut_t0, frames at fps); the title card's tiles stay black."""
+    from PIL import Image
+    src = Image.open(source_strip)
+    n_src = max(1, src.width // THUMB_W)
+    n = max(1, min(1200, int(duration / THUMB_STEP_S) + 1))
+    img = Image.new("RGB", (n * THUMB_W, THUMB_H))
+    for k in range(n):
+        c = k * THUMB_STEP_S
+        seg = next((s for s in reversed(segments) if c >= s["cut_t0"] - 1e-6), None)
+        if seg is None or c < title_s:
+            continue
+        j = min(n_src - 1, max(0, round((seg["t_in"] + c - seg["cut_t0"]) / THUMB_STEP_S)))
+        img.paste(src.crop((j * THUMB_W, 0, (j + 1) * THUMB_W, THUMB_H)), (k * THUMB_W, 0))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out, quality=80)
+    return out
+
+
+def draft_peaks(source_peaks: dict, segments: list[dict], fps: float, title_s: float) -> dict:
+    """A draft's waveform from the source's peaks (`peaks` of the source audio) through the draft's segments."""
+    rate, sp = source_peaks["rate"], source_peaks["peaks"]
+    out = [0.0] * int(round(title_s * rate))
+    for s in segments:
+        a = int(round(s["t_in"] * rate))
+        out += sp[a:a + int(round(s["frames"] / fps * rate))]
+    return {"rate": rate, "peaks": out}
