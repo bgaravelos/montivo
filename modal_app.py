@@ -95,13 +95,15 @@ def budget():
 
 
 @app.function(image=image, volumes={DATA: volume}, cpu=4.0, memory=8192, timeout=900)
-def smoke(run: str = "015", span: str = "s4", music: str = "", cover: bool = False, reorder: bool = False):
+def smoke(run: str = "015", span: str = "s4", music: str = "", cover: bool = False, reorder: bool = False, live: bool = False):
     """`modal run modal_app.py::smoke`: a $0 drop on a copy of a sample outside the Volume, so this image's ffmpeg is
     checked end to end (render, captions, loudness) without changing what the judges see. `--music ID` puts that
     bundled music bed under the speech instead (the mix, its loudness and the speech stem). `--cover` renders the
     newest version's headline and sticker covers instead (engine/thumb.py, $0) and checks Meta's SAM mask parser
     imports for the cutout. `--reorder` moves the last clip in front of the first (reorder_smoke) and fails unless
-    the new cut's audio lasts as long as its video: ffmpeg before 8.0 dropped the audio after such a clip."""
+    the new cut's audio lasts as long as its video: ffmpeg before 8.0 dropped the audio after such a clip. `--live`
+    checks the editor's live preview on this image instead (engine/preview.py): the edit proxy and audio of the
+    newest version's source, its preview data with the graphics, and one draft op (human.step), each timed."""
     import shutil
     import subprocess
     import sys
@@ -125,6 +127,24 @@ def smoke(run: str = "015", span: str = "s4", music: str = "", cover: bool = Fal
         return
     if reorder:
         reorder_smoke(root, run)
+        return
+    if live:
+        code = ("import json, subprocess, sys, time; from pathlib import Path; from montivo import human; "
+                "from montivo.engine import preview as P; from montivo.server import draft; "
+                "d = Path(sys.argv[1]); n = max(int(p.stem[5:]) for p in d.glob('edl_v*.json')); "
+                "edl = json.loads((d / f'edl_v{n}.json').read_text()); "
+                "t = time.time(); m = P.edit_media(d, edl); a = time.time() - t; "
+                "kf = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-skip_frame', 'nokey', '-show_entries', "
+                "'frame=pts_time', '-of', 'csv=p=0', str(d / m['video'])], capture_output=True, text=True).stdout.split()[:4]; "
+                "print(f'edit media v{n}: {m[\"width\"]}x{m[\"height\"]} {m[\"fps\"]:g} fps, {m[\"bytes\"] / 1e6:.1f} MB in {a:.1f} s, keyframes {kf}'); "
+                "t = time.time(); x = P.preview_data(d, edl); b = time.time() - t; "
+                "print(f'preview data: {len(x[\"segments\"])} segments, {len(x[\"captions\"])} lines, {len(x[\"callouts\"])} callouts, "
+                "{len(x[\"punch_ins\"])} punch-ins, music {bool(x.get(\"music\"))}, gain {x[\"gain_db\"]} dB in {b * 1000:.0f} ms'); "
+                "w, au = draft.inputs(d); t = time.time(); new, _ = human.step(edl, w, au, {'op': 'drop', 'args': {'span': edl['spans'][1]['id']}}); "
+                "print(f'draft drop {edl[\"spans\"][1][\"id\"]}: {edl[\"runtime_s\"]} -> {new[\"runtime_s\"]} s in {(time.time() - t) * 1000:.0f} ms')")
+        r = subprocess.run([sys.executable, "-c", code, f"runs/{run}"], cwd=root, capture_output=True, text=True,
+                           env={**os.environ, "MODEL_API_KEY": ""})
+        print(r.stdout[-3000:], r.stderr[-3000:], f"exit {r.returncode}", sep="\n", flush=True)
         return
     op = ["music", f"runs/{run}", "--track", music] if music else ["drop", f"runs/{run}", "--span", span]
     r = subprocess.run([sys.executable, "-m", "montivo.human", *op], cwd=root,
