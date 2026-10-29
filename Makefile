@@ -5,10 +5,10 @@ VENV = .venv
 
 dev: $(VENV)/bin/montivo
 
-$(VENV)/bin/montivo: pyproject.toml
+$(VENV)/bin/montivo: pyproject.toml constraints.txt
 	$(PY) -m venv $(VENV)
 	$(VENV)/bin/pip install --upgrade pip >/dev/null
-	$(VENV)/bin/pip install -e ".[dev]"
+	$(VENV)/bin/pip install -e ".[dev]" -c constraints.txt
 	@echo "ok: $(VENV)/bin/montivo (export MODEL_API_KEY=... before running)"
 
 test: dev

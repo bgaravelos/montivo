@@ -1,19 +1,47 @@
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { dur, usd } from "./api";
 import { Icon } from "./icons";
 import type { CutAsk } from "./edit";
 import type { MoveAsk, TrimAsk } from "./Timeline";
 import type { RunState, Version } from "./types";
 
-function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
+
+/** A modal's keyboard contract (WAI-ARIA dialog): focus moves into it when it opens, Tab and Shift+Tab stay inside it,
+ *  Esc closes it, and focus goes back to the control that opened it. The Export page uses it too. */
+export function useModal(box: React.RefObject<HTMLElement>, onClose: () => void) {
+  const close = useRef(onClose);
+  close.current = onClose;
   useEffect(() => {
-    const k = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    const opener = document.activeElement as HTMLElement | null;
+    const el = box.current;
+    if (el && !el.contains(document.activeElement)) el.focus({ preventScroll: true });
+    const k = (e: KeyboardEvent) => {
+      const d = box.current;
+      if (!d) return;
+      if (e.key === "Escape") { e.stopPropagation(); e.preventDefault(); close.current(); return; }
+      if (e.key !== "Tab") return;
+      const items = [...d.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((x) => x.offsetParent !== null || x === document.activeElement);
+      if (!items.length) { e.preventDefault(); d.focus(); return; }
+      const first = items[0], last = items[items.length - 1], at = document.activeElement;
+      if (e.shiftKey && (at === first || at === d || !d.contains(at))) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && (at === last || !d.contains(at))) { e.preventDefault(); first.focus(); }
+    };
     window.addEventListener("keydown", k, true);
-    return () => window.removeEventListener("keydown", k, true);
-  }, [onClose]);
+    return () => {
+      window.removeEventListener("keydown", k, true);
+      if (opener && opener.isConnected && opener !== document.body) opener.focus({ preventScroll: true });
+    };
+  }, [box]);
+}
+
+function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+  const box = useRef<HTMLDivElement>(null);
+  useModal(box, onClose);
   return (
     <div className="modal-bg" onPointerDown={onClose}>
-      <div className={`modal ${wide ? "wide" : ""}`} onPointerDown={(e) => e.stopPropagation()} role="dialog" aria-label={title}>
+      <div ref={box} tabIndex={-1} className={`modal ${wide ? "wide" : ""}`} onPointerDown={(e) => e.stopPropagation()}
+        role="dialog" aria-modal="true" aria-label={title}>
         <div className="modal-head"><span className="mh-title">{title}</span><button className="icon-btn" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button></div>
         {children}
       </div>

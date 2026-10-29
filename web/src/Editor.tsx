@@ -44,6 +44,13 @@ const typing = (el: EventTarget | null) => {
   const e = el as HTMLElement | null;
   return !!e && (e.tagName === "INPUT" || e.tagName === "TEXTAREA" || e.tagName === "SELECT" || e.isContentEditable);
 };
+// a focused control Space should press (a button, a link, a summary, a role="button" row), not the player's play/pause;
+// the clips, captions and markers on the timeline canvas stay on play/pause (select a clip, Space plays), as in an NLE
+const CONTROL = "button, a[href], summary, [role=button], [role=checkbox], [role=switch], [role=tab], [role=menuitem], [role=option], [role=radio]";
+const pressable = (el: EventTarget | null): HTMLElement | null => {
+  const e = el instanceof Element ? el.closest<HTMLElement>(CONTROL) : null;
+  return e && !e.closest(".tl-canvas") ? e : null;
+};
 
 /** The editor: top bar, icon rail + one panel, the 9:16 viewer, the inspector and the timeline. The agent loop stays in
  *  view through the Assistant (the pipeline checklist and every version's story), the score chip and the review
@@ -293,7 +300,14 @@ export function Editor({ id, replay, go }: Props) {
     }
     if (mod) return;
     switch (e.key) {
-      case " ": e.preventDefault(); p?.toggle(); break;
+      case " ": {
+        const c = pressable(e.target);
+        if (c) { // native buttons, links and summaries press on their own; role="button" rows only listen for Enter
+          if (!c.matches("button, a[href], summary")) { e.preventDefault(); c.click(); }
+          break;
+        }
+        e.preventDefault(); p?.toggle(); break;
+      }
       case "j": case "J": p?.shuttle(-1); break;
       case "k": case "K": p?.shuttle(0); break;
       case "l": case "L": p?.shuttle(1); break;
@@ -415,7 +429,7 @@ export function Editor({ id, replay, go }: Props) {
           )}
         </div>
         <ShareMenu id={id} version={v?.cut ? v.n : null} disabled={!!replay} onShare={shareLink} flash={flash} />
-        <button className="btn export" disabled={!v?.cut} onClick={() => setDialog({ kind: "export" })}><Icon name="export" /> Export</button>
+        <button className="btn export" disabled={!v?.cut} onClick={() => setDialog({ kind: "export" })} aria-label="Export"><Icon name="export" /> <span className="btn-label">Export</span></button>
       </header>
 
       <div className="mobile-note">Review mode: watch the cut, read the review, ask Montivo, export. The timeline and the editing panels open on a desktop.</div>

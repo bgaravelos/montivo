@@ -172,14 +172,14 @@ def test_saved_looks(tmp_path, monkeypatch):
     monkeypatch.delenv("MODEL_API_KEY", raising=False)
     c = TestClient(create_app(tmp_path))
     assert c.get("/api/looks").json()["saved"] == []
-    r = c.post("/api/looks/saved", json={"name": "Nocta brand", "look": {"preset": "box", "text": "#FFC629"}})
-    assert r.status_code == 200 and r.json()["saved"][0]["id"] == "nocta-brand"
-    assert c.post("/api/looks/saved", json={"name": "nocta BRAND", "look": {"preset": "clean"}}).json()["saved"][0]["look"]["preset"] == "clean"
+    r = c.post("/api/looks/saved", json={"name": "My brand", "look": {"preset": "box", "text": "#FFC629"}})
+    assert r.status_code == 200 and r.json()["saved"][0]["id"] == "my-brand"
+    assert c.post("/api/looks/saved", json={"name": "my BRAND", "look": {"preset": "clean"}}).json()["saved"][0]["look"]["preset"] == "clean"
     assert c.post("/api/looks/saved", json={"name": "x", "look": {"preset": "neon"}}).status_code == 400
     assert c.post("/api/looks/saved", json={"name": " ", "look": {}}).status_code == 400
     assert len(c.get("/api/looks").json()["saved"]) == 1 and (tmp_path / "looks" / "saved.json").is_file()
-    assert c.delete("/api/looks/saved/nocta-brand").json()["saved"] == []
-    assert c.delete("/api/looks/saved/nocta-brand").status_code == 404
+    assert c.delete("/api/looks/saved/my-brand").json()["saved"] == []
+    assert c.delete("/api/looks/saved/my-brand").status_code == 404
 
 
 def test_layout_and_preview_pass_the_reframe_concept(tmp_path, monkeypatch):

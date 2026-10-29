@@ -42,7 +42,10 @@ def generate_image(prompt: str, out: Path, request: Path, response: Path, ledger
     body = {"model": IMAGE_MODEL, "prompt": prompt, "n": 1, "size": size,
             "response_format": "b64_json", "output_format": "png", "reasoning_strength": "low",
             "tool_enablement": {"enable_image_search": False, "enable_web_search": False, "enable_shell": False}}
-    dump_json(request, body)
+    # the request is written next to the PNG only once the PNG is there: run.title_card and export.title_ready read
+    # it as "this PNG shows these words", so written first, a failed call for new words left the old card passing for
+    # them on the retry (cloud review, 29/10); a failed request is kept as <request>.failed.json
+    request.with_suffix(".failed.json").unlink(missing_ok=True)
     log(f"image: {label} -> {IMAGE_MODEL} ...")
     t0 = time.perf_counter()
 
@@ -54,11 +57,13 @@ def generate_image(prompt: str, out: Path, request: Path, response: Path, ledger
     except RuntimeError as exc:
         ledger.add(Entry(stage=stage, model=IMAGE_MODEL, seconds=round(time.perf_counter() - t0, 2), cost_usd=0.0,
                          status="http_error", note=str(exc)[:200]))
+        dump_json(request.with_suffix(".failed.json"), body)
         raise
     seconds = round(time.perf_counter() - t0, 2)
     item = data["data"][0]
     raw = base64.b64decode(item["b64_json"])
     out.write_bytes(raw)
+    dump_json(request, body)
     meta = {k: v for k, v in data.items() if k != "data"}
     meta["data"] = [{k: v for k, v in d.items() if k != "b64_json"} for d in data["data"]]
     dump_json(response, meta)

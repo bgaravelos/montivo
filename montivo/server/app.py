@@ -14,6 +14,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -43,6 +44,21 @@ RUN_PATH = re.compile(r"^/api/runs/([^/]+)")  # every route of one run (state, f
 ARCHIVE = "_archive"  # runs/_archive/<id>: archived run folders (list_runs skips it: it has no run.json)
 STOP_GRACE_S = 5  # a stopped job's process group gets this long after SIGTERM, then SIGKILL
 STOP_HOLD_USD = 0.05  # at most this much is held on the hosted budget for a call a stopped job may have had in flight
+STREAM_MAX_S = 300.0  # a live /events stream ends after this; the browser's EventSource reconnects on its own
+SHUTDOWN_GRACE_S = 5  # `montivo serve`: open streams get this long after SIGTERM, then uvicorn cancels them
+MAX_PASSES = 3  # review passes one request may ask for (the review loop's own limit; each pass is a paid review)
+
+
+def review_passes(b: dict, key: str = "review", default: int = 0, lo: int = 0) -> int:
+    """b[key] as a number of review passes, lo..MAX_PASSES: the browser sends 0 to 3, and nothing else may (a
+    request with "review": 400 asked for 400 paid reviews in one job, the hosted cap's whole $15)."""
+    try:
+        n = int(b.get(key) or default)  # as the routes read it before: absent, 0 or false is the default
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"{key}: {lo} to {MAX_PASSES} review passes")
+    if not lo <= n <= MAX_PASSES:
+        raise HTTPException(400, f"{key}: {lo} to {MAX_PASSES} review passes")
+    return n
 UPLOAD_PROBE_S = 20  # ffprobe reads only the container header: a phone clip answers in well under a second
 PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 
@@ -183,6 +199,20 @@ def job_progress(st: "State", job: Job) -> dict | None:
     return p
 
 
+def finite(x) -> float:
+    """float(x), and a ValueError (the routes' 400) for nan / inf too: the JSON bodies and the query strings both take
+    them, and they reached ffmpeg and the EDLs (/frame?t=nan answered 500, cloud review 29/10)."""
+    f = float(x)
+    if not math.isfinite(f):
+        raise ValueError(f"{x!r} is not a finite number")
+    return f
+
+
+def bad_query(*xs: float) -> None:
+    if not all(math.isfinite(x) for x in xs):
+        raise HTTPException(400, "seconds: a finite number")
+
+
 def has_key() -> bool:
     return bool(os.environ.get("MODEL_API_KEY"))
 
@@ -241,13 +271,16 @@ def retry_estimate(root: Path, kind: str, args: list[str], duration=lambda p: No
         clip = next((root / a for a in args if a.startswith("footage/")), None)
         dur = (duration(clip) if clip and clip.is_file() else None) or 95.0
         est += COST["run_fixed"] + COST["run_per_s"] * dur + (COST["review_loop"] if "--review" in args else 0.0)
-    if "replan" in args or kind == "ask":
+    if "replan" in args or (kind == "ask" and "--no-model" not in args):  # the keyword reader is $0
         est += COST["plan"] + COST["ask"]
     if kind == "hook":
         est += COST["hook_ab"] + COST["review"]
-    if "--prompt" in args:
+    if "--prompt" in args and "overlay" not in args:  # a look from words; an overlay's --prompt is the still's
         est += COST["look"]
-    if "--title" in args or "overlay" in args:
+    # new title words go as one "--title=WORDS" argument; a B-roll still costs only when made (--prompt), not when it
+    # is moved or taken out (cloud review, 29/10: a stopped $0 Ask held $0.05, a stopped overlay remove $0.01 and
+    # stopped title words nothing)
+    if "--title" in args or any(a.startswith("--title=") for a in args) or ("overlay" in args and "--prompt" in args):
         est += 0.01
     return round(max(est, hosted.MIN_PAID_USD) if floor else est, 4)
 
@@ -461,7 +494,7 @@ def create_app(root: Path) -> FastAPI:
                              f"sample {run_id}: your edits go here and the sample stays as it was for the next judge."})
         return mine
 
-    async def own(run_id: str, request: Request) -> str:
+    async def own(run_id: str, request: Request, est=None, what: str = "This edit") -> str:
         """The run an edit goes to: the run itself, or on the hosted demo the judge's own copy of a sample (made on
         their first edit, runs/<id>-<judge>), so one judge's edits never become the next judge's opening version.
         The request body is read before the copy (Starlette keeps it for the route) and the copy runs in a thread:
@@ -472,8 +505,18 @@ def create_app(root: Path) -> FastAPI:
             if budget is not None and owner(d) != judge_of(request):
                 raise HTTPException(404, "no such run")  # another judge's project
             return run_id
-        await request.body()
+        raw = await request.body()
         st.refuse_second_job()  # each route here starts a job: no copy for an edit the one-job rule refuses (28/10)
+        # nor for one the key or the budget refuses (cloud review, 29/10: every refused paid edit copied first, ~13 s
+        # each on the Modal Volume): `est(body)` is what the route will ask need_key for, the review passes included
+        try:
+            b = json.loads(raw or b"{}")
+        except ValueError:
+            b = {}
+        b = b if isinstance(b, dict) else {}
+        cost = est(b) if est else COST["review"] * review_passes(b)
+        if cost > 0:
+            need_key(what, cost)
         return await asyncio.to_thread(copy_sample, run_id, d, judge_of(request))
 
     def key_info() -> dict:
@@ -525,6 +568,7 @@ def create_app(root: Path) -> FastAPI:
     def frame(run_id: str, v: int, t: float, clean: bool = False):
         """The frame the reviewer saw at cut time t: from the review copy (720x1280 with the clock) when it exists;
         clean=1 takes it from cut_vN.mp4 itself (the loop film's posters)."""
+        bad_query(t)
         d = st.run_dir(run_id)
         src = d / "review" / f"review_v{v}" / f"cut_v{v}_review.mp4"
         if clean or not src.is_file():
@@ -701,7 +745,7 @@ def create_app(root: Path) -> FastAPI:
         aspect = b.get("aspect") or "9:16"
         template = b.get("template") or "frame"
         try:
-            v, t = int(b.get("v")), round(float(b.get("t")), 2)
+            v, t = int(b.get("v")), round(finite(b.get("t")), 2)
         except (TypeError, ValueError):
             raise HTTPException(400, "v: a version, t: a cut second")
         if aspect not in ASPECTS or template not in TEMPLATES:
@@ -789,7 +833,8 @@ def create_app(root: Path) -> FastAPI:
         if "cover" in inc and isinstance(b.get("cover_design"), dict):
             _, _, design = cover_body({**b["cover_design"], "v": b.get("v"), "t": cover or 0, "aspect": aspect})
             design.pop("t_s")
-        if not inc or preset not in ("full", "720") or (cover is not None and not isinstance(cover, (int, float))) \
+        if not inc or preset not in ("full", "720") or (cover is not None and not (isinstance(cover, (int, float))
+                                                                                and math.isfinite(cover))) \
                 or aspect not in ASPECTS:
             raise HTTPException(400, f"include: some of {', '.join(KINDS)}; preset: full or 720; cover_t: seconds; "
                                      f"aspect: one of {', '.join(ASPECTS)}")
@@ -848,6 +893,7 @@ def create_app(root: Path) -> FastAPI:
         """SSE. Live: the current session of run.log, then every new line, `job` when a job starts or ends and
         `changed` when a version, review or ledger file changes. replay=1 or 4: the finished run's story played
         back at that speed (pauses capped at 2.5 s), for recording the demo without a fresh run."""
+        bad_query(replay)
         d = st.run_dir(run_id)
         logp = d / "run.log"
 
@@ -859,7 +905,8 @@ def create_app(root: Path) -> FastAPI:
             lines = parse_log(text)
             last_session = lines[-1]["session"] if lines else 0
             j = st.job(run_id)
-            yield sse("hello", {"mode": "live", "job": j.public() if j else None})
+            # retry: the browser reconnects 2 s after the stream ends (STREAM_MAX_S, or a server going away)
+            yield "retry: 2000\n" + sse("hello", {"mode": "live", "job": j.public() if j else None})
             if j and j.ended is None:  # a job is running: replay its session so the rail picks up where it is
                 for ln in lines:
                     if ln["session"] == last_session:
@@ -870,7 +917,11 @@ def create_app(root: Path) -> FastAPI:
             seen_job = (j.id, j.ended) if j else None
             n_lines, session, t_last = len(lines), last_session, (lines[-1]["t"] if lines else None)
             buf = ""
-            while not await request.is_disconnected():
+            # a stream that never ends kept a server from stopping: uvicorn waits for every open response after a
+            # SIGTERM, and after a `modal deploy` the old web container kept serving (cloud review, 29/10). It ends
+            # after STREAM_MAX_S; the browser's reconnect gets the hello (a reload) and the job's lines again
+            deadline = time.monotonic() + STREAM_MAX_S
+            while time.monotonic() < deadline and not await request.is_disconnected():
                 await asyncio.sleep(0.4)
                 grew = False
                 if logp.is_file() and logp.stat().st_size > pos:
@@ -1032,6 +1083,9 @@ def create_app(root: Path) -> FastAPI:
             except subprocess.TimeoutExpired:
                 raise HTTPException(400, "the demo server could not read this clip's length: try an MP4 or MOV "
                                          "straight from the camera or phone")
+            if max_footage_s and dur <= 0:  # junk, a truncated file or a live recording: no length, no quota slot
+                raise HTTPException(400, "the demo server could not read this clip's length: try an MP4 or MOV "
+                                         "straight from the camera or phone")
             if max_footage_s and dur > max_footage_s:
                 raise HTTPException(400, f"this clip is {dur:.0f} s: the demo server takes clips up to "
                                          f"{max_footage_s:.0f} s")
@@ -1064,7 +1118,10 @@ def create_app(root: Path) -> FastAPI:
         rid = b.get("id") or free_name(st.runs, time.strftime("ui-%m%d-%H%M")).name  # two judges in one minute
         if not SAFE_NAME.match(rid) or (st.runs / rid / "run.json").exists():
             raise HTTPException(400, f"run id {rid!r} is taken or not a folder name")
-        target = float(b.get("target") or 40)
+        try:
+            target = finite(b.get("target") or 40)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "target: seconds")
         open_planner = planner_of(b)
         args = ["-m", "montivo.cli", "run", str(src.relative_to(st.root)), "--brief", brief, "--out", f"runs/{rid}",
                 "--target", f"{target:g}"]
@@ -1091,7 +1148,7 @@ def create_app(root: Path) -> FastAPI:
         b = await request.json()
         span = str(b.get("span", ""))
         frm = int(b.get("from") or latest_version(d))
-        passes = int(b.get("review") or 0)
+        passes = review_passes(b)
         if passes:
             need_key("Reviewing the new cut", COST["review"] * passes)
         if not re.fullmatch(r"s\d+", span):
@@ -1109,7 +1166,7 @@ def create_app(root: Path) -> FastAPI:
         b = await request.json()
         span, edge = str(b.get("span", "")), str(b.get("edge", ""))
         frm = int(b.get("from") or latest_version(d))
-        passes = int(b.get("review") or 0)
+        passes = review_passes(b)
         if passes:
             need_key("Reviewing the new cut", COST["review"] * passes)
         if not re.fullmatch(r"s\d+", span) or edge not in ("in", "out"):
@@ -1133,7 +1190,7 @@ def create_app(root: Path) -> FastAPI:
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
-        passes = int(b.get("review") or 0)
+        passes = review_passes(b)
         if passes:
             need_key("Reviewing the new cut", COST["review"] * passes)
         skip, on = b.get("skip"), b.get("on")
@@ -1224,6 +1281,7 @@ def create_app(root: Path) -> FastAPI:
     def pauses_plan(run_id: str, v: int, over: float = 0.6, keep: float = 0.3):
         """What "Remove pauses" would shorten in version v: {count, saved_s, pauses: [{t_cut, was_s, ...}]}, $0."""
         from .. import human
+        bad_query(over, keep)
         d = st.run_dir(run_id)
         p = d / f"edl_v{v}.json"
         if not p.is_file():
@@ -1244,7 +1302,7 @@ def create_app(root: Path) -> FastAPI:
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
         try:
-            over, keep = float(b.get("over", 0.6)), float(b.get("keep", 0.3))
+            over, keep = finite(b.get("over", 0.6)), finite(b.get("keep", 0.3))
         except (TypeError, ValueError):
             raise HTTPException(400, "over and keep: seconds")
         if not 0.2 <= over <= 5.0 or not 0.0 <= keep < over:
@@ -1262,7 +1320,8 @@ def create_app(root: Path) -> FastAPI:
         Image call, $0.01, so it needs the key), one moved or re-placed ({"set": "b1", "at" / "dur" / "placement"}, $0)
         or taken out ({"remove": "b1"}, $0): the next version."""
         from ..engine import broll
-        run_id = await own(run_id, request)
+        run_id = await own(run_id, request, lambda b: 0.0 if b.get("remove") or b.get("set") else 0.01,
+                           "A B-roll still (Muse Image)")
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
@@ -1270,7 +1329,7 @@ def create_app(root: Path) -> FastAPI:
         for k, flag in (("at", "--at"), ("dur", "--dur")):
             if b.get(k) is not None:
                 try:
-                    opts += [flag, f"{float(b[k]):.2f}"]
+                    opts += [flag, f"{finite(b[k]):.2f}"]
                 except (TypeError, ValueError):
                     raise HTTPException(400, f"{k}: seconds")
         if b.get("placement") is not None:
@@ -1341,7 +1400,7 @@ def create_app(root: Path) -> FastAPI:
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
-        passes = int(b.get("review") or 0)
+        passes = review_passes(b)
         if passes:
             need_key("Reviewing the new cut", COST["review"] * passes)
         edits = b.get("edits") or []
@@ -1350,7 +1409,7 @@ def create_app(root: Path) -> FastAPI:
         flags, quoted = [], []
         for e in edits:
             try:
-                at, text = float(e["at"]), " ".join(str(e["text"]).split())
+                at, text = finite(e["at"]), " ".join(str(e["text"]).split())
             except (KeyError, TypeError, ValueError):
                 raise HTTPException(400, "each edit needs at (cut seconds) and text")
             if not text or len(text) > 200:
@@ -1368,11 +1427,12 @@ def create_app(root: Path) -> FastAPI:
     async def text_edit(run_id: str, request: Request):
         """Callouts ({"callouts": {span: text}}, "" removes one), the title card on or off ({"title_card": bool}) or new
         title words ({"title": text}: one Muse Image call, $0.01, so it needs the key): the next version."""
-        run_id = await own(run_id, request)
+        run_id = await own(run_id, request, lambda b: (0.01 if b.get("title") is not None else 0.0)
+                           + COST["review"] * review_passes(b), "New title words")
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
-        passes = int(b.get("review") or 0)
+        passes = review_passes(b)
         callouts = b.get("callouts") or {}
         title, card = b.get("title"), b.get("title_card")
         if not isinstance(callouts, dict) or not all(re.fullmatch(r"s\d+", k) and isinstance(v, str) and len(v) <= 80
@@ -1429,7 +1489,7 @@ def create_app(root: Path) -> FastAPI:
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
-        passes = int(b.get("review") or 0)
+        passes = review_passes(b)
         if passes:
             need_key("Reviewing the new cut", COST["review"] * passes)
         track = b.get("track")
@@ -1472,7 +1532,7 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/looks/saved")
     def save_look(request: Request, b: dict):
-        """{"name": "Nocta", "look": {...}}: kept with the person's looks (same name replaces it, 24 at most)."""
+        """{"name": "My brand", "look": {...}}: kept with the person's looks (same name replaces it, 24 at most)."""
         name = " ".join(str(b.get("name") or "").split())[:40]
         if not name:
             raise HTTPException(400, "name: 1 to 40 characters")
@@ -1527,7 +1587,7 @@ def create_app(root: Path) -> FastAPI:
         from ..engine.look import preview as still, with_style
         d = st.run_dir(run_id)
         try:
-            v, t = int(b.get("v")), round(float(b.get("t")), 2)
+            v, t = int(b.get("v")), round(finite(b.get("t")), 2)
         except (TypeError, ValueError):
             raise HTTPException(400, "v: a version, t: a cut second")
         look, places = style_body(b)
@@ -1558,11 +1618,12 @@ def create_app(root: Path) -> FastAPI:
     async def style_edit(run_id: str, request: Request):
         """The caption look and callout places ({"look": {...}, "callouts": {span: [x, y] | null}}): the next version,
         ffmpeg only."""
-        run_id = await own(run_id, request)
+        run_id = await own(run_id, request, lambda b: (COST["look"] if str(b.get("prompt") or "").strip() else 0.0)
+                           + COST["review"] * review_passes(b), "A look from words")
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
-        passes = int(b.get("review") or 0)
+        passes = review_passes(b)
         look, places = style_body(b)
         prompt = " ".join(str(b.get("prompt") or "").split())[:300] or None
         if look is None and not places and not prompt:
@@ -1596,7 +1657,7 @@ def create_app(root: Path) -> FastAPI:
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
-        passes = int(b.get("review") or 0)
+        passes = review_passes(b)
         if passes:
             need_key("Reviewing the new cut", COST["review"] * passes)
         span, before = str(b.get("span", "")), b.get("before")
@@ -1617,7 +1678,7 @@ def create_app(root: Path) -> FastAPI:
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
-        passes = int(b.get("review") or 0)
+        passes = review_passes(b)
         if passes:
             need_key("Reviewing the new cut", COST["review"] * passes)
         ranges = b.get("words")
@@ -1670,7 +1731,7 @@ def create_app(root: Path) -> FastAPI:
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
-        passes = int(b.get("review") or 0)
+        passes = review_passes(b)
         if passes:
             need_key("Reviewing the new cut", COST["review"] * passes)
         spk, head = str(b.get("speaker", "")), b.get("head")
@@ -1686,7 +1747,8 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/runs/{run_id}/replan")
     async def replan(run_id: str, request: Request):
-        run_id = await own(run_id, request)
+        run_id = await own(run_id, request, lambda b: COST["plan_open" if b.get("planner") == "open" else "plan"]
+                           + COST["review"] * review_passes(b), "Re-planning")
         d = st.run_dir(run_id)
         b = await request.json()
         model = planner_of(b)
@@ -1694,7 +1756,7 @@ def create_app(root: Path) -> FastAPI:
         if not text:
             raise HTTPException(400, "the instruction is empty")
         frm = int(b.get("from") or latest_version(d))
-        passes = int(b.get("review") or 0)
+        passes = review_passes(b)
         need_key("Re-planning", COST["plan_open" if model else "plan"] + COST["review"] * passes)
         chips = [str(c) for c in b.get("chips") or []]
         instr = text + (f" (about {', '.join(chips)})" if chips else "")
@@ -1709,7 +1771,7 @@ def create_app(root: Path) -> FastAPI:
         """Ask Montivo: {"message", "chips", "from", "review", "planner"} -> montivo.agent: one Spark call picks the
         edits (music, look, punch-ins, captions, callouts, title, clips, a re-plan), one new version. Without the key
         (or past the hosted budget) a keyword reader does the few edits it can name safely, $0."""
-        run_id = await own(run_id, request)
+        run_id = await own(run_id, request, lambda b: 0.0)  # short of the budget it falls back to $0, never refuses
         d = st.run_dir(run_id)
         b = await request.json()
         model = planner_of(b)
@@ -1717,12 +1779,18 @@ def create_app(root: Path) -> FastAPI:
         if not text:
             raise HTTPException(400, "the message is empty")
         frm = int(b.get("from") or latest_cut(d))
-        passes = int(b.get("review") or 0)
-        use = key_ok()
+        passes = review_passes(b)
+        router = COST["ask"] + COST["plan_open" if model else "plan"]
+
+        def fits(usd: float) -> bool:
+            return budget is None or budget.left() >= round(usd, 4)
+        if key_ok() and passes and not fits(router + COST["review"] * passes):
+            passes = 0  # the edit before its review: the budget left still covers the router
+        use = key_ok() and fits(router)
         if not use:
-            passes = 0  # the keyword reader edits for $0: no review without the key
-        if use and budget is not None:
-            budget.require("Ask Montivo", COST["ask"] + COST["plan_open" if model else "plan"] + COST["review"] * passes)
+            # the keyword reader edits for $0, no review: without the key, or with less left than the router may spend
+            # (cloud review, 29/10: $0.01 to $0.056 left answered 409 instead of falling back)
+            passes = 0
         chips = [str(c) for c in b.get("chips") or []]
         msg = text + (f" (about {', '.join(chips)})" if chips else "")
         scope = b.get("scope") if isinstance(b.get("scope"), dict) else None
@@ -1751,7 +1819,7 @@ def create_app(root: Path) -> FastAPI:
         d = st.run_dir(run_id)
         b = await request.json()
         rec = pending_of(d, str(b.get("pending") or ""))
-        passes = int(b.get("review") or 0) if key_ok() else 0
+        passes = review_passes(b) if key_ok() else 0
         est = float(rec.get("card", {}).get("usd") or 0) - COST["review"] * int(rec.get("passes") or 0) + COST["review"] * passes
         if est > 0.001:
             need_key("Applying this change", est)
@@ -1808,11 +1876,12 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/runs/{run_id}/review")
     async def review(run_id: str, request: Request):
-        run_id = await own(run_id, request)
+        run_id = await own(run_id, request, lambda b: COST["review"] * review_passes(b, "passes", default=3, lo=1),
+                           "A blind review")
         d = st.run_dir(run_id)
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
-        passes = int(b.get("passes") or 3)
+        passes = review_passes(b, "passes", default=3, lo=1)
         need_key("The review loop" if passes > 1 else "A blind review", COST["review"] * passes)
         args = ["-m", "montivo.cli", "review", f"runs/{run_id}", "--edl", f"edl_v{frm}.json", "--passes", str(passes)]
         job = start_job(st, run_id, "review", "Review loop" if passes > 1 else "Blind review", args,
@@ -1824,7 +1893,7 @@ def create_app(root: Path) -> FastAPI:
     async def hook(run_id: str, request: Request):
         """The hook A/B on one version: the next version opens on another line, both are reviewed blind, the higher
         (pass, overall) is kept (`montivo hook`, one or two reviews, $0.10 budget)."""
-        run_id = await own(run_id, request)
+        run_id = await own(run_id, request, lambda b: 0.07, "The hook A/B")
         d = st.run_dir(run_id)
         b = await request.json()
         need_key("The hook A/B", 0.07)
@@ -1925,7 +1994,8 @@ def main(argv: list[str] | None = None) -> int:
     import uvicorn
     print(f"montivo-ui: http://{a.host}:{a.port}  (runs from {a.root.resolve() / 'runs'}; "
           f"MODEL_API_KEY {'set' if has_key() else 'not set: finished runs and drop span only'})", flush=True)
-    uvicorn.run(create_app(a.root), host=a.host, port=a.port, log_level="warning")
+    uvicorn.run(create_app(a.root), host=a.host, port=a.port, log_level="warning",
+                timeout_graceful_shutdown=SHUTDOWN_GRACE_S)  # an open /events stream no longer holds a SIGTERM
     return 0
 
 

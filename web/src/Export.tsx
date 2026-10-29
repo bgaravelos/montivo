@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, tc } from "./api";
 import { CoverMaker, type CoverRecord, type CoverState } from "./CoverMaker";
+import { useModal } from "./Dialogs";
 import { Icon } from "./icons";
 import type { Costs, Version } from "./types";
 
@@ -102,6 +103,8 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
   id: string; versions: Version[]; initial: number | null; onClose: () => void; onStyle: () => void;
   hasKey: boolean; keyNote: string | null; costs: Costs | undefined;
 }) {
+  const box = useRef<HTMLDivElement>(null);
+  useModal(box, onClose); // Esc closes it from anywhere, focus moves in and stays in, and goes back to Export after
   const cuts = versions.filter((x) => x.cut);
   const [n, setN] = useState(initial ?? cuts.at(-1)?.n ?? 1);
   const v = cuts.find((x) => x.n === n) ?? null;
@@ -158,8 +161,7 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
   };
   return (
     <div className="modal-bg" onPointerDown={onClose}>
-      <div className="modal export-page" onPointerDown={(e) => e.stopPropagation()} role="dialog" aria-label="Export"
-        onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}>
+      <div ref={box} tabIndex={-1} className="modal export-page" onPointerDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Export">
         <div className="modal-head"><span className="mh-title">Export</span><button className="icon-btn" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button></div>
         <div className="ex-grid">
           <div className="ex-left">

@@ -13,6 +13,7 @@ dependencies = [
     "httpx>=0.28",
     "pillow>=10.1",
     "fastapi>=0.115",
+    "starlette>=0.38",  # 0.37 read an over-limit upload body whole before the 413
     "uvicorn>=0.32",
     "meta-sam-parser==0.1.0",  # Meta's SAM 3 mask decoder (the cutout cover)
 ]

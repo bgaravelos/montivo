@@ -6,6 +6,8 @@ every version. Every op has its own tests; nobody had checked what they do to ea
 After every version:
   files      edl_vN.json and cut_vN.mp4 both exist (never one without the other), and an op that refuses writes neither
   duration   cut_vN.mp4 lasts the EDL's spans (+ the title card) within one frame
+  audio      the file's audio stream lasts as long as its video within 2 frames (ffmpeg < 8 gave 9 s of audio in a
+             22 s cut after a reorder, 29/10, and every other check passed)
   loudness   -14 LUFS +-0.5, true peak <= -1 dBTP (ffmpeg ebur128 on the file)
   words      every kept word once (no two clips share a word or a stretch of audio), the words the op deleted gone, no
              word the op did not add appears, no clip's audio covers most of a word outside its own range
@@ -106,6 +108,20 @@ def probe_duration(p: Path) -> float:
     r = sh(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=duration,width,height",
             "-of", "json", str(p)])
     return float(json.loads(r.stdout)["streams"][0]["duration"])
+
+
+def probe_audio_duration(p: Path) -> float | None:
+    """The first audio stream's duration (None when the file has no audio stream or ffprobe gives none)."""
+    r = sh(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=duration", "-of", "json", str(p)])
+    st = json.loads(r.stdout or "{}").get("streams") or []
+    return float(st[0]["duration"]) if st and st[0].get("duration") not in (None, "N/A") else None
+
+
+def audio_fail(p: Path, video_s: float) -> list[str]:
+    a = probe_audio_duration(p)
+    if a is None:
+        return [f"audio: {p.name} has no audio stream"]
+    return [f"audio {a:.3f} s vs video {video_s:.3f} s"] if abs(a - video_s) > 2 * FPS_TOL else []
 
 
 def probe_size(p: Path) -> tuple[int, int]:
@@ -380,6 +396,7 @@ def check_version(run: Path, n: int, prev: dict, step: Step, words: list[dict], 
     framed = sum(s["duration"] for s in segs) + expected_duration(run, {"spans": [], "render": new.get("render")})
     if abs(dur - want) > FPS_TOL * 2 * max(1, len(segs)) or (segs and abs(dur - framed) > FPS_TOL):
         fail.append(f"duration {dur:.3f} s vs the EDL's {want:.3f} s ({framed:.3f} s in segment frames)")
+    fail += audio_fail(cut_p, dur)
     i, tp = loudness(cut_p)
     out["loudness"] = [i, tp]
     if abs(i + 14) > 0.5 or tp > -1.0:
@@ -415,6 +432,7 @@ def check_exports(run: Path, n: int) -> list[dict]:
         for v in vids:
             if probe_size(v) != size:
                 item["fail"].append(f"{v.name} is {probe_size(v)}, not {size}")
+            item["fail"] += audio_fail(v, probe_duration(v))
             i, tp = loudness(v)
             if abs(i + 14) > 0.5 or tp > -1.0:
                 item["fail"].append(f"{v.name} loudness {i} / {tp}")

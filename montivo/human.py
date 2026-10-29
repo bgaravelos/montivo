@@ -82,6 +82,21 @@ def latest_edl(run_dir: Path) -> int:
     return max(ns)
 
 
+def from_version(run_dir: Path, from_v: int | None) -> int:
+    """The version an edit starts from: the latest edl_vN when none is named, else that one, refused cleanly (exit 1,
+    one line) when it is not 1 or more or has no edl_vN.json. `--from 0` used to mean the latest (0 is falsy) and a
+    missing version ended in a FileNotFoundError traceback."""
+    if from_v is None:
+        return latest_edl(run_dir)
+    if from_v < 1:
+        raise SystemExit(f"--from {from_v}: versions start at 1")
+    if not (run_dir / f"edl_v{from_v}.json").is_file():
+        ns = sorted(int(m.group(1)) for p in run_dir.glob("edl_v*.json") if (m := re.fullmatch(r"edl_v(\d+)\.json", p.name)))
+        have = f"versions: {', '.join(map(str, ns))}" if ns else "no edl_vN.json"
+        raise SystemExit(f"--from {from_v}: edl_v{from_v}.json not found in {run_dir} ({have})")
+    return from_v
+
+
 def _words(run_dir: Path) -> Words:
     return Words(json.loads((run_dir / "voice" / "voice.json").read_text())["words"])
 
@@ -111,7 +126,7 @@ def drop(run_dir: Path, span_id: str, from_v: int | None = None, passes: int = 0
     """Drop one span of edl_v{from} -> edl_vN: the reviewer's drop_span patch, then the two edges that now meet are
     tightened to the speech again (they used to face the dropped span)."""
     log = RunLog(run_dir / "run.log")
-    from_v = from_v or latest_edl(run_dir)
+    from_v = from_version(run_dir, from_v)
     edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
     ids = [s["id"] for s in edl["spans"]]
     if span_id not in ids:
@@ -177,7 +192,7 @@ def trim(run_dir: Path, span_id: str, edge: str, word: int, from_v: int | None =
          budget: float = 0.15) -> dict:
     """Move one edge of one span of edl_v{from} to a word boundary -> edl_vN, through apply_fixes like a review fix."""
     log = RunLog(run_dir / "run.log")
-    from_v = from_v or latest_edl(run_dir)
+    from_v = from_version(run_dir, from_v)
     edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
     words, audio = _words(run_dir), Audio.load(run_dir)
     fix = trim_fix(edl, words, span_id, edge, word)
@@ -256,7 +271,7 @@ def caption(run_dir: Path, edits: list[tuple[float, str]], from_v: int | None = 
     """Retext caption lines of edl_v{from} -> edl_vN, rendered: for the words Voice misheard (run 015: "meta meta
     models" for "Four Meta models"). $0 without --review."""
     log = RunLog(run_dir / "run.log")
-    from_v = from_v or latest_edl(run_dir)
+    from_v = from_version(run_dir, from_v)
     edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
     fixes = caption_fixes(edl, edits)
     n = next_version(run_dir)
@@ -280,7 +295,7 @@ def punch(run_dir: Path, on: bool | None = None, skip: str | None = None, from_v
     if (on is None) == (skip is None):
         raise SystemExit("give --on, --off or --skip KEY")
     log = RunLog(run_dir / "run.log")
-    from_v = from_v or latest_edl(run_dir)
+    from_v = from_version(run_dir, from_v)
     edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
     new = copy.deepcopy(edl)
     if skip is not None:
@@ -318,7 +333,7 @@ def punch(run_dir: Path, on: bool | None = None, skip: str | None = None, from_v
 
 
 def _new_version(run_dir: Path, from_v: int | None) -> tuple[int, dict, int]:
-    from_v = from_v or latest_edl(run_dir)
+    from_v = from_version(run_dir, from_v)
     return from_v, json.loads((run_dir / f"edl_v{from_v}.json").read_text()), next_version(run_dir)
 
 
@@ -556,6 +571,8 @@ def reorder(run_dir: Path, span_id: str, before: str | None, from_v: int | None 
     ids = [s["id"] for s in edl["spans"]]
     if span_id not in ids or (before is not None and before not in ids):
         raise SystemExit(f"{span_id if span_id not in ids else before} is not a span of edl_v{from_v} ({', '.join(ids)})")
+    if before == span_id:
+        raise SystemExit(f"cannot move {span_id} before itself")
     k = ids.index(span_id)
     rest = [i for i in ids if i != span_id]
     at = rest.index(before) if before else len(rest)
@@ -1297,7 +1314,7 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
     from .engine.spark import Spark
     log = RunLog(run_dir / "run.log")
     model = model or SPARK_MODEL
-    from_v = from_v or latest_edl(run_dir)
+    from_v = from_version(run_dir, from_v)
     prev = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
     run = json.loads((run_dir / "run.json").read_text())
     n = next_version(run_dir)

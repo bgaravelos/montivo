@@ -56,11 +56,14 @@ def ffprobe(path: Path) -> Probe:
     out = subprocess.run(
         ["ffprobe", "-v", "error", "-show_entries",
          "stream=index,codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,pix_fmt,color_transfer,"
-         "color_primaries:stream_tags=rotate"
+         "color_primaries:stream_tags=rotate:stream_disposition=attached_pic"
          ":stream_side_data=rotation:format=duration,size",
          "-of", "json", str(path)], check=True, capture_output=True, text=True).stdout
     data = json.loads(out)
-    video = next((s for s in data["streams"] if s.get("codec_type") == "video"), None)
+    # an audio file's cover art is a one-frame "video" stream (attached_pic): taken for the picture it made
+    # make_upright run with no end (29/10, a 6 s m4a with art: 6+ min, 1.1 GB)
+    video = next((s for s in data["streams"] if s.get("codec_type") == "video"
+                  and not (s.get("disposition") or {}).get("attached_pic")), None)
     if video is None:
         raise SystemExit(f"{path}: no video stream")
     audio = next((s for s in data["streams"] if s.get("codec_type") == "audio"), None)
@@ -72,6 +75,8 @@ def ffprobe(path: Path) -> Probe:
     r_fps = _rate(video.get("r_frame_rate") or rate)
     rot = next((sd["rotation"] for sd in video.get("side_data_list") or [] if "rotation" in sd),
                (video.get("tags") or {}).get("rotate", 0))
+    if not data["format"].get("duration"):  # a live-recorded mkv / webm (browser MediaRecorder) has none
+        raise SystemExit(f"{path}: the file has no duration (a live recording?): export it again as MP4 or MOV")
     return Probe(width=int(video["width"]), height=int(video["height"]), fps=round(fps, 3),
                  duration=float(data["format"]["duration"]), bytes=int(data["format"]["size"]),
                  has_audio=has_audio, codec=video.get("codec_name", "?"), rotation=int(round(float(rot))) % 360,
@@ -239,7 +244,7 @@ def make_upright(src: Path, dst: Path, hflip: bool = False, log=None, fps: float
     is then tagged BT.709). The copy is at most UPRIGHT_MAX_H tall and encoded veryfast: a 90 s iPhone clip in 4K HDR
     took 479 s at x264 medium and full size (28/10), the hosted demo's one job holding every judge meanwhile."""
     vf = [x for x in (sdr, f"fps={fps:g}" if fps else "", "hflip" if hflip else "",
-                      f"scale=-2:'min(ih,{UPRIGHT_MAX_H})':flags=lanczos") if x]
+                      f"scale=-2:'trunc(min(ih,{UPRIGHT_MAX_H})/2)*2':flags=lanczos") if x]
     tags = ["-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709"] if sdr else []
     # camera PCM (10-bit XAVC S, .MOV) cannot be copied into .mp4 by older ffmpeg builds: lossless ALAC instead
     audio = "alac" if ffprobe(src).audio_codec.startswith("pcm_") else "copy"

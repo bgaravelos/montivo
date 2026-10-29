@@ -603,7 +603,8 @@ def handles(segments: list[Segment], source_s: float | None = None, xfade_s: flo
     return out
 
 
-def cut_graph(segments: list[Segment], source_s: float | None = None, xfade_s: float = AUDIO_XFADE_S) -> list[str]:
+def cut_graph(segments: list[Segment], source_s: float | None = None, xfade_s: float = AUDIO_XFADE_S,
+              per_input: bool = False) -> list[str]:
     """The filter lines that cut the source audio into the segments and join them as [cut]: each segment read with
     its handles (handles()), every cut an equal-power crossfade (quarter-sine both ways, sin^2 + cos^2 = 1) centred on
     the cut over both handles, so the joined audio is exactly as long as the segments' frames and room tone runs
@@ -622,7 +623,10 @@ def cut_graph(segments: list[Segment], source_s: float | None = None, xfade_s: f
             fades.append(f"afade=t=out:st={max(0.0, n / AUDIO_RATE - AUDIO_FADE_S):.6f}:d={AUDIO_FADE_S}")
         # apad: exactly n samples even where the audio stream ends before the container (a phone clip's video runs on),
         # else the crossfade eats the short segment's end and every later segment plays early against its video
-        lines.append(f"[0:a]aresample={AUDIO_RATE},atrim=start={start / AUDIO_RATE:.9f}:duration={n / AUDIO_RATE:.9f},"
+        # per_input: segment i reads input i (the same source given once per segment): with every segment on one
+        # input, ffmpeg before 8.0 (6.1.1, 7.0.2 measured) drops the audio from the first segment that starts earlier
+        # in the source than the one before it (a reorder, the hook A/B) through acrossfade
+        lines.append(f"[{i if per_input else 0}:a]aresample={AUDIO_RATE},atrim=start={start / AUDIO_RATE:.9f}:duration={n / AUDIO_RATE:.9f},"
                      f"asetpts=PTS-STARTPTS,apad=whole_len={n},{','.join(fades + [fmt])}[s{i}]")
     cur = "[s0]"
     for i in range(1, len(segments)):
@@ -656,15 +660,16 @@ def render_audio(source: Path, segments: list[Segment], render_dir: Path, lead_s
     if lead_s > 0:
         parts.append(f"anullsrc=r={AUDIO_RATE}:cl=stereo,atrim=duration={lead_s:.6f},{fmt}[lead]")
         labels.append("[lead]")
-    parts += cut_graph(segments, source_s)
+    parts += cut_graph(segments, source_s, per_input=True)
     labels.append("[cut]")
+    inputs = [source] * len(segments)
     joined = ";".join(parts) + ";" + "".join(labels) + f"concat=n={len(labels)}:v=0:a=1"
     speech = render_dir / "speech.wav" if music else out
     rec = None
     if loudnorm:
-        rec = _loudness(source, joined, speech)
+        rec = _loudness(inputs, joined, speech)
     else:
-        _run_audio(source, _audio_graph(joined, ""), speech)
+        _run_audio(inputs, _audio_graph(joined, ""), speech)
     if not music:
         return out, rec, None
     from . import music as bed_mod

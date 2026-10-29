@@ -124,7 +124,10 @@ def test_clip_length_and_upload_size_limits(tmp_path, hosted_env):
     assert r.status_code == 400 and "up to 1 s" in r.json()["error"]
     r = c.put("/api/footage/big.mp4", content=b"x" * 5000)
     assert r.status_code == 413 and not (tmp_path / "footage" / "big.mp4").exists()
-    assert c.put("/api/footage/small.mp4", content=b"x" * 500).status_code == 200
+    # under the size limit but no readable length (junk, a truncated file, a live recording): refused, no quota slot
+    r = c.put("/api/footage/small.mp4", content=b"x" * 500)
+    assert r.status_code == 400 and "could not read" in r.json()["error"]
+    assert not (tmp_path / "footage" / "small.mp4").exists()
 
 
 def test_the_samples_cannot_be_archived_on_the_host(tmp_path, hosted_env):

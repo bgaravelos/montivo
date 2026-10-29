@@ -180,7 +180,7 @@ read the cut's frames but heard nothing, caught the planted faults as often as S
 
 Same hook and ending and 8 of 9 passages in common; Spark Open opened the body on "for the Meta Hackathon we are
 building Montivo" where Spark 1.3 kept a stumbling take. Its first cut then went through the same blind review and
-passed (88, 27/10). A second run, an Ask Montivo re-plan of run 015 to "about 30 seconds" on Spark Open,
+passed (92, 27/10; 88 on a re-review once the reviewer also got the caption timeline). A second run, an Ask Montivo re-plan of run 015 to "about 30 seconds" on Spark Open,
 came back in 14 s for $0.011 and kept both callouts. Two runs are not a benchmark: on these two the open model
 planned the same structure as Spark 1.3 at about a quarter of the cost and a fifth of the time, and we claim no more
 than that.
@@ -216,7 +216,7 @@ A running job (a new run, Ask Montivo, an edit, a review, the hook A/B) shows wh
 and its card on the project list: the step (plan, edges, render "segment 2 of 3", review, hook A/B), a clock against the
 step's expected time (this run's earlier calls in `ledger.json`, else the measured hints: plan 35 s on Spark 1.3, 7 s
 on Muse Spark Open, review 26 s) and a bar that moves by time but never past the last checkpoint `run.log` logged
-(Voice, SAM and Watch on a new run have no estimate, so their bar says so); replay drives the same view. The viewer has safe-area guides (Reels, TikTok, Shorts, approximate; G cycles them), N and Shift+N jump to the next
+(Voice, SAM and Watch on a new run have no estimate, so their bar says so); replay drives the same view. The viewer has safe-area guides (Reels, TikTok, Shorts, approximate; G cycles them), . and , jump to the next
 and previous reviewer issue, and Versions marks the version the project opens on apart from the loop's best. Export is
 a page of its own: a cover frame (scrub to pick it, with the Instagram profile grid's 3:4 crop shown, or "Let Muse Spark
 pick": one call on the version's review copy, the blind review's upload reused, names three moments with a reason each,

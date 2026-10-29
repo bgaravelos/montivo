@@ -35,8 +35,8 @@ export function ShareMenu({ id, version, disabled, onShare, flash }: {
   return (
     <div className="share-menu" onPointerDown={(e) => e.stopPropagation()}>
       <button className="btn quiet share-btn" disabled={disabled || version == null} onClick={() => version != null && onShare(version).then(() => { if (open) load(); })}
-        title="A read-only page with this version, its blind review and the score history; anyone with the link can watch it">
-        <Icon name="link" /> Share
+        title="A read-only page with this version, its blind review and the score history; anyone with the link can watch it" aria-label="Share">
+        <Icon name="link" /> <span className="btn-label">Share</span>
       </button>
       <button className="btn quiet share-caret" onClick={() => setOpen(!open)} title="This project's share links" aria-label="Share links">
         <Icon name="chevronDown" size={12} />

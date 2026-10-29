@@ -128,7 +128,7 @@ class Budget:
 
     def require(self, what: str, est: float) -> None:
         left = self.left()
-        if left < max(est, MIN_PAID_USD):
+        if left < round(max(est, MIN_PAID_USD), 4):  # 3 x $0.035 is 0.10500000000000001: refused at exactly $0.105
             raise HTTPException(409, f"{what} needs about ${est:.2f} of Meta model calls and this demo has "
                                      f"${max(left, 0):.2f} of its {usd(self.cap)} budget left. The finished projects "
                                      "and the $0 edits (delete, trim, captions, move, punch-ins, speakers) still work.")

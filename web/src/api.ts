@@ -41,12 +41,17 @@ export function useRun(id: string, replay: number) {
     setSeen(fresh());
     setProgress(null);
     const es = new EventSource(`/api/runs/${id}/events${replay ? `?replay=${replay}` : ""}`);
+    // a live stream ends every few minutes (server STREAM_MAX_S) and EventSource reconnects: the server sends the
+    // running job's lines again, so a line already shown (same i, its index in run.log) is skipped, and each hello
+    // reloads the state for what changed while the stream was away
+    const shown = new Set<number>();
     const later = () => { // a burst of file changes -> one reload
       if (timer.current) window.clearTimeout(timer.current);
       timer.current = window.setTimeout(reload, 350);
     };
     es.addEventListener("line", (ev) => {
       const ln = JSON.parse((ev as MessageEvent).data) as LogLine;
+      if (!replay) { if (shown.has(ln.i)) return; shown.add(ln.i); }
       setLines((prev) => (prev.length > 1500 ? [...prev.slice(-1200), ln] : [...prev, ln]));
       setSeen((s) => {
         const n = { ...s, stages: new Set(s.stages), cuts: new Set(s.cuts), reviews: new Set(s.reviews) };
@@ -59,6 +64,7 @@ export function useRun(id: string, replay: number) {
     });
     es.addEventListener("job", (ev) => { setJob(JSON.parse((ev as MessageEvent).data)); later(); });
     es.addEventListener("changed", later);
+    if (!replay) es.addEventListener("hello", later);
     es.addEventListener("progress", (ev) => setProgress({ ...JSON.parse((ev as MessageEvent).data), recv: performance.now() }));
     es.addEventListener("replay_end", () => { setSeen((s) => ({ ...s, running: null, ended: true })); setProgress((p) => (p ? { ...p, active: false } : p)); });
     return () => { es.close(); if (timer.current) window.clearTimeout(timer.current); };

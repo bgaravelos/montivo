@@ -152,7 +152,7 @@ export function StylePanel({ id, v, t, next, canEdit, draft, setDraft, onSeek, o
           </div>
         )}
         <div className="st-row">
-          <input className="st-input grow" value={saveName} maxLength={40} placeholder="Name this look, e.g. Nocta brand"
+          <input className="st-input grow" value={saveName} maxLength={40} placeholder="Name this look, e.g. My brand"
             onChange={(e) => setSaveName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveLook(); }} />
           <button className="btn quiet small" disabled={!saveName.trim()} onClick={saveLook} title="Keep the look as it is now (with your staged changes) for other projects">Save look</button>
         </div>
