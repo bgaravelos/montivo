@@ -480,57 +480,62 @@ def versions(run_dir: Path) -> list[dict]:
         cut = f"cut_v{n}.mp4"
         if not (run_dir / cut).is_file():
             cut = None
-        render = edl.get("render") or {}
-        title = render.get("title")
-        card = edl.get("title_card", True) is not False and bool(edl.get("title_card_text"))
-        title_s = float(title.get("seconds", 1.5)) if title else (0.0 if render else 1.5 if card else 0.0)
-        patches = edl.get("patches") or []
-        origin = {"source": "plan"}
-        if n > 1 and patches:
-            last = patches[-1]
-            origin = {"source": last.get("source") or "review", "from": last.get("from"), "review": last.get("review"),
-                      "action": last.get("action") or "review", "instruction": last.get("instruction"),
-                      "result": last.get("result"), "challenger": last.get("challenger"), "why": last.get("why"),
-                      "agent": last.get("agent"),
-                      "fixes": [{k: f.get(k) for k in ("op", "target", "issue", "severity", "t_s", "note", "args", "check")} for f in last.get("fixes") or []]}
-        # the planner that made this paper edit: v1's for the plan, a re-plan's own model; patches keep their parent's
-        planner = first_planner if origin["source"] == "plan" else last.get("model") if origin.get("action") == "replan" \
-            or (origin.get("agent") and last.get("model")) else None
-        if origin.get("action") == "replan" and not planner:
-            planner = SPARK_MODEL  # re-plans before the model was recorded ran on Spark 1.3
-        cmp = read_json(run_dir / f"plan_compare_v1_v{n}.json")
-        rv = read_json(run_dir / f"review_v{n}.json")
-        if rv and cut and Path(rv.get("cut", "")).name != cut:
-            rv = None  # a review of another file of the same name pattern
-        out.append({"n": n, "edl": p.name, "cut": cut, "runtime_s": edl.get("runtime_s"),
-                    "duration_s": render.get("duration_s"), "title_card": edl.get("title_card", True) is not False,
-                    "title_card_text": edl.get("title_card_text"), "title_s": title_s,
-                    "spans": [_span(s) for s in edl.get("spans", [])], "origin": origin,
-                    "loudness": render.get("loudness_ebur128"), "captions": render.get("captions"),
-                    "callouts": [{"span": c.get("span"), "text": c.get("text"), "t_in": c.get("t_in"), "t_out": c.get("t_out"),
-                                  "box": c.get("box"), "placement": c.get("placement"), "head_box": c.get("head_box"),
-                                  "over_face": bool(c.get("over_face"))}
-                                 for c in edl.get("callouts") or []],
-                    "look": _look(edl),
-                    "music": _music(edl, render),
-                    "caption_lines": [{"id": c.get("id"), "text": c.get("text"), "t_in": c.get("t_in"), "t_out": c.get("t_out"),
-                                       "spans": c.get("spans") or [], "placement": c.get("placement"),
-                                       "over_face": bool(c.get("over_face")), "box": c.get("box"),
-                                       "head_box": c.get("head_box"),
-                                       "heard": next((w["voice"] for w in c.get("words") or [] if w.get("voice")), None)}
-                                      for c in edl.get("captions") or []],
-                    "caption_style": edl.get("caption_style"), "caption_style_note": edl.get("caption_style_note"),
-                    "brief_missing": list(edl.get("brief_missing") or []),
-                    "punch": bool(edl.get("punch")), "punch_skip": list(edl.get("punch_skip") or []),
-                    "speaker_pins": {str(k): str(v) for k, v in (edl.get("reframe_speaker_ids") or {}).items()},
-                    "punch_ins": [{k: e.get(k) for k in ("key", "kind", "word", "span", "excess_db", "t_in", "t_out", "zoom")}
-                                  for e in edl.get("punch_ins") or [] if e.get("key")],
-                    "overlays": _overlays(edl, render),
-                    "bytes": (run_dir / cut).stat().st_size if cut else None,
-                    "planner": {"model": planner, "name": planner_name(planner)} if planner else None,
-                    "plan_compare": cmp,
-                    "review": _review(rv, run_dir) if rv else None})
+        out.append(version_entry(run_dir, n, p.name, edl, cut, first_planner))
     return out
+
+
+def version_entry(run_dir: Path, n: int, name: str, edl: dict, cut: str | None, first_planner: str) -> dict:
+    """One version as the editor reads it, from its EDL (the live preview's draft is one too, with no cut)."""
+    render = edl.get("render") or {}
+    title = render.get("title")
+    card = edl.get("title_card", True) is not False and bool(edl.get("title_card_text"))
+    title_s = float(title.get("seconds", 1.5)) if title else (0.0 if render else 1.5 if card else 0.0)
+    patches = edl.get("patches") or []
+    origin = {"source": "plan"}
+    if n > 1 and patches:
+        last = patches[-1]
+        origin = {"source": last.get("source") or "review", "from": last.get("from"), "review": last.get("review"),
+                  "action": last.get("action") or "review", "instruction": last.get("instruction"),
+                  "result": last.get("result"), "challenger": last.get("challenger"), "why": last.get("why"),
+                  "agent": last.get("agent"),
+                  "fixes": [{k: f.get(k) for k in ("op", "target", "issue", "severity", "t_s", "note", "args", "check")} for f in last.get("fixes") or []]}
+    # the planner that made this paper edit: v1's for the plan, a re-plan's own model; patches keep their parent's
+    planner = first_planner if origin["source"] == "plan" else last.get("model") if origin.get("action") == "replan" \
+        or (origin.get("agent") and last.get("model")) else None
+    if origin.get("action") == "replan" and not planner:
+        planner = SPARK_MODEL  # re-plans before the model was recorded ran on Spark 1.3
+    cmp = read_json(run_dir / f"plan_compare_v1_v{n}.json")
+    rv = read_json(run_dir / f"review_v{n}.json")
+    if rv and cut and Path(rv.get("cut", "")).name != cut:
+        rv = None  # a review of another file of the same name pattern
+    return {"n": n, "edl": name, "cut": cut, "runtime_s": edl.get("runtime_s"),
+                "duration_s": render.get("duration_s"), "title_card": edl.get("title_card", True) is not False,
+                "title_card_text": edl.get("title_card_text"), "title_s": title_s,
+                "spans": [_span(s) for s in edl.get("spans", [])], "origin": origin,
+                "loudness": render.get("loudness_ebur128"), "captions": render.get("captions"),
+                "callouts": [{"span": c.get("span"), "text": c.get("text"), "t_in": c.get("t_in"), "t_out": c.get("t_out"),
+                              "box": c.get("box"), "placement": c.get("placement"), "head_box": c.get("head_box"),
+                              "over_face": bool(c.get("over_face"))}
+                             for c in edl.get("callouts") or []],
+                "look": _look(edl),
+                "music": _music(edl, render),
+                "caption_lines": [{"id": c.get("id"), "text": c.get("text"), "t_in": c.get("t_in"), "t_out": c.get("t_out"),
+                                   "spans": c.get("spans") or [], "placement": c.get("placement"),
+                                   "over_face": bool(c.get("over_face")), "box": c.get("box"),
+                                   "head_box": c.get("head_box"),
+                                   "heard": next((w["voice"] for w in c.get("words") or [] if w.get("voice")), None)}
+                                  for c in edl.get("captions") or []],
+                "caption_style": edl.get("caption_style"), "caption_style_note": edl.get("caption_style_note"),
+                "brief_missing": list(edl.get("brief_missing") or []),
+                "punch": bool(edl.get("punch")), "punch_skip": list(edl.get("punch_skip") or []),
+                "speaker_pins": {str(k): str(v) for k, v in (edl.get("reframe_speaker_ids") or {}).items()},
+                "punch_ins": [{k: e.get(k) for k in ("key", "kind", "word", "span", "excess_db", "t_in", "t_out", "zoom")}
+                              for e in edl.get("punch_ins") or [] if e.get("key")],
+                "overlays": _overlays(edl, render),
+                "bytes": (run_dir / cut).stat().st_size if cut else None,
+                "planner": {"model": planner, "name": planner_name(planner)} if planner else None,
+                "plan_compare": cmp,
+                "review": _review(rv, run_dir) if rv else None}
 
 
 def _overlays(edl: dict, render: dict) -> list[dict]:

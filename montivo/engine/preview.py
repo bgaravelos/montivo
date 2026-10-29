@@ -12,10 +12,17 @@ import json
 import threading
 from pathlib import Path
 
+from PIL import Image
+
+from . import broll
 from .api import dump_json
+from .captions import build_overlays, fit_line, highlight_words, norm
+from .edges import Audio
 from .frame import frame_for
-from .ingest import EDIT_PROXY_SHORT, ffprobe, make_edit_proxy
-from .render import TITLE_S, plan_paths, reframe_inputs
+from .graphics import FONTS, CaptionStyle, font, normalize_look
+from .ingest import EDIT_MAX_FPS, EDIT_PROXY_SHORT, ffprobe, make_edit_proxy
+from .punch import plan_punches
+from .render import TITLE_FADE_S, TITLE_S, load_track, plan_paths, reframe_inputs
 
 EDIT_DIR = Path("ui") / "cache" / "edit"
 _locks: dict[str, threading.Lock] = {}
@@ -34,7 +41,7 @@ def edit_media(run_dir: Path, edl: dict, log=None) -> dict:
     if not src.is_file():
         raise FileNotFoundError(f"source footage {src} not found")
     st = src.stat()
-    key = {"source": src.as_posix(), "bytes": st.st_size, "mtime": round(st.st_mtime, 3), "short": EDIT_PROXY_SHORT}
+    key = {"source": src.as_posix(), "bytes": st.st_size, "mtime": round(st.st_mtime, 3), "short": EDIT_PROXY_SHORT, "max_fps": EDIT_MAX_FPS}
     d = run_dir / EDIT_DIR
     video, audio, meta = d / "proxy.mp4", d / "audio.flac", d / "meta.json"
     with _lock(run_dir):
@@ -70,9 +77,47 @@ def title_seconds(run_dir: Path, edl: dict) -> tuple[float, str | None]:
     return round(round(TITLE_S * fps) / fps, 4), png.as_posix()
 
 
-def preview_data(run_dir: Path, edl: dict) -> dict:
-    """Segments in source and cut time and the crop path of each, exactly as render.plan_paths plans them for the
-    render (one crop x per source frame, in source pixels); about 15 ms on run 015."""
+def loudness_gain(edl: dict | None) -> float | None:
+    """The gain (dB) that takes the cut's speech to the render's target loudness: the render's first loudness pass
+    on that version (render.loudnorm). The browser adds it before a limiter, so the preview plays about as loud as
+    the exported file; a draft borrows its base version's."""
+    ln = ((edl or {}).get("render") or {}).get("loudnorm") or {}
+    first = ln.get("first_pass") or ln.get("speech", {}).get("first_pass") or {}
+    try:
+        return round(float(ln.get("target_i", -14.0)) - float(first["input_i"]), 2)
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _caption_style(look) -> dict:
+    """The look's colours and modes the browser draws a caption line with (graphics.draw_caption's rules)."""
+    return {"font": look.font, "text": look.text, "stroke": look.stroke, "active": look.active, "active_fg": look.active_fg,
+            "active_bg": look.active_bg, "highlight": look.highlight, "box": look.box, "shadow": look.shadow,
+            "upper": look.case == "upper", "callout_bg": look.callout_bg, "callout_fg": look.callout_fg}
+
+
+def _line(c: dict, style: CaptionStyle, names: set[str]) -> dict:
+    """One laid-out caption line with what draw_caption would draw it with: the size after fit_line, the pad and
+    the stroke in frame pixels, the font's ascent and descent, which words are names."""
+    texts = [w["w"] for w in c["words"]]
+    st = fit_line(texts, style)
+    asc, desc = font(st.size, st.font).getmetrics()
+    return {"id": c["id"], "t_in": c["t_in"], "t_out": c["t_out"], "box": c["box"], "placement": c["placement"],
+            "words": [{"w": st.shown(w["w"]), "t_in": w["t_in"], "t_out": w["t_out"],
+                       "hl": norm(w["w"]).replace("'s", "") in names} for w in c["words"]],
+            "size": st.size, "stroke": st.stroke, "space": st.space, "pad_x": st.pad_x, "pad_y": st.pad_y,
+            "ascent": asc, "descent": desc}
+
+
+def preview_data(run_dir: Path, edl: dict, overlays: bool = True, laid: bool = False) -> dict:
+    """What the live player draws for an EDL, planned by the render's own code without drawing or encoding: the
+    frame-aligned segments in source and cut time with each one's crop path (one crop x per source frame, source
+    pixels) and punch-in zoom, the caption lines and callouts laid out (frame pixels, cut seconds), the B-roll stills
+    (composed PNGs in ui/cache/preview/), the title card and the loudness gain. `overlays` False gives the segments
+    and crop only (about 5 ms on run 015; with overlays about 30-60 ms). `laid` adds "_edl": the EDL with the
+    layout fields a render would write (captions, callouts, punch_ins and a render record of its length and card),
+    for the editor's version entry of a draft (runs.version_entry)."""
+    edl = json.loads(json.dumps(edl))  # the layout writes into it
     concept, track, speaker_ids, fallback = reframe_inputs(run_dir, edl)
     segments, paths = plan_paths(edl, track, speaker_ids, fallback=fallback)
     fps = float(edl["source"]["fps"])
@@ -86,7 +131,51 @@ def preview_data(run_dir: Path, edl: dict) -> dict:
                     "crop": {"w": path.crop_w, "h": path.crop_h, "y": path.crop_y, "xs": path.xs}})
         t += dur
     src = edl["source"]
-    return {"fps": fps, "source": {"width": src["width"], "height": src["height"]},
+    data = {"fps": fps, "source": {"width": src["width"], "height": src["height"]},
             "frame": {"aspect": frame.aspect, "width": frame.w, "height": frame.h},
-            "title": {"seconds": title_s, "png": title_png} if title_s else None,
-            "duration_s": round(t, 6), "segments": out, "reframe_concept": concept}
+            "title": {"seconds": title_s, "png": title_png, "fade_s": TITLE_FADE_S} if title_s else None,
+            "duration_s": round(t, 6), "segments": out, "reframe_concept": concept,
+            "gain_db": loudness_gain(edl), "captions": [], "callouts": [], "stills": [], "punch_ins": []}
+    if not overlays:
+        return data
+    look = normalize_look(edl.get("look"))
+    style = CaptionStyle.from_look(look)
+    vpath = run_dir / "voice" / "voice.json"
+    words = json.loads(vpath.read_text())["words"] if vpath.is_file() else []
+    cache = run_dir / "ui" / "cache" / "preview"
+    head = load_track(run_dir, edl, "head")
+    fields, _ = build_overlays(edl, words, segments, paths, head, load_track(run_dir, edl, "person"), cache / "layout",
+                               title_s=title_s, captions=bool(words), reframe_concept=concept, draw_at=-1.0)
+    edl.update(fields)
+    names = highlight_words(edl, look)
+    data["look"] = _caption_style(look)
+    data["fonts"] = {look.font: FONTS[look.font][0]}
+    data["captions"] = [_line(c, style, names) for c in fields["captions"]]
+    ca, cd = font(58, look.font).getmetrics()  # graphics.draw_callout's size
+    data["callouts"] = [{"span": c["span"], "text": c["text"], "t_in": c["t_in"], "t_out": c["t_out"], "box": c["box"],
+                         "size": 58, "ascent": ca, "descent": cd} for c in fields["callouts"]]
+    if edl.get("overlays"):
+        stills, records = broll.place(edl, segments, title_s, run_dir, cache / "broll", frame)
+        at = {o.png.as_posix(): o for ovs in stills.values() for o in ovs}
+        for r in records:
+            o = at.get(r.get("png") or "")
+            if not r["shown"] or o is None:
+                continue
+            with Image.open(o.png) as im:
+                w, h = im.size
+            data["stills"].append({"id": r["id"], "placement": r["placement"], "t_in": r["t_in"], "t_out": r["t_out"],
+                                   "x": o.x, "y": o.y, "w": w, "h": h, "fade_s": o.fade_s,
+                                   "png": o.png.relative_to(run_dir).as_posix()})
+    if edl.get("punch"):
+        zooms, punches = plan_punches(edl, segments, paths, words, Audio.load(run_dir),
+                                      head if concept == "head" else None, fields["captions"], title_s=title_s)
+        for k, z in zooms.items():
+            out[k]["zoom"] = {"base": z["base"], "anchor": list(z["anchor"]),
+                              "events": [{x: e[x] for x in ("a", "b", "c", "d", "z")} for e in z["events"]]}
+        data["punch_ins"] = punches
+        edl["punch_ins"] = punches
+    if laid:
+        edl.setdefault("render", {"duration_s": data["duration_s"],
+                                  "title": {"seconds": title_s, "png": title_png} if title_s else None})
+        data["_edl"] = edl
+    return data

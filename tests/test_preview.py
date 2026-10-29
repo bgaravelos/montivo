@@ -41,7 +41,7 @@ def test_segments_and_crop_are_the_renders(tmp_path):
 def test_the_title_card_comes_first(tmp_path):
     rendered = _edl(tmp_path / "x.mp4", render={"title": {"png": "t.png", "seconds": 1.5}})
     data = P.preview_data(tmp_path, rendered)
-    assert data["title"] == {"seconds": 1.5, "png": "t.png"} and data["segments"][0]["cut_t0"] == 1.5
+    assert data["title"] == {"seconds": 1.5, "png": "t.png", "fade_s": 0.3} and data["segments"][0]["cut_t0"] == 1.5
     assert P.title_seconds(tmp_path, _edl(tmp_path / "x.mp4", render={"title": None})) == (0.0, None)  # rendered without one
     draft = _edl(tmp_path / "x.mp4", title_card_text="Raw in")
     assert P.title_seconds(tmp_path, draft) == (0.0, None)  # a draft never generates a card
@@ -104,3 +104,92 @@ def test_preview_route(tmp_path):
     assert c.get(data["media"]["video"]).status_code == 200 and c.get(data["media"]["audio"]).status_code == 200
     assert c.get("/api/runs/r1/preview?v=9").status_code == 404
     assert c.get("/api/runs/r1/preview/title.png?v=1").status_code == 404
+
+
+# --------------------------------------------------------------------------- phase 1: graphics, gain, drafts
+
+
+def _talk_run(tmp_path, clip_s=None):
+    """tests/test_review's three-span EDL (turn 0 at 10 s, turn 1 at 30 s) with Voice words and a callout; `clip_s`
+    adds a small source clip of that length (for the edit media)."""
+    from tests.test_review import make_edl, voice_words
+    d = tmp_path / "runs" / "r1"
+    (d / "voice").mkdir(parents=True)
+    edl, _ = make_edl(title=False)
+    edl["spans"][1]["callout"] = "Four Meta models"
+    edl["highlight"] = ["w02"]
+    if clip_s:
+        src = tmp_path / "clip.mp4"
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", f"testsrc=size=320x180:rate=30:duration={clip_s}",
+                        "-f", "lavfi", "-i", f"sine=frequency=440:duration={clip_s}", "-shortest", "-c:v", "libx264",
+                        "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", str(src)], check=True)
+        edl["source"]["path"] = str(src)
+    (d / "edl_v1.json").write_text(json.dumps(edl))
+    (d / "run.json").write_text(json.dumps({"footage": "x.mp4", "brief": "b"}))
+    (d / "voice" / "voice.json").write_text(json.dumps({"words": voice_words(), "speakers": ["A", "B"]}))
+    return d, edl
+
+
+def test_graphics_are_laid_out_as_the_render_lays_them_out(tmp_path):
+    from montivo.engine import look
+    d, edl = _talk_run(tmp_path)
+    data = P.preview_data(d, edl)
+    fields = look.layout(d, edl)
+    assert [(c["box"], c["t_in"], c["t_out"]) for c in data["captions"]] == [(c["box"], c["t_in"], c["t_out"]) for c in fields["captions"]]
+    assert [(c["box"], c["text"]) for c in data["callouts"]] == [(c["box"], c["text"]) for c in fields["callouts"]] != []
+    line = data["captions"][0]
+    assert line["size"] == 84 and line["stroke"] == 7 and line["ascent"] > 0  # the marker look's style
+    assert [w["hl"] for w in line["words"]] == [w["w"] == "w02" for w in line["words"]]
+    assert data["look"]["active"] == "pill" and data["fonts"] == {"inter-tight": "Inter Tight"}
+    assert data["gain_db"] is None  # never rendered
+
+
+def test_loudness_gain_reads_the_first_pass():
+    edl = {"render": {"loudnorm": {"target_i": -14.0, "first_pass": {"input_i": -29.73}}}}
+    assert P.loudness_gain(edl) == 15.73
+    assert P.loudness_gain({"render": {"loudnorm": {"speech": {"first_pass": {"input_i": -20}}}}}) == 6.0
+    assert P.loudness_gain({}) is None
+
+
+def test_draft_media_follow_the_segments(tmp_path):
+    from PIL import Image
+
+    from montivo.server import media
+    segs = [{"t_in": 2.0, "cut_t0": 1.0, "frames": 30}, {"t_in": 0.0, "cut_t0": 2.0, "frames": 15}]
+    pk = media.draft_peaks({"rate": 100, "peaks": [round(i / 1000, 3) for i in range(400)]}, segs, 30.0, 1.0)
+    assert len(pk["peaks"]) == 100 + 100 + 50 and pk["peaks"][:100] == [0.0] * 100
+    assert pk["peaks"][100] == 0.2 and pk["peaks"][200] == 0.0  # source 2.0 s, then source 0.0 s
+    strip = Image.new("RGB", (8 * media.THUMB_W, media.THUMB_H))
+    for k in range(8):  # source tile k painted k * 30
+        strip.paste((k * 30, 0, 0), (k * media.THUMB_W, 0, (k + 1) * media.THUMB_W, media.THUMB_H))
+    strip.save(tmp_path / "src.jpg", quality=100)
+    out = Image.open(media.draft_filmstrip(tmp_path / "src.jpg", segs, 2.5, 1.0, tmp_path / "d.jpg"))
+    reds = [out.getpixel((k * media.THUMB_W + 20, 40))[0] for k in range(6)]
+    assert reds[0] < 10 and reds[1] < 10  # the title card
+    assert abs(reds[2] - 120) < 12 and abs(reds[3] - 150) < 12 and abs(reds[4] - 0) < 12  # source 2.0, 2.5, then 0.0
+
+
+def test_draft_preview_and_its_timeline_media(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from montivo.server import draft
+    from montivo.server.app import create_app
+    d, _ = _talk_run(tmp_path, clip_s=34)
+    draft._inputs.clear()
+    c = TestClient(create_app(tmp_path))
+    assert c.get("/api/runs/r1/draft/preview").status_code == 404
+    r = c.post("/api/runs/r1/draft", json={"op": "drop", "args": {"span": "s2"}, "from": 1})
+    assert r.status_code == 200, r.text
+    p = c.get("/api/runs/r1/draft/preview").json()
+    assert p["draft"]["n"] == 2 and p["draft"]["ops"] == 1 and p["version"] is None
+    v = p["version_entry"]
+    assert v["draft"] and v["cut"] is None and v["n"] == 2 and [s["id"] for s in v["spans"]] == ["s1", "s3"]
+    assert v["origin"]["action"] == "draft" and v["origin"]["from"] == 1 and len(v["caption_lines"]) == len(p["captions"])
+    assert not any(c["span"] == "s2" for c in p["callouts"])  # the callout went with its clip
+    f = c.get("/api/runs/r1/filmstrip?draft=1")
+    assert f.status_code == 200 and f.headers["content-type"] == "image/jpeg"
+    pk = c.get("/api/runs/r1/peaks?draft=1").json()
+    assert abs(len(pk["peaks"]) - p["duration_s"] * 100) <= 2
+    assert c.get("/api/fonts/inter-tight").status_code == 200 and c.get("/api/fonts/x").status_code == 404
+    c.delete("/api/runs/r1/draft")
+    assert c.get("/api/runs/r1/filmstrip?draft=1").status_code == 404

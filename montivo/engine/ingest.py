@@ -184,6 +184,7 @@ def make_proxy(src: Path, dst: Path, p: Probe, max_dim: int = PROXY_MAX_DIM, fps
 
 EDIT_PROXY_SHORT = 720  # the live preview's copy: a 9:16 crop of 16:9 footage is 405x720, the editor's viewer ~400 css px
 EDIT_GOP_S = 0.5  # a keyframe every half second: a browser seek decodes at most 15 frames (the proxy's GOP is 8.3 s)
+EDIT_MAX_FPS = 30.0  # a 60 fps source plays at 30 in the preview: headless Chrome dropped 18 % of 720p60's frames
 
 
 def edit_proxy_size(p: Probe, short: int = EDIT_PROXY_SHORT) -> tuple[int, int]:
@@ -193,12 +194,14 @@ def edit_proxy_size(p: Probe, short: int = EDIT_PROXY_SHORT) -> tuple[int, int]:
 
 def make_edit_proxy(src: Path, dst: Path, audio_dst: Path, p: Probe, short: int = EDIT_PROXY_SHORT, log=None) -> Probe:
     """The editor's live preview plays the cut from these two files: video only at most `short` px on the short side,
-    the source's own frames (the crop path holds one x per source frame), a keyframe every EDIT_GOP_S; the audio apart
-    as 48 kHz FLAC, which the browser decodes once for sample-accurate playback (no AAC priming offset)."""
+    the source's frames up to EDIT_MAX_FPS (the player reads each frame's crop x by its time, so half the frames of a
+    60 fps source is fine), a keyframe every EDIT_GOP_S; the audio apart as 48 kHz FLAC, which the browser decodes
+    once for sample-accurate playback (no AAC priming offset)."""
     w, h = edit_proxy_size(p, short)
-    gop = max(1, round(p.fps * EDIT_GOP_S))
+    fps = p.fps if p.fps <= EDIT_MAX_FPS + 0.5 else p.fps / round(p.fps / EDIT_MAX_FPS)
+    gop = max(1, round(fps * EDIT_GOP_S))
     run_ffmpeg(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-map", "0:v:0", "-an",
-                "-vf", f"scale={w}:{h}:flags=lanczos", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+                "-vf", f"{'' if fps == p.fps else f'fps={fps:.6f},'}scale={w}:{h}:flags=lanczos", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
                 "-g", str(gop), "-keyint_min", str(gop), "-sc_threshold", "0", "-pix_fmt", "yuv420p",
                 "-movflags", "+faststart", "-map_metadata", "-1", str(dst)], "edit proxy", log)
     run_ffmpeg(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-map", "0:a:0", "-vn", "-ar", "48000", "-ac", "2",

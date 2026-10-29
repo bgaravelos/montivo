@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -34,9 +34,9 @@ from ..config import OPEN_MODEL
 from ..engine.api import dump_json as write_json
 from ..engine.frame import ASPECTS
 from ..engine import preview as live_preview_engine
-from ..engine.graphics import FONTS, PRESET_NAMES, PRESETS, normalize_look
+from ..engine.graphics import FONTS, PRESET_NAMES, PRESETS, font_path, normalize_look
 from . import draft, hosted, media, preflight, share
-from .runs import fingerprint, heads, list_runs, parse_log, progress, read_json, replay_script, run_state
+from .runs import fingerprint, heads, list_runs, parse_log, progress, read_json, replay_script, run_state, version_entry
 
 STATIC = Path(__file__).parent / "static"
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm"}
@@ -592,22 +592,65 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(404, f"no edl_v{v}.json")
         return d, json.loads(p.read_text())
 
-    @app.get("/api/runs/{run_id}/preview")
-    def live_preview(run_id: str, v: int):
-        """What the live player needs to play version v from the edit proxy (engine/preview.py); the first call for a
-        source makes the edit proxy and audio (a few seconds), later ones answer in milliseconds."""
-        d, edl = edl_of(run_id, v)
+    def preview_payload(run_id: str, d: Path, edl: dict, v: int | None, base: dict | None = None, laid: bool = False) -> dict:
+        """engine/preview.py's data with the URLs the browser fetches: the edit proxy and audio (made on the first
+        call for a source, a few seconds), the title card, the B-roll stills, the look's font. A draft (v None)
+        borrows its base version's loudness gain."""
         try:
             media = live_preview_engine.edit_media(d, edl)
         except FileNotFoundError as e:
             raise HTTPException(404, str(e))
-        data = live_preview_engine.preview_data(d, edl)
+        data = live_preview_engine.preview_data(d, edl, laid=laid)
+        if data["gain_db"] is None and base is not None:
+            data["gain_db"] = live_preview_engine.loudness_gain(base)
         if data["title"]:
-            data["title"] = {"seconds": data["title"]["seconds"], "url": f"/api/runs/{run_id}/preview/title.png?v={v}"}
+            png = Path(data["title"].pop("png") or "")
+            inside = png.name != "" and d.resolve() in png.resolve().parents
+            data["title"]["url"] = (f"/api/runs/{run_id}/file/{png.resolve().relative_to(d.resolve()).as_posix()}" if inside
+                                    else f"/api/runs/{run_id}/preview/title.png?v={v}")
+        for s in data["stills"]:
+            s["url"] = f"/api/runs/{run_id}/file/{s.pop('png')}"
+        data["fonts"] = {k: {"name": name, "url": f"/api/fonts/{k}"} for k, name in (data.get("fonts") or {}).items()}
         data["media"] = {"video": f"/api/runs/{run_id}/file/{media['video']}", "audio": f"/api/runs/{run_id}/file/{media['audio']}",
                          "width": media["width"], "height": media["height"], "bytes": media["bytes"]}
         data["version"] = v
         return data
+
+    @app.get("/api/runs/{run_id}/preview")
+    def live_preview(run_id: str, v: int):
+        """What the live player needs to play version v from the edit proxy (engine/preview.py)."""
+        d, edl = edl_of(run_id, v)
+        return preview_payload(run_id, d, edl, v)
+
+    @app.get("/api/runs/{run_id}/draft/preview")
+    def live_preview_draft(run_id: str, request: Request):
+        """The same for the open draft (server/draft.py): what the editor plays while the edits are not a version."""
+        d = st.run_dir(run_id)
+        fd = draft.folder(d, judge_of(request) if budget is not None else None)
+        with draft.run_lock(d):
+            state = draft.load(fd)
+            if state is None:
+                raise HTTPException(404, "no draft")
+            edl = draft.current(fd, d, state)
+        base = d / f"edl_v{state['base']}.json"
+        out = preview_payload(run_id, d, edl, None, json.loads(base.read_text()) if base.is_file() else None, laid=True)
+        laid_edl = out.pop("_edl")
+        n = draft.newest(d) + 1  # the version "Make Version N" makes
+        laid_edl.setdefault("patches", []).append({"from": state["base"], "source": "human", "action": "draft",
+                                                   "fixes": [{"op": o["op"], "target": str(o["args"].get("span") or ""),
+                                                              "issue": -1} for o in state["ops"]]})
+        run = read_json(d / "run.json") or {}
+        ver = version_entry(d, n, "draft", laid_edl, None, run.get("planner_model") or run.get("model") or "muse-spark-1.3")
+        ver["draft"] = True
+        out["draft"] = {"id": state["id"], "base": state["base"], "ops": len(state["ops"]), "n": n}
+        out["version_entry"] = ver
+        return out
+
+    @app.get("/api/fonts/{key}")
+    def font_file(key: str):
+        if key not in FONTS:
+            raise HTTPException(404, "no such font")
+        return FileResponse(font_path(key), media_type="font/ttf", headers={"Cache-Control": "max-age=86400"})
 
     @app.get("/api/runs/{run_id}/preview/title.png")
     def live_preview_title(run_id: str, v: int):
@@ -625,9 +668,34 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(404, "no cut for this version")
         return d, src
 
+    def draft_media(run_id: str, request: Request) -> tuple[Path, dict, dict]:
+        """The open draft's run folder, segments (engine/preview.py, no graphics) and the edit media of its source."""
+        d = st.run_dir(run_id)
+        fd = draft.folder(d, judge_of(request) if budget is not None else None)
+        with draft.run_lock(d):
+            state = draft.load(fd)
+            if state is None:
+                raise HTTPException(404, "no draft")
+            edl = draft.current(fd, d, state)
+        try:
+            em = live_preview_engine.edit_media(d, edl)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+        return d, live_preview_engine.preview_data(d, edl, overlays=False), em
+
     @app.get("/api/runs/{run_id}/filmstrip")
-    def filmstrip(run_id: str, v: int):
-        """The timeline's thumbnails: one JPEG row of 54x96 frames, one every 0.5 s of cut_vN.mp4 (cached in ui/cache/)."""
+    def filmstrip(run_id: str, request: Request, v: int | None = None, draft_: int = Query(0, alias="draft")):
+        """The timeline's thumbnails: one JPEG row of 54x96 frames, one every 0.5 s of cut_vN.mp4 (cached in ui/cache/).
+        draft=1: the open draft's, put together from the source's filmstrip (no render)."""
+        if draft_:
+            d, data, em = draft_media(run_id, request)
+            strip = media.filmstrip(d / em["video"], d / "ui" / "cache" / "edit" / "filmstrip_source.jpg")
+            title_s = (data["title"] or {}).get("seconds", 0.0)
+            out = media.draft_filmstrip(strip, data["segments"], data["duration_s"], title_s,
+                                        d / "ui" / "cache" / "edit" / "filmstrip_draft.jpg")
+            return FileResponse(out, headers={"Cache-Control": "no-store", "X-Thumb": f"{media.THUMB_W}x{media.THUMB_H}@{media.THUMB_STEP_S}"})
+        if v is None:
+            raise HTTPException(400, "v or draft=1")
         d, src = cut_of(run_id, v)
         try:
             out = media.filmstrip(src, d / "ui" / "cache" / f"filmstrip_v{v}.jpg")
@@ -672,9 +740,15 @@ def create_app(root: Path) -> FastAPI:
         return FileResponse(p, media_type="audio/mp4", headers={"Cache-Control": "no-cache"})
 
     @app.get("/api/runs/{run_id}/peaks")
-    def peaks(run_id: str, v: int, track: str = "cut"):
+    def peaks(run_id: str, request: Request, v: int | None = None, track: str = "cut", draft_: int = Query(0, alias="draft")):
         """An audio track's waveform: the absolute peak of every 10 ms of cut_vN.mp4, or of its voice or music stem
-        (cached in ui/cache/)."""
+        (cached in ui/cache/). draft=1: the open draft's, from the source audio's peaks (no render)."""
+        if draft_:
+            d, data, em = draft_media(run_id, request)
+            src = media.peaks(d / em["audio"], d / "ui" / "cache" / "edit" / "peaks_source.json")
+            return media.draft_peaks(src, data["segments"], data["fps"], (data["title"] or {}).get("seconds", 0.0))
+        if v is None:
+            raise HTTPException(400, "v or draft=1")
         if track == "cut":
             d, src = cut_of(run_id, v)
             name = f"peaks_v{v}.json"
