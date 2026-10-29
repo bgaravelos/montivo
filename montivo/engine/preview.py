@@ -15,6 +15,7 @@ from pathlib import Path
 from PIL import Image
 
 from . import broll
+from . import music as bed
 from .api import dump_json
 from .captions import build_overlays, fit_line, highlight_words, norm
 from .edges import Audio
@@ -82,7 +83,8 @@ def loudness_gain(edl: dict | None) -> float | None:
     on that version (render.loudnorm). The browser adds it before a limiter, so the preview plays about as loud as
     the exported file; a draft borrows its base version's."""
     ln = ((edl or {}).get("render") or {}).get("loudnorm") or {}
-    first = ln.get("first_pass") or ln.get("speech", {}).get("first_pass") or {}
+    # with music the record's own first pass measured the mix: the speech's pass is under "speech"
+    first = (ln.get("speech") or {}).get("first_pass") or ln.get("first_pass") or {}
     try:
         return round(float(ln.get("target_i", -14.0)) - float(first["input_i"]), 2)
     except (KeyError, TypeError, ValueError):
@@ -136,6 +138,17 @@ def preview_data(run_dir: Path, edl: dict, overlays: bool = True, laid: bool = F
             "title": {"seconds": title_s, "png": title_png, "fade_s": TITLE_FADE_S} if title_s else None,
             "duration_s": round(t, 6), "segments": out, "reframe_concept": concept,
             "gain_db": loudness_gain(edl), "captions": [], "callouts": [], "stills": [], "punch_ins": []}
+    music = bed.normalize_music(edl.get("music"))
+    if music:  # the bed as render_audio builds it: the loop at level_db, ducked along the speech, faded in and out
+        t_ = bed.track(music["track"])
+        vpath0 = run_dir / "voice" / "voice.json"
+        vwords = json.loads(vpath0.read_text())["words"] if vpath0.is_file() else None
+        intervals, how = bed.speech_intervals(segments, vwords, title_s, None if vwords else Audio.load(run_dir))
+        data["music"] = {"track": t_["id"], "name": t_["name"], "gain_db": round(music["level_db"] - float(t_["lufs"]), 2),
+                         "level_db": music["level_db"], "track_lufs": float(t_["lufs"]), "duck_db": music["duck_db"],
+                         "voice_db": float(music.get("voice_db") or 0.0), "ducked": [list(x) for x in intervals],
+                         "duck_source": how, "attack_s": bed.ATTACK_S, "release_s": bed.RELEASE_S,
+                         "fade_in_s": min(bed.FADE_IN_S, t / 3), "fade_out_s": min(bed.FADE_OUT_S, t / 3)}
     if not overlays:
         return data
     look = normalize_look(edl.get("look"))

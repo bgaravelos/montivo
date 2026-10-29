@@ -27,6 +27,8 @@ export type LiveData = {
   callouts?: { span: string; text: string; t_in: number; t_out: number; box: [number, number, number, number]; size: number; ascent: number; descent: number }[];
   stills?: { id: string; placement: string; t_in: number; t_out: number; x: number; y: number; w: number; h: number; fade_s: number; url: string }[];
   draft?: { id: string; base: number; ops: number; n: number };
+  music?: { track: string; name: string; url: string; gain_db: number; level_db: number; track_lufs: number; duck_db: number;
+    voice_db: number; ducked: [number, number][]; attack_s: number; release_s: number; fade_in_s: number; fade_out_s: number };
   version_entry?: Version;
 };
 
@@ -53,6 +55,9 @@ export class LiveMedia {
   private buffer: AudioBuffer | null = null;
   private master: GainNode | null = null;
   private level: GainNode | null = null;
+  private bedBuf: AudioBuffer | null = null;
+  private bedUrl = "";
+  private mixOver: { level_db: number; voice_db: number } | null = null;
   private nodes: AudioBufferSourceNode[] = [];
   private anchorCtx = 0;
   private anchorT = 0;
@@ -75,7 +80,8 @@ export class LiveMedia {
     this.ready = fetch(data.media.audio)
       .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`edit audio: ${r.status}`))))
       .then((b) => audioCtx().decodeAudioData(b))
-      .then((buf) => { this.buffer = buf; });
+      .then((buf) => { this.buffer = buf; })
+      .then(() => this.loadBed());
     this.zoom = document.createElement("div");
     this.zoom.className = "live-zoom";
     this.vids = [document.createElement("video"), document.createElement("video")];
@@ -106,10 +112,32 @@ export class LiveMedia {
     this.box.replaceChildren();
   }
 
+  /** The music bed's loop (engine/music.py's bundled track), decoded once per track. */
+  private async loadBed() {
+    const url = this.data.music?.url ?? "";
+    if (url === this.bedUrl) return;
+    this.bedUrl = url;
+    this.bedBuf = null;
+    if (!url) return;
+    const buf = await fetch(url).then((r) => r.arrayBuffer()).then((b) => audioCtx().decodeAudioData(b));
+    if (this.bedUrl === url) {
+      this.bedBuf = buf;
+      if (!this.paused) this.start(this.currentTime);
+    }
+  }
+
+  /** The timeline's faders heard live: the bed's level and the voice's gain (dB), or null for the version's own. */
+  setMix(m: { level_db: number; voice_db: number } | null) {
+    if (JSON.stringify(m) === JSON.stringify(this.mixOver)) return;
+    this.mixOver = m;
+    if (!this.paused) this.start(this.currentTime);
+  }
+
   /** Another EDL of the same source (a draft edit): same media, new segments and graphics, the playhead kept. */
   setData(data: LiveData) {
     const t = Math.min(this.currentTime, data.duration_s);
     this.data = data;
+    this.loadBed().catch(() => {});
     this.duration = data.duration_s;
     this.overlay.setData(data);
     this.cued = [-1, -1];
@@ -163,7 +191,8 @@ export class LiveMedia {
     this.onstate?.();
   }
 
-  /** The output chain once: mute -> the render's loudness gain -> a limiter (the render's -1.5 dBTP ceiling). */
+  /** The output chain once: the speech through the render's loudness gain (and the music's voice_db), the bed beside
+   *  it, both into mute -> a limiter (the render's -1.5 dBTP ceiling). Returns the speech's input. */
   private chain(): GainNode {
     const ctx = audioCtx();
     if (!this.master) {
@@ -171,11 +200,24 @@ export class LiveMedia {
       this.level = ctx.createGain();
       const lim = ctx.createDynamicsCompressor();
       lim.threshold.value = -1.5; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.002; lim.release.value = 0.05;
-      this.master.connect(this.level).connect(lim).connect(ctx.destination);
+      this.level.connect(this.master).connect(lim).connect(ctx.destination);
     }
-    this.level!.gain.value = Math.pow(10, (this.data.gain_db ?? 0) / 20);
+    const voice = this.mixOver?.voice_db ?? this.data.music?.voice_db ?? 0;
+    this.level!.gain.value = Math.pow(10, ((this.data.gain_db ?? 0) + voice) / 20);
     this.master.gain.value = this.mute ? 0 : 1;
-    return this.master;
+    return this.level!;
+  }
+
+  /** The bed's gain at cut second c as render_bed shapes it: level_db over the track's own loudness, the duck along the
+   *  speech with its attack and release ramps (music.duck_at), the fade in and out. */
+  private bedGain(c: number): number {
+    const m = this.data.music!;
+    const gain = this.mixOver ? this.mixOver.level_db - m.track_lufs : m.gain_db;
+    let duck = 0;
+    for (const [a, b] of m.ducked)
+      duck += Math.min(1, Math.max(0, (c - (a - m.attack_s)) / m.attack_s)) * Math.min(1, Math.max(0, (b + m.release_s - c) / m.release_s));
+    const fade = Math.min(1, c / Math.max(1e-3, m.fade_in_s), (this.duration - c) / Math.max(1e-3, m.fade_out_s));
+    return Math.pow(10, (gain + m.duck_db * duck) / 20) * Math.max(0, fade);
   }
 
   /** (Re)start the audio at cut time t: every segment from there on scheduled at once on the context's clock. */
@@ -207,6 +249,18 @@ export class LiveMedia {
       g.gain.linearRampToValueAtTime(k < this.data.segments.length - 1 ? 0 : 1, end);
       src.connect(g).connect(out);
       src.start(when, off, dur);
+      this.nodes.push(src);
+    }
+    const bed = this.bedBuf;
+    if (this.data.music && bed && t < this.duration) { // the loop from the cut's start, its gain as one curve
+      const src = ctx.createBufferSource();
+      src.buffer = bed; src.loop = true; src.playbackRate.value = this.rate;
+      const g = ctx.createGain();
+      const span = this.duration - t, n = Math.max(2, Math.ceil(span * 50));
+      g.gain.setValueCurveAtTime(Float32Array.from({ length: n }, (_, i) => this.bedGain(t + (span * i) / (n - 1))), now, span / this.rate);
+      src.connect(g).connect(this.master!);
+      src.start(now, t % bed.duration);
+      src.stop(now + span / this.rate);
       this.nodes.push(src);
     }
   }

@@ -40,7 +40,8 @@ export const Player = forwardRef<PlayerHandle, {
   live?: string | LiveData;
   liveToggle?: { on: boolean; set: (on: boolean) => void }; // the Live / Rendered switch on the transport
   labelTone?: string;
-}>(function Player({ src, onTime, bands = [], marks = [], compact, muted, label, scrub, overlay, onPlaying, safe, live, liveToggle, labelTone }, ref) {
+  liveMix?: { level_db: number; voice_db: number } | null; // the timeline's faders while they are moved (live mode)
+}>(function Player({ src, onTime, bands = [], marks = [], compact, muted, label, scrub, overlay, onPlaying, safe, live, liveToggle, labelTone, liveMix }, ref) {
   const video = useRef<HTMLVideoElement>(null);
   const lm = useRef<LiveMedia | null>(null);
   const media = (): Media | null => (live ? lm.current : video.current);
@@ -153,6 +154,7 @@ export const Player = forwardRef<PlayerHandle, {
     setLiveData(live); setD(live.duration_s); last.current = -1;
   }, [live]);
   useEffect(() => { if (lm.current) lm.current.muted = mute; }, [mute]);
+  useEffect(() => { lm.current?.setMix(liveMix ?? null); }, [liveMix?.level_db, liveMix?.voice_db, liveData]); // eslint-disable-line
 
   useEffect(() => { // a smooth playhead for the timeline, not only the 4 Hz timeupdate; also runs the reverse shuttle
     let raf = 0, prev = performance.now();

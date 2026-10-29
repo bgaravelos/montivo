@@ -581,7 +581,7 @@ export function Editor({ id, replay, go }: Props) {
           <Player ref={player} key={draftV ? `draft-${draftData!.draft!.id}` : `${v.n}${live0 ? "-live" : ""}`}
             src={v.cut ? fileUrl(id, v.cut) : ""} onTime={onTime} onPlaying={setPlaying}
             live={draftV ? draftData! : live0 ? `/api/runs/${id}/preview?v=${v.n}` : undefined}
-            liveToggle={replay ? undefined : { on: liveOn, set: setLive }}
+            liveToggle={replay ? undefined : { on: liveOn, set: setLive }} liveMix={live0 && mixStaged ? mix : null}
             marks={blocks.filter((b) => b.kind !== "ghost").map((b) => b.t0)}
             label={draftV ? `Draft · ${edits(draftSum?.ops.length ?? 0)}` : `v${v.n}${live0 ? " · live" : ""}`} labelTone={draftV ? "draft" : undefined}
             safe={{ label: GUIDE_NAME[guide], on: guide !== "off", next: nextGuide }} overlay={<>

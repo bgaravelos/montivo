@@ -610,6 +610,8 @@ def create_app(root: Path) -> FastAPI:
                                     else f"/api/runs/{run_id}/preview/title.png?v={v}")
         for s in data["stills"]:
             s["url"] = f"/api/runs/{run_id}/file/{s.pop('png')}"
+        if data.get("music"):
+            data["music"]["url"] = f"/api/music/{data['music']['track']}"
         data["fonts"] = {k: {"name": name, "url": f"/api/fonts/{k}"} for k, name in (data.get("fonts") or {}).items()}
         data["media"] = {"video": f"/api/runs/{run_id}/file/{media['video']}", "audio": f"/api/runs/{run_id}/file/{media['audio']}",
                          "width": media["width"], "height": media["height"], "bytes": media["bytes"]}

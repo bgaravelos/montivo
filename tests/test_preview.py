@@ -148,7 +148,25 @@ def test_loudness_gain_reads_the_first_pass():
     edl = {"render": {"loudnorm": {"target_i": -14.0, "first_pass": {"input_i": -29.73}}}}
     assert P.loudness_gain(edl) == 15.73
     assert P.loudness_gain({"render": {"loudnorm": {"speech": {"first_pass": {"input_i": -20}}}}}) == 6.0
+    with_music = {"render": {"loudnorm": {"first_pass": {"input_i": -14.6}, "speech": {"first_pass": {"input_i": -29.0}}}}}
+    assert P.loudness_gain(with_music) == 15.0  # the mix's own pass measured speech already normalised
     assert P.loudness_gain({}) is None
+
+
+def test_the_music_bed_ducks_where_the_render_ducks(tmp_path):
+    from montivo.engine import music as bed
+    from montivo.engine.render import plan_paths
+    d, edl = _talk_run(tmp_path)
+    t = bed.tracks()[0]
+    edl["music"] = {"track": t["id"], "level_db": -22.0, "duck_db": -10.0, "voice_db": 2.0}
+    m = P.preview_data(d, edl, overlays=False)["music"]
+    segs, _ = plan_paths(edl, None, {})
+    want, how = bed.speech_intervals(segs, json.loads((d / "voice" / "voice.json").read_text())["words"], 0.0)
+    assert m["ducked"] == [list(x) for x in want] and how == m["duck_source"] == "voice words"
+    assert m["gain_db"] == round(-22.0 - float(t["lufs"]), 2) and (m["duck_db"], m["voice_db"]) == (-10.0, 2.0)
+    assert (m["attack_s"], m["release_s"]) == (bed.ATTACK_S, bed.RELEASE_S)
+    del edl["music"]
+    assert "music" not in P.preview_data(d, edl, overlays=False)
 
 
 def test_draft_media_follow_the_segments(tmp_path):
@@ -191,5 +209,6 @@ def test_draft_preview_and_its_timeline_media(tmp_path):
     pk = c.get("/api/runs/r1/peaks?draft=1").json()
     assert abs(len(pk["peaks"]) - p["duration_s"] * 100) <= 2
     assert c.get("/api/fonts/inter-tight").status_code == 200 and c.get("/api/fonts/x").status_code == 404
+    assert "music" not in p
     c.delete("/api/runs/r1/draft")
     assert c.get("/api/runs/r1/filmstrip?draft=1").status_code == 404
