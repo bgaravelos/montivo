@@ -689,7 +689,10 @@ modal_app.py::smoke --reorder` (passed on Modal with the new image); `constraint
 UI: Music lane, Space on buttons, modal focus + Esc, contrast, reduced motion, 375 px bar, no Nocta placeholder; CLI
 --from checks. Each new test fails on the old code. Left out: 1a (cover / post / share on a sample would answer "make
 any edit first"), 3d / 3e (iOS only, no Xcode here). Still on ffmpeg 7.1, old and new: a clip that runs past the end
-of the audio stream and is moved first renders no audio (rare). Not deployed yet.
+of the audio stream and is moved first renders no audio (rare). Deployed on Billy's go 29/10 at c0f2046 (no
+container was running before it); Modal's image has ffmpeg 5.1.9 (Debian 12); live /api/health 200, /api/runs 401,
+/s/nope 404, host spend $2.79 of $15; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 9.8 s; smoke
+--reorder: audio 37.333 s = video, the moved clip -15.8 dB.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
