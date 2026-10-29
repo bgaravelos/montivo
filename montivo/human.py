@@ -18,6 +18,7 @@
     python -m montivo.human pauses runs/012 [--over 0.6] [--keep 0.3] [--dry-run]
     python -m montivo.human overlay runs/015 --at 12.4 --prompt "a flow diagram ..." [--dur 2.5] [--placement full|upper|pip]
     python -m montivo.human overlay runs/015 --set b1 [--at 14] [--dur 3] [--placement pip] (or --remove b1)
+    python -m montivo.human draft runs/015 --ops '[{"op": "split", "args": {"span": "s3", "word": 12}}, ...]' [--id D]
 
 Each writes the next edl_vN.json (N = one past the highest version in the run folder, so no version is ever
 overwritten) with a `patches` entry marked `source: "human"`, renders cut_vN.mp4 and, with --review, runs the blind
@@ -40,19 +41,24 @@ its track or level, or takes it out; $0. `insert` adds a passage the cut does no
 by source time or in front of a clip), the way a clip deleted earlier comes back; $0. `pauses` shortens every pause
 longer than --over to about --keep seconds by splitting the clip there, never removing a word; $0. `overlay` lays a
 Muse Image still (B-roll: full frame, the upper part or a corner card) over a few seconds of the cut, only when a
-person asks for one; one Muse Image call, $0.01 (moving, resizing or removing one is $0).
+person asks for one; one Muse Image call, $0.01 (moving, resizing or removing one is $0). `draft` applies several of
+the structural edits (split, trim, reorder, drop, cut, insert, pauses: pure functions, `OPS`) in one version with one
+patch and one render: what the editor's live preview commits at "Make Version N"; $0.
 """
 from __future__ import annotations
 
 import argparse
 import copy
+import inspect
 import json
 import re
 import shutil
 import signal
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Callable
 
 from .engine import broll
 from .engine.api import dump_json
@@ -122,20 +128,90 @@ def _finish(run_dir: Path, edl_path: Path, n: int, passes: int, budget: float, l
     return {"version": n, "edl": edl_path.name, "cut": f"cut_v{n}.mp4", "review": loop}
 
 
-def drop(run_dir: Path, span_id: str, from_v: int | None = None, passes: int = 0, budget: float = 0.15) -> dict:
-    """Drop one span of edl_v{from} -> edl_vN: the reviewer's drop_span patch, then the two edges that now meet are
-    tightened to the speech again (they used to face the dropped span)."""
+# --------------------------------------------------------------------------- pure edit ops
+# The structural edits (drop, trim, reorder, cut, split, insert, pauses) as pure functions of (edl, words, audio, args):
+# no file is read or written, nothing is logged. Each returns (the new EDL, its Edit); the CLI wrappers below read
+# edl_v{from}, call the op, stamp version and patch, write edl_vN and render, and the editor's draft
+# (montivo/server/draft.py) chains them in memory and renders once at "Make Version N".
+
+
+@dataclass
+class Edit:
+    """What a pure edit op did, besides the EDL it returns: the patch entry's action, fixes and instruction, a few
+    plain words for a draft's list (`say`), and its run.log lines, which name the version numbers only the caller
+    knows (from_v, n)."""
+    action: str
+    fixes: list[dict]
+    say: str
+    head: Callable[[int, int], str]
+    instruction: str | None = None
+    lines: Callable[[int, int], list[str]] | None = None
+
+    def log_lines(self, from_v: int, n: int) -> list[str]:
+        if self.lines:
+            return self.lines(from_v, n)
+        return [f"patch v{from_v} -> v{n}: {f['op']} {f['target']}: {f['note']} (human)" for f in self.fixes]
+
+    def patch(self, from_v: int) -> dict:
+        return {"from": from_v, "review": None, "source": "human", "action": self.action, "fixes": self.fixes,
+                **({"instruction": self.instruction} if self.instruction else {})}
+
+
+def _of(edl: dict) -> str:
+    """The EDL an op refuses on, as its messages name it."""
+    return f"edl_v{edl['version']}" if edl.get("version") is not None else "this EDL"
+
+
+def stamp(new: dict, rec: Edit, from_v: int, n: int) -> dict:
+    """The new EDL as version n, with the edit's patch entry."""
+    new["version"] = n
+    new.setdefault("patches", []).append(rec.patch(from_v))
+    return new
+
+
+def _write_edit(run_dir: Path, from_v: int, n: int, new: dict, rec: Edit, log) -> Path:
+    log(rec.head(from_v, n))
+    stamp(new, rec, from_v, n)
+    for line in rec.log_lines(from_v, n):
+        log(line)
+    edl_path = run_dir / f"edl_v{n}.json"
+    dump_json(edl_path, new)
+    return edl_path
+
+
+class RunWords(Words):
+    """voice.json's words, read when an op first asks for a turn: an op refuses a bad span id or a move onto itself
+    before that, also in a folder without voice.json (as the edits did before they became pure functions)."""
+
+    def __init__(self, run_dir: Path):
+        self._run_dir = run_dir
+        self._words: Words | None = None
+
+    @property
+    def by_turn(self) -> dict[int, list[dict]]:
+        if self._words is None:
+            self._words = _words(self._run_dir)
+        return self._words.by_turn
+
+
+def _run_edit(run_dir: Path, from_v: int | None, passes: int, budget: float, op, **args) -> dict:
+    """A CLI edit: edl_v{from} through the pure op -> edl_vN, rendered (and reviewed with passes > 0)."""
     log = RunLog(run_dir / "run.log")
-    from_v = from_version(run_dir, from_v)
-    edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
+    from_v, edl, n = _new_version(run_dir, from_v)
+    new, rec = op(edl, RunWords(run_dir), Audio.load(run_dir), **args)
+    edl_path = _write_edit(run_dir, from_v, n, new, rec, log)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
+def drop_edit(edl: dict, words: Words, audio: Audio | None, span: str) -> tuple[dict, Edit]:
+    """Drop one span: the reviewer's drop_span patch, then the two edges that now meet are tightened to the speech
+    again (they used to face the dropped span)."""
+    span_id = span
     ids = [s["id"] for s in edl["spans"]]
     if span_id not in ids:
-        raise SystemExit(f"{span_id} is not a span of edl_v{from_v} ({', '.join(ids)})")
+        raise SystemExit(f"{span_id} is not a span of {_of(edl)} ({', '.join(ids)})")
     if len(ids) == 1:
         raise SystemExit("cannot drop the only span")
-    n = next_version(run_dir)
-    log(f"montivo drop: {span_id} from edl_v{from_v} -> edl_v{n}")
-    words, audio = _words(run_dir), Audio.load(run_dir)
     k = ids.index(span_id)
     neighbours = {(ids[k - 1], "out")} if k > 0 else set()
     if k + 1 < len(ids):
@@ -149,13 +225,14 @@ def drop(run_dir: Path, span_id: str, from_v: int | None = None, passes: int = 0
             plog[0]["note"] += f"; {m['span']} {m['edge']} edge tightened to the speech {m['from']:.3f} -> {m['to']:.3f}"
         for s in new["spans"]:
             refresh_span(s, words)
-    new["version"] = n
-    new.setdefault("patches", []).append({"from": from_v, "review": None, "source": "human", "action": "drop",
-                                          "fixes": plog})
-    log(f"patch v{from_v} -> v{n}: drop_span {span_id}: {plog[0]['note']} (human)")
-    edl_path = run_dir / f"edl_v{n}.json"
-    dump_json(edl_path, new)
-    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+    return new, Edit("drop", plog, f"delete clip {span_id}",
+                     head=lambda f, n: f"montivo drop: {span_id} from edl_v{f} -> edl_v{n}",
+                     lines=lambda f, n: [f"patch v{f} -> v{n}: drop_span {span_id}: {plog[0]['note']} (human)"])
+
+
+def drop(run_dir: Path, span_id: str, from_v: int | None = None, passes: int = 0, budget: float = 0.15) -> dict:
+    """Drop one span of edl_v{from} -> edl_vN (drop_edit), rendered."""
+    return _run_edit(run_dir, from_v, passes, budget, drop_edit, span=span_id)
 
 
 def trim_fix(edl: dict, words: Words, span_id: str, edge: str, word: int) -> Fix:
@@ -188,25 +265,21 @@ def trim_fix(edl: dict, words: Words, span_id: str, edge: str, word: int) -> Fix
     return mk("extend_span", edge=edge, seconds=round(seconds if edge == "out" else -seconds, 3))
 
 
-def trim(run_dir: Path, span_id: str, edge: str, word: int, from_v: int | None = None, passes: int = 0,
-         budget: float = 0.15) -> dict:
-    """Move one edge of one span of edl_v{from} to a word boundary -> edl_vN, through apply_fixes like a review fix."""
-    log = RunLog(run_dir / "run.log")
-    from_v = from_version(run_dir, from_v)
-    edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
-    words, audio = _words(run_dir), Audio.load(run_dir)
+def trim_edit(edl: dict, words: Words, audio: Audio | None, span: str, edge: str, word: int) -> tuple[dict, Edit]:
+    """Move one edge of one span to a word boundary, through apply_fixes like a review fix."""
+    span_id = span
     fix = trim_fix(edl, words, span_id, edge, word)
-    n = next_version(run_dir)
-    log(f"montivo trim: {span_id} {edge} edge to word {word} in edl_v{from_v} -> edl_v{n}")
     new, plog = apply_fixes(edl, [fix], words, audio)
     hold_trimmed_edges(edl, new, [fix], plog, words, audio)
-    new["version"] = n
-    new.setdefault("patches", []).append({"from": from_v, "review": None, "source": "human", "action": "trim",
-                                          "fixes": plog})
-    log(f"patch v{from_v} -> v{n}: {fix.op} {span_id} {edge}: {plog[0]['note']} (human)")
-    edl_path = run_dir / f"edl_v{n}.json"
-    dump_json(edl_path, new)
-    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+    return new, Edit("trim", plog, f"trim the {'start' if edge == 'in' else 'end'} of clip {span_id}",
+                     head=lambda f, n: f"montivo trim: {span_id} {edge} edge to word {word} in edl_v{f} -> edl_v{n}",
+                     lines=lambda f, n: [f"patch v{f} -> v{n}: {fix.op} {span_id} {edge}: {plog[0]['note']} (human)"])
+
+
+def trim(run_dir: Path, span_id: str, edge: str, word: int, from_v: int | None = None, passes: int = 0,
+         budget: float = 0.15) -> dict:
+    """Move one edge of one span of edl_v{from} to a word boundary -> edl_vN (trim_edit), rendered."""
+    return _run_edit(run_dir, from_v, passes, budget, trim_edit, span=span_id, edge=edge, word=word)
 
 
 def caption_fixes(edl: dict, edits: list[tuple[float, str]]) -> list[Fix]:
@@ -562,15 +635,13 @@ def roles_by_position(spans: list[dict]) -> list[str]:
     return notes
 
 
-def reorder(run_dir: Path, span_id: str, before: str | None, from_v: int | None = None, passes: int = 0,
-            budget: float = 0.15) -> dict:
-    """Move one clip of edl_v{from} before another (or to the end, before=None) -> edl_vN: the reviewer's reorder
-    patch; the cuts that now meet (around the gap it left and around its new place) are tightened to the speech."""
-    log = RunLog(run_dir / "run.log")
-    from_v, edl, n = _new_version(run_dir, from_v)
+def reorder_edit(edl: dict, words: Words, audio: Audio | None, span: str, before: str | None) -> tuple[dict, Edit]:
+    """Move one clip before another (or to the end, before=None): the reviewer's reorder patch; the cuts that now meet
+    (around the gap it left and around its new place) are tightened to the speech."""
+    span_id = span
     ids = [s["id"] for s in edl["spans"]]
     if span_id not in ids or (before is not None and before not in ids):
-        raise SystemExit(f"{span_id if span_id not in ids else before} is not a span of edl_v{from_v} ({', '.join(ids)})")
+        raise SystemExit(f"{span_id if span_id not in ids else before} is not a span of {_of(edl)} ({', '.join(ids)})")
     if before == span_id:
         raise SystemExit(f"cannot move {span_id} before itself")
     k = ids.index(span_id)
@@ -579,8 +650,6 @@ def reorder(run_dir: Path, span_id: str, before: str | None, from_v: int | None 
     order = rest[:at] + [span_id] + rest[at:]
     if order == ids:
         raise SystemExit(f"{span_id} is already there")
-    log(f"montivo reorder: {span_id} {'before ' + before if before else 'to the end'} in edl_v{from_v} -> edl_v{n}")
-    words, audio = _words(run_dir), Audio.load(run_dir)
     fix = Fix(op="reorder", target=span_id, issue=-1, severity="human", t_s=0.0, args={"before": before})
     new, plog = apply_fixes(edl, [fix], words, audio)
     moved = order.index(span_id)
@@ -599,8 +668,16 @@ def reorder(run_dir: Path, span_id: str, before: str | None, from_v: int | None 
     roles = roles_by_position(new["spans"])
     if roles:
         plog[0]["note"] += f"; roles by position: {', '.join(roles)}"
-    edl_path = _save(run_dir, new, n, from_v, "reorder", plog, log)
-    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+    where = f"before {before}" if before else "to the end"
+    return new, Edit("reorder", plog, f"move clip {span_id} {where}",
+                     head=lambda f, n: f"montivo reorder: {span_id} {'before ' + before if before else 'to the end'} "
+                                       f"in edl_v{f} -> edl_v{n}")
+
+
+def reorder(run_dir: Path, span_id: str, before: str | None, from_v: int | None = None, passes: int = 0,
+            budget: float = 0.15) -> dict:
+    """Move one clip of edl_v{from} before another (or to the end, before=None) -> edl_vN (reorder_edit), rendered."""
+    return _run_edit(run_dir, from_v, passes, budget, reorder_edit, span=span_id, before=before)
 
 
 def tw_word(words: Words, span: dict, i: int) -> str:
@@ -792,18 +869,14 @@ def hold_trimmed_edges(edl: dict, new: dict, fixes: list[Fix], plog: list[dict],
         new["runtime_s"] = round(sum(x["duration"] for x in new["spans"]), 2)
 
 
-def cut(run_dir: Path, ranges: list[tuple[str, int, int]], from_v: int | None = None, passes: int = 0,
-        budget: float = 0.15) -> dict:
-    """Delete the words of a transcript selection from edl_v{from} -> one edl_vN: drops and trims through apply_fixes
-    like the reviewer's, splits as new spans on the kept words' boundaries; every cut that now meets is tightened to the
-    speech, and roles follow the position."""
-    log = RunLog(run_dir / "run.log")
-    from_v, edl, n = _new_version(run_dir, from_v)
-    words, audio = _words(run_dir), Audio.load(run_dir)
+def cut_edit(edl: dict, words: Words, audio: Audio | None, ranges: list[tuple[str, int, int]]) -> tuple[dict, Edit]:
+    """Delete the words of a transcript selection ((span id, first, last turn word index) per range) in one edit: drops
+    and trims through apply_fixes like the reviewer's, splits as new spans on the kept words' boundaries; every cut that
+    now meets is tightened to the speech, and roles follow the position."""
+    ranges = [(str(sid), int(a), int(b)) for sid, a, b in ranges]
     fixes, splits = cut_plan(edl, words, ranges)
     total = len({(sid, i) for sid, a, b in ranges for i in range(a, b + 1)})
     sids = list(dict.fromkeys(sid for sid, _, _ in ranges))
-    log(f"montivo cut: {total} word{'s' if total != 1 else ''} of {', '.join(sids)} in edl_v{from_v} -> edl_v{n}")
     ids = [s["id"] for s in edl["spans"]]
     by_id = {s["id"]: s for s in edl["spans"]}
     deleted: dict[int, set[int]] = {}  # no edge may settle or widen back into the words the selection deleted
@@ -849,8 +922,14 @@ def cut(run_dir: Path, ranges: list[tuple[str, int, int]], from_v: int | None = 
     roles = roles_by_position(new["spans"])
     if roles:
         plog[-1]["note"] += f"; roles by position: {', '.join(roles)}"
-    edl_path = _save(run_dir, new, n, from_v, "cut", plog, log)
-    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+    what = f"{total} word{'s' if total != 1 else ''} of {', '.join(sids)}"
+    return new, Edit("cut", plog, f"delete {what}", head=lambda f, n: f"montivo cut: {what} in edl_v{f} -> edl_v{n}")
+
+
+def cut(run_dir: Path, ranges: list[tuple[str, int, int]], from_v: int | None = None, passes: int = 0,
+        budget: float = 0.15) -> dict:
+    """Delete the words of a transcript selection from edl_v{from} -> one edl_vN (cut_edit), rendered."""
+    return _run_edit(run_dir, from_v, passes, budget, cut_edit, ranges=ranges)
 
 
 def split_plan(edl: dict, words: Words, span_id: str, word: int) -> tuple[dict, list[tuple[int, int]]]:
@@ -868,17 +947,13 @@ def split_plan(edl: dict, words: Words, span_id: str, word: int) -> tuple[dict, 
     return s, [(a, word - 1), (word, b)]
 
 
-def split(run_dir: Path, span_id: str, word: int, from_v: int | None = None, passes: int = 0,
-          budget: float = 0.15) -> dict:
-    """Split one clip of edl_v{from} in two in front of turn word `word` -> edl_vN, $0. No word is removed: both
-    pieces meet on one point, the quietest 40 ms between the two words, so the render joins them again into the same
-    cut (render.merge_segments); the split is the step before a move, a delete or a callout of its own."""
-    log = RunLog(run_dir / "run.log")
-    from_v, edl, n = _new_version(run_dir, from_v)
-    words, audio = _words(run_dir), Audio.load(run_dir)
+def split_edit(edl: dict, words: Words, audio: Audio | None, span: str, word: int) -> tuple[dict, Edit]:
+    """Split one clip in two in front of turn word `word`. No word is removed: both pieces meet on one point, the
+    quietest 40 ms between the two words, so the render joins them again into the same cut (render.merge_segments);
+    the split is the step before a move, a delete or a callout of its own."""
+    span_id = span
     s, runs = split_plan(edl, words, span_id, word)
     tw = words.turn(s["turn_id"])
-    log(f"montivo split: {span_id} in front of word {word} ({tw[word]['w']!r}) in edl_v{from_v} -> edl_v{n}")
     new, _ = apply_fixes(edl, [], words)
     pieces, _ = split_pieces(new, words, span_id, runs, next_span_id(edl), set())
     first, second = pieces
@@ -897,8 +972,15 @@ def split(run_dir: Path, span_id: str, word: int, from_v: int | None = None, pas
            "args": {"word": word, "runs": [list(r) for r in runs], "ids": [first["id"], second["id"]], "at": t},
            "note": f"{span_id} split at {t:.3f} in front of {tw[word]['w']!r}: {first['id']} {first['words'][:40]} | "
                    f"{second['id']} {second['words'][:40]}" + (f"; roles by position: {', '.join(roles)}" if roles else "")}
-    edl_path = _save(run_dir, new, n, from_v, "split", [fix], log)
-    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+    return new, Edit("split", [fix], f"split clip {span_id} in front of {tw[word]['w']!r}",
+                     head=lambda f, n: f"montivo split: {span_id} in front of word {word} ({tw[word]['w']!r}) "
+                                       f"in edl_v{f} -> edl_v{n}")
+
+
+def split(run_dir: Path, span_id: str, word: int, from_v: int | None = None, passes: int = 0,
+          budget: float = 0.15) -> dict:
+    """Split one clip of edl_v{from} in two in front of turn word `word` -> edl_vN (split_edit), rendered, $0."""
+    return _run_edit(run_dir, from_v, passes, budget, split_edit, span=span_id, word=word)
 
 
 def insert_plan(edl: dict, words: Words, turn: int, a: int, b: int, before: str | None) -> tuple[dict, int]:
@@ -953,17 +1035,13 @@ def join_at_dip(left: dict, right: dict, words: Words, audio: Audio | None) -> f
     return t
 
 
-def insert(run_dir: Path, turn: int, a: int, b: int, before: str | None = None, from_v: int | None = None,
-           passes: int = 0, budget: float = 0.15) -> dict:
-    """Add a passage the cut does not use back into edl_v{from} -> edl_vN, rendered, $0: words a..b of a Voice turn
-    as a new clip (placed by source time unless `before` says where), its edges and the cuts that now meet tightened to
-    the speech (a neighbour that continues it in the recording joins it on the dip between the words instead), roles
-    by position. A clip deleted in an earlier version comes back the same way (the editor's ghost clips)."""
-    log = RunLog(run_dir / "run.log")
-    from_v, edl, n = _new_version(run_dir, from_v)
-    words, audio = _words(run_dir), Audio.load(run_dir)
+def insert_edit(edl: dict, words: Words, audio: Audio | None, turn: int, a: int, b: int,
+                before: str | None = None) -> tuple[dict, Edit]:
+    """Add a passage the cut does not use back: words a..b of a Voice turn as a new clip (placed by source time unless
+    `before` says where), its edges and the cuts that now meet tightened to the speech (a neighbour that continues it
+    in the recording joins it on the dip between the words instead), roles by position. A clip deleted in an earlier
+    version comes back the same way (the editor's ghost clips)."""
     span, at = insert_plan(edl, words, turn, a, b, before)
-    log(f"montivo insert: turn {turn} words {a}-{b} as {span['id']} at position {at + 1} in edl_v{from_v} -> edl_v{n}")
     new, _ = apply_fixes(edl, [], words)
     new["spans"].insert(at, span)
     meet: set[tuple[str, str]] = {(span["id"], "in"), (span["id"], "out")}
@@ -1002,8 +1080,16 @@ def insert(run_dir: Path, turn: int, a: int, b: int, before: str | None = None, 
         note += f"; roles by position: {', '.join(roles)}"
     fix = {"op": "insert_span", "target": span["id"], "issue": -1, "severity": "human", "t_s": 0.0,
            "args": {"turn": turn, "word_from": a, "word_to": b, "before": before, "at": at}, "note": note}
-    edl_path = _save(run_dir, new, n, from_v, "insert", [fix], log, instruction=f"Add back “{span['words'][:60]}”")
-    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+    return new, Edit("insert", [fix], f"add back “{span['words'][:40]}”",
+                     head=lambda f, n: f"montivo insert: turn {turn} words {a}-{b} as {span['id']} at position {at + 1} "
+                                       f"in edl_v{f} -> edl_v{n}",
+                     instruction=f"Add back “{span['words'][:60]}”")
+
+
+def insert(run_dir: Path, turn: int, a: int, b: int, before: str | None = None, from_v: int | None = None,
+           passes: int = 0, budget: float = 0.15) -> dict:
+    """Add a passage the cut does not use back into edl_v{from} -> edl_vN (insert_edit), rendered, $0."""
+    return _run_edit(run_dir, from_v, passes, budget, insert_edit, turn=turn, a=a, b=b, before=before)
 
 
 PAUSE_OVER_S = 0.6  # pauses longer than this are shortened (OpusClip's default is 0.8 s)
@@ -1100,14 +1186,27 @@ def pauses(run_dir: Path, over: float = PAUSE_OVER_S, keep: float = PAUSE_KEEP_S
     words, audio = _words(run_dir), Audio.load(run_dir)
     if audio is None:
         raise SystemExit(f"{run_dir / 'audio.wav'} not found (ingest writes it)")
-    plan = pause_plan(edl, words, audio, over, keep)
     if dry_run:
-        return {"from": from_v, **plan}
-    if not plan["pauses"]:
-        raise SystemExit(f"no pause over {over:g} s in edl_v{from_v}" + (f" ({len(plan['skipped'])} sit inside a word or "
-                                                                        "would leave a one-word clip)" if plan["skipped"] else ""))
+        return {"from": from_v, **pause_plan(edl, words, audio, over, keep)}
+    new, rec = pauses_edit(edl, words, audio, over, keep)
     log = RunLog(run_dir / "run.log")
-    log(f"montivo pauses: {plan['count']} over {over:g} s -> {keep:g} s in edl_v{from_v} -> edl_v{n} (-{plan['saved_s']:.2f} s)")
+    edl_path = _write_edit(run_dir, from_v, n, new, rec, log)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
+def pauses_edit(edl: dict, words: Words, audio: Audio | None, over: float = PAUSE_OVER_S,
+                keep: float = PAUSE_KEEP_S) -> tuple[dict, Edit]:
+    """Shorten every pause longer than `over` to about `keep` seconds. No word is removed: the clip splits at the pause
+    and the two pieces meet `keep` seconds of silence apart."""
+    over, keep = float(over), float(keep)
+    if not 0.2 <= over <= 5.0 or not 0.0 <= keep < over:
+        raise SystemExit("--over is 0.2..5 s and --keep is under it")
+    if audio is None:
+        raise SystemExit("audio.wav not found (ingest writes it)")
+    plan = pause_plan(edl, words, audio, over, keep)
+    if not plan["pauses"]:
+        raise SystemExit(f"no pause over {over:g} s in {_of(edl)}" + (f" ({len(plan['skipped'])} sit inside a word or "
+                                                                     "would leave a one-word clip)" if plan["skipped"] else ""))
     new, _ = apply_fixes(edl, [], words)
     notes = apply_pauses(new, words, plan, {s["id"]: s["turn_id"] for s in edl["spans"]})
     finalize(new, words)
@@ -1116,10 +1215,11 @@ def pauses(run_dir: Path, over: float = PAUSE_OVER_S, keep: float = PAUSE_KEEP_S
            "args": {"over_s": over, "keep_s": keep, "pauses": plan["pauses"], "skipped": plan["skipped"]},
            "note": f"{plan['count']} pause{'s' if plan['count'] != 1 else ''} shortened, -{plan['saved_s']:.2f} s: "
                    + "; ".join(notes) + (f"; roles by position: {', '.join(roles)}" if roles else "")}
-    edl_path = _save(run_dir, new, n, from_v, "pauses", [fix], log,
-                     instruction=f"Shorten {plan['count']} pause{'s' if plan['count'] != 1 else ''} over {over:g} s "
-                                 f"(−{plan['saved_s']:.1f} s).")
-    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+    count = f"{plan['count']} pause{'s' if plan['count'] != 1 else ''}"
+    return new, Edit("pauses", [fix], f"shorten {count} (−{plan['saved_s']:.1f} s)",
+                     head=lambda f, n: f"montivo pauses: {plan['count']} over {over:g} s -> {keep:g} s in edl_v{f} -> "
+                                       f"edl_v{n} (-{plan['saved_s']:.2f} s)",
+                     instruction=f"Shorten {count} over {over:g} s (−{plan['saved_s']:.1f} s).")
 
 
 def overlay_anchor(edl: dict, at: float) -> tuple[str, float]:
@@ -1419,6 +1519,76 @@ def compare_plans(v1: dict, new: dict, v1_model: str, model: str, v1_call, plann
             f"v{new['version']}": side(new, model, planned.cost_usd, planned.seconds)}
 
 
+# --------------------------------------------------------------------------- a draft: several pure ops, one version
+
+OPS: dict[str, Callable[..., tuple[dict, Edit]]] = {
+    "split": split_edit, "trim": trim_edit, "reorder": reorder_edit, "drop": drop_edit, "cut": cut_edit,
+    "insert": insert_edit, "pauses": pauses_edit}
+
+
+def apply_op(edl: dict, words: Words, audio: Audio | None, op: str, args: dict) -> tuple[dict, Edit]:
+    """One pure edit op by name with its arguments (the keyword arguments of OPS[op]); SystemExit for an unknown op,
+    a missing or unknown argument, or anything the op itself refuses."""
+    fn = OPS.get(op)
+    if fn is None:
+        raise SystemExit(f"{op!r} is not an edit ({', '.join(OPS)})")
+    params = list(inspect.signature(fn).parameters.values())[3:]
+    known = {p.name for p in params}
+    if bad := sorted(set(args) - known):
+        raise SystemExit(f"{op}: unknown argument {', '.join(bad)} (takes {', '.join(sorted(known))})")
+    if missing := [p.name for p in params if p.default is inspect.Parameter.empty and p.name not in args]:
+        raise SystemExit(f"{op}: missing {', '.join(missing)}")
+    return fn(edl, words, audio, **args)
+
+
+def step(edl: dict, words: Words, audio: Audio | None, o: dict) -> tuple[dict, Edit]:
+    """One op of a chain ({"op", "args"}): the EDL it makes goes through JSON, as the file the next CLI edit would
+    read, and keeps the version it started from (finalize counts it up; the caller stamps the real one)."""
+    new, rec = apply_op(edl, words, audio, o["op"], o.get("args") or {})
+    new = json.loads(json.dumps(new))
+    if "version" in edl:
+        new["version"] = edl["version"]
+    return new, rec
+
+
+def chain_edit(edl: dict, words: Words, audio: Audio | None, ops: list[dict]) -> tuple[dict, Edit]:
+    """Several ops ({"op", "args"}) one after another, each on the EDL the one before made, as one edit: the patch
+    lists every op's fixes in order (one op keeps its own action and instruction, more are "edits"). Between two ops
+    the EDL goes through JSON, as the file the next CLI edit would read, so the chain gives the same EDL as the ops one
+    by one (DEFER); the version stays the starting one until the caller stamps it."""
+    if not ops:
+        raise SystemExit("no edits to apply")
+    cur, recs = edl, []
+    for o in ops:
+        cur, rec = step(cur, words, audio, o)
+        recs.append(rec)
+    if len(recs) == 1:
+        return cur, recs[0]
+    actions = {r.action for r in recs}
+    say = "; ".join(r.say for r in recs)
+    return cur, Edit(actions.pop() if len(actions) == 1 else "edits", [f for r in recs for f in r.fixes], say,
+                     head=lambda f, n: f"montivo draft: {len(recs)} edits ({say}) on edl_v{f} -> edl_v{n}",
+                     instruction=f"{len(recs)} edits: {say[0].upper() + say[1:]}.",
+                     lines=lambda f, n: [x for r in recs for x in r.log_lines(f, n)])
+
+
+def apply_draft(run_dir: Path, ops: list[dict], from_v: int | None = None, draft_id: str | None = None,
+                passes: int = 0, budget: float = 0.15) -> dict:
+    """A draft's ops (the editor's live preview, montivo/server/draft.py) on edl_v{from} -> ONE edl_vN with one patch
+    (`draft` keeps the ops and the draft's id), rendered once, $0 without --review."""
+    log = RunLog(run_dir / "run.log")
+    from_v, edl, n = _new_version(run_dir, from_v)
+    new, rec = chain_edit(edl, RunWords(run_dir), Audio.load(run_dir), ops)
+    log(rec.head(from_v, n))
+    stamp(new, rec, from_v, n)
+    new["patches"][-1]["draft"] = {"id": draft_id, "ops": ops}
+    for line in rec.log_lines(from_v, n):
+        log(line)
+    edl_path = run_dir / f"edl_v{n}.json"
+    dump_json(edl_path, new)
+    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m montivo.human", description="Human edits: the next EDL version, rendered.")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1510,7 +1680,11 @@ def main(argv: list[str] | None = None) -> int:
     ov.add_argument("--placement", choices=broll.PLACEMENTS, default=None, help="full frame, upper part or corner card")
     ov.add_argument("--style", choices=("auto", *broll.STYLES), default="auto", help="photo, diagram or icon (default: "
                                                                                      "from the prompt)")
-    for p in (d, t, r, pu, c, tx, ro, pn, cu, sp, ed, sy, mu, rs, ins, pa, ov):
+    dr = sub.add_parser("draft", help="a draft's edits in one version -> edl_vN -> cut_vN ($0 without --review)")
+    dr.add_argument("run_dir", type=Path)
+    dr.add_argument("--ops", required=True, help='the edits as JSON: [{"op": "split", "args": {"span": "s3", "word": 12}}, ...]')
+    dr.add_argument("--id", dest="draft_id", default=None, help="the draft's id, kept in the patch")
+    for p in (d, t, r, pu, c, tx, ro, pn, cu, sp, ed, sy, mu, rs, ins, pa, ov, dr):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
         p.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
@@ -1581,6 +1755,14 @@ def main(argv: list[str] | None = None) -> int:
             ap.error("a new overlay needs --at CUT_S")
         out = overlay(a.run_dir, prompt=a.prompt, at=a.at, dur=a.dur, placement=a.placement, style=a.style,
                       set_id=a.set_id, remove=a.remove, from_v=a.from_v, passes=a.review, budget=a.budget)
+    elif a.cmd == "draft":
+        try:
+            ops = json.loads(a.ops)
+        except json.JSONDecodeError as e:
+            ap.error(f"--ops is not JSON: {e}")
+        if not isinstance(ops, list) or not all(isinstance(o, dict) and isinstance(o.get("op"), str) for o in ops):
+            ap.error('--ops is a list of {"op": ..., "args": {...}}')
+        out = apply_draft(a.run_dir, ops, a.from_v, a.draft_id, a.review, a.budget)
     elif a.cmd == "pin":
         out = pin(a.run_dir, a.speaker, None if a.head.lower() == "none" else a.head, a.from_v, a.review, a.budget)
     else:
