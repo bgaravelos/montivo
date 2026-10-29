@@ -691,6 +691,25 @@ of the audio stream and is moved first renders no audio (rare). Deployed on Bill
 container was running before it); Modal's image has ffmpeg 5.1.9 (Debian 12); live /api/health 200, /api/runs 401,
 /s/nope 404, host spend $2.79 of $15; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 9.8 s; smoke
 --reorder: audio 37.333 s = video, the moved clip -15.8 dB.
+Live preview editing (29-30/10, $0, Billy: into the demo and the submission despite the freeze; merged as `5876f4d`,
+not deployed yet): the editor plays a version or a draft EDL from an edit proxy without a render. `ingest.make_edit_proxy`
+(720 px short side, keyframe every 0.5 s, at most 30 fps, video only; the audio apart as 48 kHz FLAC) made once per source
+into `ui/cache/edit/`; `engine/preview.py` `preview_data` lays out with the render's own code (plan_paths segments and
+crop x per source frame, build_overlays captions and callouts not drawn, broll.place stills, plan_punches zoom,
+music.speech_intervals for the bed, the speech's loudness gain), 5 ms without graphics, 27-41 ms with; GET
+`/api/runs/{id}/preview?v=N`, `/draft/preview` (plus the draft's `version_entry`, runs.version_entry now shared with
+runs.versions), `/api/fonts/{key}`, `/filmstrip` and `/peaks` with `draft=1`. `web/src/Live.ts` LiveMedia: audio-led
+(Web Audio, one source per segment, gain into a limiter, the looped bed with its duck curve), two `<video>`s swapped
+in the frame callback with the next one pre-rolled 0.15 s before each cut, the crop and punch-ins as CSS transforms,
+`LiveOverlay.ts` HTML graphics; the Player drives it through its usual transport (`live` = URL or data). Live /
+Rendered switch on the transport (localStorage `montivo.live`, `#/run/<id>?live=1`). In Live the structural edits
+(split, delete, trim, move, word cuts, insert, pauses) go to the draft (`montivo/server/draft.py`, pure ops in
+`human.OPS`, 4-33 ms an edit, per judge on the hosted demo) with no dialog, cmd-Z is the draft's undo, the top bar
+offers Discard and Make Version N (Billy: commit by button only, one render, no auto-commit); captions, style, music,
+review and Ask wait for the version. `tools/live_check.mjs RUN` (headless Google Chrome, needs `montivo serve`): on a
+015 clone no freeze, picture vs audio p95 0.5-0.98 frame, seek-to-play 21-48 ms; never measure in the hidden browser
+pane (animation frames at 4 Hz). Open: Safari and listening (Billy, `runs/015-live` v8 has Chill Lofi), pitch at
+1.5x / 2x, HTML caption stroke a little heavier than Pillow's. Notes: `docs/notes/live-preview-phase0_2026-10-29.md`.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
