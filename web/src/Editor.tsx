@@ -84,6 +84,8 @@ export function Editor({ id, replay, go }: Props) {
   const setGuide = (g: Guide) => { setGuideState(g); try { localStorage.setItem("montivo.viewer.guide", g); } catch { /* this tab only */ } };
   const nextGuide = () => setGuide(GUIDES[(GUIDES.indexOf(guide) + 1) % GUIDES.length]);
   const player = useRef<PlayerHandle>(null);
+  // the live preview (Live.ts) behind a flag while it is built: #/run/<id>?live=1 turns it on, ?live=0 off
+  const liveOn = !replay && (() => { try { return localStorage.getItem("montivo.live") === "1"; } catch { return false; } })();
   const [styleDraft, setStyleDraft] = useState<StyleDraft>(EMPTY_DRAFT);
 
   // in replay, a version exists once the log rendered it; live, once it is on disk
@@ -202,7 +204,7 @@ export function Editor({ id, replay, go }: Props) {
   const onTime = useCallback((x: number) => { tRef.current = x; setT(x); }, []);
   const getTime = useCallback(() => tRef.current, []);
   // the playhead for a key: the video's own clock (onTime follows it on animation frames, which stall in a hidden tab)
-  const playhead = () => player.current?.el()?.currentTime ?? tRef.current;
+  const playhead = () => player.current?.time() ?? tRef.current;
   const blocksRef = useRef(blocks);
   blocksRef.current = blocks;
   const selRef = useRef({ key: selKey, keys: selKeys });
@@ -491,9 +493,10 @@ export function Editor({ id, replay, go }: Props) {
           </button>
         )}
         {v?.cut ? (
-          <Player ref={player} key={`${v.n}`} src={fileUrl(id, v.cut)} onTime={onTime} onPlaying={setPlaying}
+          <Player ref={player} key={`${v.n}${liveOn ? "-live" : ""}`} src={fileUrl(id, v.cut)} onTime={onTime} onPlaying={setPlaying}
+            live={liveOn ? `/api/runs/${id}/preview?v=${v.n}` : undefined}
             marks={blocks.filter((b) => b.kind !== "ghost").map((b) => b.t0)}
-            label={`v${v.n}`} safe={{ label: GUIDE_NAME[guide], on: guide !== "off", next: nextGuide }} overlay={<>
+            label={`v${v.n}${liveOn ? " · live" : ""}`} safe={{ label: GUIDE_NAME[guide], on: guide !== "off", next: nextGuide }} overlay={<>
               {v && <StyleCanvas v={v} t={t} draft={styleDraft} setDraft={setStyleDraft} preview={stylePreview} busy={previewBusy}
                 show={styling && !playing} />}
               <SafeArea kind={guide} />

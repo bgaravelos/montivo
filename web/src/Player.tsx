@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { tc } from "./api";
 import { Icon } from "./icons";
+import { LiveMedia, type LiveData } from "./Live";
 
 export const FPS = 30;
 
@@ -21,7 +22,11 @@ export type PlayerHandle = {
   seek: (a: number, b?: number) => void; play: () => void; pause: () => void; toggle: () => void;
   step: (dt: number) => void; shuttle: (dir: -1 | 0 | 1) => void; el: () => HTMLVideoElement | null;
   toggleMute: () => void; fullscreen: () => void; skip: (dir: 1 | -1) => void; // to the previous / next cut
+  time: () => number; // the cut second on screen (el() is null in live mode)
 };
+/** What the transport drives: the <video> of a rendered cut, or the live preview (Live.ts) that plays the EDL. */
+type Media = { currentTime: number; paused: boolean; playbackRate: number; duration: number; loop: boolean;
+  play: () => Promise<void>; pause: () => void };
 type Band = { a: number; b: number; sev: string };
 
 /** The 9:16 viewer with its own transport. seek(a, b) loops a..b until the viewer seeks or plays elsewhere; shuttle()
@@ -31,8 +36,15 @@ export const Player = forwardRef<PlayerHandle, {
   src: string; onTime?: (t: number) => void; bands?: Band[]; marks?: number[]; compact?: boolean; muted?: boolean;
   label?: string; scrub?: boolean; overlay?: React.ReactNode; onPlaying?: (playing: boolean) => void;
   safe?: { label: string; on: boolean; next: () => void }; // the safe-area guides' switch, on the transport's right
-}>(function Player({ src, onTime, bands = [], marks = [], compact, muted, label, scrub, overlay, onPlaying, safe }, ref) {
+  live?: string; // GET /preview of the version: play its EDL from the edit proxy instead of `src`
+}>(function Player({ src, onTime, bands = [], marks = [], compact, muted, label, scrub, overlay, onPlaying, safe, live }, ref) {
   const video = useRef<HTMLVideoElement>(null);
+  const lm = useRef<LiveMedia | null>(null);
+  const media = (): Media | null => (live ? lm.current : video.current);
+  const va = useRef<HTMLVideoElement>(null), vb = useRef<HTMLVideoElement>(null);
+  const box = useRef<HTMLDivElement>(null), timg = useRef<HTMLImageElement>(null);
+  const [liveData, setLiveData] = useState<LiveData | null>(null);
+  const [liveErr, setLiveErr] = useState<string | null>(null);
   const loop = useRef<[number, number] | null>(null);
   const back = useRef(0); // reverse shuttle speed, 0 = off
   const last = useRef(-1);
@@ -50,14 +62,14 @@ export const Player = forwardRef<PlayerHandle, {
 
   const calm = () => { // a shuttle speed (J/L) ends with the play or pause; a speed picked on the transport stays
     if (rate > 0 && RATES.includes(rate)) return;
-    if (video.current) video.current.playbackRate = 1;
+    const m = media(); if (m) m.playbackRate = 1;
     setRate(1);
   };
   const clearLoop = () => { loop.current = null; setLooping(false); };
   const stopBack = () => { back.current = 0; };
   const api: PlayerHandle = {
     seek(a, b) {
-      const el = video.current;
+      const el = media();
       if (!el) return;
       stopBack();
       el.currentTime = Math.max(0, a);
@@ -65,23 +77,23 @@ export const Player = forwardRef<PlayerHandle, {
       setLooping(b != null);
       if (b != null) el.play().catch(() => {});
     },
-    play: () => { stopBack(); video.current?.play().catch(() => {}); },
-    pause: () => { stopBack(); calm(); video.current?.pause(); },
+    play: () => { stopBack(); media()?.play().catch(() => {}); },
+    pause: () => { stopBack(); calm(); media()?.pause(); },
     toggle() {
-      const el = video.current;
+      const el = media();
       if (!el) return;
       if (back.current) { stopBack(); setRate(1); return; }
       calm();
       if (el.paused) el.play().catch(() => {}); else el.pause();
     },
     step(dt) {
-      const el = video.current;
+      const el = media();
       if (!el) return;
       stopBack(); el.pause(); clearLoop();
       el.currentTime = Math.max(0, Math.min(el.duration || 0, el.currentTime + dt));
     },
     shuttle(dir) {
-      const el = video.current;
+      const el = media();
       if (!el) return;
       if (dir === 0) { stopBack(); el.pause(); el.playbackRate = 1; setRate(1); return; }
       if (dir > 0) {
@@ -96,6 +108,7 @@ export const Player = forwardRef<PlayerHandle, {
       }
     },
     el: () => video.current,
+    time: () => media()?.currentTime ?? 0,
     skip: (dir) => skip(dir),
     toggleMute: () => setMute((m) => !m),
     fullscreen() {
@@ -107,10 +120,31 @@ export const Player = forwardRef<PlayerHandle, {
   };
   useImperativeHandle(ref, () => api);
 
+  useEffect(() => { // live mode: the version's segments and crop path, then the edit proxy on two <video>s
+    if (!live) return;
+    let on = true, made: LiveMedia | null = null;
+    setLiveData(null); setLiveErr(null);
+    fetch(live).then((r) => (r.ok ? r.json() : r.text().then((x) => Promise.reject(new Error(x || `preview: ${r.status}`)))))
+      .then((data: LiveData) => {
+        if (!on || !va.current || !vb.current || !box.current) return;
+        made = new LiveMedia(data, [va.current, vb.current], box.current, timg.current);
+        made.onstate = () => { const p = !made!.paused; setPlaying(p); onPlaying?.(p); };
+        made.muted = mute;
+        lm.current = made;
+        setLiveData(data); setD(data.duration_s); setT(0); last.current = -1;
+        made.ready.catch((e) => on && setLiveErr(String(e.message ?? e)));
+      })
+      .catch((e) => on && setLiveErr(String(e.message ?? e)));
+    const ro = new ResizeObserver(() => lm.current?.layout());
+    if (box.current) ro.observe(box.current);
+    return () => { on = false; ro.disconnect(); made?.destroy(); if (lm.current === made) lm.current = null; };
+  }, [live]); // eslint-disable-line
+  useEffect(() => { if (lm.current) lm.current.muted = mute; }, [mute]);
+
   useEffect(() => { // a smooth playhead for the timeline, not only the 4 Hz timeupdate; also runs the reverse shuttle
     let raf = 0, prev = performance.now();
     const tick = (now: number) => {
-      const el = video.current;
+      const el = media();
       const dt = (now - prev) / 1000;
       prev = now;
       if (el) {
@@ -130,17 +164,17 @@ export const Player = forwardRef<PlayerHandle, {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [onTime]);
+  }, [onTime, live]);
 
   const skip = (dir: 1 | -1) => { // to the previous / next clip edge
-    const el = video.current;
+    const el = media();
     if (!el) return;
     const edges = [0, ...marks, d].sort((a, b) => a - b);
     const to = dir > 0 ? edges.find((m) => m > el.currentTime + 0.05) : [...edges].reverse().find((m) => m < el.currentTime - 0.25);
     api.seek(to ?? (dir > 0 ? d : 0));
   };
   const nextRate = () => { // 1 -> 1.5 -> 2 -> 0.5 -> 1; a running shuttle drops back to 1
-    const el = video.current;
+    const el = media();
     if (!el) return;
     stopBack();
     const r = rate < 0 || !RATES.includes(rate) ? 1 : RATES[(RATES.indexOf(rate) + 1) % RATES.length];
@@ -153,12 +187,12 @@ export const Player = forwardRef<PlayerHandle, {
   };
   const loopBtn = () => {
     if (looping) return clearLoop();
-    const el = video.current;
+    const el = media();
     if (el) el.loop = !whole;
     setWhole(!whole);
   };
   const scrubTo = (e: React.MouseEvent<HTMLDivElement>) => {
-    const el = video.current;
+    const el = media();
     if (!el || !d) return;
     const r = e.currentTarget.getBoundingClientRect();
     el.currentTime = Math.max(0, Math.min(d, ((e.clientX - r.left) / r.width) * d));
@@ -168,8 +202,17 @@ export const Player = forwardRef<PlayerHandle, {
   return (
     <div className={`player ${compact ? "compact" : ""}`}>
       <div className="frame916" ref={frame} onClick={api.toggle}>
-        <video ref={video} src={src} preload="auto" playsInline muted={mute}
-          onLoadedMetadata={(e) => setD(e.currentTarget.duration)} onPlay={() => { setPlaying(true); onPlaying?.(true); }} onPause={() => { setPlaying(false); onPlaying?.(false); }} />
+        {live ? (
+          <div className="live-box" ref={box}>
+            <video ref={va} playsInline muted /><video ref={vb} playsInline muted />
+            <img ref={timg} className="live-title" alt="" />
+            {!liveData && !liveErr && <span className="live-wait">Preparing the live preview…</span>}
+            {liveErr && <span className="live-wait err">{liveErr}</span>}
+          </div>
+        ) : (
+          <video ref={video} src={src} preload="auto" playsInline muted={mute}
+            onLoadedMetadata={(e) => setD(e.currentTarget.duration)} onPlay={() => { setPlaying(true); onPlaying?.(true); }} onPause={() => { setPlaying(false); onPlaying?.(false); }} />
+        )}
         {label && <span className="vlabel">{label}</span>}
         {overlay}
         {!playing && <span className="big-play"><Icon name="play" size={34} /></span>}

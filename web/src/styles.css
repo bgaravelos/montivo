@@ -1032,3 +1032,9 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .ex-post-text { margin: 0; max-height: 180px; overflow: auto; white-space: pre-wrap; font: 12.5px/1.45 var(--sans); color: var(--text);
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px; }
 .ex-post-row { display: flex; align-items: center; gap: 8px; }
+/* live preview (Live.ts): two <video>s of the edit proxy, each cropped by a transform per frame */
+.live-box { position: absolute; inset: 0; overflow: hidden; background: #000; }
+.frame916 .live-box video { position: absolute; left: 0; top: 0; width: auto; height: auto; max-width: none; object-fit: fill; transform-origin: 0 0; will-change: transform; }
+.live-box .live-title { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.live-wait { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--text-2); font-size: 13px; }
+.live-wait.err { color: var(--blocker); }

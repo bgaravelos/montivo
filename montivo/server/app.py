@@ -33,6 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from ..config import OPEN_MODEL
 from ..engine.api import dump_json as write_json
 from ..engine.frame import ASPECTS
+from ..engine import preview as live_preview_engine
 from ..engine.graphics import FONTS, PRESET_NAMES, PRESETS, normalize_look
 from . import hosted, media, preflight, share
 from .runs import fingerprint, heads, list_runs, parse_log, progress, read_json, replay_script, run_state
@@ -583,6 +584,39 @@ def create_app(root: Path) -> FastAPI:
         if not out.is_file():
             raise HTTPException(404, "frame extraction failed")
         return FileResponse(out, headers={"Cache-Control": "max-age=3600"})
+
+    def edl_of(run_id: str, v: int) -> tuple[Path, dict]:
+        d = st.run_dir(run_id)
+        p = d / f"edl_v{v}.json"
+        if not p.is_file():
+            raise HTTPException(404, f"no edl_v{v}.json")
+        return d, json.loads(p.read_text())
+
+    @app.get("/api/runs/{run_id}/preview")
+    def live_preview(run_id: str, v: int):
+        """What the live player needs to play version v from the edit proxy (engine/preview.py); the first call for a
+        source makes the edit proxy and audio (a few seconds), later ones answer in milliseconds."""
+        d, edl = edl_of(run_id, v)
+        try:
+            media = live_preview_engine.edit_media(d, edl)
+        except FileNotFoundError as e:
+            raise HTTPException(404, str(e))
+        data = live_preview_engine.preview_data(d, edl)
+        if data["title"]:
+            data["title"] = {"seconds": data["title"]["seconds"], "url": f"/api/runs/{run_id}/preview/title.png?v={v}"}
+        data["media"] = {"video": f"/api/runs/{run_id}/file/{media['video']}", "audio": f"/api/runs/{run_id}/file/{media['audio']}",
+                         "width": media["width"], "height": media["height"], "bytes": media["bytes"]}
+        data["version"] = v
+        return data
+
+    @app.get("/api/runs/{run_id}/preview/title.png")
+    def live_preview_title(run_id: str, v: int):
+        d, edl = edl_of(run_id, v)
+        _, png = live_preview_engine.title_seconds(d, edl)
+        p = Path(png).resolve() if png else None
+        if p is None or not p.is_file() or st.runs.resolve() not in p.parents:
+            raise HTTPException(404, "no title card")
+        return FileResponse(p, headers={"Cache-Control": "max-age=3600"})
 
     def cut_of(run_id: str, v: int) -> tuple[Path, Path]:
         d = st.run_dir(run_id)

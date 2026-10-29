@@ -30,7 +30,7 @@ export function liveGains(base: Mix, mix: Mix, margin_db: number | null): { voic
 }
 
 let shared: AudioContext | null = null;
-const audioCtx = () => (shared ??= new AudioContext());
+export const audioCtx = () => (shared ??= new AudioContext());
 
 type Stems = { n: number; voice: AudioBuffer; music: AudioBuffer };
 
