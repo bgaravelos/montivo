@@ -1,10 +1,11 @@
 # Montivo: project instructions for Claude Code
 
 This folder (`~/Documents/montivo`, public repo https://github.com/bgaravelos/montivo) is the only place the
-hackathon project lives. Work here, not in `~/Documents/nocta-digital` (Nocta's agency work, off limits for this project).
+hackathon project lives. Work here and nowhere else. Private notes (task board, hosted address, background) are in
+`CLAUDE.local.md`, which is git-ignored.
 
 ## What this is
-Montivo is Billy's (official name Vasileios Gkaravelos) own Indie entry (as an individual, not Nocta Digital's) for the Meta Global AI Developer Hackathon (build window 26/10 to 4/11/2026, kickoff 26/10 18:00 Athens,
+Montivo is Billy's (official name Vasileios Gkaravelos) own Indie entry (as an individual) for the Meta Global AI Developer Hackathon (build window 26/10 to 4/11/2026, kickoff 26/10 18:00 Athens,
 submission on cerebralvalley.ai by Wed 4/11 evening, deadline Thu 5/11 04:00 Athens). An agent-first video editor:
 Muse Spark 1.3 watches the footage and plans a paper edit, Muse Voice gives turns and word timings, SAM 3.1 tracks
 the speaker for the 9:16 reframe and callouts, ffmpeg renders, then Spark reviews its own render against a rubric and
@@ -23,12 +24,9 @@ Build on Meta Open Weight Models (mixing is encouraged), served on own hardware 
 (`meta-models/muse-spark-open-1026`, `https://inference.baseten.co/v1`); the demo and README must say which stage runs
 on Spark Open and why (README "Open weight: Muse Spark Open", 28/10); the infrastructure partner verifies it in round 1.
 OSS license is in the rules (a builder on Discord, 28/10): MIT in `LICENSE` (Vasileios Gkaravelos), fonts OFL, music CC0.
-Track decision (Billy, 28/10, FINAL): Indie, as Billy's own entry as an individual. Nocta Digital is a Greek OE
-(general partnership, can employ people), so by the bot's rule the agency would fit Startup: every public credit
-(team name "Montivo", README, brand title/end cards, demo end card, submission drafts, X post) must name Vasileios Gkaravelos (Billy's official name), not
-Nocta Digital; the open list is in the Board card «Credit από Nocta Digital στον Billy (Indie)». Follow-up
-in thread 4 (28/10): Kai | CV (organizer) confirmed "having an agency doesn't automatically put you as startup, you may
-proceed with the indie".
+Track decision (Billy, 28/10, FINAL): Indie, as Billy's own entry as an individual (the organizer confirmed it in
+#questions, 28/10). Every public credit (team name "Montivo", README, brand title/end cards, demo end card, submission
+drafts, X post) names Vasileios Gkaravelos (Billy's official name) and no company; background in `CLAUDE.local.md`.
 Event pages (read 28/10): Indie = "individual builders and students", judged on creativity, technical ambition and
 whether it works; Startup = "teams and founders building a real product", judged on technical execution and whether it
 holds up in production, and startups may build on existing products. Stage 2 rubric is the same for both tracks
@@ -40,7 +38,7 @@ holds up in production, and startups may build on existing products. Stage 2 rub
   `muse-image-1.0`). No other model provider in the product.
 - All code was written from scratch during the hackathon. The concept comes from an earlier personal project of
   Billy's (also called Montivo); that code and repo no longer exist and nothing from it is used. Never copy code from
-  `~/Documents/nocta-digital` either.
+  Billy's other projects either.
 - Code, comments, README and commit messages in English. Replies to Billy in Greek with the professional terms in
   English, no em dashes. Billy dictates with Wispr Flow mixing Greek and English.
 - `MODEL_API_KEY` lives in `~/.zshenv`; never print it, never commit it. `.env`, `runs/`, `footage/`, media files and
@@ -74,7 +72,7 @@ Evening 2 (26/10 night, same session group) done: `engine/reframe.py` (9:16 crop
 frame, keyframes in the EDL) and `engine/render.py` (frame-aligned segments from the source, audio cut in one pass,
 concat by stream copy) give `cut_v1.mp4`; `montivo render runs/001` re-renders without the API; `--no-render` skips it.
 Kill test (a) passed on the NASA clip (cut re-transcribed with Voice: span words in order, segment edges intact).
-Measured facts that shape the code are in README.md ("Measured behaviour") and, in full, in `docs/notes/`.
+Measured facts that shape the code are in `docs/measurements.md` (the README links it) and, in full, in `docs/notes/`. The pipeline, every CLI flag and the run folder layout are in `docs/pipeline.md`; the README keeps what a judge needs.
 Evening 3 (26/10 night) done offline on run 011: `engine/captions.py` + `engine/graphics.py` (Pillow PNG captions and
 callouts, overlay in the segment encode: this ffmpeg has no libass/drawtext), `engine/image.py` (Muse Image title card,
 `--no-title`), loudnorm -14 LUFS in `render_audio`; `montivo render runs/011 --out cut_v3.mp4`.
@@ -109,12 +107,12 @@ Muse Spark Open on Baseten as an OpenAI-compatible chat completion with the plan
 model so the call sends `reasoning_effort` low unless `--plan-effort` says otherwise; offline tests only, the planner
 path never called with the real key yet (Billy's 27/10 probe: HTTP 200, effort low answered in 0.8 s).
 Second cloud round (27/10): README rebuilt for judges (why it is different, mermaid loop, measured results, try it,
-the NLE editor, built during the hackathon, build log); English drafts of the submission form fields in Notion (subpage
-of the Montivo page, waiting for Billy's yes); punch-ins (`engine/punch.py`, `--punch` on run and render, opt-in, stored
+the NLE editor, built during the hackathon, build log); English drafts of the submission form fields (private,
+waiting for Billy's yes); punch-ins (`engine/punch.py`, `--punch` on run and render, opt-in, stored
 as EDL `punch` so the loop and edits keep it, `punch_ins` records them): 1.12x on words 3 dB over the cut's median level
 or highlight words, 1.06x alternating on jump cuts, zoompan after the scale (crop cannot resize per frame, the graph
 stalls), skipped when the head would leave the top or touch a caption; synthetic tests and a smoke render only.
-Third cloud round (27/10, same branch, $0): demo video script and storyboard in Notion (subpage of the Montivo page,
+Third cloud round (27/10, same branch, $0): demo video script and storyboard (private,
 waiting for Billy's yes; shots 7a/7b only if punch-ins / speaker mapping look good on the Mac). Punch-ins in the editor
 (commit `36e137e`): every `punch_ins` entry has a `key` (`emphasis:<word>@<onset>`, `jump_cut:<span>`), the EDL's
 `punch_skip` removes one while it keeps its place (budget, spacing, alternation), `python -m montivo.human punch RUN
@@ -334,10 +332,10 @@ Hosted demo (28/10, Billy: Modal, a $15 cap on the Meta credits): `montivo/serve
 adopted; a paid action needs its estimate left, the $0 edits never; `MONTIVO_ONE_JOB`, `MONTIVO_MAX_FOOTAGE_S` 95,
 `MONTIVO_MAX_UPLOAD_MB` 400; the samples cannot be archived); the state carries `budget` and `key_note` (shown instead of
 "set MODEL_API_KEY", Home shows what is left). `modal_app.py`: Debian image + ffmpeg, Volume `montivo-data`, secret
-`montivo-keys` (MODEL_API_KEY, BASETEN_API_KEY, MONTIVO_PASSWORD; the password is on the Board card), one container,
+`montivo-keys` (MODEL_API_KEY, BASETEN_API_KEY, MONTIVO_PASSWORD; where the password is: `CLAUDE.local.md`), one container,
 4 CPUs, scale to zero, a thread commits the Volume every 30 s; `modal run modal_app.py::seed` unzips /data/seed/*.zip
 (`python -m montivo.server.sample pack runs/015 --footage`) and adopts them, `::budget` prints the cap, `::smoke` renders a
-$0 drop on a copy (this image: 015 v6 34.3 s, -14.0 LUFS, 22 s, same as the Mac). Live: https://bgaravelos--montivo-web.us-east.modal.run
+$0 drop on a copy (this image: 015 v6 34.3 s, -14.0 LUFS, 22 s, same as the Mac). Live (address in `CLAUDE.local.md`):
 (012 v2, 015 v5, $15 left). A judge's own copy (Billy's go): sign-in sets a `montivo_judge` id cookie per browser; the
 first edit on a sample (adopted, no `ui/owner`) copies it to `runs/<id>-<judge>` (`app.own`, through `.copying/`, the
 copy adopted so its ledger is not host spend, a chat line says so), every mutating route goes there and the editor
@@ -625,7 +623,7 @@ never widen or settle into another span's source time in any turn (NASA turns pl
 join on the same source second is not a gate cut. Real runs (today's code, `runs/d1-nasa`, `d1-usgs`, `d1-tedx`; TEDx
 clip pulled from the Volume): no pass (NASA 58 -> 66, after the fixes 62: the astronauts talk over each other at turn
 changes, not a sample for run 017; USGS 68; TEDx 62 -> 70). Open for day 3: the clean export's punch-ins and pip, an
-upload quota per judge (needs Billy's number); Nice ones on the Board. The judge cookie change needs the deploy; the
+upload quota per judge (needs Billy's number); Nice ones on the task board. The judge cookie change needs the deploy; the
 iPhone HDR clip was not in ~/Downloads (day 2).
 Debugging day 2 (28/10 evening, $1.12, commits ac581c4 7c0d9ba d442e5a f5c96c7 c6e9b4c 2a3115f 898c7e8 fdb04c5
 544ae75, findings in `docs/notes/debugging-day2_2026-10-29.md`): the judge checklist walked in a local hosted-mode
@@ -678,7 +676,7 @@ budget.json `held`); the hosted server sets aside at start the unrendered edl_vN
 stop never ran the job's clean-up); Ask Montivo refuses a re-plan while part of the cut is selected. Deployed on Billy's
 go at 23:46 (no job since 23:22; the 23:33 container stopped); live /api/health 200, /api/runs 401, /s/nope 404, host spend
 $2.79 of $15; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 10.1 s.
-Cloud review patches (29/10 evening, $0 Meta, commit `6f2f180`): of the 23 patches the cloud sessions left in Notion, 20
+Cloud review patches (29/10 evening, $0 Meta, commit `6f2f180`): of the 23 patches the cloud sessions left in their notes, 20
 went in after a check on the Mac: render reads one input per segment, so a clip moved earlier keeps its audio on
 ffmpeg 7.x (a reorder of 015 on a static 7.1: the old code failed, measured_I -inf; now audio = video; on 9.0 015 v5
 audio and frames byte-identical, same render time); ingest refuses cover-art audio, no-duration files and evens an
@@ -686,7 +684,7 @@ odd height (old code: a 90000 fps "video", KeyError, ffmpeg exit 187); hosted re
 before a sample copy, priced stop holds, Ask fallback on the last cents, exact cents, nan / inf 400; title card cache
 after success; SSE streams end after 300 s and reconnect, serve stops 5 s after SIGTERM; `modal run
 modal_app.py::smoke --reorder` (passed on Modal with the new image); `constraints.txt` (make dev, Modal image);
-UI: Music lane, Space on buttons, modal focus + Esc, contrast, reduced motion, 375 px bar, no Nocta placeholder; CLI
+UI: Music lane, Space on buttons, modal focus + Esc, contrast, reduced motion, 375 px bar, no agency name in the Style placeholder; CLI
 --from checks. Each new test fails on the old code. Left out: 1a (cover / post / share on a sample would answer "make
 any edit first"), 3d / 3e (iOS only, no Xcode here). Still on ffmpeg 7.1, old and new: a clip that runs past the end
 of the audio stream and is moved first renders no audio (rare). Deployed on Billy's go 29/10 at c0f2046 (no
@@ -696,21 +694,12 @@ container was running before it); Modal's image has ffmpeg 5.1.9 (Debian 12); li
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
-## Montivo Board (live task board, every session)
-Notion database "Montivo Board" under the project page, data source `collection://ca1d961f-09be-4b9a-bb90-875fbe8afab3`
-(database `5cf24c9678414d9291a044acc150c283`). Billy tracks everything there until the submission, so every session,
-local or cloud, keeps it current:
-- First task of the session: query the board; take the matching card (or create one) and set Status `In progress`,
-  Owner (`Claude session` / `Cloud session`), Area, Priority, Due, and Session = `claude://claude.ai/epitaxy/<local_id>`
-  plus Session ID when the id is known (a session you start with start_session: create its card yourself with the id the
-  tool returns); otherwise put the session title in Notes.
-- New open items found while working (a follow-up, something that needs Billy's yes) get their own card: `Next` or
-  `Backlog`, or `Waiting on Billy` with Owner `Billy` and what he has to do in Notes.
-- At wrap-up: Status `Done` (with Commit and Cost) or `Waiting on Billy` / `Backlog` with one line in Notes on what is
-  left. Card text in Greek with the professional terms in English, no em dashes. Never delete cards.
-- Without the Notion connector (some cloud sessions): list the card changes in the final report instead.
+## Task board (every session)
+Billy tracks every task on a private board until the submission; every session keeps it current. Where it is and
+how to update it: `CLAUDE.local.md`. A session without that file (a cloud session): list the task changes in the
+final report instead.
 
 ## Where the rest of the context is
 - `docs/notes/` (copies of the session notes: kill tests and architecture, evening 1, fresh research and verdict).
-- Notion page `405a4ee32031814ba38cfb1efd670918` (Kill test results, Architecture, Plan).
+- `CLAUDE.local.md` (private: the task board, the planning pages, the hosted address).
 - Claude Code memory for this folder: `~/.claude/projects/-Users-billy-Documents-montivo/memory/`.

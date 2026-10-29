@@ -62,7 +62,7 @@ def review_passes(b: dict, key: str = "review", default: int = 0, lo: int = 0) -
 UPLOAD_PROBE_S = 20  # ffprobe reads only the container header: a phone clip answers in well under a second
 PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 
-# rough prices and times for the hint on each button (README "Measured behaviour"; the planner A/B on runs/012-open:
+# rough prices and times for the hint on each button (docs/measurements.md; the planner A/B on runs/012-open:
 # Spark 1.3 $0.050 in 35 s, Muse Spark Open $0.012 in 6.8 s). The *_s times are the progress bar's expectation when the
 # run's own ledger has no earlier call of that stage (run 015: review prep 8.3 s, Spark review 26 s, title card 10.3 s,
 # render 20.3 s for 1161 frames)

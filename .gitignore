@@ -43,3 +43,6 @@ docs/notes/
 dist/
 shares.json
 judge.key
+
+# private notes for Claude Code (agency background, hosted address, task board)
+CLAUDE.local.md

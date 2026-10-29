@@ -107,11 +107,10 @@ A and C combine well: the bracket as the mark, the version tag as a motion and c
 ## 7. Questions for Billy
 
 - Name: keep "Montivo" and rebuild only the identity, or is the name also open?
-- Who should the brand speak to first: the hackathon judges (craft, credibility) or creators and small agencies like Nocta (speed,
+- Who should the brand speak to first: the hackathon judges (craft, credibility) or creators and small agencies (speed,
   personality)?
 - UI mood: dark editor (like Premiere, Opus, Runway) or light paper (like Descript, Captions)? Direction A works in both, but the
   choice sets the palette.
-- Is there any tie to Nocta Digital's identity, or must Montivo stand on its own?
 
 ## Sources
 
