@@ -149,7 +149,7 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
     ["⌫ / Delete", "Delete the selected clips, or the selected transcript words"],
     ["N", "Snapping on / off (hold ⇧ while dragging: free)"],
     ["⌘Z · ⇧⌘Z", "Previous version · next version"], ["⌘+ · ⌘−", "Zoom the timeline"], ["Esc", "Clear the selection"],
-    [". · ,", "Next · previous reviewer issue"], ["G", "Safe-area guides: Reels, TikTok, Shorts, off"], ["⇧M", "Mute the viewer"], ["F", "Full screen"],
+    [". · ,", "Next · previous reviewer issue"], ["V", "Viewer: Live (edits play at once) or Rendered (the exported file)"], ["G", "Safe-area guides: Reels, TikTok, Shorts, off"], ["⇧M", "Mute the viewer"], ["F", "Full screen"],
   ];
   return (
     <Modal title="Keyboard shortcuts" onClose={onClose}>

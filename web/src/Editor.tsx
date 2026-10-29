@@ -87,7 +87,7 @@ export function Editor({ id, replay, go }: Props) {
   const player = useRef<PlayerHandle>(null);
   // the live preview (Live.ts): the viewer plays the EDL from the source, and the structural edits (split, trim, move,
   // delete, words, insert, pauses) go to a draft (server/draft.py) that plays at once; "Make Version N" renders it
-  const [liveOn, setLiveOnState] = useState(() => { try { return localStorage.getItem("montivo.live") === "1"; } catch { return false; } });
+  const [liveOn, setLiveOnState] = useState(() => { try { return localStorage.getItem("montivo.live") !== "0"; } catch { return true; } });
   const setLive = (on: boolean) => { setLiveOnState(on); try { localStorage.setItem("montivo.live", on ? "1" : "0"); } catch { /* this tab only */ } };
   const live0 = liveOn && !replay;
   const [draftData, setDraftData] = useState<LiveData | null>(null);
@@ -419,6 +419,7 @@ export function Editor({ id, replay, go }: Props) {
         break;
       case "Escape": if (ctx) setCtx(null); else if (menu) setMenu(false); else if (wordSel) setWordSel(null); else { setSelKey(null); setSelKeys([]); } break;
       case "g": case "G": nextGuide(); break;
+      case "v": case "V": if (!replay) setLive(!liveOn); break;
       case "m": case "M": if (e.shiftKey) p?.toggleMute(); break; // M alone stays free for markers (Premiere, Resolve)
       case "f": case "F": p?.fullscreen(); break;
       case "n": case "N": setSnap(!snap); flash(`Snapping ${snap ? "off" : "on"}${snap ? "" : ": the playhead, clip edges and review issues"} (hold ⇧ while dragging for free)`); break;
@@ -571,6 +572,18 @@ export function Editor({ id, replay, go }: Props) {
       </aside>
 
       <main className="viewer">
+        {!replay && v && (
+          <div className="view-mode" role="group" aria-label="What the viewer plays">
+            <button className={liveOn ? "on" : ""} aria-pressed={liveOn} onClick={() => setLive(true)}
+              title="Live: every cut, move or delete plays at once, straight from the footage; Make Version renders them into a file (V)">
+              <span className="vm-dot" />Live
+            </button>
+            <button className={!liveOn ? "on" : ""} aria-pressed={!liveOn} onClick={() => setLive(false)}
+              title="Rendered: the exported file of this version, exactly as it downloads (V)">
+              Rendered
+            </button>
+          </div>
+        )}
         {v?.cut && guide !== "off" && (
           <button className="guide-btn on" onClick={nextGuide}
             title="Safe-area guides: the margins Reels, TikTok and Shorts cover with their own UI (G cycles)">
@@ -581,7 +594,7 @@ export function Editor({ id, replay, go }: Props) {
           <Player ref={player} key={draftV ? `draft-${draftData!.draft!.id}` : `${v.n}${live0 ? "-live" : ""}`}
             src={v.cut ? fileUrl(id, v.cut) : ""} onTime={onTime} onPlaying={setPlaying}
             live={draftV ? draftData! : live0 ? `/api/runs/${id}/preview?v=${v.n}` : undefined}
-            liveToggle={replay ? undefined : { on: liveOn, set: setLive }} liveMix={live0 && mixStaged ? mix : null}
+            liveMix={live0 && mixStaged ? mix : null}
             marks={blocks.filter((b) => b.kind !== "ghost").map((b) => b.t0)}
             label={draftV ? `Draft · ${edits(draftSum?.ops.length ?? 0)}` : `v${v.n}${live0 ? " · live" : ""}`} labelTone={draftV ? "draft" : undefined}
             safe={{ label: GUIDE_NAME[guide], on: guide !== "off", next: nextGuide }} overlay={<>

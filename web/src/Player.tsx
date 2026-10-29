@@ -38,10 +38,9 @@ export const Player = forwardRef<PlayerHandle, {
   safe?: { label: string; on: boolean; next: () => void }; // the safe-area guides' switch, on the transport's right
   // the live preview (Live.ts) in place of `src`: GET /preview's URL for a version, or a draft's data already fetched
   live?: string | LiveData;
-  liveToggle?: { on: boolean; set: (on: boolean) => void }; // the Live / Rendered switch on the transport
   labelTone?: string;
   liveMix?: { level_db: number; voice_db: number } | null; // the timeline's faders while they are moved (live mode)
-}>(function Player({ src, onTime, bands = [], marks = [], compact, muted, label, scrub, overlay, onPlaying, safe, live, liveToggle, labelTone, liveMix }, ref) {
+}>(function Player({ src, onTime, bands = [], marks = [], compact, muted, label, scrub, overlay, onPlaying, safe, live, labelTone, liveMix }, ref) {
   const video = useRef<HTMLVideoElement>(null);
   const lm = useRef<LiveMedia | null>(null);
   const media = (): Media | null => (live ? lm.current : video.current);
@@ -263,8 +262,6 @@ export const Player = forwardRef<PlayerHandle, {
             <button className={`tp-tool tp-rate ${rate !== 1 ? "on" : ""}`} onClick={nextRate} title="Playback speed (J · K · L shuttle)">{rate < 0 ? `◀ ${-rate}×` : `${rate}×`}</button>
             <button className={`tp-tool ${looping || whole ? "on" : ""}`} onClick={loopBtn} title={looping ? "Stop looping the clip" : whole ? "Stop looping the cut" : "Loop the cut"}><Icon name="repeat" /></button>
             <button className={`tp-tool ${mute ? "on" : ""}`} onClick={() => setMute(!mute)} title={mute ? "Unmute (⇧M)" : "Mute (⇧M)"}><Icon name={mute ? "mute" : "volume"} /></button>
-            {liveToggle && <button className={`tp-tool tp-live ${liveToggle.on ? "on" : ""}`} onClick={() => liveToggle.set(!liveToggle.on)}
-              title={liveToggle.on ? "Live: edits play at once from the source, graphics in the browser. Click for the rendered file." : "Rendered: the exported file. Click for Live, where edits play at once."}>{liveToggle.on ? "Live" : "Rendered"}</button>}
             {safe && <button className={`tp-tool ${safe.on ? "on" : ""}`} onClick={safe.next} title={`Safe-area guides: ${safe.label} (G cycles Reels, TikTok, Shorts, off)`}><Icon name="safe" /></button>}
             <button className="tp-tool" onClick={api.fullscreen} title="Full screen (F)"><Icon name="fit" /></button>
           </span>
