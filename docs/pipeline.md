@@ -15,7 +15,10 @@ montivo run footage.mp4 --brief "..." --out runs/001
   watch    Spark 1.3 + proxy + transcript -> shot log, speaker map, concept suggestions, b-roll, movement moments /
   speakers (2+ voices, 2+ heads) mouth-minus-eyes motion of every SAM head vs the Voice word times of every speaker
            -> speakers.json (head ids per speaker; watch's "left/right/centre" as the fallback), $0, ffmpeg + Pillow
-  plan     Spark 1.3 + brief + shot log + movement moments + measured speech rate + transcript -> paper edit (turn id + verbatim words)
+  plan     Spark 1.3 + brief + shot log + movement moments + measured speech rate + transcript -> paper edit (turn id + verbatim words);
+           the same call names the words Voice probably misheard (likely_mishearings: from the brief, on-screen text or
+           context) -> EDL glossary_suggestions, offered in the chat and the Captions panel ("Did you say ...?", Accept =
+           the glossary edit), never applied unasked
   edl      spans mapped to Voice word boundaries, then every cut edge tightened to the speech in the source audio
            (0.1 s before the onset, 0.15 s after the offset, 0.3 s at the very end) -> edl_v1.json
   reframe  per segment: the head track (person as fallback), the talking speaker's head when speakers.json maps one, else the

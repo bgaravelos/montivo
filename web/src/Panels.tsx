@@ -4,7 +4,7 @@ import { api, fileUrl, frameUrl, tc, usd } from "./api";
 import { flatWords, originKind, originLabel, parentOf, speakerColor, type Block } from "./edit";
 import { Icon, MarkLoader } from "./icons";
 import { whatChanged } from "./Loop";
-import type { CaptionLine, Costs, HeadsInfo, Planner, RunState, Version } from "./types";
+import type { CaptionLine, Costs, GlossarySuggestion, HeadsInfo, Planner, RunState, Version } from "./types";
 
 /** A3: in Live a panel's Apply goes into the draft with the timeline's edits. */
 export const LIVE_TIP = "Into the draft: it plays at once; Make Version in the top bar renders every draft edit once ($0)";
@@ -172,6 +172,50 @@ export type CaptionEdit = { at: number; text: string };
 /** Lowercase, punctuation off: how the glossary matches words (captions.norm). */
 const normTok = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
 const toks = (s: string) => s.split(/\s+/).filter(Boolean);
+
+/** C3: the planner's suggestions the run's glossary (as `latest` has it) does not correct yet, minus the ones put off
+ *  here (`hidden`, per run in localStorage). */
+export function openSuggestions(v: Version | null | undefined, latest: Version | null | undefined, hidden: string[]): GlossarySuggestion[] {
+  const done = new Set(Object.keys(latest?.glossary ?? {}).map((k) => toks(k).map(normTok).join(" ")));
+  return (v?.glossary_suggestions ?? []).filter((s) => {
+    const key = toks(s.heard).map(normTok).join(" ");
+    return !done.has(key) && !hidden.includes(key);
+  });
+}
+
+export function useHiddenSuggestions(run: string): [string[], (heard: string) => void] {
+  const key = `montivo.mishear.${run}`;
+  const [hidden, setHidden] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem(key) ?? "[]"); } catch { return []; } });
+  const hide = (heard: string) => setHidden((h) => {
+    const next = [...h, toks(heard).map(normTok).join(" ")];
+    try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* this tab only */ }
+    return next;
+  });
+  return [hidden, hide];
+}
+
+/** C3: "Did you say ...?" for each name the planner thinks Voice misheard. Accept = Correct all (the run's glossary,
+ *  every line that says it, $0); Not now hides it here. Captions stay as heard until a person says yes. */
+export function MishearList({ items, disabled, onAccept, onHide }: {
+  items: GlossarySuggestion[]; disabled: string | null; onAccept: (s: GlossarySuggestion) => void; onHide: (s: GlossarySuggestion) => void;
+}) {
+  if (!items.length) return null;
+  return (
+    <ul className="mishear">
+      {items.map((s) => (
+        <li key={s.heard}>
+          <span className="mh-q">Did you say <b>“{s.written}”</b>? <span className="mute">Voice heard “{s.heard}”.</span></span>
+          {s.why && <span className="mh-why mute small">{s.why}</span>}
+          <span className="mh-acts">
+            <button className="btn small" disabled={!!disabled} title={disabled ?? `Every caption that says “${s.heard}” reads “${s.written}”, now and after a re-plan ($0)`}
+              onClick={() => onAccept(s)}>Accept</button>
+            <button className="btn quiet small" onClick={() => onHide(s)}>Not now</button>
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
 const bare = (s: string) => s.replace(/[.,!?;:]+$/, "");
 
 /** C2: the one run of words a line edit changed ("meta meta" -> "Four Meta"), as a glossary entry, or null when the edit
@@ -210,8 +254,9 @@ function toCheck(v: Version | null, c: CaptionLine): string[] {
 /** The caption lines of a version: retext a line where Voice misheard a word (here, or everywhere it says it: the run's
  *  glossary), find and replace, split or join lines, and the lines worth a second look. Edits are staged here and
  *  applied together (the reviewer's caption_text patch, $0); in Live they go into the draft. */
-export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, focus, rev, live, onStyle, onGlossary, onBreak }: {
+export function CaptionsPanel({ v, latest, run, t, next, canEdit, onSeek, onApply, onAsk, focus, rev, live, onStyle, onGlossary, onBreak }: {
   v: Version | null; t: number; next: number; canEdit: string | null; onSeek: (a: number) => void; focus?: PanelFocus | null;
+  latest: Version | null; run: string; // C3: the suggestions the newest version's glossary has not taken yet
   rev: string; live: boolean; // what the staged lines belong to (a version, or the draft as it stands); Live: Apply goes to the draft
   onApply: (edits: CaptionEdit[]) => void;
   onAsk?: (line: CaptionLine) => void; // the line goes to the chat as "this" (UX B3)
@@ -283,6 +328,8 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, foc
   };
   const matches = find?.find.trim() ? linesSaying(lines.filter((c) => !c.heard), find.find) : [];
   const gloss = Object.entries(v?.glossary ?? {});
+  const [hidden, hide] = useHiddenSuggestions(run);
+  const sugg = openSuggestions(v, latest, hidden);
   return (
     <section className="side-panel">
       <div className="panel-head">
@@ -312,6 +359,8 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, foc
               Replace in {matches.length} line{matches.length === 1 ? "" : "s"}</button>
           </div>
         )}
+        {!find && <MishearList items={sugg} disabled={canEdit} onHide={(s) => hide(s.heard)}
+          onAccept={(s) => onGlossary({ [s.heard]: s.written })} />}
         {lines.length > 0 && !find && <p className="mute small">Double-click a line to fix a word Voice misheard. In the box: Enter at a word splits the line, ⌫ at the start joins it to the line before.</p>}
         <div className="list" ref={body}>
           {(find?.find.trim() ? matches : lines).map((c) => {

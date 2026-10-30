@@ -161,6 +161,14 @@ def run_glossary(edl: dict) -> dict[str, str]:
     return dict(DEMO_GLOSSARY) if gl is None else {str(k): str(v) for k, v in gl.items()}
 
 
+def glossary_suggestions(edl: dict) -> list[dict]:
+    """The planner's glossary suggestions (C3, edl.mishearings) a person has not taken yet: one whose heard words the
+    run's glossary already corrects (accepted, or fixed by hand through Correct all) is left out."""
+    done = {tuple(norm(t) for t in k.split()) for k in run_glossary(edl)}
+    return [dict(s) for s in edl.get("glossary_suggestions") or []
+            if tuple(norm(t) for t in str(s.get("heard", "")).split()) not in done]
+
+
 def highlight_words(edl: dict, look: Look | None = None) -> set[str]:
     """The words the captions colour and punch.py treats as names: the EDL's `highlight` (DEMO_HIGHLIGHT for an EDL
     from before per-run words), plus the look's `highlight_add`, minus its `highlight_off`; normalised like

@@ -40,6 +40,7 @@ from pathlib import Path
 
 from . import human
 from .config import OPEN_MODEL, SPARK_MODEL
+from .engine import captions as captions_mod
 from .engine import music as music_mod
 from .engine.api import dump_json
 from .engine.edl import title_on, title_style
@@ -230,6 +231,9 @@ def context(run_dir: Path, edl: dict) -> str:
                      + (f"; notes: {notes}" if notes else ""))
     if missing := edl.get("brief_missing"):
         lines.append("Asked for in the brief but never said in the footage: " + "; ".join(map(str, missing)))
+    if sugg := captions_mod.glossary_suggestions(edl):  # C3: a "yes, fix those" becomes glossary ops
+        lines.append("Likely Voice mishearings the planner found, not applied (a glossary op fixes one if asked): "
+                     + "; ".join(f"\"{s['heard']}\" probably \"{s['written']}\"" for s in sugg))
     return "\n".join(lines + footage(run_dir, edl) + versions(run_dir, int(edl.get("version") or 0)))
 
 

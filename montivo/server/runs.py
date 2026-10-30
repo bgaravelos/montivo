@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 from ..config import SPARK_MODEL
-from ..engine.captions import highlight_words, norm, run_glossary
+from ..engine.captions import glossary_suggestions, highlight_words, norm, run_glossary
 from ..engine.edl import title_card_on, title_style
 from ..engine.graphics import normalize_look
 from ..engine.review import caption_heard_diff
@@ -567,6 +567,7 @@ def version_entry(run_dir: Path, n: int, name: str, edl: dict, cut: str | None, 
                                    "words": [[w.get("w"), w.get("t_in")] for w in c.get("words") or []]}
                                   for c in edl.get("captions") or []],
                 "glossary": run_glossary(edl), "caption_breaks": list(edl.get("caption_breaks") or []),
+                "glossary_suggestions": glossary_suggestions(edl),
                 "highlight": _highlight(edl),
                 "caption_style": edl.get("caption_style"), "caption_style_note": edl.get("caption_style_note"),
                 "brief_missing": list(edl.get("brief_missing") or []),
