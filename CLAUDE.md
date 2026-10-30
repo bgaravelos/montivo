@@ -791,6 +791,16 @@ words, colours for every callout or only this one (= the clip's own look, S4), p
 +0.5 s). T3 `engine/titles.py`: "Suggest 3 hooks" = one muse-spark-1.3 call (POST /title/suggest, no version; $0.0088,
 9.4 s on rp-015: "Why do editors skip checking work?", "Every editor stops at first cut", "Raw footage in, reviewed cut
 out"); a pick stages new title words (a $0.01 card at the render).
+Rail panels Music M1-M5 (30/10, $0, same branch): M1 in Live a track's play button stages it and plays the cut from
+the playhead with that bed (POST /preview/styled takes `music`; the Music panel's staged track lives in the editor);
+Rendered still plays the loop alone. M2 the panel's level is Quiet / Balanced / Present (-22/-8, -18/-6, -15/-5), the
+dB in a Details fold; the timeline fader stays the fine control. M3 mood chips and "loop 1:37 · cut 0:38". M4 EDL
+`music.start_s` (where in the loop it starts, `atrim=start`) and `fade_out_s` (0-8 s, default 1.5), kept only when set.
+M5 `music.duck_edits` [{a, b, duck}] in cut seconds: drag across the Music lane -> Lift / Hold down, a band per edit
+(click removes it); `music.edit_ducks` applies them in render, the stem rebuild, preview_data and the draft peaks; a
+lifted window is at least 0.8 s; they stay on the cut's clock, so a later structural edit leaves them where they were.
+The music op keeps all three through a level or track change (`human music --start --fade-out --duck-edits`). Existing
+beds render as before. rp-015 v8: Midnight Cruiser from 20 s, 4 s fade, 9.5-13.3 s lifted (bed -20.1 vs -25.3 dB), -14.0 LUFS.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

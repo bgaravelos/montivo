@@ -3,7 +3,7 @@ import { api, crit, fileUrl, tc } from "./api";
 import { blockAt, edgeSnaps, flatWords, ghostRestore, punchLabel, selRange, sevRank, spanText, unusedRuns, type Block, type Snap, type WordSel } from "./edit";
 import { Icon } from "./icons";
 import { LEVEL_RANGE, VOICE_RANGE, type Mix } from "./Mix";
-import type { CaptionLine, Issue, Overlay, PausePlan, Version, Word } from "./types";
+import type { CaptionLine, DuckEdit, Issue, Overlay, PausePlan, Version, Word } from "./types";
 
 export type TrimAsk = { span: string; edge: "in" | "out"; word: number; words: number; dt: number; label: string };
 export type ClipMenu = { x: number; y: number; span: string };
@@ -44,6 +44,7 @@ type Props = {
    *  opens its panel there; a caption retexted in place (double-click, Enter). */
   onPick: (key: string) => void; onCaptionText: (line: CaptionLine, text: string) => void;
   onNewCallout: (t: number) => void; // T1: a double-click on the Text lane: a callout at that moment
+  onDuckEdits: (edits: DuckEdit[]) => void; // M5: the music bed held down or lifted over windows of the cut
 };
 
 /** The bottom of the editor: a read-mostly multi-track timeline of the selected version (select, seek, delete from the
@@ -207,7 +208,7 @@ function Canvas(p: Props & { v: Version; pps: number; dur: number; scroller: Rea
       <Tracks id={p.id} v={v} blocks={p.blocks} words={p.words} selected={p.selected} selection={p.selection} canTrim={p.canTrim} pps={pps} dur={dur}
         snap={p.snap} getT={getT}
         timeAt={timeAt} onSelect={p.onSelect} onSeek={p.onSeek} onMenu={p.onMenu} onTrim={p.onTrim} onMove={p.onMove}
-        onPick={p.onPick} onCaptionText={p.onCaptionText} onNewCallout={p.onNewCallout}
+        onPick={p.onPick} onCaptionText={p.onCaptionText} onNewCallout={p.onNewCallout} onDuckEdits={p.onDuckEdits}
         mix={p.mix} base={p.base} onMusicPanel={p.onMusicPanel} bar={p.bar} setBar={p.setBar} plan={p.plan} />
       <div className="playhead" style={{ transform: `translateX(${t * pps}px)` }}>
         <span className="ph-handle" onPointerDown={scrub} />
@@ -284,14 +285,17 @@ function usePeaks(url: string | null): { rate: number; peaks: number[] } | null 
 type Drag = { key: string; edge: "in" | "out"; snaps: Snap[]; snap: Snap | null; current: number; target: number | null };
 type Move = { key: string; slot: number; t: number; target: number | null }; // a clip being dragged: its insertion slot among the others
 const MOVE_PX = 6; // a press that travels further than this is a drag, not a click
+const round2 = (x: number) => Math.round(x * 100) / 100;
 
 type TrackProps = Pick<Props, "id" | "blocks" | "words" | "selected" | "selection" | "canTrim" | "onSelect" | "onSeek" | "onMenu" | "onTrim" | "onMove"
-  | "mix" | "base" | "onMusicPanel" | "snap" | "onPick" | "onCaptionText" | "onNewCallout"> & BarProps & {
+  | "mix" | "base" | "onMusicPanel" | "snap" | "onPick" | "onCaptionText" | "onNewCallout" | "onDuckEdits"> & BarProps & {
   v: Version; pps: number; dur: number; timeAt: (x: number) => number; getT: () => number; plan: PausePlan | null;
 };
 
 const Tracks = memo(function Tracks(p: TrackProps) {
   const { id, v, blocks, words, pps, selected, selection, canTrim, onSelect, onSeek, onMenu, onTrim, onMove, timeAt, getT } = p;
+  const duckFrom = useRef<{ x: number; t: number } | null>(null);
+  const [duckAsk, setDuckAsk] = useState<{ a: number; b: number; open: boolean } | null>(null);
   const q = v.bytes ? `&b=${v.bytes}` : "";
   // a draft (live preview) has no cut: its thumbnails and waveform come from the source through its clips
   const dq = v.draft ? `draft=1&k=${hashKey(v.spans.map((s) => `${s.id}:${s.t_in}:${s.t_out}`).join("|"))}` : "";
@@ -555,10 +559,40 @@ const Tracks = memo(function Tracks(p: TrackProps) {
         {move && moveGhost(live.find((x) => x.key === move.key)!)}
       </div>
       <div className={`track audio music ${selected === "music" ? "sel" : ""}`} style={{ height: TRACK_H.music }}
-        onPointerDown={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).tagName === "CANVAS") { onSelect(v.music ? "music" : null); onSeek(timeAt(e.clientX)); } }}>
+        onPointerDown={(e) => {
+          if (!(e.target === e.currentTarget || (e.target as HTMLElement).tagName === "CANVAS")) return;
+          onSelect(v.music ? "music" : null); onSeek(timeAt(e.clientX)); setDuckAsk(null);
+          if (v.music && canTrim) duckFrom.current = { x: e.clientX, t: timeAt(e.clientX) };
+        }}
+        onPointerMove={(e) => { // M5: a drag across the bed marks a window to hold down or lift
+          const f = duckFrom.current;
+          if (!f || Math.abs(e.clientX - f.x) < MOVE_PX) return;
+          const t = timeAt(e.clientX);
+          setDuckAsk({ a: Math.max(0, Math.min(f.t, t)), b: Math.min(p.dur, Math.max(f.t, t)), open: false });
+        }}
+        onPointerUp={() => { if (duckFrom.current) { duckFrom.current = null; setDuckAsk((d) => (d ? { ...d, open: true } : d)); } }}>
         {v.music ? <>
           <Wave peaks={bedPeaks} pps={pps} height={TRACK_H.music} width={Math.ceil(p.dur * pps)} top={top} color="--wave-music"
             gain={gain(p.mix?.level_db, p.base?.level_db)} />
+          {(v.music.duck_edits ?? []).map((d, k) => (
+            <button key={`${d.a}-${d.b}`} className={`duck-ed ${d.duck ? "held" : "lifted"}`} style={{ left: d.a * pps, width: Math.max(4, (d.b - d.a) * pps - 1) }}
+              disabled={!canTrim} onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => p.onDuckEdits(v.music!.duck_edits!.filter((_, j) => j !== k))}
+              title={`${d.duck ? "Music held down" : "Music lifted"} ${tc(d.a)}–${tc(d.b)} by hand. Click to take it out (back to the automatic duck).`}>
+              {d.duck ? "held" : "up"}</button>
+          ))}
+          {duckAsk && <span className="duck-sel" style={{ left: duckAsk.a * pps, width: Math.max(2, (duckAsk.b - duckAsk.a) * pps) }} />}
+          {duckAsk?.open && (
+            <span className="duck-ask" style={{ left: Math.max(0, duckAsk.a * pps) }} onPointerDown={(e) => e.stopPropagation()}>
+              <span className="mono">{tc(duckAsk.a)}–{tc(duckAsk.b)}</span>
+              <button className="btn small" disabled={duckAsk.b - duckAsk.a < 0.8}
+                title={duckAsk.b - duckAsk.a < 0.8 ? "A lifted window needs at least 0.8 s (the ramps)" : "The bed comes up here although someone speaks"}
+                onClick={() => { p.onDuckEdits([...(v.music!.duck_edits ?? []), { a: round2(duckAsk.a), b: round2(duckAsk.b), duck: false }]); setDuckAsk(null); }}>Lift</button>
+              <button className="btn small" title="The bed stays down here although nobody speaks"
+                onClick={() => { p.onDuckEdits([...(v.music!.duck_edits ?? []), { a: round2(duckAsk.a), b: round2(duckAsk.b), duck: true }]); setDuckAsk(null); }}>Hold down</button>
+              <button className="icon-btn" onClick={() => setDuckAsk(null)} title="Cancel"><Icon name="close" size={11} /></button>
+            </span>
+          )}
           <button className="music-tag" onPointerDown={(e) => e.stopPropagation()} onClick={() => { onSelect("music"); p.onMusicPanel(); }}
             title="The bed's settings in the inspector, the tracks in the Music panel">
             <Icon name="music" size={11} /><span className="mt-name">{v.music.track.replace(/_/g, " ")}</span> · ducked {v.music.duck_db} dB under the voice

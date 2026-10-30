@@ -1,6 +1,6 @@
 import { LiveOverlay } from "./LiveOverlay";
 import { audioCtx } from "./Mix";
-import type { Version } from "./types";
+import type { DuckEdit, Version } from "./types";
 
 /** One render segment as GET /preview gives it: source in/out, its place in the cut, the crop x of every source
  *  frame and the punch-in zoom (engine/punch.zoom_at's curve over segment-local seconds, about an anchor in frame px). */
@@ -30,7 +30,8 @@ export type LiveData = {
   stills?: { id: string; placement: string; t_in: number; t_out: number; x: number; y: number; w: number; h: number; fade_s: number; url: string }[];
   draft?: { id: string; base: number; ops: number; n: number };
   music?: { track: string; name: string; url: string; gain_db: number; level_db: number; track_lufs: number; duck_db: number;
-    voice_db: number; ducked: [number, number][]; attack_s: number; release_s: number; fade_in_s: number; fade_out_s: number };
+    voice_db: number; ducked: [number, number][]; attack_s: number; release_s: number; fade_in_s: number; fade_out_s: number;
+    start_s?: number; loop_s?: number; duck_edits?: DuckEdit[] };
   version_entry?: Version;
 };
 
@@ -261,7 +262,7 @@ export class LiveMedia {
       const span = this.duration - t, n = Math.max(2, Math.ceil(span * 50));
       g.gain.setValueCurveAtTime(Float32Array.from({ length: n }, (_, i) => this.bedGain(t + (span * i) / (n - 1))), now, span / this.rate);
       src.connect(g).connect(this.master!);
-      src.start(now, t % bed.duration);
+      src.start(now, ((this.data.music.start_s ?? 0) + t) % bed.duration); // M4: where in the loop the bed starts
       src.stop(now + span / this.rate);
       this.nodes.push(src);
     }

@@ -8,7 +8,7 @@ import { Icon, MarkLoader } from "./icons";
 import { Inspector, type PunchAsk } from "./Inspector";
 import { Palette, type Command } from "./Palette";
 import { mixOf, sameMix, useLiveMix, type Mix } from "./Mix";
-import { MusicPanel } from "./Music";
+import { MusicPanel, type MusicDraft } from "./Music";
 import { askToNotify, ProgressInline, useJobSignals } from "./Progress";
 import { GUIDE_NAME, GUIDES, SafeArea, type Guide } from "./SafeArea";
 import { CaptionsPanel, MediaPanel, SpeakersPanel, TextPanel, VersionsPanel } from "./Panels";
@@ -94,6 +94,7 @@ export function Editor({ id, replay, go }: Props) {
   const [draftData, setDraftData] = useState<LiveData | null>(null);
   const [draftSum, setDraftSum] = useState<DraftSum | null>(null);
   const [styleDraft, setStyleDraft] = useState<StyleDraft>(EMPTY_DRAFT);
+  const [musicDraft, setMusicDraft] = useState<MusicDraft>(undefined); // M1: a track staged in the Music panel
   // A2: a caption line or callout picked on the timeline: its panel opens on it (nonce: the same one picked again)
   const [focus, setFocus] = useState<PanelFocus | null>(null);
 
@@ -184,14 +185,18 @@ export function Editor({ id, replay, go }: Props) {
   const staged = draftCount(styleDraft, v);
   const { p: stylePreview, busy: previewBusy } = usePreview(id, v, t, styleDraft, styling && staged > 0 && !playing);
   // A4: in Live the staged look plays at once (the same cut laid out with it by the server); paused, the still above
-  // stays what the render burns
+  // stays what the render burns. M1: so does a track staged in the Music panel (the cut with that bed under it)
   const [styled, setStyled] = useState<LiveData | null>(null);
-  const styleKey = live0 && styling && staged > 0 && v ? JSON.stringify([rev, styleDraft.look, styleDraft.callouts, styleDraft.clips]) : null;
+  const musicStaged = live0 && panel === "music" && musicDraft !== undefined;
+  const styleKey = live0 && v && ((styling && staged > 0) || musicStaged)
+    ? JSON.stringify([rev, styling ? [styleDraft.look, styleDraft.callouts, styleDraft.clips] : null, musicStaged ? musicDraft : "-"]) : null;
   useEffect(() => {
     if (!styleKey || !v) return setStyled(null);
     let on = true;
     const tm = window.setTimeout(() => {
-      api<LiveData>(`/api/runs/${id}/preview/styled`, { ...(v.draft ? { draft: true } : { v: v.n }), look: styleDraft.look, callouts: styleDraft.callouts, clips: styleDraft.clips })
+      api<LiveData>(`/api/runs/${id}/preview/styled`, { ...(v.draft ? { draft: true } : { v: v.n }),
+        ...(styling ? { look: styleDraft.look, callouts: styleDraft.callouts, clips: styleDraft.clips } : {}),
+        ...(musicStaged ? { music: musicDraft } : {}) })
         .then((d) => { if (on) setStyled(d); }).catch(() => { if (on) setStyled(null); });
     }, 250);
     return () => { on = false; window.clearTimeout(tm); };
@@ -648,7 +653,8 @@ export function Editor({ id, replay, go }: Props) {
             onApply={(e) => made(edit("text", { ...e, from: v?.n }))} />
         )}
         {panel === "music" && (
-          <MusicPanel v={v} next={next} canEdit={canEdit} rev={rev} live={live0}
+          <MusicPanel v={v} next={next} canEdit={canEdit} rev={rev} live={live0} draft={musicDraft} setDraft={setMusicDraft}
+            onListen={() => window.setTimeout(() => player.current?.play(), 400)}
             onApply={(e) => made(edit("music", { ...e, from: v?.n }))} />
         )}
         {panel === "speakers" && (
@@ -737,6 +743,11 @@ export function Editor({ id, replay, go }: Props) {
           mix={mix} base={mixBase} live={live} next={next} liveEdit={live0} canEdit={canEdit} onMix={setMixDraft} onResetMix={() => setMixDraft(null)}
           onMusicPanel={() => setPanel("music")}
           onPick={(k) => pickItem(k)} onNewCallout={newCallout}
+          onDuckEdits={(duck_edits) => { // M5: the bed held down or lifted by hand
+            if (!v?.music) return;
+            if (canEdit) return flash(`Cannot edit now: ${canEdit.toLowerCase()}.`);
+            made(edit("music", { track: v.music.track, level_db: v.music.level_db, duck_db: v.music.duck_db, duck_edits, from: v.n }));
+          }}
           onCaptionText={(c, text) => {
             if (canEdit) return flash(`Cannot edit now: ${canEdit.toLowerCase()}.`);
             made(edit("caption", { edits: [{ at: (c.t_in + c.t_out) / 2, text }], from: v?.n }));
@@ -869,7 +880,7 @@ const DRAFT_OPS: Record<string, { op: string; args: (b: Record<string, unknown>)
   linebreak: { op: "caption_break", args: (b) => ({ at: b.at, join: !!b.join }) },
   text: { op: "text", args: (b) => pick(b, ["callouts", "title", "title_card", "callout_at"]) },
   style: { op: "style", args: (b) => pick(b, ["look", "callouts", "prompt", "why", "clips"]) },
-  music: { op: "music", args: (b) => ({ track: b.track ?? null, ...pick(b, ["level_db", "duck_db", "voice_db"]) }) },
+  music: { op: "music", args: (b) => ({ track: b.track ?? null, ...pick(b, ["level_db", "duck_db", "voice_db", "start_s", "fade_out_s", "duck_edits"]) }) },
   pin: { op: "pin", args: (b) => ({ speaker: b.speaker, head: b.head ?? null }) },
   punch: { op: "punch", args: (b) => pick(b, ["on", "skip"]) },
   kit: { op: "kit", args: (b) => pick(b, ["kit", "name"]) },

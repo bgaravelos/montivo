@@ -675,6 +675,7 @@ def render_audio(source: Path, segments: list[Segment], render_dir: Path, lead_s
     from . import music as bed_mod
     duration = round(lead_s + sum(s.duration for s in segments), 6)
     intervals, src = bed_mod.speech_intervals(segments, words, lead_s, audio)
+    intervals = bed_mod.edit_ducks(intervals, music)
     bed = render_dir / "music_bed.wav"
     mrec = bed_mod.render_bed(music, duration, intervals, bed, AUDIO_RATE, fmt)
     mrec["duck_source"] = src
@@ -694,7 +695,8 @@ def render_audio(source: Path, segments: list[Segment], render_dir: Path, lead_s
     _run_audio(bed, "[0:a]anull[a]", bed_stem)
     mrec["music_stem"] = bed_stem.as_posix()
     mrec["voice_db"] = voice_db
-    mrec["measured"] = bed_mod.measure_windows(speech, bed, intervals, duration, voice_db)
+    mrec["measured"] = bed_mod.measure_windows(speech, bed, intervals, duration, voice_db,
+                                               float(music.get("fade_out_s", bed_mod.FADE_OUT_S)))
     speech.unlink(missing_ok=True)
     bed.unlink(missing_ok=True)
     return out, rec, mrec
@@ -770,6 +772,7 @@ def music_stem(run_dir: Path, edl: dict, out: Path) -> Path:
     vpath = run_dir / "voice" / "voice.json"
     words = json.loads(vpath.read_text()).get("words") if vpath.is_file() else None
     intervals, _ = bed_mod.speech_intervals(segments, words, lead, None if words else Audio.load(run_dir))
+    intervals = bed_mod.edit_ducks(intervals, music)
     fmt = f"aformat=sample_fmts=fltp:sample_rates={AUDIO_RATE}:channel_layouts=stereo"
     out.parent.mkdir(parents=True, exist_ok=True)
     wav = out.with_suffix(".tmp.wav")

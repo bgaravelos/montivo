@@ -255,3 +255,71 @@ def test_title_suggest_route(tmp_path, monkeypatch):
     monkeypatch.setattr(T, "suggest", lambda d, edl, brief, ledger, log: [{"text": f"{edl['title_card_text']} / {brief}", "why": "w"}])
     r = c.post("/api/runs/h1/title/suggest", json={"v": 1})
     assert r.status_code == 200 and r.json()["titles"][0]["text"] == "Raw In / b"
+
+
+# --------------------------------------------------------------------------- M4, M5: where the bed starts, its fade, duck edits
+
+
+def test_music_start_fade_and_duck_edits_are_checked_and_kept_only_when_set():
+    from montivo.engine.music import normalize_music
+    m = normalize_music({"track": "ukulele", "start_s": 12.34, "fade_out_s": 3,
+                         "duck_edits": [{"a": 10, "b": 12, "duck": False}, {"a": 2, "b": 3, "duck": True}]})
+    assert m["start_s"] == 12.3 and m["fade_out_s"] == 3.0 and [e["a"] for e in m["duck_edits"]] == [2.0, 10.0]
+    assert normalize_music({"track": "ukulele", "start_s": 0, "fade_out_s": 1.5, "duck_edits": []}) == \
+        {"track": "ukulele", "level_db": -18.0, "duck_db": -6.0}  # the defaults are not written
+    for bad, msg in [({"start_s": 9999}, "start_s"), ({"fade_out_s": 20}, "fade_out_s"),
+                     ({"duck_edits": [{"a": 3, "b": 2, "duck": True}]}, "0 <= a < b"),
+                     ({"duck_edits": [{"a": 1, "b": 1.5, "duck": False}]}, "at least"),
+                     ({"duck_edits": [{"a": 1}]}, "a duck edit is")]:
+        with pytest.raises(ValueError, match=msg):
+            normalize_music({"track": "ukulele", **bad})
+
+
+def test_duck_edits_hold_down_and_lift_the_bed():
+    from montivo.engine.music import edit_ducks
+    speech = [(1.0, 5.0), (8.0, 12.0)]
+    assert edit_ducks(speech, None) == speech
+    lifted = edit_ducks(speech, {"duck_edits": [{"a": 2.0, "b": 3.5, "duck": False}]})
+    assert lifted == [(1.0, 2.0), (3.5, 5.0), (8.0, 12.0)]
+    held = edit_ducks(speech, {"duck_edits": [{"a": 5.0, "b": 8.0, "duck": True}]})
+    assert held == [(1.0, 12.0)]  # the pause between the two runs stays down
+    gone = edit_ducks(speech, {"duck_edits": [{"a": 0.0, "b": 20.0, "duck": False}]})
+    assert gone == []
+
+
+def test_bed_graph_starts_into_the_loop_and_fades_as_asked():
+    from montivo.engine.music import bed_graph
+    plain = bed_graph(30.0, -3.0, -6.0, [(1.0, 2.0)], "aformat=x")
+    assert "atrim=duration=30.000000," in plain and "afade=t=out:st=28.500000:d=1.500" in plain
+    moved = bed_graph(30.0, -3.0, -6.0, [(1.0, 2.0)], "aformat=x", start_s=12.5, fade_out_s=4.0)
+    assert "atrim=start=12.500:duration=30.000000" in moved and "afade=t=out:st=26.000000:d=4.000" in moved
+    assert "afade=t=out" not in bed_graph(30.0, -3.0, -6.0, [], "aformat=x", fade_out_s=0.0)
+
+
+def test_music_op_keeps_start_fade_and_duck_edits(tmp_path, monkeypatch):
+    import montivo.human as H
+    d = _panel_run(tmp_path, monkeypatch)
+    edl, words = json.loads((d / "edl_v1.json").read_text()), H._words(d)
+    edits = [{"a": 1.0, "b": 2.0, "duck": False}]
+    a, rec = H.apply_op(edl, words, None, "music", {"track": "ukulele", "start_s": 20, "fade_out_s": 3, "duck_edits": edits})
+    assert a["music"]["start_s"] == 20.0 and a["music"]["duck_edits"] == edits
+    b, rec2 = H.apply_op(a, words, None, "music", {"track": "ukulele", "level_db": -15})  # the fader: the rest stays
+    assert b["music"]["start_s"] == 20.0 and b["music"]["fade_out_s"] == 3.0 and b["music"]["duck_edits"] == edits
+    c, _ = H.apply_op(b, words, None, "music", {"track": "ukulele", "duck_edits": []})
+    assert "duck_edits" not in c["music"] and "duck edits 1 -> 0" in _.fixes[0]["note"]
+    e, _ = H.apply_op(b, words, None, "music", {"track": "cup_of_tea"})  # another track keeps a start inside its loop
+    assert e["music"]["start_s"] == 20.0
+    # the CLI writes the same EDL byte for byte
+    H.stamp(a, rec, 1, 2)
+    dump_json(tmp_path / "pure.json", a)
+    H.main(["music", str(d), "--track", "ukulele", "--start", "20", "--fade-out", "3", "--duck-edits", json.dumps(edits)])
+    assert (tmp_path / "pure.json").read_bytes() == (d / "edl_v2.json").read_bytes()
+
+
+def test_draft_and_route_take_the_bed_choices(tmp_path, monkeypatch):
+    from montivo.server import draft
+    o = draft.clean_op({"op": "music", "args": {"track": "ukulele", "start_s": 4, "duck_edits": [{"a": 1, "b": 2, "duck": True}]}})
+    assert o["args"] == {"track": "ukulele", "level_db": None, "duck_db": None, "voice_db": None, "start_s": 4.0,
+                         "duck_edits": [{"a": 1.0, "b": 2.0, "duck": True}]}
+    with pytest.raises(Exception):
+        draft.clean_op({"op": "music", "args": {"track": "ukulele", "duck_edits": "x"}})

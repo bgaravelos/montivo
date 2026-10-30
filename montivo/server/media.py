@@ -111,6 +111,7 @@ def draft_bed_peaks(track_peaks: dict, music: dict, duration: float) -> dict:
     """A draft's music bed waveform: the track's loop from the cut's start, each 10 ms at the gain the live player gives
     it (Live.ts bedGain: level over the track's loudness, the duck along the speech with its ramps, the fades)."""
     rate, tp = track_peaks["rate"], track_peaks["peaks"]
+    off = int(round(float(music.get("start_s") or 0.0) * rate))  # M4: the bed starts this far into the loop
     att, rel = music["attack_s"], music["release_s"]
     fin, fout = max(1e-3, music["fade_in_s"]), max(1e-3, music["fade_out_s"])
     out = []
@@ -119,7 +120,7 @@ def draft_bed_peaks(track_peaks: dict, music: dict, duration: float) -> dict:
         duck = sum(min(1.0, max(0.0, (c - (a - att)) / att)) * min(1.0, max(0.0, (b + rel - c) / rel)) for a, b in music["ducked"])
         fade = max(0.0, min(1.0, c / fin, (duration - c) / fout))
         g = 10 ** ((music["gain_db"] + music["duck_db"] * duck) / 20) * fade
-        out.append(round(tp[i % len(tp)] * g, 3) if tp else 0.0)
+        out.append(round(tp[(i + off) % len(tp)] * g, 3) if tp else 0.0)
     return {"rate": rate, "peaks": out}
 
 

@@ -1,7 +1,10 @@
 """Music bed: a bundled loop under the cut's speech, ducked while someone talks.
 
 The EDL's `music` = {"track": id, "level_db": -18, "duck_db": -6, "voice_db": 0} (absent = no music; `voice_db`
-only when not 0). The tracks are files in
+only when not 0), and a person's choices (rail panels M4, M5, each kept only when set): `start_s`, where in the loop
+the bed starts; `fade_out_s`, the fade at the end of the cut (default FADE_OUT_S); `duck_edits`, cut-second windows
+[{"a", "b", "duck": true|false}] where the bed is held down although nobody speaks, or lifted although someone does
+(edit_ducks; anchored to the cut's clock, so a later structural edit leaves them where they were). The tracks are files in
 montivo/music/ (CC0 tracks from OpenGameArt cut into loops by build.py; tracks.json holds each loop's measured
 loudness, author and source page), so the bed is plain DSP: no model is called. `level_db` is the bed's loudness in LUFS where nobody speaks (the speech sits at the
 render's -14 LUFS); under speech it drops by `duck_db`, so the defaults keep the bed about 9 dB under the voice. `voice_db`
@@ -33,6 +36,8 @@ VOICE_RANGE = (-12.0, 6.0)
 ATTACK_S, RELEASE_S = 0.15, 0.45
 HOLD_GAP_S = 0.8  # a pause shorter than this keeps the bed down (>= ATTACK_S + RELEASE_S: the ramps never overlap)
 FADE_IN_S, FADE_OUT_S = 0.5, 1.5
+FADE_OUT_RANGE = (0.0, 8.0)
+MAX_DUCK_EDITS = 40
 ENV_SAMPLES = 256
 STRIDE = 3  # rms_db reads every third sample: an odd stride still visits both channels
 
@@ -57,7 +62,7 @@ def normalize_music(m: dict | None) -> dict | None:
         return None
     if not isinstance(m, dict):
         raise ValueError("music: an object {track, level_db, duck_db, voice_db}")
-    extra = set(m) - {"track", "level_db", "duck_db", "voice_db"}
+    extra = set(m) - {"track", "level_db", "duck_db", "voice_db", "start_s", "fade_out_s", "duck_edits"}
     if extra:
         raise ValueError(f"music: unknown keys {', '.join(sorted(extra))}")
     t = track(str(m.get("track") or ""))
@@ -72,7 +77,42 @@ def normalize_music(m: dict | None) -> dict | None:
         out[key] = round(float(v), 1)
     if not out["voice_db"]:
         del out["voice_db"]
+    for key, default, (lo, hi) in (("start_s", 0.0, (0.0, float(t["loop_s"]))), ("fade_out_s", FADE_OUT_S, FADE_OUT_RANGE)):
+        v = m.get(key, default)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not lo <= v <= hi:
+            raise ValueError(f"music: {key} is a number of seconds in {lo:g}..{hi:g}")
+        if round(float(v), 1) != default:
+            out[key] = round(float(v), 1)
+    edits = m.get("duck_edits") or []
+    if not isinstance(edits, list) or len(edits) > MAX_DUCK_EDITS:
+        raise ValueError(f"music: duck_edits is a list of at most {MAX_DUCK_EDITS} windows")
+    clean = []
+    for e in edits:
+        try:
+            a, b, duck = float(e["a"]), float(e["b"]), e["duck"]
+        except (KeyError, TypeError, ValueError):
+            raise ValueError('music: a duck edit is {"a": s, "b": s, "duck": true|false}')
+        if not isinstance(duck, bool) or not (math.isfinite(a) and math.isfinite(b)) or not 0 <= a < b <= 3600:
+            raise ValueError("music: a duck edit's window is 0 <= a < b seconds, duck true or false")
+        if not duck and b - a < HOLD_GAP_S:
+            raise ValueError(f"music: a lifted window is at least {HOLD_GAP_S:g} s (the ramps need the room)")
+        clean.append({"a": round(a, 2), "b": round(b, 2), "duck": duck})
+    if clean:
+        out["duck_edits"] = sorted(clean, key=lambda e: (e["a"], e["b"]))
     return out
+
+
+def edit_ducks(intervals: list[tuple[float, float]], music: dict | None) -> list[tuple[float, float]]:
+    """The ducked intervals with a person's duck_edits applied in order (M5): a "duck" window is added, a lifted one
+    cut out of every interval; merged again (a lifted window is at least HOLD_GAP_S, so the ramps never overlap)."""
+    cur = list(intervals)
+    for e in (music or {}).get("duck_edits") or []:
+        if e["duck"]:
+            cur.append((e["a"], e["b"]))
+        else:
+            cur = [x for a, b in cur for x in ((a, min(b, e["a"])), (max(a, e["b"]), b)) if x[1] - x[0] > 1e-3]
+        cur = merge(cur)
+    return cur
 
 
 def merge(intervals: list[tuple[float, float]], gap_s: float = HOLD_GAP_S) -> list[tuple[float, float]]:
@@ -123,21 +163,29 @@ def duck_at(intervals: list[tuple[float, float]], t: float) -> float:
                for a, b in intervals)
 
 
-def bed_graph(duration_s: float, gain_db: float, duck_db: float, intervals: list[tuple[float, float]], fmt: str) -> str:
-    """The filter chain for the looped track (input 0, looped by -stream_loop) -> the bed: cut to the cut's length,
-    the static gain to level_db, the duck envelope, a fade in and out."""
-    fade_out = min(FADE_OUT_S, duration_s / 3)
-    return (f"[0:a]{fmt},atrim=duration={duration_s:.6f},asetpts=PTS-STARTPTS,asetnsamples=n={ENV_SAMPLES},"
+def fade_out_for(music: dict, duration_s: float) -> float:
+    """The fade at the end of the cut: the person's fade_out_s (M4), else FADE_OUT_S; at most a third of the cut."""
+    return min(float(music.get("fade_out_s", FADE_OUT_S)), duration_s / 3)
+
+
+def bed_graph(duration_s: float, gain_db: float, duck_db: float, intervals: list[tuple[float, float]], fmt: str,
+              start_s: float = 0.0, fade_out_s: float = FADE_OUT_S) -> str:
+    """The filter chain for the looped track (input 0, looped by -stream_loop) -> the bed: from `start_s` into the
+    loop, cut to the cut's length, the static gain to level_db, the duck envelope, a fade in and out."""
+    fade_out = min(fade_out_s, duration_s / 3)
+    trim = f"atrim=start={start_s:.3f}:duration={duration_s:.6f}" if start_s else f"atrim=duration={duration_s:.6f}"
+    fade = f",afade=t=out:st={max(0.0, duration_s - fade_out):.6f}:d={fade_out:.3f}" if fade_out > 0 else ""
+    return (f"[0:a]{fmt},{trim},asetpts=PTS-STARTPTS,asetnsamples=n={ENV_SAMPLES},"
             f"volume='{duck_expr(intervals, gain_db, duck_db)}':eval=frame,"
-            f"afade=t=in:st=0:d={min(FADE_IN_S, duration_s / 3):.3f},"
-            f"afade=t=out:st={max(0.0, duration_s - fade_out):.6f}:d={fade_out:.3f}[a]")
+            f"afade=t=in:st=0:d={min(FADE_IN_S, duration_s / 3):.3f}{fade}[a]")
 
 
 def render_bed(music: dict, duration_s: float, intervals: list[tuple[float, float]], out: Path, rate: int, fmt: str) -> dict:
     """The ducked bed as a float WAV of exactly duration_s; returns the record for the EDL's render block."""
     t = track(music["track"])
     gain = round(music["level_db"] - float(t["lufs"]), 2)
-    graph = bed_graph(duration_s, gain, music["duck_db"], intervals, fmt)
+    graph = bed_graph(duration_s, gain, music["duck_db"], intervals, fmt, float(music.get("start_s") or 0.0),
+                      float(music.get("fade_out_s", FADE_OUT_S)))
     proc = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-stream_loop", "-1", "-i", t["path"],
                            "-filter_complex", graph, "-map", "[a]", "-c:a", "pcm_f32le", "-ar", str(rate), str(out)],
                           capture_output=True, text=True)
@@ -145,8 +193,9 @@ def render_bed(music: dict, duration_s: float, intervals: list[tuple[float, floa
         raise RuntimeError(f"ffmpeg music bed failed ({proc.returncode})\n{proc.stderr[-2000:]}")
     return {"track": t["id"], "name": t["name"], "level_db": music["level_db"], "duck_db": music["duck_db"],
             "track_lufs": t["lufs"], "gain_db": gain, "loop_s": t["loop_s"], "attack_s": ATTACK_S,
-            "release_s": RELEASE_S, "hold_gap_s": HOLD_GAP_S, "fade_in_s": FADE_IN_S, "fade_out_s": FADE_OUT_S,
-            "ducked": [list(x) for x in intervals]}
+            "release_s": RELEASE_S, "hold_gap_s": HOLD_GAP_S, "fade_in_s": FADE_IN_S,
+            "fade_out_s": float(music.get("fade_out_s", FADE_OUT_S)), "start_s": float(music.get("start_s") or 0.0),
+            "duck_edits": music.get("duck_edits") or [], "ducked": [list(x) for x in intervals]}
 
 
 def read_f32(path: Path) -> tuple[array.array, int, int]:
@@ -181,7 +230,7 @@ def rms_db(samples: array.array, rate: int, ch: int, spans: list[tuple[float, fl
 
 
 def measure_windows(speech: Path, bed: Path, intervals: list[tuple[float, float]], duration_s: float,
-                    voice_db: float = 0.0) -> dict:
+                    voice_db: float = 0.0, fade_out_s: float = FADE_OUT_S) -> dict:
     """The listen check, measured: speech and bed levels under speech (inside the ducked intervals, ramps left out)
     and the bed where nobody speaks (between them, ramps and fades left out). Both stems go through the same final
     gain in the mix, so `margin_db` (speech minus bed under it) is what a listener gets; `voice_db` is the gain the
@@ -189,7 +238,7 @@ def measure_windows(speech: Path, bed: Path, intervals: list[tuple[float, float]
     s, rate, ch = read_f32(speech)
     m, rate_m, ch_m = read_f32(bed)
     under = [(a, b) for a, b in intervals if b > a]
-    gaps, cur, end = [], FADE_IN_S, duration_s - min(FADE_OUT_S, duration_s / 3)
+    gaps, cur, end = [], FADE_IN_S, duration_s - min(max(FADE_OUT_S, fade_out_s), duration_s / 3)
     for a, b in intervals:
         hi = min(a - ATTACK_S, end)
         if hi - cur > 0.2:

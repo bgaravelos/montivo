@@ -150,11 +150,14 @@ def preview_data(run_dir: Path, edl: dict, overlays: bool = True, laid: bool = F
         vpath0 = run_dir / "voice" / "voice.json"
         vwords = json.loads(vpath0.read_text())["words"] if vpath0.is_file() else None
         intervals, how = bed.speech_intervals(segments, vwords, title_s, None if vwords else Audio.load(run_dir))
+        intervals = bed.edit_ducks(intervals, music)
         data["music"] = {"track": t_["id"], "name": t_["name"], "gain_db": round(music["level_db"] - float(t_["lufs"]), 2),
                          "level_db": music["level_db"], "track_lufs": float(t_["lufs"]), "duck_db": music["duck_db"],
                          "voice_db": float(music.get("voice_db") or 0.0), "ducked": [list(x) for x in intervals],
                          "duck_source": how, "attack_s": bed.ATTACK_S, "release_s": bed.RELEASE_S,
-                         "fade_in_s": min(bed.FADE_IN_S, t / 3), "fade_out_s": min(bed.FADE_OUT_S, t / 3)}
+                         "fade_in_s": min(bed.FADE_IN_S, t / 3), "fade_out_s": bed.fade_out_for(music, t),
+                         "start_s": float(music.get("start_s") or 0.0), "duck_edits": music.get("duck_edits") or [],
+                         "loop_s": float(t_["loop_s"])}
     if not overlays:
         return data
     look = normalize_look(edl.get("look"))

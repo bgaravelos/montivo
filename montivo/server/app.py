@@ -685,6 +685,16 @@ def create_app(root: Path) -> FastAPI:
             styled = with_style(edl, look, places, clips)
         except ValueError as e:
             raise HTTPException(400, f"look: {e}")
+        if "music" in b:  # M1: a track staged in the Music panel, heard under the cut ({...} or null for none)
+            from ..engine.music import normalize_music
+            try:
+                m = normalize_music(b["music"])
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            if m:
+                styled["music"] = m
+            else:
+                styled.pop("music", None)
         return preview_payload(run_id, d, styled, v, base)
 
     @app.get("/api/fonts/{key}")
@@ -1730,11 +1740,16 @@ def create_app(root: Path) -> FastAPI:
         if track is None:
             flag, label, text = ["--off"], "Music off", f"Take the music out of v{frm}."
         else:
+            more = draft.clean_panel_op("music", b)  # start_s, fade_out_s, duck_edits typed as the draft takes them
             try:
-                m = normalize_music({k: b[k] for k in ("track", "level_db", "duck_db", "voice_db") if b.get(k) is not None})
+                m = normalize_music({k: v for k, v in {**{k: b.get(k) for k in ("track", "level_db", "duck_db", "voice_db")},
+                                                        **more}.items() if v is not None})
             except ValueError as e:
                 raise HTTPException(400, str(e))
-            flag = ["--track", m["track"], "--level", f"{m['level_db']:g}", "--duck", f"{m['duck_db']:g}"]
+            flag = ["--track", m["track"], "--level", f"{m['level_db']:g}", "--duck", f"{m['duck_db']:g}",
+                    *(["--start", f"{more['start_s']:g}"] if more.get("start_s") is not None else []),
+                    *(["--fade-out", f"{more['fade_out_s']:g}"] if more.get("fade_out_s") is not None else []),
+                    *(["--duck-edits", json.dumps(more["duck_edits"])] if "duck_edits" in more else [])]
             voice = ""
             if b.get("voice_db") is not None:  # the timeline's Voice fader; left out keeps the version's own
                 flag += ["--voice", f"{m.get('voice_db', 0.0):g}"]

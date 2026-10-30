@@ -239,7 +239,14 @@ def clean_panel_op(op: str, a: dict) -> dict:
         track = a.get("track")
         if track is not None and (not isinstance(track, str) or not re.fullmatch(r"[a-z0-9_]{1,40}", track)):
             raise HTTPException(400, "track: a bundled track id, or null for none")
-        return {"track": track, **{k: _num(a.get(k), k) for k in ("level_db", "duck_db", "voice_db")}}
+        out = {"track": track, **{k: _num(a.get(k), k) for k in ("level_db", "duck_db", "voice_db", "start_s", "fade_out_s")}}
+        if a.get("duck_edits") is not None:
+            de = a["duck_edits"]
+            if not isinstance(de, list) or len(de) > 40 or not all(isinstance(e, dict) for e in de):
+                raise HTTPException(400, 'duck_edits: [{"a": s, "b": s, "duck": true|false}, ...]')
+            out["duck_edits"] = [{"a": _seconds(e.get("a"), "a"), "b": _seconds(e.get("b"), "b"), "duck": e.get("duck") is True}
+                                 for e in de]
+        return {k: v for k, v in out.items() if v is not None or k in ("track", "level_db", "duck_db", "voice_db")}
     if op == "glossary":
         add, drop = a.get("add") or {}, a.get("drop") or []
         if not isinstance(add, dict) or not isinstance(drop, list) or not 0 < len(add) + len(drop) <= 20:

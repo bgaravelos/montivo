@@ -66,7 +66,8 @@ from .engine.captions import CALLOUT_LEAD_S, CALLOUT_MIN_S
 from .engine.edges import Audio, Words, reset_edges, tighten_edges
 from .engine.edl import build_edl, carry_run_words, edl_summary, normalize_roles
 from .engine.graphics import Look, normalize_look, restyle
-from .engine.music import DUCK_DB as MUSIC_DUCK_DB, LEVEL_DB as MUSIC_LEVEL_DB, normalize_music
+from .engine.music import DUCK_DB as MUSIC_DUCK_DB, FADE_OUT_S as MUSIC_FADE_OUT_S, LEVEL_DB as MUSIC_LEVEL_DB, normalize_music
+from .engine.music import track as music_track
 from .engine.punch import parse_key
 from .engine.render import TITLE_S, merge_segments
 from .engine.review import (REACH_S, Fix, _caption_at, _src_time, apply_fixes, cut_map, finalize, kept_elsewhere,
@@ -732,14 +733,19 @@ def style(run_dir: Path, look: dict | None = None, callouts: dict[str, list[floa
                      why=why, **({"clips": clips} if clips else {}))
 
 
+MUSIC_KEEP = ("start_s", "fade_out_s", "duck_edits")  # a person's bed choices (M4, M5) that a level or track change keeps
+
+
 def music_fix(edl: dict, track: str | None, level_db: float | None = None, duck_db: float | None = None,
-              voice_db: float | None = None) -> tuple[dict | None, dict]:
+              voice_db: float | None = None, start_s: float | None = None, fade_out_s: float | None = None,
+              duck_edits: list[dict] | None = None) -> tuple[dict | None, dict]:
     """The EDL's next `music` and the patch entry: track None = off; a level, duck or voice gain left out keeps the
-    current one (else the defaults; voice 0 dB). Raises SystemExit for an unknown track, a value out of range or an
+    current one (else the defaults; voice 0 dB), and so do the start in the loop, the fade out and the duck edits
+    (another track drops a start past its loop). Raises SystemExit for an unknown track, a value out of range or an
     edit that changes nothing."""
     was = edl.get("music") or None
     if track is None:
-        if level_db is not None or duck_db is not None or voice_db is not None:
+        if any(x is not None for x in (level_db, duck_db, voice_db, start_s, fade_out_s, duck_edits)):
             raise SystemExit("--off takes no level")
         if not was:
             raise SystemExit("there is no music to take out")
@@ -749,6 +755,17 @@ def music_fix(edl: dict, track: str | None, level_db: float | None = None, duck_
             "level_db": level_db if level_db is not None else (was or {}).get("level_db", MUSIC_LEVEL_DB),
             "duck_db": duck_db if duck_db is not None else (was or {}).get("duck_db", MUSIC_DUCK_DB),
             "voice_db": voice_db if voice_db is not None else (was or {}).get("voice_db", 0.0)}
+    given = {"start_s": start_s, "fade_out_s": fade_out_s, "duck_edits": duck_edits}
+    for k in MUSIC_KEEP:
+        v = given[k] if given[k] is not None else (was or {}).get(k)
+        if v is not None:
+            want[k] = v
+    if start_s is None and was and was.get("track") != track and want.get("start_s"):
+        try:
+            if want["start_s"] > float(music_track(track)["loop_s"]):
+                del want["start_s"]
+        except ValueError:
+            pass  # an unknown track: normalize_music says so
     try:
         now = normalize_music(want)
     except ValueError as e:
@@ -760,8 +777,10 @@ def music_fix(edl: dict, track: str | None, level_db: float | None = None, duck_
     if was and was == now:
         raise SystemExit(f"the music is already {now['track']} at {now['level_db']:g} LUFS, ducked {now['duck_db']:g} dB"
                          + (f", voice {now['voice_db']:+g} dB" if now.get("voice_db") else ""))
-    val = lambda m, k: m.get(k, 0.0 if k == "voice_db" else None)  # noqa: E731 (voice_db is only kept when not 0)
-    changed = ", ".join(f"{k} {val(was, k)!r} -> {val(now, k)!r}" for k in ("track", "level_db", "duck_db", "voice_db")
+    val = lambda m, k: m.get(k, {"voice_db": 0.0, "start_s": 0.0, "fade_out_s": MUSIC_FADE_OUT_S}.get(k))  # noqa: E731
+    changed = ", ".join(f"{k} {val(was, k)!r} -> {val(now, k)!r}" if k != "duck_edits"
+                        else f"duck edits {len(was.get(k) or [])} -> {len(now.get(k) or [])}"
+                        for k in ("track", "level_db", "duck_db", "voice_db", *MUSIC_KEEP)
                         if val(was, k) != val(now, k)) if was else None
     note = f"music {changed}" if changed else (f"music {now['track']} under the speech at {now['level_db']:g} LUFS, "
                                               f"ducked {now['duck_db']:g} dB while anyone speaks")
@@ -769,9 +788,11 @@ def music_fix(edl: dict, track: str | None, level_db: float | None = None, duck_
 
 
 def music_edit(edl: dict, words: Words, audio: Audio | None, track: str | None, level_db: float | None = None,
-               duck_db: float | None = None, voice_db: float | None = None) -> tuple[dict, Edit]:
-    """A music bed under the speech, another track or level, or none (track None): music_fix, ffmpeg only."""
-    now, fix = music_fix(edl, track, level_db, duck_db, voice_db)
+               duck_db: float | None = None, voice_db: float | None = None, start_s: float | None = None,
+               fade_out_s: float | None = None, duck_edits: list[dict] | None = None) -> tuple[dict, Edit]:
+    """A music bed under the speech, another track or level, where it starts, its fade out and duck edits, or none
+    (track None): music_fix, ffmpeg only."""
+    now, fix = music_fix(edl, track, level_db, duck_db, voice_db, start_s, fade_out_s, duck_edits)
     new, _ = apply_fixes(edl, [], words)
     if now:
         new["music"] = now
@@ -781,11 +802,12 @@ def music_edit(edl: dict, words: Words, audio: Audio | None, track: str | None, 
 
 
 def music(run_dir: Path, track: str | None, level_db: float | None = None, duck_db: float | None = None,
-          from_v: int | None = None, passes: int = 0, budget: float = 0.15, voice_db: float | None = None) -> dict:
+          from_v: int | None = None, passes: int = 0, budget: float = 0.15, voice_db: float | None = None,
+          **more) -> dict:
     """A music bed under edl_v{from}'s speech, another track or level, or none -> edl_vN (music_edit), rendered, $0.
     The EDL's `music` travels with later versions like `look` (review patches deep-copy the EDL, replan carries it)."""
     return _run_edit(run_dir, from_v, passes, budget, music_edit, track=track, level_db=level_db, duck_db=duck_db,
-                     voice_db=voice_db)
+                     voice_db=voice_db, **{k: v for k, v in more.items() if v is not None})
 
 
 def kit_edit(edl: dict, words: Words, audio: Audio | None, kit: dict, name: str | None = None) -> tuple[dict, Edit]:
@@ -1880,6 +1902,10 @@ def main(argv: list[str] | None = None) -> int:
     mu.add_argument("--level", type=float, default=None, help="the bed's loudness in LUFS where nobody speaks (default -18)")
     mu.add_argument("--duck", type=float, default=None, help="dB the bed drops while anyone speaks (default -6)")
     mu.add_argument("--voice", type=float, default=None, help="dB on the speech against the bed, -12..6 (default 0)")
+    mu.add_argument("--start", type=float, default=None, help="seconds into the loop the bed starts at (default 0)")
+    mu.add_argument("--fade-out", type=float, default=None, help="seconds of fade at the end of the cut (default 1.5)")
+    mu.add_argument("--duck-edits", default=None, metavar="JSON",
+                    help='windows held down or lifted: [{"a": 12.0, "b": 14.5, "duck": false}, ...] ([] clears them)')
     rs = sub.add_parser("restore", help="an earlier version back as the newest -> edl_vN -> cut_vN ($0)")
     rs.add_argument("run_dir", type=Path)
     ins = sub.add_parser("insert", help="add a passage the cut does not use back -> edl_vN -> cut_vN ($0)")
@@ -1996,7 +2022,12 @@ def main(argv: list[str] | None = None) -> int:
                 ap.error("--clip SPAN=JSON or SPAN=cut, like s3={\"preset\": \"box\"}")
         out = style(a.run_dir, look, places, a.from_v, a.review, a.budget, prompt=a.prompt, clips=clips)
     elif a.cmd == "music":
-        out = music(a.run_dir, None if a.off else a.track, a.level, a.duck, a.from_v, a.review, a.budget, a.voice)
+        try:
+            edits = json.loads(a.duck_edits) if a.duck_edits is not None else None
+        except json.JSONDecodeError as e:
+            ap.error(f"--duck-edits is not JSON: {e}")
+        out = music(a.run_dir, None if a.off else a.track, a.level, a.duck, a.from_v, a.review, a.budget, a.voice,
+                    start_s=a.start, fade_out_s=a.fade_out, duck_edits=edits)
     elif a.cmd == "insert":
         m = re.fullmatch(r"(\d+):(\d+)-(\d+)", a.words)
         if not m:

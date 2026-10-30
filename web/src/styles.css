@@ -282,6 +282,8 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .chip { font-size: 11px; padding: 1px 8px; border-radius: 99px; background: var(--panel-3); color: var(--text-2); border: 1px solid var(--line-2); }
 .chip.sel { opacity: 0.55; }
+button.chip.on { background: var(--accent); color: var(--ink, #141414); border-color: var(--accent); }
+.mu-details summary { cursor: pointer; font-size: 12px; color: var(--text-2); margin: 6px 0; }
 .chip.sel.on { opacity: 1; border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .sugg { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 12px 8px; }
 .sugg button { font-size: 11.5px; color: var(--text-2); border: 1px solid var(--line-2); border-radius: 99px; padding: 3px 10px; }
@@ -1234,3 +1236,9 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .hook-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 8px 10px; border-radius: var(--r); border: 1px solid var(--line); background: var(--panel-2); color: var(--text); }
 .hook-opt:hover { border-color: var(--line-2); }
 .hook-opt.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+/* M5: the music bed held down or lifted by hand over a window of the cut */
+.duck-ed { position: absolute; top: 2px; height: 14px; padding: 0 4px; font-size: 9.5px; line-height: 14px; border-radius: 3px; z-index: 2; color: var(--text); overflow: hidden; white-space: nowrap; }
+.duck-ed.lifted { background: color-mix(in srgb, var(--pass) 45%, transparent); border: 1px solid var(--pass); }
+.duck-ed.held { background: color-mix(in srgb, var(--text-3, #888) 40%, transparent); border: 1px solid var(--line-2); }
+.duck-sel { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 22%, transparent); border-left: 1px solid var(--accent); border-right: 1px solid var(--accent); pointer-events: none; z-index: 1; }
+.duck-ask { position: absolute; top: 2px; display: flex; gap: 4px; align-items: center; padding: 2px 4px; background: var(--panel); border: 1px solid var(--line-2); border-radius: var(--r); z-index: 5; font-size: 11px; }
