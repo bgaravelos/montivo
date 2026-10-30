@@ -827,6 +827,20 @@ Rail panels deployed 30/10 on Billy's go: main pushed at 2dbae3f, `modal deploy`
 running before it, so no job and no old container to stop); /api/health 200, /api/runs 401, /s/nope 404; smoke drop on
 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 31.9 s (was 8-11 s on earlier smokes; not looked into); smoke --live: preview
 data 174 ms, draft drop 69 ms. The new panels not yet clicked live with the sign-in.
+Rail panels leftovers (30/10, $0, branch `claude/rail-leftovers-7c07b5`, commit `cdad581`; not merged, pushed or deployed):
+the New project sheet has a Brand kit row (None + every saved look / kit from GET /api/looks, remembered in localStorage
+`montivo.kit`, posted as {kit} -> `montivo run --kit`). `human.carry_clip_looks`: a re-plan gives a new span the look of
+the old span it shares most source time with (over half of the shorter one); a look no new span takes is dropped
+(`clip_look_off` in the replan patch). `music.follow_cut(prev, new)`: duck edits stay stored in cut seconds but every
+structural edit maps them through the source (prev's cut map back, new's forward; `follows_cut` on the drop, trim,
+reorder, cut, split, insert, pauses, text and kit ops, plus edges, replan, the review loop and the hook A/B); pieces
+that part become their own windows, a window whose words left the cut goes, a `duck_follow` fix per window; the
+title card on / off shifts them. On a clone of 015 (removed): lifts at 9-12 / 18-20.5 s -> reorder -> 31.97-34.97 /
+11.50-14.00 s (exact by source seconds), drop -> one goes; bed 5-6 dB up in the moved windows, -14.0 LUFS / -1.8 dBTP.
+`preview.heads_at` scales the head boxes about the punch-in's anchor (`punch.zoom_at`; box width x1.12 inside a 1.12
+punch-in). 575 tests. Modal smoke 31.9 s (30/10): not the code. On the Mac, drop s4 of 015 with `MONTIVO_SEGCACHE=0`,
+3 runs each: 1e2295b 6.9-7.6 s, 103d570 6.8-8.2 s, same segment timings, framemd5 identical; Modal variance (cold
+worker or Volume reads), not checked with a second `modal run`.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
