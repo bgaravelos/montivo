@@ -907,7 +907,10 @@ for old runs); `build_overlays(face_track=)` places those lines against the face
 below_face / above_face, entry `face_box`), `caption_face_facts` and `head_frame_facts` measure the face. Lines placed
 today are untouched. Found on the way: 013's speaker map gave A to a 25 px passer-by (the crop showed the atrium for
 15 s): `speakers.foreground` drops heads under 0.25 of the widest (014 unchanged). 013 first review 64 -> 83
-(`runs/fx-013`); 635 tests. Not deployed.
+(`runs/fx-013`); 635 tests. Pushed and deployed 30/10 23:50 on Billy's go at 87b8750 from a clean worktree (no job since
+21:56; the idle 23:37 web container stopped after the deploy); /api/health 200 (one 500 while the old container
+stopped, then 200 five times), /api/runs 401, /s/nope 404, host spend $3.37 of $15; smoke drop on 015: 34.3 s,
+-14.0 LUFS / -1.7 dBTP, render 10.1 s.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
