@@ -840,7 +840,9 @@ title card on / off shifts them. On a clone of 015 (removed): lifts at 9-12 / 18
 `preview.heads_at` scales the head boxes about the punch-in's anchor (`punch.zoom_at`; box width x1.12 inside a 1.12
 punch-in). 575 tests. Modal smoke 31.9 s (30/10): not the code. On the Mac, drop s4 of 015 with `MONTIVO_SEGCACHE=0`,
 3 runs each: 1e2295b 6.9-7.6 s, 103d570 6.8-8.2 s, same segment timings, framemd5 identical; Modal variance (cold
-worker or Volume reads), not checked with a second `modal run`.
+worker or Volume reads). Merged into main (fast-forward to 5853b8d), pushed and deployed 30/10 on Billy's go from a clean
+worktree (no container was running before it); /api/health 200, /api/runs 401, /s/nope 404; two smoke drops on 015 in a
+row: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 10.75 s and 10.13 s (the same segments as the 31.9 s one): Modal variance.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
