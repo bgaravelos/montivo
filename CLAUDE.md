@@ -843,6 +843,34 @@ punch-in). 575 tests. Modal smoke 31.9 s (30/10): not the code. On the Mac, drop
 worker or Volume reads). Merged into main (fast-forward to 5853b8d), pushed and deployed 30/10 on Billy's go from a clean
 worktree (no container was running before it); /api/health 200, /api/runs 401, /s/nope 404; two smoke drops on 015 in a
 row: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 10.75 s and 10.13 s (the same segments as the 31.9 s one): Modal variance.
+Smarter chat (30/10 evening, $0.52 incl. the bench rounds, branch `claude/chat-agent`, commits 4081926 7f201dc cc5fdc3
+96f3604; research in `docs/notes/chat-research_2026-10-30.md`; not merged, pushed or deployed): `tools/chat_bench.py`
+(38 messages, EN + GR, on clones of 015 v5 / 012 v2 / 014 v1 in runs/chatbench/, router only, intents + argument
+checks; `--model open`, `--compare A B`): before 22/38 (both models). `agent.context` now adds `footage()` (every
+passage the cut leaves out by turn with numbered words, up to 900 words; watch.json summary, moments with their cut
+second, b-roll candidates, objects; speakers.json speakers -> heads as "watch's guess"), `versions()` (each rendered
+version: runtime, review, name / star from ui/labels.json, what made it), each clip's `why`, `brief_missing`; `history()`
+= the last 8 ui/chat.jsonl lines without the message itself (A1). New router ops (strict schema, flat fields word / edge
+/ turn / version / speaker / name / head / heard / written / panel): trim, split, insert, pauses, glossary, speakers, pin
+run as `human.OPS` pure edits through `_run_edit` under DEFER (`agent.pure`), restore alone (`human.restore`, the patch
+gets the agent record), seek / select / open = `UI_OPS`, no version: `record.ui` -> the chat line's `ui` -> Editor.tsx
+moves the playhead (again at 1.5 s if a reload undid it), selects a clip or words (Transcript), opens a panel / Export /
+Loop; a reply with a seek has a play link (`.seek-at`). After: 38/38 on Spark 1.3 (median 2.9 s, $0.006), Spark Open
+35/38 (2.4 s, $0.0026): the router stays on 1.3; reorder takes "end". The Review toggle no longer reviews a question or a
+show-me (only what a message changes, or an asked review). A5: POST /ask {"live": true} -> `agent --draft [--draft-edl
+ui/draft/.../edl.json]`: ops that fit the draft (`agent.draft_ops`; not replan / overlay / restore / a look from words)
+come back as draft ops, the server's job end (`result_message`, chat kind "draft") adds them with `draft.push` (each
+clean_op + resolve + step, a refused one skipped with why) and the editor reloads the draft; with a draft open the
+router reads the draft EDL and an ask that needs a version is refused ("Make Version first"); the editor no longer
+refuses an ask while a draft is open in Live. B1: after a chat version renders, `agent.measured` runs gate_check without
+Voice on the cut ($0: loud edges, caption forced over the head, head out of frame) and the chat line says it
+(`checked_text`); 014 v1 shows four cuts in speech, 015 v5 clear. 582 tests. Checked with the key in the browser on
+`runs/chat-smoke-015` (a clone of 015): "πού λέω για το SAM;" -> 0:22, s6 selected in the Transcript, play link; in Live
+"βάλε ukulele μουσική και κόψε το διπλό and στο s2" -> a draft of 2 edits (music lane, the "and" struck), no render;
+"δείξε μου ..." on the open draft -> 0:21.5 (the draft's own time). Found: a refused message stays first in the chat
+queue and holds the next one back until its x (the queue's design, unchanged). Open: "undo that" in Live after a chat
+draft edit routes to restore (refused while the draft is open) instead of the draft's undo; a fix round after a failed
+check (the chat only says it); B2-B5 and Γ2-Γ4 of the research note.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

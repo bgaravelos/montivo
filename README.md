@@ -266,12 +266,19 @@ pauses the audio has between abutting words, cut at the nearest word edge (`huma
 Image for a still from a prompt and lays it under the captions, tied to its words, full frame, as a card or in the
 corner away from the head (one call, $0.01; moving, resizing and removing it are $0); Restore copies an older version
 forward as the next one with its review. Ask Montivo is an agent over those operations: one Spark 1.3 call (about
-$0.005) reads the message next to the version (its clips, caption lines, look, music and last review) and picks
-operations from a closed list (music, style, captions, callouts, title, drop, reorder, cut, re-plan, review), run as
-one version and rendered once; a structural change (re-plan, drop, reorder, cut) or anything over $0.02 first comes
-back as a card with the change, its cost and time (Apply, or Try something else), a question gets an answer and no
-version, a selection of clips, words or a caption line scopes the request, and a message typed during a job waits
-for it. Share makes a read-only page for
+$0.006, 2.9 s) reads the message next to the version (its clips, caption lines, look, music and last review), the
+whole recording (every passage the cut leaves out, what Spark saw when it watched the footage, the speakers and heads),
+every version with its score and the chat's last turns, and picks operations from a closed list: the editor's own
+edits (music, style, captions, a word fixed in every caption, callouts, title, drop, reorder, cut, trim, split, put a
+passage back, shorten pauses, name a speaker, pin a head, restore a version), a re-plan, a review, and three that show
+instead of edit (move the playhead, select the words, open a panel: "where do I say X" lands on the words). In Live
+the edits go into the draft and play at once, nothing renders until Make Version; in Rendered they make one version,
+rendered once, and the review gate's free checks (a cut in speech, a caption over the face, the head out of frame) are
+said in the chat. A structural change or anything over $0.02 first comes back as a card with the change, its cost and
+time (Apply, or Try something else), a question gets an answer and no version, a selection of clips, words or a
+caption line scopes the request, and a message typed during a job waits for it. `tools/chat_bench.py` scores the
+routing on 38 messages in English and Greek over three runs: 22 of 38 before the recording, the chat and the editor's
+own edits reached the router, 38 of 38 after (Spark Open: 35 of 38 at 2.4 s). Share makes a read-only page for
 one version (`/s/<token>`: the cut, its score and score history, the top notes; Unshare removes it). On the Export
 page the cover maker lays a headline over a still (frame, headline, sticker, or a cutout with the headline behind the
 speaker, cut out by SAM 3.1 from that one still, $0.010), or "Design it with Muse Spark" picks the still from a
