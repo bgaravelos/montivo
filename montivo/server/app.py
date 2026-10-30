@@ -1578,6 +1578,44 @@ def create_app(root: Path) -> FastAPI:
                               "chips": [f"v{frm}"], "kind": "caption"})
         return {"job": job.public()}
 
+    @app.post("/api/runs/{run_id}/glossary")
+    async def glossary_edit(run_id: str, request: Request):
+        """Correct all ({"add": {"heard words": "written words"}, "drop": [...]}): every caption line that says it, now
+        and in re-plans (the run's glossary): the next version, ffmpeg only."""
+        run_id = await own(run_id, request)
+        d = st.run_dir(run_id)
+        b = await request.json()
+        frm = int(b.get("from") or latest_version(d))
+        passes = review_passes(b)
+        if passes:
+            need_key("Reviewing the new cut", COST["review"] * passes)
+        g = draft.clean_panel_op("glossary", b)
+        args = ["-m", "montivo.human", "glossary", f"runs/{run_id}", *[f"--add={k}={v}" for k, v in g["add"].items()],
+                *[f"--drop={x}" for x in g["drop"]], "--from", str(frm), "--review", str(passes)]
+        said = [f"“{k}” → “{v}”" for k, v in g["add"].items()] + [f"“{x}” as heard" for x in g["drop"]]
+        job = start_job(st, run_id, "glossary", "Correct everywhere", args,
+                        chat={"role": "user", "text": f"Everywhere in v{frm}: {', '.join(said)}.", "chips": [f"v{frm}"], "kind": "caption"})
+        return {"job": job.public()}
+
+    @app.post("/api/runs/{run_id}/linebreak")
+    async def linebreak(run_id: str, request: Request):
+        """A caption line starts at a word ({"at": its cut second}) or joins the line before ({"at", "join": true}): the
+        next version, ffmpeg only."""
+        run_id = await own(run_id, request)
+        d = st.run_dir(run_id)
+        b = await request.json()
+        frm = int(b.get("from") or latest_version(d))
+        passes = review_passes(b)
+        if passes:
+            need_key("Reviewing the new cut", COST["review"] * passes)
+        g = draft.clean_panel_op("caption_break", {"at": b.get("at"), "join": b.get("join")})
+        args = ["-m", "montivo.human", "linebreak", f"runs/{run_id}", f"--at={g['at']:.3f}", *(["--join"] if g["join"] else []),
+                "--from", str(frm), "--review", str(passes)]
+        job = start_job(st, run_id, "linebreak", "Join caption lines" if g["join"] else "Break a caption line", args,
+                        chat={"role": "user", "chips": [f"v{frm}"], "kind": "caption",
+                              "text": f"{'Join' if g['join'] else 'Break'} the caption line at {g['at']:.2f} s in v{frm}."})
+        return {"job": job.public()}
+
     @app.post("/api/runs/{run_id}/text")
     async def text_edit(run_id: str, request: Request):
         """Callouts ({"callouts": {span: text}}, "" removes one), the title card on or off ({"title_card": bool}) or new

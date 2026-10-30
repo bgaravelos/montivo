@@ -39,7 +39,7 @@ const PANELS: { id: PanelId; label: string; icon: string }[] = [
 type Current = { version: number | null; newest: number | null };
 const currentKey = (id: string) => `montivo.current.${id}`;
 // the requests that make a version from the one on screen: after an undo they branch from an older version
-const MAKES_VERSION = ["drop", "trim", "reorder", "cut", "split", "punch", "caption", "text", "style", "music", "pin", "ask", "review", "hook",
+const MAKES_VERSION = ["drop", "trim", "reorder", "cut", "split", "punch", "caption", "glossary", "linebreak", "text", "style", "music", "pin", "ask", "review", "hook",
   "insert", "pauses", "overlay"];
 
 const typing = (el: EventTarget | null) => {
@@ -608,7 +608,10 @@ export function Editor({ id, replay, go }: Props) {
         {panel === "captions" && (
           <CaptionsPanel v={v} t={t} next={next} canEdit={canEdit} onSeek={seek} focus={focus} rev={rev} live={live0}
             onAsk={(c) => { setCapSel({ t_in: c.t_in, t_out: c.t_out, text: c.text }); setPanel("assistant"); setAskNonce((n) => n + 1); }}
-            onApply={(edits) => made(edit("caption", { edits, from: v?.n }))} />
+            onApply={(edits) => made(edit("caption", { edits, from: v?.n }))}
+            onStyle={() => setPanel("style")}
+            onGlossary={(add, drop) => made(edit("glossary", { add, drop: drop ?? [], from: v?.n }))}
+            onBreak={(at, join) => made(edit("linebreak", { at, join, from: v?.n }))} />
         )}
         {panel === "style" && (
           <StylePanel id={id} v={v} t={t} next={next} canEdit={canEdit} live={live0} draft={styleDraft} setDraft={setStyleDraft} onSeek={(a) => { player.current?.pause(); seek(a); }}
@@ -828,6 +831,8 @@ const DRAFT_OPS: Record<string, { op: string; args: (b: Record<string, unknown>)
   pauses: { op: "pauses", args: (b) => ({ over: b.over, keep: b.keep }) },
   // the panels' edits (A3): the same draft, one render at Make Version N
   caption: { op: "caption", args: (b) => ({ edits: b.edits }) },
+  glossary: { op: "glossary", args: (b) => ({ add: b.add ?? {}, drop: b.drop ?? [] }) },
+  linebreak: { op: "caption_break", args: (b) => ({ at: b.at, join: !!b.join }) },
   text: { op: "text", args: (b) => pick(b, ["callouts", "title", "title_card"]) },
   style: { op: "style", args: (b) => pick(b, ["look", "callouts", "prompt", "why"]) },
   music: { op: "music", args: (b) => ({ track: b.track ?? null, ...pick(b, ["level_db", "duck_db", "voice_db"]) }) },

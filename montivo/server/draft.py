@@ -18,7 +18,8 @@ ops take the pure functions' arguments (human.OPS): split {span, word}, trim {sp
 before|null}, drop {span}, cut {ranges: [[span, first, last], ...]}, insert {turn, a, b, before: span|"end"|null},
 pauses {over, keep}; caption {edits: [{at, text}]} (resolved here against the draft as laid out, and kept as
 {lines: [{span, src_t, text, was, t}]}), text {callouts, title, title_card}, style {look, callouts, prompt, why}, music
-{track|null, level_db, duck_db, voice_db}, pin {speaker, head|null}, punch {on} | {skip}. $0: no model is called (new
+{track|null, level_db, duck_db, voice_db}, pin {speaker, head|null}, punch {on} | {skip}, glossary {add: {heard:
+written}, drop: [heard]}, caption_break {at, join} (resolved like a caption edit, kept as {span, src_t, join, word}). $0: no model is called (new
 title words make one Muse Image card at the commit, $0.01). An op never runs beside a job on its run (a job writes the run's versions),
 and one lock per run keeps two ops of one draft in order. A version made after the draft started (another tab, the
 chat) is not lost: the commit replays the ops on the newest version, or refuses with the op that no longer applies.
@@ -187,7 +188,9 @@ def clean_panel_op(op: str, a: dict) -> dict:
                 raise HTTPException(400, "lines: 1 to 40 resolved caption lines")
             return {"lines": [{"span": _span(x.get("span")), "src_t": _seconds(x.get("src_t"), "src_t"),
                                "text": _text(x.get("text"), "caption text", 200, False),
-                               "was": _text(x.get("was") or "", "was", 400), "t": _seconds(x.get("t", 0), "t")} for x in ls]}
+                               "was": _text(x.get("was") or "", "was", 400), "t": _seconds(x.get("t", 0), "t"),
+                               **({"until": _seconds(x["until"], "until")} if x.get("until") is not None else {})}
+                              for x in ls]}
         es = a.get("edits")
         if not isinstance(es, list) or not 1 <= len(es) <= 40 or not all(isinstance(e, dict) for e in es):
             raise HTTPException(400, "edits: 1 to 40 of {at, text}")
@@ -227,6 +230,17 @@ def clean_panel_op(op: str, a: dict) -> dict:
         if track is not None and (not isinstance(track, str) or not re.fullmatch(r"[a-z0-9_]{1,40}", track)):
             raise HTTPException(400, "track: a bundled track id, or null for none")
         return {"track": track, **{k: _num(a.get(k), k) for k in ("level_db", "duck_db", "voice_db")}}
+    if op == "glossary":
+        add, drop = a.get("add") or {}, a.get("drop") or []
+        if not isinstance(add, dict) or not isinstance(drop, list) or not 0 < len(add) + len(drop) <= 20:
+            raise HTTPException(400, 'add: {"heard words": "written words"}, drop: ["heard words"]')
+        return {"add": {_text(k, "heard", 80, False): _text(v, "written", 80, False) for k, v in add.items()},
+                "drop": [_text(x, "heard", 80, False) for x in drop]}
+    if op == "caption_break":
+        if "span" in a:  # already resolved
+            return {"span": _span(a["span"]), "src_t": _seconds(a.get("src_t"), "src_t"), "join": a.get("join") is True,
+                    "word": _text(a.get("word") or "", "word", 80)}
+        return {"at": _seconds(a.get("at"), "at"), "join": a.get("join") is True}
     if op == "pin":
         spk, head = a.get("speaker"), a.get("head")
         if not isinstance(spk, str) or not SPEAKER.fullmatch(spk) or (head is not None and not HEAD.fullmatch(str(head))):
@@ -245,9 +259,11 @@ def resolve(run_dir: Path, edl: dict, o: dict) -> dict:
     """An op as the draft keeps it: a caption edit's cut seconds become the lines they name in the draft as it is laid
     out now (preview_data, the render's layout; a version's own rendered captions when it has them), so a replay or the
     commit retexts the same lines whatever comes after; a pin is checked against the run's speakers and heads."""
-    if o["op"] == "caption" and "edits" in o["args"]:
+    if (o["op"] == "caption" and "edits" in o["args"]) or (o["op"] == "caption_break" and "at" in o["args"]):
         laid = edl if edl.get("captions") else preview_data(run_dir, edl, laid=True)["_edl"]
         try:
+            if o["op"] == "caption_break":
+                return {"op": "caption_break", "args": human.caption_break_at(laid, o["args"]["at"], o["args"]["join"])}
             lines = human.caption_lines(laid, [(e["at"], e["text"]) for e in o["args"]["edits"]])
         except SystemExit as e:
             raise HTTPException(409, str(e))

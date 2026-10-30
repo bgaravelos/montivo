@@ -49,8 +49,9 @@ def test_every_panel_op_writes_the_cli_edl_byte_for_byte(tmp_path, monkeypatch, 
     edl = json.loads((d / "edl_v1.json").read_text())
     if o is None:  # the caption edit: the editor's cut second, resolved to the line it names
         o = {"op": "caption", "args": {"lines": H.caption_lines(edl, cli_args["edits"])}}
-        assert o["args"]["lines"] == [{"span": "s2", "src_t": o["args"]["lines"][0]["src_t"], "text": "Four Meta models",
-                                       "was": "meta meta models", "t": 3.1}]
+        ln = o["args"]["lines"][0]
+        assert ln == {"span": "s2", "src_t": ln["src_t"], "text": "Four Meta models", "was": "meta meta models", "t": 3.1,
+                      "until": round(ln["src_t"] - 0.01 + 0.78, 3)}  # the line's words: 2.72-3.5 cut seconds
     new, rec = H.apply_op(edl, H._words(d), H.Audio.load(d), o["op"], o["args"])
     assert json.loads((d / "edl_v1.json").read_text()) == edl  # the op never changes the EDL it is given
     H.stamp(new, rec, 1, 2)
@@ -182,3 +183,108 @@ def test_a_look_from_words_goes_into_the_draft_without_a_version(tmp_path, monke
     r = c.post("/api/runs/h1/draft", json={"op": "style", "args": r.json()})
     assert r.status_code == 200 and r.json()["draft"]["ops"][1]["say"] == "style: bold and boxed"
     assert c.post("/api/runs/h1/style/suggest", json={"prompt": " "}).status_code == 400
+
+
+# --------------------------------------------------------------------------- Captions panel: correct all, line breaks
+
+
+def test_correct_all_is_a_glossary_entry_kept_by_a_replan(tmp_path, monkeypatch):
+    """C2: one fix for every line that says it: the run's glossary (an old EDL starts from the demo words it used)."""
+    import montivo.human as H
+    from montivo.engine.captions import DEMO_GLOSSARY
+    from montivo.engine.edl import carry_run_words
+    d = _panel_run(tmp_path, monkeypatch)
+    edl = json.loads((d / "edl_v1.json").read_text())
+    new, rec = H.apply_op(edl, H._words(d), None, "glossary", {"add": {"meta  meta.": "Four Meta"}})
+    assert new["glossary"] == {**DEMO_GLOSSARY, "meta meta": "Four Meta"} and "glossary" not in edl
+    assert rec.say == "correct everywhere: “meta meta” -> “Four Meta”" and rec.fixes[0]["op"] == "glossary"
+    H.stamp(new, rec, 1, 2)
+    dump_json(tmp_path / "pure.json", new)
+    H.main(["glossary", str(d), "--add", "meta meta.=Four Meta"])
+    assert (tmp_path / "pure.json").read_bytes() == (d / "edl_v2.json").read_bytes()
+    with pytest.raises(SystemExit, match="already says"):
+        H.apply_op(new, H._words(d), None, "glossary", {"add": {"meta meta": "Four Meta"}})
+    gone, _ = H.apply_op(new, H._words(d), None, "glossary", {"drop": ["meta meta"]})
+    assert "meta meta" not in gone["glossary"]
+    replanned = {"spans": []}
+    carry_run_words(new, replanned)
+    assert replanned["glossary"]["meta meta"] == "Four Meta"
+
+
+def test_hand_line_breaks_move_with_their_word():
+    """C4: a break starts a line at its word, a join puts that line back on the one before; a word that is gone or a
+    break already there changes nothing."""
+    from montivo.engine.captions import CWord, apply_breaks
+    ws = [CWord(w=f"w{k}", t_in=10.0 + k * 0.3, t_out=10.25 + k * 0.3, span="s2") for k in range(6)]
+    lines = [ws[:3], ws[3:]]
+    text = lambda ls: [" ".join(w.w for w in ln) for ln in ls]  # noqa: E731
+    assert text(apply_breaks(lines, [{"span": "s2", "src_t": 10.31}])) == ["w0", "w1 w2", "w3 w4 w5"]
+    assert text(apply_breaks(lines, [{"span": "s2", "src_t": 10.9, "join": True}])) == ["w0 w1 w2 w3 w4 w5"]
+    for noop in [{"span": "s2", "src_t": 10.0}, {"span": "s3", "src_t": 10.3}, {"span": "s2", "src_t": 10.6, "join": True},
+                 {"span": "s2", "src_t": 50.0}]:
+        assert text(apply_breaks(lines, [noop])) == ["w0 w1 w2", "w3 w4 w5"], noop
+    assert lines == [ws[:3], ws[3:]]  # the lines it is given stay as they were
+
+
+def test_a_line_break_is_resolved_to_its_word_and_its_opposite_takes_it_out(tmp_path, monkeypatch):
+    import montivo.human as H
+    d = _panel_run(tmp_path, monkeypatch)
+    edl = json.loads((d / "edl_v1.json").read_text())
+    with pytest.raises(SystemExit, match="already starts a line"):
+        H.caption_break_at(edl, 2.72, False)
+    with pytest.raises(SystemExit, match="joins the one before at its first word"):
+        H.caption_break_at(edl, 3.0, True)
+    brk = H.caption_break_at(edl, 3.0, False)
+    assert brk["span"] == "s2" and brk["word"] == "models" and not brk["join"]
+    new, rec = H.apply_op(edl, H._words(d), None, "caption_break", brk)
+    assert new["caption_breaks"] == [{"span": "s2", "src_t": brk["src_t"]}] and rec.say == "new caption line at “models”"
+    H.stamp(new, rec, 1, 2)
+    dump_json(tmp_path / "pure.json", new)
+    H.main(["linebreak", str(d), "--at", "3.0"])
+    assert (tmp_path / "pure.json").read_bytes() == (d / "edl_v2.json").read_bytes()
+    back, _ = H.apply_op(new, H._words(d), None, "caption_break", {**brk, "join": True})
+    assert "caption_breaks" not in back  # a break joined again is no entry at all
+    with pytest.raises(SystemExit, match="already breaks"):
+        H.apply_op(new, H._words(d), None, "caption_break", brk)
+
+
+def test_correct_all_and_a_line_break_ride_the_draft(tmp_path, monkeypatch):
+    d = _panel_run(tmp_path, monkeypatch)
+    c, st = _client(tmp_path)
+    r = c.post("/api/runs/h1/draft", json={"op": "caption_break", "args": {"at": 3.0}, "from": 1})
+    assert r.status_code == 200, r.text
+    assert r.json()["draft"]["ops"][0]["args"] == {"span": "s2", "src_t": r.json()["draft"]["ops"][0]["args"]["src_t"],
+                                                   "join": False, "word": "models"}
+    r = c.post("/api/runs/h1/draft", json={"op": "glossary", "args": {"add": {"meta meta": "Four Meta"}}})
+    assert r.status_code == 200, r.text
+    for bad in [{"op": "glossary", "args": {}}, {"op": "glossary", "args": {"add": {"x": ""}}},
+                {"op": "caption_break", "args": {"at": "x"}}]:
+        assert c.post("/api/runs/h1/draft", json=bad).status_code == 400, bad
+    drafted = c.get("/api/runs/h1/draft?edl=1").json()["edl"]
+    _fake_jobs(monkeypatch, st)
+    assert c.post("/api/runs/h1/draft/commit", json={}).status_code == 200
+    v2 = json.loads((d / "edl_v2.json").read_text())
+    assert _bare(v2) == _bare(drafted) and v2["glossary"]["meta meta"] == "Four Meta" and v2["caption_breaks"]
+
+
+def test_a_retexted_line_keeps_its_words_through_any_style():
+    """C6: a person's retext names the words it was written for (src_t .. until), so a look with 1 or 6 words per line
+    shows it once, with nothing doubled and nothing else replaced (015 at 1 word: "we edit short form | added | short")."""
+    from montivo.engine.captions import CWord, apply_overrides
+    said = "so we added short form videos".split()
+    ws = [CWord(w=x, t_in=20.0 + k * 0.4, t_out=20.35 + k * 0.4, span="s3") for k, x in enumerate(said)]
+    ov = {"span": "s3", "src_t": 20.41, "text": "we edit short form", "until": 21.95, "why": "human"}
+    text = lambda ls: [" ".join(w.w for w in ln) for ln in ls]  # noqa: E731
+    for grouping in ([[w] for w in ws], [ws[:2], ws[2:4], ws[4:]], [ws]):
+        assert text(apply_overrides(grouping, [ov])[0]) == ["so", "we edit short form", "videos"], text(grouping)
+    old = {k: v for k, v in ov.items() if k != "until"}  # an override from before: it retexts the line it lands on,
+    assert "so" not in text(apply_overrides([ws[:2], ws[2:4], ws[4:]], [old])[0])  # "so" with it (why `until` is kept)
+
+
+def test_a_lower_case_correction_keeps_the_capital_it_replaces():
+    from montivo.engine.captions import CWord, apply_glossary
+    ws = [CWord(w=x, t_in=k, t_out=k + 0.5, span="s1") for k, x in enumerate(["Every", "editor", "hears", "every", "word."])]
+    out, fixes = apply_glossary(ws, {"every": "each"})
+    assert [w.w for w in out] == ["Each", "editor", "hears", "each", "word."] and len(fixes) == 2
+    out, _ = apply_glossary(ws, {"every": "EACH"})
+    assert out[0].w == "EACH"

@@ -24,6 +24,7 @@ export type Review = {
   name: string; carried_from?: number | null; overall: number; pass: boolean; scores: Record<string, number>; summary: string; issues: Issue[];
   reviewer_pass: boolean; gate: Gate | null; // pass is the gated pass, reviewer_pass the reviewer's own
   fixes: PlannedFix[]; skipped: { issue: number; reason: string }[]; facts_text: string;
+  heard_diff?: { t: number; caption: string; heard: string }[]; // caption words vs the words Voice heard in the cut (C3)
   facts: { silences: number; over_face: number; caption_lines: number; cut_edges: number; loud_edges: number };
   cost_usd: number; seconds: number; duration_s: number; clock: boolean; has_copy: boolean;
 };
@@ -74,6 +75,7 @@ export type Version = {
     head_box: number[] | null; over_face: boolean }[]; review: Review | null;
   look: Look | null; // the caption look this version was rendered with (graphics.normalize_look)
   music: (MusicSetting & { voice_db: number; margin_db: number | null; ducked_s: number | null; ducked: [number, number][] }) | null; // the bed under the speech (engine/music.py)
+  glossary?: Record<string, string>; // the run's caption corrections {"heard words": "written words"} (C2)
   caption_lines: CaptionLine[]; caption_style: CaptionStyle | null; caption_style_note: string | null; brief_missing?: string[]; bytes: number | null;
   punch: boolean; punch_skip: string[]; punch_ins: PunchIn[];
   speaker_pins: Record<string, string>; // reframe_speaker_ids: Voice speaker -> the head the crop follows (a human pin)
@@ -103,7 +105,8 @@ export type PunchIn = {
 
 export type CaptionLine = { id: string; text: string; t_in: number; t_out: number; spans: string[]; placement: string | null; over_face: boolean;
   box: number[] | null; head_box: number[] | null; // [x, y, w, h] and the head [x0, y0, x1, y1] in the 1080 x 1920 frame
-  heard: string | null }; // heard: the words Voice heard, when the line was retexted (by a human or the reviewer)
+  heard: string | null; // heard: the words Voice heard, when the line was retexted (by a human or the reviewer)
+  words?: [string, number][] }; // each word and its first cut second (a hand line break anchors there, C4)
 
 /** The caption and callout look (engine/graphics.py Look): a preset and every choice on top of it. */
 export type Look = {

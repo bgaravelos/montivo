@@ -192,6 +192,8 @@ def apply_glossary(words: list[CWord], glossary: dict[str, str]) -> tuple[list[C
         src = " ".join(w.w for w in old)
         trail = old[-1].w[len(old[-1].w.rstrip(".,!?;:")):]  # keep the punctuation Voice put on the last word
         new = repl.split()
+        if old[0].w[:1].isupper() and new[0][:1].islower():  # a fix written in lower case keeps a capital it replaces
+            new[0] = new[0][0].upper() + new[0][1:]
         new[-1] += trail
         t0, t1 = old[0].t_in, old[-1].t_out
         total = sum(len(x) for x in new) or 1
@@ -569,6 +571,61 @@ def covered(line: list[CWord], text: str, nxt: list[CWord]) -> int:
     return max(0, last - len(own) + 1)
 
 
+def isolate(lines: list[list[CWord]], span: str, src_t: float, until: float) -> list[list[CWord]]:
+    """The words of `span` from src_t (a line's first word + 0.01 s) to `until` (its last word's end) as one line of
+    their own, where the first of them stood; the words around them keep their lines. A retexted line (C6) is the
+    words it was written for: a look with fewer words per line used to break them over several lines and show the
+    rest twice next to the new text (015 "we edit short form | added | short | form"), one with more put other words
+    on its line and the retext replaced them too."""
+    inside = lambda w: w.span == span and w.t_out > src_t and w.t_in < until - 0.01  # noqa: E731
+    out: list[list[CWord]] = []
+    mine: list[CWord] | None = None
+    for ln in lines:
+        before = [w for w in ln if not inside(w) and w.t_in < src_t]
+        hit = [w for w in ln if inside(w)]
+        after = [w for w in ln if not inside(w) and w.t_in >= src_t]
+        if not hit:
+            out.append(ln)
+            continue
+        if before:
+            out.append(before)
+        if mine is None:
+            mine = hit
+            out.append(mine)
+        else:
+            mine.extend(hit)
+        if after:
+            out.append(after)
+    return out
+
+
+BREAK_MATCH_S = 0.06  # a hand line break finds its word by source time within this (frame alignment, a clipped edge)
+
+
+def apply_breaks(lines: list[list[CWord]], breaks: list[dict]) -> list[list[CWord]]:
+    """A person's line breaks on a segment's lines (EDL `caption_breaks`, Captions panel C4): {"span", "src_t"} starts a
+    line at that word, {"join": true} puts the line that starts there back on the line before. Each finds its word by
+    span and source time, so a break stays with its word through any edit that keeps the word; an entry whose word is
+    gone, or that is already so, changes nothing. Applied after the automatic breaks, before the overrides."""
+    out = [list(ln) for ln in lines]
+    for b in breaks:
+        hit: tuple[int, int, float] | None = None
+        for j, ln in enumerate(out):
+            for k, w in enumerate(ln):
+                d = abs(w.t_in - float(b["src_t"]))
+                if w.span == b["span"] and d <= BREAK_MATCH_S and (hit is None or d < hit[2]):
+                    hit = (j, k, d)
+        if hit is None:
+            continue
+        j, k, _ = hit
+        if b.get("join"):
+            if k == 0 and j > 0:
+                out[j - 1:j + 1] = [out[j - 1] + out[j]]
+        elif k > 0:
+            out[j:j + 1] = [out[j][:k], out[j][k:]]
+    return out
+
+
 def apply_overrides(lines: list[list[CWord]], overrides: list[dict]) -> tuple[list[list[CWord]], dict[int, dict]]:
     """The caption overrides on a segment's lines: a `text` retexts its line (taking over the next line's words it
     covers, so nothing shows twice; a next line left empty goes) and a `top` forces its position. Returns the lines and
@@ -576,11 +633,14 @@ def apply_overrides(lines: list[list[CWord]], overrides: list[dict]) -> tuple[li
     out: list[list[CWord]] = []
     forced: dict[int, dict] = {}
     todo = [list(ln) for ln in lines]
+    for ov in overrides:  # a person's retext keeps the words it was written for as one line, whatever the style breaks
+        if ov.get("text") and ov.get("until") is not None and ov.get("voice") is None:
+            todo = isolate(todo, ov["span"], float(ov["src_t"]), float(ov["until"]))
     while todo:
         ws = todo.pop(0)
         ov = override_for(ws, overrides)
         if ov and ov.get("text"):
-            n = covered(ws, ov["text"], todo[0]) if todo else 0
+            n = covered(ws, ov["text"], todo[0]) if todo and ov.get("until") is None else 0
             if n:
                 ws, todo[0] = ws + todo[0][:n], todo[0][n:]
                 if not todo[0]:
@@ -702,7 +762,8 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
     if captions:
         for i, ws in sorted(seg_words.items()):
             seg = segments[i]
-            grouped, forced = apply_overrides(group_lines(ws, style, max_words=look.max_words, breaks=look.line_breaks), overrides)
+            grouped, forced = apply_overrides(apply_breaks(group_lines(ws, style, max_words=look.max_words, breaks=look.line_breaks),
+                                                           edl.get("caption_breaks") or []), overrides)
             lines = [Line(words=lw, segment=i) for lw in grouped]
             for ln in lines:
                 ln.word_times = [(cut_t(i, w.t_in), cut_t(i, w.t_out)) for w in ln.words]

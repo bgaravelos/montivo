@@ -69,13 +69,55 @@ export function MediaPanel({ state }: { state: RunState }) {
 
 export type CaptionEdit = { at: number; text: string };
 
-/** The caption lines of a version; each can be retexted where Voice misheard a word. Edits are staged here and applied
- *  together as the next version (the reviewer's caption_text patch, $0, a re-render), so four fixes are one render. */
-export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, focus, rev, live }: {
+/** Lowercase, punctuation off: how the glossary matches words (captions.norm). */
+const normTok = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
+const toks = (s: string) => s.split(/\s+/).filter(Boolean);
+const bare = (s: string) => s.replace(/[.,!?;:]+$/, "");
+
+/** C2: the one run of words a line edit changed ("meta meta" -> "Four Meta"), as a glossary entry, or null when the edit
+ *  changes more than one run (or only punctuation). */
+export function phraseFix(was: string, now: string): { heard: string; written: string } | null {
+  const a = toks(was), b = toks(now);
+  let p = 0;
+  while (p < a.length && p < b.length && normTok(a[p]) === normTok(b[p])) p++;
+  let q = 0;
+  while (q < a.length - p && q < b.length - p && normTok(a[a.length - 1 - q]) === normTok(b[b.length - 1 - q])) q++;
+  const heard = bare(a.slice(p, a.length - q).join(" ")), written = bare(b.slice(p, b.length - q).join(" "));
+  return heard && written && normTok(heard) !== normTok(written) ? { heard, written } : null;
+}
+
+/** The lines that say these words (as the glossary would match them). */
+export function linesSaying(lines: CaptionLine[], words: string): CaptionLine[] {
+  const want = toks(words).map(normTok).filter(Boolean);
+  if (!want.length) return [];
+  return lines.filter((c) => {
+    const have = toks(c.text).map(normTok);
+    return have.some((_, i) => want.every((w, k) => have[i + k] === w));
+  });
+}
+
+/** C3: why a line wants a look: the reviewer said its words do not match the speech, or the words Voice heard in the
+ *  cut differ from it. */
+function toCheck(v: Version | null, c: CaptionLine): string[] {
+  const r = v?.review;
+  if (!r) return [];
+  const out = r.issues.filter((i) => i.criterion === "captions_match_speech" && i.t_s >= c.t_in - 0.25 && i.t_s < c.t_out + 0.25)
+    .map((i) => `reviewer: ${i.what}`);
+  for (const d of r.heard_diff ?? []) if (d.t >= c.t_in - 0.05 && d.t < c.t_out) out.push(`Voice heard “${d.heard || "nothing"}” for “${d.caption}”`);
+  return out;
+}
+
+/** The caption lines of a version: retext a line where Voice misheard a word (here, or everywhere it says it: the run's
+ *  glossary), find and replace, split or join lines, and the lines worth a second look. Edits are staged here and
+ *  applied together (the reviewer's caption_text patch, $0); in Live they go into the draft. */
+export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, focus, rev, live, onStyle, onGlossary, onBreak }: {
   v: Version | null; t: number; next: number; canEdit: string | null; onSeek: (a: number) => void; focus?: PanelFocus | null;
   rev: string; live: boolean; // what the staged lines belong to (a version, or the draft as it stands); Live: Apply goes to the draft
   onApply: (edits: CaptionEdit[]) => void;
   onAsk?: (line: CaptionLine) => void; // the line goes to the chat as "this" (UX B3)
+  onStyle: () => void; // C1: the Style panel
+  onGlossary: (add: Record<string, string>, drop?: string[]) => void; // C2: correct everywhere
+  onBreak: (at: number, join: boolean) => void; // C4: a new line at a word, or a line back on the one before
 }) {
   const lines = v?.caption_lines ?? [];
   const st = v?.caption_style;
@@ -83,17 +125,28 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, foc
   const [staged, setStaged] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [find, setFind] = useState<{ find: string; replace: string } | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [follow, setFollowState] = useState(() => { try { return localStorage.getItem("montivo.captions.follow") !== "off"; } catch { return true; } });
+  const setFollow = (on: boolean) => { setFollowState(on); try { localStorage.setItem("montivo.captions.follow", on ? "on" : "off"); } catch { /* this tab */ } };
   useEffect(() => { setStaged({}); setEditing(null); }, [rev]);
   const n = Object.keys(staged).length;
   const open = (id: string, text: string) => { if (canEdit) return; setEditing(id); setDraft(staged[id] ?? text); };
   const body = useRef<HTMLDivElement>(null);
+  const show = (id: string) => window.requestAnimationFrame(() =>
+    body.current?.querySelector(`[data-line="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "nearest" }));
   useEffect(() => { // A2: the line picked on the timeline, scrolled into view (and its text box open on Enter)
     const id = focus?.key.startsWith("cap:") ? focus.key.slice(4) : null;
     const c = id ? lines.find((x) => x.id === id) : null;
     if (!c) return;
     if (focus!.edit) open(c.id, c.text);
-    window.requestAnimationFrame(() => body.current?.querySelector(`[data-line="${CSS.escape(c.id)}"]`)?.scrollIntoView({ block: "nearest" }));
+    setPicked(c.id);
+    show(c.id);
   }, [focus?.nonce]); // eslint-disable-line
+  const active = lines.find((c) => t >= c.t_in && t < c.t_out)?.id ?? null;
+  useEffect(() => { // C5: the line being said stays in view, never while you type or search
+    if (follow && active && !editing && !find) show(active);
+  }, [active]); // eslint-disable-line
   const commit = (id: string, text: string) => {
     const clean = draft.split(/\s+/).filter(Boolean).join(" ");
     setStaged((s) => {
@@ -106,59 +159,115 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, foc
     const edits = lines.filter((c) => staged[c.id]).map((c) => ({ at: (c.t_in + c.t_out) / 2, text: staged[c.id] }));
     if (edits.length) onApply(edits);
   };
+  /** C4: Enter inside an unchanged line splits it in front of the word at the cursor; ⌫ at its start joins it to the
+   *  line before. Anything else in the box is a retext. */
+  const lineKey = (e: React.KeyboardEvent<HTMLInputElement>, c: CaptionLine) => {
+    const el = e.currentTarget, pos = el.selectionStart ?? 0, words = c.words ?? [];
+    const same = toks(el.value).join(" ") === toks(c.text).join(" ") && !c.heard && el.selectionStart === el.selectionEnd;
+    if (e.key === "Enter" && same && pos > 0 && pos < el.value.trimEnd().length) {
+      const k = toks(el.value.slice(0, pos)).length - (/\S$/.test(el.value.slice(0, pos)) && /^\S/.test(el.value.slice(pos)) ? 1 : 0);
+      if (k > 0 && k < words.length) { e.preventDefault(); setEditing(null); onBreak(words[k][1] + 0.005, false); return; }
+    }
+    if (e.key === "Backspace" && same && pos === 0 && words.length && lines.indexOf(c) > 0) {
+      e.preventDefault(); setEditing(null); onBreak(words[0][1] + 0.005, true); return;
+    }
+    if (e.key === "Enter") { e.preventDefault(); commit(c.id, c.text); }
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setEditing(null); }
+  };
+  const checks = new Map(lines.map((c) => [c.id, toCheck(v, c)] as const).filter(([, r]) => r.length));
+  const nextCheck = () => {
+    const ids = lines.filter((c) => checks.has(c.id));
+    const to = ids.find((c) => c.t_in > t + 0.05) ?? ids[0];
+    if (!to) return;
+    setPicked(to.id); onSeek(to.t_in + 0.01); show(to.id);
+  };
+  const matches = find?.find.trim() ? linesSaying(lines.filter((c) => !c.heard), find.find) : [];
+  const gloss = Object.entries(v?.glossary ?? {});
   return (
     <section className="side-panel">
-      <div className="panel-head"><span className="ph-title">Captions</span><span className="ph-sub">{lines.length} lines</span></div>
+      <div className="panel-head">
+        <span className="ph-title">Captions</span><span className="ph-sub">{lines.length} lines</span>
+        <span className="grow" />
+        {checks.size > 0 && <button className="btn quiet small" onClick={nextCheck} title="The next line the reviewer or Voice's second listen flagged">
+          <span className="chk-dot" /> Next to check ({checks.size})</button>}
+        <button className={`icon-btn ${find ? "on" : ""}`} aria-pressed={!!find} title="Find and replace in every line"
+          onClick={() => setFind(find ? null : { find: "", replace: "" })}><Icon name="search" size={14} /></button>
+        <button className={`icon-btn ${follow ? "on" : ""}`} aria-pressed={follow} onClick={() => setFollow(!follow)}
+          title={`Follow the playhead: ${follow ? "on" : "off"} (never while you type)`}><Icon name="follow" size={14} /></button>
+      </div>
       <div className="panel-body">
-        <div className="style-card">
-          <div className="pn-k">Style</div>
-          {st ? (
-            <>
-              <div className="cap-sample" style={{ fontSize: Math.min(26, (st.font ?? 84) / 3.4) }}>Captions look like this</div>
-              <dl className="props">
-                <dt>Font</dt><dd>{font ?? "–"} · {st.font ?? "–"} px</dd>
-                <dt>Line</dt><dd>up to {st.max_words ?? 4} words</dd>
-                <dt>Position</dt><dd>{v?.look?.position === "fixed" ? `fixed at y ${v.look.top} (your choice)` : `from y ${st.default_top}, moves off the face`}</dd>
-              </dl>
-              {v?.caption_style_note && <p className="mute small">Planner's note: {v.caption_style_note}</p>}
-              <p className="mute small">Preset{v?.look ? ` ${v.look.preset.replace("_", " ")}` : ""}. Fonts, colours and position: the Style panel in the rail.</p>
-            </>
-          ) : <p className="mute small">This version was rendered without captions.</p>}
+        <div className="cap-style-line">
+          {st ? <span>{v?.look ? v.look.preset.replace("_", " ") : "Marker"} · {font ?? "Inter Tight"} · {v?.look?.size ?? st.font ?? "–"} px · up to {v?.look?.max_words ?? st.max_words ?? 4} words</span>
+            : <span className="mute">Rendered without captions</span>}
+          <button className="link small" onClick={onStyle}>Edit style →</button>
         </div>
-        {lines.length > 0 && <p className="mute small">Double-click a line (or its pencil) to fix a word Voice misheard; the timing stays.</p>}
+        {find && (
+          <div className="cap-find">
+            <input autoFocus value={find.find} placeholder="Find (as Voice heard it)" aria-label="Find"
+              onChange={(e) => setFind({ ...find, find: e.target.value })} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setFind(null); } }} />
+            <input value={find.replace} placeholder="Replace with" aria-label="Replace with" onChange={(e) => setFind({ ...find, replace: e.target.value })} />
+            <button className="btn small" disabled={!matches.length || !find.replace.trim() || !!canEdit}
+              title={canEdit ?? "Every line that says it, now and after a re-plan (the run's glossary); lines you retexted keep your words"}
+              onClick={() => { onGlossary({ [find.find.trim()]: find.replace.trim() }); setFind(null); }}>
+              Replace in {matches.length} line{matches.length === 1 ? "" : "s"}</button>
+          </div>
+        )}
+        {lines.length > 0 && !find && <p className="mute small">Double-click a line to fix a word Voice misheard. In the box: Enter at a word splits the line, ⌫ at the start joins it to the line before.</p>}
         <div className="list" ref={body}>
-          {lines.map((c) => editing === c.id ? (
-            <div key={c.id} data-line={c.id} className="list-row cap-edit">
-              <span className="lr-t mono">{tc(c.t_in)}</span>
-              <input autoFocus value={draft} maxLength={200} aria-label={`Caption at ${tc(c.t_in)}`} onFocus={(e) => e.currentTarget.select()}
-                onChange={(e) => setDraft(e.target.value)} onBlur={() => commit(c.id, c.text)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") { e.preventDefault(); commit(c.id, c.text); }
-                  else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setEditing(null); }
-                }} />
-            </div>
-          ) : (
-            <div key={c.id} data-line={c.id} role="button" tabIndex={0}
-              className={`list-row cap-row ${t >= c.t_in && t < c.t_out ? "on" : ""} ${staged[c.id] ? "staged" : ""} ${focus?.key === `cap:${c.id}` ? "picked" : ""}`}
-              onClick={() => onSeek(c.t_in)} onDoubleClick={() => open(c.id, c.text)}
-              onKeyDown={(e) => { if (e.key === "Enter") open(c.id, c.text); }}>
-              <span className="lr-t mono">{tc(c.t_in)}</span>
-              <span className="lr-txt">
-                {staged[c.id] ?? c.text}
-                {staged[c.id] ? <span className="lr-was">was: {c.text}</span>
-                  : c.heard && c.heard !== c.text ? <span className="lr-was" title="The words Voice heard; the line was corrected">Voice: {c.heard}</span> : null}
-              </span>
-              <span className="lr-end">
-                {staged[c.id] ? <span className="lr-flag edited">edited</span> : c.over_face && <span className="lr-flag" title="moved off the face">moved</span>}
-                <button className="icon-btn lr-edit" disabled={!!canEdit} title={canEdit ?? "Edit this line"}
-                  onClick={(e) => { e.stopPropagation(); open(c.id, c.text); }}><Icon name="pencil" size={13} /></button>
-                {onAsk && <button className="icon-btn lr-edit" title="Ask Montivo about this line"
-                  onClick={(e) => { e.stopPropagation(); onAsk(c); }}><Icon name="assistant" size={13} /></button>}
-              </span>
-            </div>
-          ))}
+          {(find?.find.trim() ? matches : lines).map((c) => {
+            const fix = staged[c.id] && !c.heard ? phraseFix(c.text, staged[c.id]) : null;
+            const others = fix ? linesSaying(lines.filter((x) => x.id !== c.id && !x.heard), fix.heard) : [];
+            const why = checks.get(c.id);
+            return editing === c.id ? (
+              <div key={c.id} data-line={c.id} className="list-row cap-edit">
+                <span className="lr-t mono">{tc(c.t_in)}</span>
+                <input autoFocus value={draft} maxLength={200} aria-label={`Caption at ${tc(c.t_in)}`}
+                  onChange={(e) => setDraft(e.target.value)} onBlur={() => commit(c.id, c.text)} onKeyDown={(e) => lineKey(e, c)} />
+              </div>
+            ) : (
+              <div key={c.id} data-line={c.id} role="button" tabIndex={0}
+                className={`list-row cap-row ${c.id === active ? "on" : ""} ${staged[c.id] ? "staged" : ""} ${picked === c.id || focus?.key === `cap:${c.id}` ? "picked" : ""}`}
+                onClick={() => { setPicked(c.id); onSeek(c.t_in); }} onDoubleClick={() => open(c.id, c.text)}
+                onKeyDown={(e) => { if (e.key === "Enter") open(c.id, c.text); }}>
+                <span className="lr-t mono">{why ? <span className="chk-dot" title={why.join("\n")} /> : null}{tc(c.t_in)}</span>
+                <span className="lr-txt">
+                  {staged[c.id] ?? c.text}
+                  {staged[c.id] ? <span className="lr-was">was: {c.text}</span>
+                    : c.heard && c.heard !== c.text ? <span className="lr-was" title="The words Voice heard; the line was corrected">Voice: {c.heard}</span> : null}
+                  {why && !staged[c.id] && <span className="lr-was chk">{why[0]}</span>}
+                  {others.length > 0 && (
+                    <span className="lr-all">Also in {others.length} other line{others.length === 1 ? "" : "s"}:
+                      <button className="link small" disabled={!!canEdit} onClick={(e) => {
+                        e.stopPropagation();
+                        setStaged((s) => { const { [c.id]: _, ...rest } = s; return rest; });
+                        onGlossary({ [fix!.heard]: fix!.written });
+                      }} title="The run's glossary: every line that says it, now and after a re-plan">Correct all “{fix!.heard}” → “{fix!.written}”</button>
+                    </span>
+                  )}
+                </span>
+                <span className="lr-end">
+                  {staged[c.id] ? <span className="lr-flag edited">edited</span> : c.over_face && <span className="lr-flag" title="moved off the face">moved</span>}
+                  <button className="icon-btn lr-edit" disabled={!!canEdit} title={canEdit ?? "Edit this line"}
+                    onClick={(e) => { e.stopPropagation(); open(c.id, c.text); }}><Icon name="pencil" size={13} /></button>
+                  {onAsk && <button className="icon-btn lr-edit" title="Ask Montivo about this line"
+                    onClick={(e) => { e.stopPropagation(); onAsk(c); }}><Icon name="assistant" size={13} /></button>}
+                </span>
+              </div>
+            );
+          })}
           {!lines.length && <p className="mute small pad">No caption lines in this version.</p>}
+          {find?.find.trim() && !matches.length && <p className="mute small pad">No line says “{find.find}”{lines.some((c) => c.heard) ? " (lines you retexted keep your words)" : ""}.</p>}
         </div>
+        {gloss.length > 0 && (
+          <details className="cap-gloss">
+            <summary className="mute small">Corrected everywhere ({gloss.length})</summary>
+            {gloss.map(([h, w]) => (
+              <div key={h} className="cg-row"><span>“{h}” → <b>“{w}”</b></span>
+                <button className="icon-btn" disabled={!!canEdit} title="Take it out: the lines read as Voice heard them" onClick={() => onGlossary({}, [h])}><Icon name="close" size={12} /></button></div>
+            ))}
+          </details>
+        )}
+        <p className="mute small">Your fixes stay through every style change: a retexted line keeps its words as one line, whatever the font, size or words per line.</p>
       </div>
       {n > 0 && (
         <div className="cap-apply">

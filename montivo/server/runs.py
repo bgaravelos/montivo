@@ -10,7 +10,9 @@ import re
 from pathlib import Path
 
 from ..config import SPARK_MODEL
+from ..engine.captions import run_glossary
 from ..engine.graphics import normalize_look
+from ..engine.review import caption_heard_diff
 
 LINE = re.compile(r"^\[\s*([\d.]+)s\] ?(.*)$")
 EDL = re.compile(r"edl_v(\d+)\.json")
@@ -453,6 +455,7 @@ def _review(rv: dict, run_dir: Path) -> dict:
             "reviewer_pass": r.get("reviewer_pass", r.get("pass")), "gate": _gate(rv), "scores": r.get("scores") or {},
             "summary": r.get("summary", ""), "issues": [{"k": k, **i} for k, i in enumerate(r.get("issues") or [])],
             "fixes": rv.get("fixes") or [], "skipped": rv.get("skipped") or [], "facts_text": rv.get("facts_text", ""),
+            "heard_diff": _heard_diff(facts),
             "facts": {"silences": len(facts.get("silences") or []),
                       "over_face": len((facts.get("captions") or {}).get("over_face") or []),
                       "caption_lines": (facts.get("captions") or {}).get("lines"),
@@ -460,6 +463,19 @@ def _review(rv: dict, run_dir: Path) -> dict:
                       "loud_edges": sum(1 for e in facts.get("cut_edges") or [] if e.get("loud"))},
             "cost_usd": rv.get("cost_usd"), "seconds": rv.get("seconds"), "duration_s": rv.get("duration_s"),
             "clock": rv.get("clock"), "has_copy": bool(copy) and (run_dir / "review" / rv["name"] / Path(copy).name).is_file()}
+
+
+def _heard_diff(facts: dict) -> list[dict]:
+    """Where the caption words and the words Voice heard in the cut's own audio differ (review.caption_heard_diff on
+    the review's stored facts): the Captions panel marks those lines to check (C3)."""
+    timeline, heard = facts.get("caption_timeline"), facts.get("heard")
+    if not timeline or not isinstance(heard, list):
+        return []
+    try:
+        return [{"t": round(float(d["t"]), 3), "caption": d["caption"], "heard": d["heard"]}
+                for d in caption_heard_diff(timeline, heard)]
+    except (KeyError, TypeError, ValueError):
+        return []
 
 
 def planner_name(model: str | None) -> str:
@@ -523,8 +539,10 @@ def version_entry(run_dir: Path, n: int, name: str, edl: dict, cut: str | None, 
                                    "spans": c.get("spans") or [], "placement": c.get("placement"),
                                    "over_face": bool(c.get("over_face")), "box": c.get("box"),
                                    "head_box": c.get("head_box"),
-                                   "heard": next((w["voice"] for w in c.get("words") or [] if w.get("voice")), None)}
+                                   "heard": next((w["voice"] for w in c.get("words") or [] if w.get("voice")), None),
+                                   "words": [[w.get("w"), w.get("t_in")] for w in c.get("words") or []]}
                                   for c in edl.get("captions") or []],
+                "glossary": run_glossary(edl), "caption_breaks": list(edl.get("caption_breaks") or []),
                 "caption_style": edl.get("caption_style"), "caption_style_note": edl.get("caption_style_note"),
                 "brief_missing": list(edl.get("brief_missing") or []),
                 "punch": bool(edl.get("punch")), "punch_skip": list(edl.get("punch_skip") or []),

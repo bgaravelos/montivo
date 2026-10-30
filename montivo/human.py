@@ -303,8 +303,9 @@ def caption_fixes(edl: dict, edits: list[tuple[float, str]]) -> list[Fix]:
             raise SystemExit(f"the line at {t:.2f} s already reads {text!r}")
         sid = cap["spans"][0]
         src_t = round(_src_time(edl, cmap, sid, cap["words"][0]["t_in"]) + 0.01, 3)
+        until = round(_src_time(edl, cmap, sid, cap["words"][-1]["t_out"]), 3)  # the line's words stay one line (C6)
         fixes.append(Fix(op="caption_text", target=f"{sid}@{src_t:.2f}", issue=-1, severity="human", t_s=t,
-                         args={"span": sid, "src_t": src_t, "text": text, "was": cap["text"]}))
+                         args={"span": sid, "src_t": src_t, "text": text, "was": cap["text"], "until": until}))
     return fixes
 
 
@@ -344,7 +345,7 @@ def caption_lines(edl: dict, edits: list[tuple[float, str]]) -> list[dict]:
     span and source second of the line (caption_fixes), its words before and the cut second. The pure op takes these,
     so a draft's line keeps its place whatever is laid out after it."""
     return [{"span": f.args["span"], "src_t": f.args["src_t"], "text": f.args["text"], "was": f.args["was"],
-             "t": round(float(f.t_s), 3)} for f in caption_fixes(edl, edits)]
+             "t": round(float(f.t_s), 3), "until": f.args["until"]} for f in caption_fixes(edl, edits)]
 
 
 def caption_edit(edl: dict, words: Words, audio: Audio | None, lines: list[dict]) -> tuple[dict, Edit]:
@@ -366,13 +367,91 @@ def caption_edit(edl: dict, words: Words, audio: Audio | None, lines: list[dict]
         seen.add((sid, src_t))
         fixes.append(Fix(op="caption_text", target=f"{sid}@{src_t:.2f}", issue=-1, severity="human",
                          t_s=float(ln.get("t") or 0.0), args={"span": sid, "src_t": src_t, "text": text,
-                                                             "was": str(ln.get("was") or "")}))
+                                                             "was": str(ln.get("was") or ""),
+                                                             **({"until": round(float(ln["until"]), 3)}
+                                                                if ln.get("until") is not None else {})}))
     new, plog = apply_fixes(edl, fixes, words)
     say = "; ".join(f"caption “{f.args['text']}”" for f in fixes)
     return new, Edit("caption", plog, say,
                      head=lambda f, n: f"montivo caption: {len(fixes)} line(s) in edl_v{f} -> edl_v{n}",
                      lines=lambda f, n: [f"patch v{f} -> v{n}: caption_text at {x.t_s:.2f} s: {x.args['was']!r} -> "
                                          f"{x.args['text']!r} (human)" for x in fixes])
+
+
+def glossary_edit(edl: dict, words: Words, audio: Audio | None, add: dict[str, str] | None = None,
+                  drop: list[str] | None = None) -> tuple[dict, Edit]:
+    """Correct all (Captions panel C2): the run's glossary {"heard words": "written words"} (captions.run_glossary,
+    applied to every caption line at the layout) gains `add` and loses `drop`, so one fix reads right on every line
+    that says it, in this version and in every re-plan (edl.carry_run_words). An EDL from before per-run words starts
+    from the demo glossary it was using."""
+    from .engine.captions import run_glossary
+    gl = run_glossary(edl)
+    was = dict(gl)
+    clean = lambda x: " ".join(str(x).split()).rstrip(".,!?;:")  # noqa: E731 (the glossary keeps Voice's punctuation)
+    for heard, written in (add or {}).items():
+        h, w = clean(heard), clean(written)
+        if not (0 < len(h) <= 80 and 0 < len(w) <= 80):
+            raise SystemExit("the glossary takes the heard words and the written words, 1 to 80 characters each")
+        gl[h] = w
+    for heard in drop or []:
+        gl.pop(clean(heard), None)
+    if gl == was:
+        raise SystemExit("nothing to change: the glossary already says this")
+    new, _ = apply_fixes(edl, [], words)
+    new["glossary"] = gl
+    said = [f"“{clean(h)}” -> “{clean(w)}”" for h, w in (add or {}).items()] + [f"“{clean(h)}” off" for h in drop or []]
+    fix = {"op": "glossary", "target": "captions", "issue": -1, "severity": "human",
+           "args": {"add": {clean(h): clean(w) for h, w in (add or {}).items()}, "drop": [clean(h) for h in drop or []]},
+           "note": f"glossary: {', '.join(said)} on every line"}
+    return new, Edit("glossary", [fix], f"correct everywhere: {', '.join(said)}",
+                     head=lambda f, n: f"montivo glossary: {', '.join(said)} in edl_v{f} -> edl_v{n}")
+
+
+def caption_break_at(edl: dict, at: float, join: bool) -> dict:
+    """The line break a person asks for at cut second `at` (the first cut second of a word of a rendered caption
+    line), as the source word it anchors to: a break starts a line at that word, a join puts the line it starts back
+    on the line before."""
+    cap = _caption_at(edl, at, within=0.0)
+    if cap is None:
+        raise SystemExit(f"no caption line on screen at {at:.2f} s")
+    ws = cap.get("words") or []
+    k = min(range(len(ws)), key=lambda i: abs(float(ws[i]["t_in"]) - at)) if ws else -1
+    if k < 0:
+        raise SystemExit("that caption line has no words")
+    if join and k:
+        raise SystemExit("a line joins the one before at its first word")
+    if not join and not k:
+        raise SystemExit(f"“{ws[0]['w']}” already starts a line")
+    sid = cap["spans"][0]
+    return {"span": sid, "src_t": _src_time(edl, cut_map(edl), sid, float(ws[k]["t_in"])), "join": join,
+            "word": ws[k]["w"]}
+
+
+def caption_break_edit(edl: dict, words: Words, audio: Audio | None, span: str, src_t: float, join: bool = False,
+                       word: str = "") -> tuple[dict, Edit]:
+    """A hand line break in the captions (Captions panel C4): a new line starts at the word at source second src_t of
+    `span`, or (join) that line goes back on the one before; the EDL's `caption_breaks` (captions.apply_breaks). The
+    opposite of an entry already there takes it out (a break joined again is no entry at all)."""
+    if span not in {s["id"] for s in edl["spans"]}:
+        raise SystemExit(f"{span} is not a span of {_of(edl)}")
+    src_t = round(float(src_t), 3)
+    brs = [dict(b) for b in edl.get("caption_breaks") or []]
+    same = next((b for b in brs if b["span"] == span and abs(b["src_t"] - src_t) < 0.02), None)
+    if same is not None and bool(same.get("join")) == join:
+        raise SystemExit(f"the line {'already joins' if join else 'already breaks'} there")
+    if same is not None:
+        brs.remove(same)
+    else:
+        brs.append({"span": span, "src_t": src_t, **({"join": True} if join else {})})
+    new, _ = apply_fixes(edl, [], words)
+    if brs:
+        new["caption_breaks"] = sorted(brs, key=lambda b: (b["span"], b["src_t"]))
+    else:
+        new.pop("caption_breaks", None)
+    what = f"join the caption line at “{word}”" if join else f"new caption line at “{word}”"
+    fix = {"op": "caption_join" if join else "caption_break", "target": f"{span}@{src_t:.2f}", "issue": -1,
+           "severity": "human", "args": {"span": span, "src_t": src_t}, "note": what}
+    return new, Edit("caption", [fix], what, head=lambda f, n: f"montivo caption: {what} in edl_v{f} -> edl_v{n}")
 
 
 def caption(run_dir: Path, edits: list[tuple[float, str]], from_v: int | None = None, passes: int = 0,
@@ -1574,7 +1653,7 @@ OPS: dict[str, Callable[..., tuple[dict, Edit]]] = {
     "insert": insert_edit, "pauses": pauses_edit,
     # the panels' edits (A3): one draft holds them next to the structural ones, one render at "Make Version N"
     "caption": caption_edit, "text": text_edit, "style": style_edit, "music": music_edit, "pin": pin_edit,
-    "punch": punch_edit}
+    "punch": punch_edit, "glossary": glossary_edit, "caption_break": caption_break_edit}
 
 
 def apply_op(edl: dict, words: Words, audio: Audio | None, op: str, args: dict) -> tuple[dict, Edit]:
@@ -1667,6 +1746,14 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--at", type=float, action="append", required=True,
                    help="a cut second inside the line to retext (repeat with --text for more lines)")
     c.add_argument("--text", action="append", required=True, help="the words actually spoken on that line")
+    gs = sub.add_parser("glossary", help="correct a misheard phrase on every caption line -> edl_vN -> cut_vN ($0)")
+    gs.add_argument("run_dir", type=Path)
+    gs.add_argument("--add", action="append", default=[], metavar="HEARD=WRITTEN", help="what Voice heard = what was said")
+    gs.add_argument("--drop", action="append", default=[], metavar="HEARD", help="a glossary entry to take out")
+    lb = sub.add_parser("linebreak", help="start a caption line at a word, or join it to the line before -> edl_vN -> cut_vN ($0)")
+    lb.add_argument("run_dir", type=Path)
+    lb.add_argument("--at", type=float, required=True, help="the cut second of the word (a rendered caption line's word)")
+    lb.add_argument("--join", action="store_true", help="join the line that starts there to the line before")
     tx = sub.add_parser("text", help="callout and title card text -> edl_vN -> cut_vN ($0, $0.01 for new title words)")
     tx.add_argument("run_dir", type=Path)
     tx.add_argument("--callout", action="append", default=[], metavar="SPAN=TEXT", help="a span's callout (empty removes it)")
@@ -1735,7 +1822,7 @@ def main(argv: list[str] | None = None) -> int:
     dr.add_argument("run_dir", type=Path)
     dr.add_argument("--ops", required=True, help='the edits as JSON: [{"op": "split", "args": {"span": "s3", "word": 12}}, ...]')
     dr.add_argument("--id", dest="draft_id", default=None, help="the draft's id, kept in the patch")
-    for p in (d, t, r, pu, c, tx, ro, pn, cu, sp, ed, sy, mu, rs, ins, pa, ov, dr):
+    for p in (d, t, r, pu, c, gs, lb, tx, ro, pn, cu, sp, ed, sy, mu, rs, ins, pa, ov, dr):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
         p.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
@@ -1752,6 +1839,15 @@ def main(argv: list[str] | None = None) -> int:
         if len(a.at) != len(a.text):
             ap.error("give one --text for every --at")
         out = caption(a.run_dir, list(zip(a.at, a.text)), a.from_v, a.review, a.budget)
+    elif a.cmd == "glossary":
+        pairs = [x.split("=", 1) for x in a.add]
+        if any(len(x) != 2 for x in pairs) or not (pairs or a.drop):
+            ap.error("--add HEARD=WRITTEN or --drop HEARD")
+        out = _run_edit(a.run_dir, a.from_v, a.review, a.budget, glossary_edit, add=dict(pairs), drop=a.drop)
+    elif a.cmd == "linebreak":
+        from_v = from_version(a.run_dir, a.from_v)
+        brk = caption_break_at(json.loads((a.run_dir / f"edl_v{from_v}.json").read_text()), a.at, a.join)
+        out = _run_edit(a.run_dir, from_v, a.review, a.budget, caption_break_edit, **brk)
     elif a.cmd == "text":
         pairs = [x.split("=", 1) for x in a.callout]
         if any(len(x) != 2 for x in pairs):
