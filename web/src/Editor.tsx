@@ -6,6 +6,7 @@ import { ExportPage } from "./Export";
 import { childOf, clipsAsk, cutAsk, flatWords, layout, parentOf, projectName, splitAt, type CutAsk, type WordSel } from "./edit";
 import { Icon, MarkLoader } from "./icons";
 import { Inspector, type PunchAsk } from "./Inspector";
+import { Palette, type Command } from "./Palette";
 import { mixOf, sameMix, useLiveMix, type Mix } from "./Mix";
 import { MusicPanel } from "./Music";
 import { askToNotify, ProgressInline, useJobSignals } from "./Progress";
@@ -21,7 +22,7 @@ import type { LogLine, RunState } from "./types";
 
 type Props = { id: string; replay: number; go: (hash: string) => void };
 type PanelId = "assistant" | "media" | "captions" | "style" | "text" | "music" | "speakers" | "versions";
-type Dialog = { kind: "delete"; span: string } | { kind: "title" } | { kind: "words"; ask: CutAsk } | { kind: "trim"; ask: TrimAsk } | { kind: "move"; ask: MoveAsk } | { kind: "export" } | { kind: "ledger" } | { kind: "keys" };
+type Dialog = { kind: "delete"; span: string } | { kind: "title" } | { kind: "words"; ask: CutAsk } | { kind: "trim"; ask: TrimAsk } | { kind: "move"; ask: MoveAsk } | { kind: "export" } | { kind: "ledger" } | { kind: "keys" } | { kind: "palette" };
 
 const PANELS: { id: PanelId; label: string; icon: string }[] = [
   { id: "assistant", label: "Assistant", icon: "assistant" },
@@ -414,6 +415,7 @@ export function Editor({ id, replay, go }: Props) {
     if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); setZoom((z) => Math.min(ZOOM_MAX, (z ?? ppsRef.current) * 1.4)); return; }
     if (mod && e.key === "-") { e.preventDefault(); setZoom((z) => Math.max(ZOOM_MIN, (z ?? ppsRef.current) / 1.4)); return; }
     if (mod && (e.key === "k" || e.key === "K")) { e.preventDefault(); doSplit(); return; }
+    if (mod && (e.key === "p" || e.key === "P")) { e.preventDefault(); setDialog({ kind: "palette" }); return; } // ⌘K is split
     if (mod && (e.key === "a" || e.key === "A") && tlMode === "timeline" && v) {
       e.preventDefault();
       const all = blocks.filter((b) => b.kind === "span").map((b) => b.key);
@@ -491,6 +493,9 @@ export function Editor({ id, replay, go }: Props) {
         break;
       }
       case "?": setDialog({ kind: "keys" }); break;
+      case "/": e.preventDefault(); setDialog({ kind: "palette" }); break;
+      case "1": case "2": case "3": case "4": case "5": case "6": case "7": case "8": // A5: the rail's panels in order
+        setPanel(PANELS[Number(e.key) - 1].id); break;
     }
   };
   useEffect(() => {
@@ -579,8 +584,8 @@ export function Editor({ id, replay, go }: Props) {
       <div className="mobile-note">Review mode: watch the cut, read the review, ask Montivo, export. The timeline and the editing panels open on a desktop.</div>
 
       <nav className="rail">
-        {PANELS.map((x) => (
-          <button key={x.id} className={`rail-btn ${panel === x.id ? "on" : ""}`} onClick={() => setPanel(x.id)} title={x.label}>
+        {PANELS.map((x, i) => (
+          <button key={x.id} className={`rail-btn ${panel === x.id ? "on" : ""}`} onClick={() => setPanel(x.id)} title={`${x.label} (${i + 1})`}>
             <Icon name={x.icon} size={19} />
             <span>{x.label}</span>
             {x.id === "assistant" && busy && <span className="rail-dot" />}
@@ -739,6 +744,26 @@ export function Editor({ id, replay, go }: Props) {
         hasKey={state.has_key} keyNote={state.key_note ?? null} costs={state.costs} />}
       {dialog?.kind === "ledger" && <LedgerDialog state={state} onClose={() => setDialog(null)} />}
       {dialog?.kind === "keys" && <ShortcutsDialog onClose={() => setDialog(null)} />}
+      {dialog?.kind === "palette" && <Palette onClose={() => setDialog(null)} commands={[
+        ...PANELS.map((x, i): Command => ({ id: `panel:${x.id}`, label: `${x.label} panel`, group: "Panels", key: String(i + 1), icon: x.icon, run: () => setPanel(x.id) })),
+        { id: "play", label: playing ? "Pause" : "Play", group: "Viewer", key: "Space", icon: playing ? "pause" : "play", run: () => player.current?.toggle() },
+        { id: "split", label: "Split the clip at the playhead", group: "Edit", key: "S", icon: "scissors", off: canEdit, run: doSplit },
+        { id: "undo", label: draftSum?.can_undo ? "Undo the last draft edit" : "Undo: the previous version", group: "Edit", key: "⌘Z", icon: "undo", run: () => step(-1) },
+        { id: "redo", label: draftSum?.can_redo ? "Redo the draft edit" : "Redo: the next version", group: "Edit", key: "⇧⌘Z", icon: "redo", run: () => step(1) },
+        ...(draftV ? [{ id: "commit", label: `Make Version ${draftData?.draft?.n ?? ""} from the draft`, group: "Draft", icon: "check", off: canEdit, run: commitDraft },
+          { id: "discard", label: "Discard the draft", group: "Draft", icon: "close", run: discardDraft }] : []),
+        { id: "live", label: liveOn ? "Viewer: Rendered (the exported file)" : "Viewer: Live (edits play at once)", group: "Viewer", key: "V", off: replay ? "Replay is on" : null, run: () => setLive(!liveOn) },
+        { id: "guide", label: `Safe-area guides: ${GUIDE_NAME[GUIDES[(GUIDES.indexOf(guide) + 1) % GUIDES.length]]}`, group: "Viewer", key: "G", run: nextGuide },
+        { id: "snap", label: `Snapping ${snap ? "off" : "on"}`, group: "Timeline", key: "N", icon: "magnet", run: () => setSnap(!snap) },
+        { id: "transcript", label: tlMode === "timeline" ? "Show the transcript" : "Show the timeline", group: "Timeline", icon: tlMode === "timeline" ? "transcript" : "film", run: () => setTlMode(tlMode === "timeline" ? "transcript" : "timeline") },
+        { id: "review", label: "Review this version (Muse Spark, blind)", group: "Agent", icon: "spark", off: canEdit ?? (!v?.cut ? "Make the version first" : null), run: () => { if (v) made(edit("review", { from: v.n, passes: 1 })); } },
+        { id: "ask", label: "Ask Montivo", group: "Agent", icon: "assistant", run: () => { setPanel("assistant"); setAskNonce((n) => n + 1); } },
+        { id: "loop", label: "Watch the agent loop", group: "Agent", icon: "loop", run: () => go(`${base}/loop${replay ? `?replay=${replay}` : ""}`) },
+        { id: "export", label: "Export", group: "Project", icon: "export", off: !v?.cut ? "No rendered version" : null, run: () => setDialog({ kind: "export" }) },
+        { id: "cost", label: "Cost and time", group: "Project", run: () => setDialog({ kind: "ledger" }) },
+        { id: "keys", label: "Keyboard shortcuts", group: "Help", key: "?", run: () => setDialog({ kind: "keys" }) },
+        { id: "home", label: "All projects", group: "Project", icon: "back", run: () => go("#/") },
+      ]} />}
       {toast && (
         <div className={`toast ${toast.tone ?? ""}`} onClick={() => setToast(null)}>
           {toast.text}

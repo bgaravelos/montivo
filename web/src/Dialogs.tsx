@@ -148,7 +148,9 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
     ["⇧ click · ⌘ click", "Select a run of clips · add or remove one"], ["⌘A", "Select every clip"],
     ["⌫ / Delete", "Delete the selected clips, or the selected transcript words"],
     ["N", "Snapping on / off (hold ⇧ while dragging: free)"],
-    ["⌘Z · ⇧⌘Z", "Previous version · next version"], ["⌘+ · ⌘−", "Zoom the timeline"], ["Esc", "Clear the selection"],
+    ["1 – 8", "Open a panel: Assistant, Media, Captions, Style, Text, Music, Speakers, Versions"], ["⌘P · /", "Command palette"],
+    ["Enter", "Retext the caption or callout picked on the timeline"],
+    ["⌘Z · ⇧⌘Z", "Previous version · next version (in Live: the draft's last edit)"], ["⌘+ · ⌘−", "Zoom the timeline"], ["Esc", "Clear the selection"],
     [". · ,", "Next · previous reviewer issue"], ["V", "Viewer: Live (edits play at once) or Rendered (the exported file)"], ["G", "Safe-area guides: Reels, TikTok, Shorts, off"], ["⇧M", "Mute the viewer"], ["F", "Full screen"],
   ];
   return (

@@ -673,6 +673,16 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .modal-bg { position: fixed; inset: 0; background: #000a; display: grid; place-items: center; z-index: 40; animation: rise 0.12s ease-out; }
 .modal { width: 440px; max-width: calc(100vw - 32px); background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: 0 30px 80px -20px #000; }
 .modal.wide { width: 640px; }
+.palette-bg { place-items: start center; padding-top: 12vh; }
+.modal.palette { width: 560px; overflow: hidden; }
+.palette-q { width: 100%; padding: 14px 18px; background: transparent; border: 0; border-bottom: 1px solid var(--line); color: var(--text); font: inherit; font-size: 15px; outline: none; }
+.palette-list { max-height: 50vh; overflow-y: auto; padding: 6px; display: flex; flex-direction: column; }
+.palette-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 6px; text-align: left; color: var(--text); }
+.palette-row.on { background: var(--panel-3); }
+.palette-row:disabled { opacity: 0.45; }
+.palette-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.palette-group { color: var(--mute); font-size: 12px; }
+.palette-dot { width: 14px; }
 .modal:focus { outline: none; } /* focused on open (useModal) so Tab starts inside it; its controls keep their own ring */
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 12px 4px 18px; }
 .mh-title { font-weight: 650; font-size: 15px; }
