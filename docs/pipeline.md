@@ -4,23 +4,33 @@ The reference behind the [README](../README.md): every stage of a run, the CLI a
 
 ## Pipeline
 
-Works end to end from raw footage to a finished 9:16 cut with captions, callouts, a title card and loudnorm, then
+Works end to end from raw footage to a finished 9:16 cut with captions, callouts, a title and loudnorm, then
 reviews its own cut blind and re-cuts:
 
 ```
 montivo run footage.mp4 --brief "..." --out runs/001
-  ingest   ffprobe, 960 px proxy at source fps, 24 kHz mono wav, one Files API upload reused by every Spark call
+  ingest   ffprobe, 24 kHz mono wav first (Voice starts on it), 960 px proxy at source fps, one Files API upload reused
+           by every Spark call
   voice    streaming DIARIZATION -> turns[] + words[] (lag-corrected, snapped to speechStart/speechEnd)   \
   track    SAM 3.1 "person" and "head" at 5 fps (one upload) over httpx SSE, regex boxes -> track/<concept>/tracks.json | in parallel
-  watch    Spark 1.3 + proxy + transcript -> shot log, speaker map, concept suggestions, b-roll, movement moments /
+  watch    Spark 1.3 (effort low) + proxy + transcript -> shot log, speaker map, concepts, b-roll, movement moments /
   speakers (2+ voices, 2+ heads) mouth-minus-eyes motion of every SAM head vs the Voice word times of every speaker
            -> speakers.json (head ids per speaker; watch's "left/right/centre" as the fallback), $0, ffmpeg + Pillow
-  plan     Spark 1.3 + brief + shot log + movement moments + measured speech rate + transcript -> paper edit (turn id + verbatim words)
+  plan     Spark 1.3 (effort low, starts as soon as watch is in, beside SAM) + brief + shot log + movement moments +
+           measured speech rate + transcript -> paper edit (turn id + verbatim words) and the brief as a checklist
+           (`brief_checks`: opening, ending, keep, drop, length, other, with the transcript words each names)
   edl      spans mapped to Voice word boundaries, then every cut edge tightened to the speech in the source audio
-           (0.1 s before the onset, 0.15 s after the offset, 0.3 s at the very end) -> edl_v1.json
+           (0.1 s before the onset, 0.15 s after the offset, 0.3 s at the very end)
+  check    the paper edit against its checklist, the target, repeated takes and unplaced words (`edl.plan_check`, $0);
+           on a failure one more plan call with exactly what failed, kept when it fails fewer checks (`plan_check`)
+  preflight the gate's checks that need no cut (cut edges in speech, captions forced over the head, the head out of the
+           crop) on the EDL as the render lays it out, fixed with the gate's own fixes, up to 3 rounds, $0
+           (`review.preflight`, EDL `preflight`) -> edl_v1.json
   reframe  per segment: the head track (person as fallback), the talking speaker's head when speakers.json maps one, else the
            largest and most centred id -> smoothed 9:16 crop path (dead zone, EMA, pan clamp)
-  title    Muse Image 1.0: the plan's title_card_text -> title/title_card.png (generated once, $0.01)
+  title    new EDLs (`title_style` "header"): the plan's title_card_text as a pill over the first 2.2 s of speech, above
+           the head, no card in front of the first word ($0); `--title-style card` (human text) or an EDL from before
+           30/10: Muse Image 1.0 -> title/title_card.png (generated once, $0.01), 1.5 s in front of the cut
   captions Voice words of the kept spans -> de-doubled, glossary-corrected, 1 to 4 word lines up at least 0.4 s each, placed
            clear of the SAM head box;
            the plan's per-span callouts anchored to the SAM person box -> transparent PNGs (Pillow)
@@ -30,7 +40,8 @@ montivo run footage.mp4 --brief "..." --out runs/001
            (measure, then one fixed gain to -14 LUFS, a 4x oversampled limiter when the peaks need it) -> cut_v1.mp4,
            measured again with ebur128; with EDL `music` a bundled loop under the normalised speech, ducked along the
            Voice words in cut time, the mix normalised again (-14 LUFS, true peak of the AAC file under -1 dBTP)
-  review   (--review) Spark 1.3 watches cut_vN blind -> rubric scores + fix ops -> EDL patch -> edl_vN+1 -> render cut_vN+1, repeat
+  review   (--review) Spark 1.3 watches cut_vN blind -> rubric scores + fix ops -> EDL patch -> preflight -> edl_vN+1 ->
+           render cut_vN+1, repeat; review prep runs Voice on the cut and the review copy + upload side by side
 montivo render runs/001 --out cut_v3.mp4   re-render from edl_v1.json + voice.json + tracks, ffmpeg only (the title card is
                                            generated once if missing, --no-title to skip it)
 montivo review runs/001                    the review loop on a finished run folder: review cut_v1, patch, render cut_v2, review ...

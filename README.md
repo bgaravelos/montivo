@@ -101,6 +101,11 @@ pages, not a test.) In detail:
   pass (two exceptions, both on record: brief coverage, since the planner reports a brief line the footage never
   contains, and a caption a person retexted against the recording), and each measured fault becomes a fix of its own. The loop keeps a version that passes over a higher score
   that does not.
+- **A first cut that has already checked itself.** Before anything is rendered, the paper edit is checked against the
+  brief written as a checklist (the line to open on, the line to end on, what to keep, what to drop, the length; the
+  planner gets one more try with exactly what failed), and the measured checks that need no render (a cut inside
+  speech, a caption forced over the head, the head out of frame) are fixed at $0. The title sits over the opening
+  speech instead of in front of it. The paid review then judges the edit, not the mechanics.
 - **Fix operations, not prose.** Every issue comes back with a time in the cut and one of nine fix ops (`move_cut`,
   `drop_span`, `extend_span`, `swap_hook`, `reorder`, `caption_fix`, `retime_callout`, `reframe_bias`, `none`). The
   patcher maps the time to a span, a cut, a caption line or a callout and writes the next `edl_vN.json` with a
@@ -127,7 +132,8 @@ flowchart LR
   V --> W["Spark 1.3 watch: shot log, speaker map"]
   W --> P["Spark 1.3 plan: paper edit, verbatim words"]
   P --> E["EDL on word boundaries, edges tightened to speech"]
-  E --> R["ffmpeg render: 9:16 crop, captions, Muse Image title card, loudness"]
+  E --> C["checks: brief checklist, preflight ($0)"]
+  C --> R["ffmpeg render: 9:16 crop, captions, title, loudness"]
   S --> R
   R --> Q{"Spark 1.3 blind review"}
   Q -- "issues + fix ops" --> X["patch: edl_vN+1"]
@@ -145,6 +151,7 @@ flowchart LR
 | A public-domain USGS interview, 166 s, a noisy atrium, a second speaker, passers-by (run 013) | 62 to 68 to 72, no pass; it exposed three bugs the first clip never hit, all fixed (captions avoided every passer-by's head, a flagged title card stayed, a fast speaker's clipped words) | $0.78 |
 | Reviewer benchmark (27/10 night, the reviewer as of that night, with the measured checks and the pass gate): four fault types (a weak hook, a cut inside a word, a wrong caption, the head out of frame) planted in three finished cuts, 28 blind reviews | 91 % of the planted faults caught as blocker or major; 2 of 22 faulty cuts still passed (9 %); 3 of 4 reviews of clean cuts passed (75 %); the same cut reviewed twice differs by 4.3 points (SD) | $0.80 |
 | Three unseen clips re-run with that day's code (28/10): NASA, 4 astronauts, one mic; the USGS interview; the TEDx talk below | no pass on any: NASA 58 to 66 (the astronauts talk over each other at turn changes), USGS 68, TEDx 62 to 70; the bugs they exposed are fixed | part of $1.67 for the day |
+| A faster first cut (30/10): the title over the opening speech, plan and watch at effort low, the brief checklist and the $0 preflight; the same seven clips re-planned from their stored transcripts | first review mean 65.9 to 78.7; passed at the first review 0 of 7 to 2 of 7 (the demo clip: 100); a fresh run of the demo clip passed its first review in 107 s instead of 200 s | $0.56 for the seven, $0.22 for the fresh run |
 | A TEDx clip uploaded through the hosted demo, 84 s, multi-camera, the speaker small in the wide shots | upload, run and loop in the container in 209 s: 72 to 76, no pass ($0.32); after a caption fix, a re-review (74) let the loop try the reviewer's swap_hook: that version scored 48 and the regression guard kept v2 ($0.07) | $0.39 |
 
 The first two rows were scored by the reviewer of 26/10, before the measured checks and the pass gate (27/10), and are
@@ -324,6 +331,7 @@ and the run folder layout are in [docs/pipeline.md](docs/pipeline.md).
 | 27/10 | the edge pass (loops 76 to 100 and 65 to 85); two-pass loudness and a minimum caption duration; a second source (run 013) and its three fixes; SAM at 5 fps for every concept; the API and the review room, then the NLE editor with trim by drag; the bundled caption font and CI; speaker to head mapping; the Open Weight planner; punch-ins, then their switch, markers and removal in the editor; the hook A/B; the brand (logo, tokens in the editor and the render, social preview, title and end cards, logo sting) |
 | 28/10 | the hosted demo on Modal and its first upload; the Codex review fixes; caption looks and the canvas drag; the Export page with its pre-flight; style by prompt; saved looks; the Spark cover; Feed 4:5 and Square 1:1 exports; a music bed with ducking (eight CC0 tracks from OpenGameArt) and live voice and music faders; the Ask Montivo agent over the edit operations, with a preview and its cost for a structural change and a queue for messages typed during a job; restore and share links; split, snapping and multi-select on the timeline; a segment cache (a caption edit re-renders in about 2.5 s instead of 10); adding back a passage, removing pauses and Muse Image B-roll stills; the cover maker (Spark designs it, SAM 3.1 cuts the speaker out of the still) and post text per platform; picture and sound (an eased reframe, a crossfade at every cut, phrase-aware caption lines, camera cuts, VFR and HDR sources) |
 | 28/10 night | debugging: a combination matrix of chained edits (`tools/combo_check.py`, 44 versions with every invariant checked, 0 failures), real runs again on the NASA, USGS and TEDx clips, a code review and a bug bash as a judge on the hosted setup, 27 fixes each with a test first; then the feature freeze (tag `freeze-2026-10-31`) |
+| 30/10 | a faster and smarter first cut: the title over the opening speech, plan and watch at effort low, Voice and the plan started earlier, the review prep in parallel, the brief as a checklist with a plan check, a $0 preflight of the measured checks before every render |
 | 29/10 to 4/11 | the samples for the hosted demo, the demo video, the submission; after the freeze, only fixes for what breaks the demo |
 
 ## Before the kickoff

@@ -875,6 +875,22 @@ Merged into main (fast-forward to 2726ee3), pushed and deployed 30/10 22:02 on B
 last job on the Volume (ui-1030-1950's draft commit, v4) ended 21:56, the 21:49 web container stopped after the deploy;
 live /api/health 200, /api/runs 401, /s/nope 404; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 9.7 s. The
 new chat not yet asked live with the sign-in.
+Faster, smarter first cut (30/10, $1.01 incl. probes and benchmark, commits 91185a6..63c2579, research and results in
+`docs/notes/review-and-first-cut-research_2026-10-30.md`, Billy: all of it despite the freeze): every first cut on the
+Mac (9 of 9) failed its first review on the 1.5 s silent title card. Now: Voice starts on the wav during the upload
+(`ingest(on_wav=)`), review prep runs Voice on the cut and copy + upload in parallel (016 v3 19.2 -> 10.7 s, facts
+identical), plan and watch at reasoning effort low (`spark.PLAN_EFFORT`, `WATCH_EFFORT`; plan 26-40 -> 11-13 s, same
+kept words on 015 / 016; watch named all four NASA speakers right), the plan starts beside SAM; new EDLs have
+`title_style` "header" (`edl.title_style`, `title_card_on`, `title_header_on`; `captions.place_header`, the title as a
+pill over the first 2.2 s of speech, no Muse Image call in v1; EDLs without the field keep the card, 016 v3 framemd5
+identical; Text panel "Over the opening / Card before", `human text --title-style`, POST /text `title_style`);
+`review.preflight` (the gate's $0 checks on the EDL as the render lays it out, fixed before v1's render and before each
+loop patch's render; the loop stops when only measured fixes ran and could not clear them); plan schema `brief_checks`
+(`edl.check_brief`, a reviewer fact) and `edl.plan_check` + one repair plan call (`plan_check` in the EDL). Fresh run of
+the 016 clip (`runs/a1run-016`): first review 88 pass at 106.6 s, $0.22 (was 200 s, $0.31). Benchmark on seven clones
+(`runs/fc-*`): first review mean 65.9 -> 78.7, first-review passes 0 -> 2 (015, 016), title hook issues 7 -> 0; 013,
+nasa, tedx, heli still no pass. Not pushed or deployed. C2 pairwise judge, C3 glossary asks, C4 escalate, A3
+close-up captions: side session `review-loop-c2-a3` on its own branch.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

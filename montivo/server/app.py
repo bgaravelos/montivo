@@ -70,11 +70,14 @@ PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 # render 20.3 s for 1161 frames)
 # A new run's cost and wall time from the footage length (5 fps SAM, before any review): run 014, 120 s, $0.36 in
 # 169 s; run 015, 69 s, $0.23 in about 130 s, so about $0.045 + $0.0026 per footage second and 60 s + 0.9 s per second;
-# the review loop adds about two reviews and a render (run 015: $0.07, 85 s)
+# the review loop adds about two reviews and a render (run 015: $0.07, 85 s).
+# 30/10 (plan and watch at effort low, Voice on the wav, the plan beside SAM, the title over the speech): the 016 clip,
+# 69 s, cut_v1 at 66 s wall, its first review passed at 107 s, $0.22; plans 11-13 s / $0.012-0.016 (the plan price
+# stays $0.05 here: the hosted budget admits a paid action on it, an upper bound)
 # the chat's job label of an edit made through POST /op (the panels' newer edits)
 OP_LABEL = {"kit": "Brand kit", "speakers": "Speakers", "style": "Style", "text": "Edit text", "music": "Music", "pin": "Pin a speaker"}
-COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_fixed": 0.045,
-        "run_per_s": 0.0026, "run_wall_fixed_s": 60, "run_wall_per_s": 0.9, "review_loop": 0.07, "review_loop_s": 85,
+COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 13, "plan_open_s": 7, "review": 0.035, "run_fixed": 0.045,
+        "run_per_s": 0.0026, "run_wall_fixed_s": 30, "run_wall_per_s": 0.5, "review_loop": 0.05, "review_loop_s": 60,
         "hook_ab": 0.04, "ask": 0.006, "look": 0.008, "titles": 0.009, "cover": 0.025, "cover_design": 0.05, "cover_mask": 0.01,
         "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175}
 

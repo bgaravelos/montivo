@@ -183,6 +183,20 @@ folders, which stay out of the repository.
   comes to about $0.48 with the review loop. Clips under 60 s, which SAM used to see at the source rate (30 fps, $0.36
   per concept per minute), are resampled too.
 
+- **A faster and smarter first cut (30/10).** Every first cut on the Mac (9 of 9) failed its first review on the 1.5 s
+  title card that played in silence before the first word, so every pass cost a second review (016: 72 -> 88 for
+  ~95 s and $0.07, the only fix the card dropped). Changed: the title over the opening speech (`title_style` header),
+  plan and watch at reasoning effort low (plan 26-40 s / $0.03-0.05 -> 11-13 s / $0.012-0.016 on 012, 015, 016 with
+  the same kept words on 015 and 016; watch 32.5 -> 10.8 s on 016, 50.3 -> 18.7 s on 014), Voice started on the wav
+  during the upload and the plan beside SAM, the review prep in parallel (016 v3: 19.2 -> 10.7 s, facts identical),
+  the brief as a checklist with a plan check and one repair call, and a $0 preflight of the measured checks before
+  every render. A fresh run of the 016 clip passed its first review at 88 in 106.6 s wall and $0.22 (before: pass at
+  200 s, $0.31). First-cut benchmark on seven runs re-planned from their stored Voice, watch and tracks ($0.56):
+  first review mean 65.9 -> 78.7, passed at the first review 0 -> 2 (015 88, 016 100), title-card hook issues 7 -> 0;
+  012 82 -> 100 at the second; 013, d1-nasa, d1-tedx and heli-01 still do not pass (close-up captions over the head,
+  overlapping speakers, an opening line the reviewer finds weak, a cut edge the preflight cannot clear). Notes:
+  `docs/notes/review-and-first-cut-research_2026-10-30.md`.
+
 ## Design rules fixed on 26/10
 
 - **Blind reviewer.** The review pass gets only the rendered mp4, the brief and the rubric, never the EDL. It also gets
