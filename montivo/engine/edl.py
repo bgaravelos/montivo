@@ -151,6 +151,9 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
         # what the brief asks for and the footage does not have, as the planner found it: said once in the chat and
         # handed to the reviewer as a fact about the source, so it does not come back as a brief_covered major
         "brief_missing": brief_missing(plan.get("brief_not_in_footage") or [], spans),
+        # the brief as a checklist (C1): measured against the kept words at every review (check_brief)
+        "brief_checks": [{k: c.get(k) for k in ("item", "kind", "quote", "min_s", "max_s")}
+                         for c in plan.get("brief_checks") or []],
         "speaker_map": watch.get("speaker_map", []),
         "tracks": tracks,
         "reframe_concept": reframe_concept,  # the SAM concept the 9:16 crop follows (falls back to person)
@@ -164,6 +167,110 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
     if audio is not None and edl["spans"]:
         tighten_edges(edl, Words([asdict(w) for w in voice.words]), audio)
     return edl
+
+
+# --------------------------------------------------------------------------- the brief as a checklist (C1, A4)
+
+QUOTE_MATCH = 0.8  # a quote counts as kept when a run of the kept words matches it this well (difflib ratio)
+DROP_MATCH = 0.6  # a drop item counts as left in when a run of the kept words matches it this well
+LENGTH_SLACK_S = 0.5
+REPEAT_N = 4  # the same REPEAT_N words kept twice is a repeated take
+
+
+def _best_window(quote: list[str], kept: list[str]) -> float:
+    """How well the best run of `kept` (the quote's length, a word either side) matches `quote` (difflib ratio)."""
+    import difflib
+    if not quote or not kept:
+        return 0.0
+    n = len(quote)
+    best = 0.0
+    for size in (n - 1, n, n + 1):
+        if size <= 0:
+            continue
+        for i in range(0, max(1, len(kept) - size + 1)):
+            r = difflib.SequenceMatcher(None, quote, kept[i:i + size], autojunk=False).ratio()
+            if r > best:
+                best = r
+    return best
+
+
+def check_brief(edl: dict, duration_s: float | None = None) -> list[dict]:
+    """The planner's brief_checks measured on this EDL's kept words: each item with status met / missed / open
+    ("other" and items without a quote are the reviewer's), and what was found. Opening and ending compare the
+    quote with the first / last words of the cut, keep and drop look for it anywhere in the kept words (fuzzy:
+    Voice's doubled words and small mishearings still match), length uses `duration_s` (the cut, title card
+    included) or the runtime."""
+    spans = edl.get("spans") or []
+    kept = [t for s in spans for t in norm_tokens(s.get("words") or "")]
+    runtime = float(duration_s if duration_s is not None else edl.get("runtime_s") or 0.0)
+    out = []
+    for c in edl.get("brief_checks") or []:
+        kind, quote = c.get("kind"), norm_tokens(c.get("quote") or "")
+        status, found = "open", ""
+        if kind == "length" and (c.get("min_s", -1) >= 0 or c.get("max_s", -1) >= 0):
+            lo, hi = c.get("min_s", -1), c.get("max_s", -1)
+            ok = (lo < 0 or runtime >= lo - LENGTH_SLACK_S) and (hi < 0 or runtime <= hi + LENGTH_SLACK_S)
+            status, found = ("met" if ok else "missed"), f"{runtime:.1f} s"
+        elif kind in ("opening", "ending") and quote and kept:
+            part = kept[:len(quote) + 1] if kind == "opening" else kept[-(len(quote) + 1):]
+            r = _best_window(quote, part)
+            status = "met" if r >= QUOTE_MATCH else "missed"
+            found = " ".join(kept[:len(quote)] if kind == "opening" else kept[-len(quote):])
+        elif kind == "keep" and quote:
+            r = _best_window(quote, kept)
+            status, found = ("met" if r >= QUOTE_MATCH else "missed"), f"best match {r:.0%}"
+        elif kind == "drop" and quote:
+            r = _best_window(quote, kept)
+            status, found = ("met" if r < DROP_MATCH else "missed"), f"best match {r:.0%}"
+        out.append({**c, "status": status, "found": found})
+    return out
+
+
+def repeated_takes(edl: dict, n: int = REPEAT_N) -> list[str]:
+    """The same `n` words kept twice anywhere in the cut (a retake the plan kept both of: d1-tedx "we had enough /
+    we've had enough"). One-word doubles ("agent agent") are Voice's and the captions drop them."""
+    seen: dict[tuple, str] = {}
+    out = []
+    for s in edl.get("spans") or []:
+        toks = norm_tokens(s.get("words") or "")
+        for i in range(len(toks) - n + 1):
+            g = tuple(toks[i:i + n])
+            if len(set(g)) < 2:
+                continue
+            if g in seen and seen[g] != f"{s['id']}@{i}":
+                out.append(f"\"{' '.join(g)}\" is kept twice ({seen[g].split('@')[0]} and {s['id']})")
+                break
+            seen.setdefault(g, f"{s['id']}@{i}")
+    return list(dict.fromkeys(out))
+
+
+def plan_check(edl: dict, target_s: float) -> list[str]:
+    """A4: what is wrong with a paper edit before anything is rendered: brief items it misses (check_brief), a
+    runtime outside the target band when the brief gives no length, a repeated take, planned words not found in
+    the transcript. Empty = the plan is kept as it is."""
+    out = []
+    checks = check_brief(edl)
+    for c in checks:
+        if c["status"] != "missed":
+            continue
+        if c["kind"] == "length":
+            out.append(f"length: the cut runs {c['found']}, the brief allows {c['min_s']:g} to {c['max_s']:g} s "
+                       f"({c['item']})")
+        elif c["kind"] in ("opening", "ending"):
+            out.append(f"{c['kind']}: the cut {'opens' if c['kind'] == 'opening' else 'ends'} on \"{c['found']}\", the "
+                       f"brief wants \"{c['quote']}\" ({c['item']})")
+        elif c["kind"] == "keep":
+            out.append(f"keep: \"{c['quote']}\" is not in the paper edit ({c['item']})")
+        else:
+            out.append(f"drop: \"{c['quote']}\" is still in the paper edit ({c['item']})")
+    if not any(c["kind"] == "length" and c["status"] != "open" for c in checks) and target_s:
+        rt = float(edl.get("runtime_s") or 0.0)
+        if rt < 0.8 * target_s or rt > 1.25 * target_s:
+            out.append(f"length: the cut runs {rt:.1f} s, the target is {target_s:.0f} to {1.2 * target_s:.0f} s")
+    out += [f"repeat: {r}" for r in repeated_takes(edl)]
+    out += [f"unplaced: the words \"{m.get('words', '')[:80]}\" are not in turn {m.get('turn_id')} of the transcript"
+            for m in edl.get("unplaced") or []]
+    return out
 
 
 def title_on(edl: dict) -> bool:

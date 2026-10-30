@@ -15,7 +15,7 @@ from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, open_api_ke
 from .engine import track as track_mod
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, tighten_edges
-from .engine.edl import build_edl, carry_run_words, title_card_on
+from .engine.edl import build_edl, carry_run_words, plan_check, title_card_on
 from .engine.image import generate_title_card
 from .engine.ingest import Ingested, Probe, detect_shots, ingest
 from .engine.render import render as render_edl
@@ -324,6 +324,36 @@ def run(opts: RunOptions) -> dict:
                         reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out))
         if prev_v1:  # a new plan on a resumed run keeps the run's caption words (an old v1's demo words too)
             carry_run_words(prev_v1, edl)
+        # A4: the paper edit checked word by word against the brief's checklist (C1), the target, repeated takes and
+        # unplaced words; one more plan call with exactly what failed, kept when it fails fewer checks ($0 when clean)
+        problems = plan_check(edl, opts.target_s)
+        record = {"first": problems, "repaired": False}
+        if problems:
+            log(f"plan check: {len(problems)} problem(s): " + "; ".join(problems))
+            try:
+                planner = Spark(out, ledger, model=opts.planner_model, log=log) if opts.planner_model else spark
+                again = planner.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
+                                     file_id=ing.file_id if opts.plan_with_video else None,
+                                     reasoning_effort=opts.plan_effort, words_per_s=wps, name="plan_repair",
+                                     repair="\n".join(f"- {p}" for p in problems))
+                edl2 = build_edl(again.parsed, voice, watch.parsed, source, opts.brief, track_summary,
+                                 reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out))
+                if prev_v1:
+                    carry_run_words(prev_v1, edl2)
+                left = plan_check(edl2, opts.target_s)
+                record.update(left=left, repaired=len(left) < len(problems))
+                if record["repaired"]:
+                    dump_json(out / "plan_first.json", planned.parsed)
+                    planned, edl = again, edl2
+                    dump_json(out / "plan.json", planned.parsed)
+                log(f"plan check: the repaired plan {'is kept' if record['repaired'] else 'is not better, the first stays'}"
+                    f" ({len(left)} left{': ' + '; '.join(left) if left else ''})")
+            except Exception:
+                errors.append(("plan repair", traceback.format_exc()))
+                log(f"ERROR in plan repair (the first plan stays):\n{errors[-1][1]}")
+        else:
+            log("plan check: the paper edit meets the brief's checks")
+        edl["plan_check"] = record
         if edl["role_fixes"]:
             log(f"roles set by position (one hook first, the payoff last): {', '.join(edl['role_fixes'])}")
         if edl.get("brief_missing"):

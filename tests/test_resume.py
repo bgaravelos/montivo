@@ -42,7 +42,8 @@ def plans(monkeypatch):
     calls = []
 
     def fake_plan(self, brief, *a, **kw):
-        calls.append(brief)
+        if not kw.get("repair"):  # the plan check's one repair call (A4) is not a new plan: this 3-word plan fails it
+            calls.append(brief)
         return SparkCall(name="plan", parsed={**PLAN, "title_card_text": "new"}, status="completed", usage={},
                          cost_usd=0.03, seconds=1.0, response_id="r")
 

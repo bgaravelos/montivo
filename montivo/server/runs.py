@@ -242,6 +242,13 @@ def progress(lines: list[dict], label: str | None = None, ledger: dict | None = 
             exp, src = expect("spark.plan", "plan_open_s" if is_open else "plan_s", model)
             begin("plan", "Plan", t, detail=planner_name(model), expected_s=exp, expected_from=src)
             continue
+        if msg.startswith("plan check:"):
+            if "problem(s)" in msg:
+                begin("plan", "Plan check", t, detail="one more plan for what the brief check found",
+                      expected_s=expect("spark.plan", "plan_s")[0])
+            else:
+                done(t, msg[len("plan check: "):][:80])
+            continue
         if msg.startswith("spark: plan:"):
             done(t, f"{(cur or {}).get('detail') or 'planned'}, {msg.rsplit(', ', 1)[-1]}")
             continue

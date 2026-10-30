@@ -154,8 +154,10 @@ class Spark:
         return self.call("watch", prompt, schemas.WATCH, file_id=file_id, reasoning_effort=reasoning_effort or WATCH_EFFORT)
 
     def plan(self, brief: str, transcript_text: str, watch: dict, target_s: float, file_id: str | None = None,
-             reasoning_effort: str | None = None, words_per_s: float = 2.5) -> SparkCall:
-        """`words_per_s` is the speech rate measured by Voice on this clip (VoiceResult.speech_rate); 2.5 when unknown."""
+             reasoning_effort: str | None = None, words_per_s: float = 2.5, repair: str | None = None,
+             name: str = "plan") -> SparkCall:
+        """`words_per_s` is the speech rate measured by Voice on this clip (VoiceResult.speech_rate); 2.5 when unknown.
+        `repair` (A4): what the deterministic plan check found wrong in an earlier paper edit, for one more try."""
         wps = words_per_s if words_per_s and words_per_s > 0 else 2.5
         shot_log = "\n".join(
             f"- {s['start_s']:.1f}-{s['end_s']:.1f}s {s['shot_type']}: {s['visual']}"
@@ -198,11 +200,20 @@ class Spark:
             "names and words (\"Soundtracks me\" for \"SAM tracks me\", \"meta meta\" for \"four Meta\"): a line that is there "
             "in a misheard form is not missing, and a line you keep in the paper edit is never listed. Leave the list empty "
             "when everything is there.\n"
+            "- Write the brief as brief_checks, one item per concrete requirement in the brief's own words. kind: "
+            "'opening' (the line the video must open on), 'ending' (the line it must end on), 'keep' (a line or passage "
+            "that must stay), 'drop' (something to leave out), 'length' (the runtime the brief allows: min_s and max_s in "
+            "seconds), 'other' (anything else). For opening, ending, keep and drop, quote = the transcript's exact words "
+            "it names (for a passage 'from X through Y', its first through its last words as the transcript has them), "
+            "empty when they are not in the transcript. Unused: quote empty, min_s -1, max_s -1. Your paper edit must "
+            "meet every item it can; they are checked against it word by word.\n"
             "- Propose a short title card text (max 6 words), a caption style note and a one-sentence reframe note.\n"
             f"- estimated_runtime_s = total kept words / {wps:.1f}.\n\n"
-            f"TRANSCRIPT (authoritative):\n{transcript_text}")
-        return self.call("plan", prompt, schemas.PLAN, file_id=file_id, max_output_tokens=16000,
-                         reasoning_effort=reasoning_effort or PLAN_EFFORT)
+            + (f"A first paper edit for this brief was checked word by word and failed these checks. Write a new paper "
+               f"edit that fixes every one of them and keeps what was right:\n{repair}\n\n" if repair else "")
+            + f"TRANSCRIPT (authoritative):\n{transcript_text}")
+        return self.call(name, prompt, schemas.PLAN, file_id=file_id, max_output_tokens=16000,
+                         reasoning_effort=reasoning_effort or PLAN_EFFORT, stage="spark.plan", schema_name="plan")
 
     def review(self, file_id: str | None, brief: str, facts: str, duration_s: float, name: str = "review",
                reasoning_effort: str | None = "low", max_output_tokens: int = 16000, video: Path | None = None,

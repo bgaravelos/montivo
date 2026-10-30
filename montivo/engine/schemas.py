@@ -55,9 +55,20 @@ PLAN = {
         "brief_not_in_footage": {"type": "array", "items": {"type": "string"},
                                  "description": "each thing the brief asks to keep or show that the transcript and footage do not "
                                                 "contain, in the brief's own words; empty when everything is there"},
+        "brief_checks": {"type": "array",
+                         "description": "the brief as a checklist, one concrete requirement per item (C1)",
+                         "items": {"type": "object", "additionalProperties": False, "properties": {
+                             "item": {"type": "string", "description": "the requirement in the brief's own words"},
+                             "kind": {"type": "string", "enum": ["opening", "ending", "keep", "drop", "length", "other"]},
+                             "quote": {"type": "string", "description": "the transcript's exact words the requirement "
+                                       "names (opening, ending, keep, drop), empty when it is not in the transcript or "
+                                       "for length / other"},
+                             "min_s": {"type": "number", "description": "length: the shortest runtime allowed, else -1"},
+                             "max_s": {"type": "number", "description": "length: the longest runtime allowed, else -1"}},
+                             "required": ["item", "kind", "quote", "min_s", "max_s"]}},
     },
     "required": ["paper_edit", "estimated_runtime_s", "title_card_text", "caption_style_note", "reframe_note",
-                 "brief_not_in_footage"],
+                 "brief_not_in_footage", "brief_checks"],
 }
 
 CRITERIA = ["hook_in_1_5s", "brief_covered", "no_cut_mid_word", "captions_legible", "captions_match_speech",
