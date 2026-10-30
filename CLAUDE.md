@@ -844,7 +844,7 @@ worker or Volume reads). Merged into main (fast-forward to 5853b8d), pushed and 
 worktree (no container was running before it); /api/health 200, /api/runs 401, /s/nope 404; two smoke drops on 015 in a
 row: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 10.75 s and 10.13 s (the same segments as the 31.9 s one): Modal variance.
 Smarter chat (30/10 evening, $0.84: Meta $0.66 incl. five bench rounds and the browser checks, Baseten $0.18, branch `claude/chat-agent`, commits 4081926 7f201dc cc5fdc3
-96f3604; research in `docs/notes/chat-research_2026-10-30.md`; not merged, pushed or deployed): `tools/chat_bench.py`
+96f3604; research in `docs/notes/chat-research_2026-10-30.md`): `tools/chat_bench.py`
 (38 messages, EN + GR, on clones of 015 v5 / 012 v2 / 014 v1 in runs/chatbench/, router only, intents + argument
 checks; `--model open`, `--compare A B`): before 22/38 (both models). `agent.context` now adds `footage()` (every
 passage the cut leaves out by turn with numbered words, up to 900 words; watch.json summary, moments with their cut
@@ -871,6 +871,10 @@ Voice on the cut ($0: loud edges, caption forced over the head, head out of fram
 queue and holds the next one back until its x (the queue's design, unchanged). Open: "undo that" in Live after a chat
 draft edit routes to restore (refused while the draft is open) instead of the draft's undo; a fix round after a failed
 check (the chat only says it); B2-B5 and Γ2-Γ4 of the research note.
+Merged into main (fast-forward to 2726ee3), pushed and deployed 30/10 22:02 on Billy's go from a clean worktree: the
+last job on the Volume (ui-1030-1950's draft commit, v4) ended 21:56, the 21:49 web container stopped after the deploy;
+live /api/health 200, /api/runs 401, /s/nope 404; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 9.7 s. The
+new chat not yet asked live with the sign-in.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
