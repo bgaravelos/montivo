@@ -78,7 +78,7 @@ export function Editor({ id, replay, go }: Props) {
   const [menu, setMenu] = useState(false);
   const [ctx, setCtx] = useState<ClipMenu | null>(null);
   const [askNonce, setAskNonce] = useState(0);
-  const [toast, setToast] = useState<{ text: string; tone?: string } | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
   const [guide, setGuideState] = useState<Guide>(() => {
     try { const g = localStorage.getItem("montivo.viewer.guide") as Guide | null; return g && GUIDES.includes(g) ? g : "off"; } catch { return "off"; }
   });
@@ -93,6 +93,8 @@ export function Editor({ id, replay, go }: Props) {
   const [draftData, setDraftData] = useState<LiveData | null>(null);
   const [draftSum, setDraftSum] = useState<DraftSum | null>(null);
   const [styleDraft, setStyleDraft] = useState<StyleDraft>(EMPTY_DRAFT);
+  // A2: a caption line or callout picked on the timeline: its panel opens on it (nonce: the same one picked again)
+  const [focus, setFocus] = useState<PanelFocus | null>(null);
 
   // in replay, a version exists once the log rendered it; live, once it is on disk
   const visible = useMemo(() => {
@@ -185,7 +187,9 @@ export function Editor({ id, replay, go }: Props) {
   useJobSignals(state ? projectName(v, state.run.brief) : id, replay ? null : job, progress);
   const canEdit = replay ? "Replay is on" : busy ? `${job!.label} is running` : null;
 
-  const flash = useCallback((text: string, tone?: string) => { setToast({ text, tone }); window.setTimeout(() => setToast(null), 4500); }, []);
+  const flash = useCallback((text: string, tone?: string, action?: Toast["action"]) => {
+    setToast({ text, tone, action }); window.setTimeout(() => setToast(null), action ? 6000 : 4500);
+  }, []);
   const forkFrom = v && newest != null && v.n < newest && !replay ? v.n : null;
   const act = useCallback(async (path: string, body: unknown) => {
     if (["ask", "review", "hook"].includes(path)) askToNotify(); // the jobs that take a minute or more
@@ -212,6 +216,7 @@ export function Editor({ id, replay, go }: Props) {
   /** One structural edit into the draft (started from the version on screen), in milliseconds and $0. */
   const draftOp = useCallback(async (op: string, args: Record<string, unknown>) => {
     try {
+      madeDraft.current = true;
       const r = await api<{ draft: DraftSum | null }>(`/api/runs/${id}/draft`, { op, args, ...(draftSum ? {} : { from: v?.n }) });
       setDraftSum(r.draft);
       await loadDraft(false);
@@ -236,6 +241,15 @@ export function Editor({ id, replay, go }: Props) {
   const discardDraft = async () => {
     try { await api(`/api/runs/${id}/draft`, undefined, "DELETE"); setDraftSum(null); setDraftData(null); }
     catch (e) { flash(String((e as Error).message), "error"); }
+  };
+  /** A1: an edit started from a panel leaves the panel open (a second change needs no search for it); the toast says
+   *  what is happening and opens the chat on a click. A draft edit (Live) says nothing: the viewer already plays it. */
+  const madeDraft = useRef(false);
+  const made = async (p: Promise<boolean>) => {
+    madeDraft.current = false;
+    const ok = await p;
+    if (!ok || madeDraft.current || panel === "assistant" || !state) return;
+    flash(`Making Version ${nextN(state)}…`, undefined, { label: "Open chat", run: () => setPanel("assistant") });
   };
   const shareLink = async (n: number) => {
     try {
@@ -339,7 +353,14 @@ export function Editor({ id, replay, go }: Props) {
     api(`/api/runs/${id}/current`, c).catch(() => { /* the browser's copy still holds */ });
   }, [id, replay, newest]);
   const pick = useCallback((n: number) => { setSel(n); remember(n); }, [remember]);
-  const onPunch = (a: PunchAsk) => { setSelKey(null); setPanel("assistant"); edit("punch", { ...a, from: v?.n }); };
+  /** A2: a caption line (`cap:<id>`) or callout (`callout:<span>`) picked on the timeline: selected, and its panel
+   *  opens on it (Captions, Text). `edit` opens the line's text box there. */
+  const pickItem = (key: string, edit = false) => {
+    select(key);
+    setPanel(key.startsWith("cap:") ? "captions" : "text");
+    setFocus({ key, edit, nonce: Date.now() });
+  };
+  const onPunch = (a: PunchAsk) => { setSelKey(null); made(edit("punch", { ...a, from: v?.n })); };
   const step = (dir: -1 | 1) => {
     if (draftSum && (dir < 0 ? draftSum.can_undo : draftSum.can_redo)) return void draftStep(dir);
     const to = dir < 0 ? undoTo : redoTo;
@@ -406,6 +427,13 @@ export function Editor({ id, replay, go }: Props) {
           e.preventDefault();
           if (canEdit) flash(`Cannot change it now: ${canEdit.toLowerCase()}.`);
           else setDialog({ kind: "title" });
+        } else if (selKey?.startsWith("callout:") && v) { // A2: a selected callout comes off its clip
+          e.preventDefault();
+          if (canEdit) flash(`Cannot change it now: ${canEdit.toLowerCase()}.`);
+          else { made(edit("text", { callouts: { [selKey.slice(8)]: "" }, from: v.n })); setSelKey(null); }
+        } else if (selKey?.startsWith("cap:")) {
+          e.preventDefault();
+          flash("A caption line follows the speech: press Enter to retext it, or delete the words it says.");
         } else if (punch) {
           e.preventDefault();
           if (canEdit) flash(`Cannot remove it now: ${canEdit.toLowerCase()}.`);
@@ -416,6 +444,9 @@ export function Editor({ id, replay, go }: Props) {
           else if (v && v.spans.length < 2) flash("That is the only clip.");
           else askDelete(block.span!.id);
         }
+        break;
+      case "Enter":
+        if (selKey?.startsWith("cap:") || selKey?.startsWith("callout:")) { e.preventDefault(); pickItem(selKey, true); }
         break;
       case "Escape": if (ctx) setCtx(null); else if (menu) setMenu(false); else if (wordSel) setWordSel(null); else { setSelKey(null); setSelKeys([]); } break;
       case "g": case "G": nextGuide(); break;
@@ -545,30 +576,36 @@ export function Editor({ id, replay, go }: Props) {
         )}
         {panel === "media" && <MediaPanel state={state} />}
         {panel === "captions" && (
-          <CaptionsPanel v={v} t={t} next={next} canEdit={canEdit} onSeek={seek}
+          <CaptionsPanel v={v} t={t} next={next} canEdit={canEdit} onSeek={seek} focus={focus}
             onAsk={(c) => { setCapSel({ t_in: c.t_in, t_out: c.t_out, text: c.text }); setPanel("assistant"); setAskNonce((n) => n + 1); }}
-            onApply={(edits) => { setPanel("assistant"); edit("caption", { edits, from: v?.n }); }} />
+            onApply={(edits) => made(edit("caption", { edits, from: v?.n }))} />
         )}
         {panel === "style" && (
           <StylePanel id={id} v={v} t={t} next={next} canEdit={canEdit} draft={styleDraft} setDraft={setStyleDraft} onSeek={(a) => { player.current?.pause(); seek(a); }}
             hasKey={state.has_key} keyNote={state.key_note ?? null} cost={state.costs?.look ?? 0.004}
-            onPrompt={(text) => { setPanel("assistant"); edit("style", { prompt: text, from: v?.n }); }}
-            onApply={() => { const d = styleDraft; setPanel("assistant"); edit("style", { look: d.look, callouts: d.callouts, from: v?.n }); }} />
+            onPrompt={(text) => made(edit("style", { prompt: text, from: v?.n }))}
+            onApply={() => { const d = styleDraft; made(edit("style", { look: d.look, callouts: d.callouts, from: v?.n })); }} />
         )}
         {panel === "text" && (
-          <TextPanel state={state} v={v} t={t} next={next} canEdit={canEdit} onSeek={seek}
-            onApply={(e) => { setPanel("assistant"); edit("text", { ...e, from: v?.n }); }} />
+          <TextPanel state={state} v={v} t={t} next={next} canEdit={canEdit} onSeek={seek} focus={focus}
+            onApply={(e) => made(edit("text", { ...e, from: v?.n }))} />
         )}
         {panel === "music" && (
           <MusicPanel v={v} next={next} canEdit={canEdit}
-            onApply={(e) => { setPanel("assistant"); edit("music", { ...e, from: v?.n }); }} />
+            onApply={(e) => made(edit("music", { ...e, from: v?.n }))} />
         )}
         {panel === "speakers" && (
           <SpeakersPanel id={id} v={v} next={next} canEdit={canEdit}
-            onApply={(speaker, head) => { setPanel("assistant"); edit("pin", { speaker, head, from: v?.n }); }} />
+            onApply={(speaker, head) => made(edit("pin", { speaker, head, from: v?.n }))} />
         )}
         {panel === "versions" && <VersionsPanel id={id} state={state} versions={visible} sel={sel} onPick={pick} go={go} replay={replay} opening={opening}
-          canEdit={canEdit} onRestore={(n) => { setPanel("assistant"); edit("restore", { from: n }); }} />}
+          canEdit={canEdit} onRestore={(n) => made(edit("restore", { from: n }))} />}
+        {panel !== "assistant" && busy && !replay && ( // A1: the job a panel started, in view while the panel stays open
+          <div className="panel-job">
+            {progress?.active ? <ProgressInline p={progress} /> : <span><MarkLoader /> {job!.label}…</span>}
+            <button className="link small" onClick={() => setPanel("assistant")}>Open chat</button>
+          </div>
+        )}
       </aside>
 
       <main className="viewer">
@@ -623,6 +660,11 @@ export function Editor({ id, replay, go }: Props) {
           wordSel={wordSel} onWordSel={pickWords} onCutWords={askCut} onDelete={askDelete} onAsk={ask}
           mix={mix} base={mixBase} live={live} next={next} canEdit={canEdit} onMix={setMixDraft} onResetMix={() => setMixDraft(null)}
           onMusicPanel={() => setPanel("music")}
+          onPick={(k) => pickItem(k)}
+          onCaptionText={(c, text) => {
+            if (canEdit) return flash(`Cannot edit now: ${canEdit.toLowerCase()}.`);
+            made(edit("caption", { edits: [{ at: (c.t_in + c.t_out) / 2, text }], from: v?.n }));
+          }}
           onEdit={(path, body, note) => { // add a passage back, remove pauses, B-roll stills (Batch D)
             if (!v) return;
             if (canEdit) return flash(`Cannot edit now: ${canEdit.toLowerCase()}.`);
@@ -633,8 +675,8 @@ export function Editor({ id, replay, go }: Props) {
           onApplyMix={() => {
             if (!v?.music || !mixDraft) return;
             const m = mixDraft;
-            setMixDraft(null); setPanel("assistant");
-            edit("music", { track: v.music.track, level_db: m.level_db, duck_db: v.music.duck_db, voice_db: m.voice_db, mix: true, from: v.n });
+            setMixDraft(null);
+            made(edit("music", { track: v.music.track, level_db: m.level_db, duck_db: v.music.duck_db, voice_db: m.voice_db, mix: true, from: v.n }));
           }} />
       </footer>
 
@@ -649,30 +691,35 @@ export function Editor({ id, replay, go }: Props) {
       )}
       {dialog?.kind === "delete" && v && (
         <EditDialog kind="delete" state={state} v={v} span={dialog.span} next={next} newest={newest} onCancel={() => setDialog(null)}
-          onConfirm={(review) => { setDialog(null); setPanel("assistant"); act("drop", { span: dialog.span, from: v.n, review: review ? 1 : 0 }); }} />
+          onConfirm={(review) => { setDialog(null); made(act("drop", { span: dialog.span, from: v.n, review: review ? 1 : 0 })); }} />
       )}
       {dialog?.kind === "words" && v && (
         <EditDialog kind="words" state={state} v={v} span={dialog.ask.ranges[0].span} cut={dialog.ask} next={next} newest={newest} onCancel={() => setDialog(null)}
-          onConfirm={(review) => { setDialog(null); setWordSel(null); setSelKeys([]); setPanel("assistant"); act(dialog.ask.path, { ...dialog.ask.body, from: v.n, review: review ? 1 : 0 }); }} />
+          onConfirm={(review) => { setDialog(null); setWordSel(null); setSelKeys([]); made(act(dialog.ask.path, { ...dialog.ask.body, from: v.n, review: review ? 1 : 0 })); }} />
       )}
       {dialog?.kind === "title" && v && (
         <EditDialog kind="title" state={state} v={v} span="title" next={next} newest={newest} onCancel={() => setDialog(null)}
-          onConfirm={(review) => { setDialog(null); setSelKey(null); setPanel("assistant"); edit("text", { title_card: false, from: v.n, review: review ? 1 : 0 }); }} />
+          onConfirm={(review) => { setDialog(null); setSelKey(null); made(edit("text", { title_card: false, from: v.n, review: review ? 1 : 0 })); }} />
       )}
       {dialog?.kind === "trim" && v && (
         <EditDialog kind="trim" state={state} v={v} span={dialog.ask.span} trim={dialog.ask} next={next} newest={newest} onCancel={() => setDialog(null)}
-          onConfirm={(review) => { setDialog(null); setPanel("assistant"); act("trim", { span: dialog.ask.span, edge: dialog.ask.edge, word: dialog.ask.word, from: v.n, review: review ? 1 : 0 }); }} />
+          onConfirm={(review) => { setDialog(null); made(act("trim", { span: dialog.ask.span, edge: dialog.ask.edge, word: dialog.ask.word, from: v.n, review: review ? 1 : 0 })); }} />
       )}
       {dialog?.kind === "move" && v && (
         <EditDialog kind="move" state={state} v={v} span={dialog.ask.span} move={dialog.ask} next={next} newest={newest} onCancel={() => setDialog(null)}
-          onConfirm={(review) => { setDialog(null); setPanel("assistant"); act("reorder", { span: dialog.ask.span, before: dialog.ask.before, from: v.n, review: review ? 1 : 0 }); }} />
+          onConfirm={(review) => { setDialog(null); made(act("reorder", { span: dialog.ask.span, before: dialog.ask.before, from: v.n, review: review ? 1 : 0 })); }} />
       )}
       {dialog?.kind === "export" && <ExportPage id={id} versions={visible} initial={sel} onClose={() => setDialog(null)}
         onStyle={() => { setDialog(null); setPanel("style"); }}
         hasKey={state.has_key} keyNote={state.key_note ?? null} costs={state.costs} />}
       {dialog?.kind === "ledger" && <LedgerDialog state={state} onClose={() => setDialog(null)} />}
       {dialog?.kind === "keys" && <ShortcutsDialog onClose={() => setDialog(null)} />}
-      {toast && <div className={`toast ${toast.tone ?? ""}`} onClick={() => setToast(null)}>{toast.text}</div>}
+      {toast && (
+        <div className={`toast ${toast.tone ?? ""}`} onClick={() => setToast(null)}>
+          {toast.text}
+          {toast.action && <button className="link toast-act" onClick={() => toast.action!.run()}>{toast.action.label}</button>}
+        </div>
+      )}
     </div>
   );
 }
@@ -695,6 +742,11 @@ function replaySpent(lines: LogLine[]): { usd: number; s: number } {
   }
   return { usd, s: s + sessionEnd };
 }
+
+/** A timeline item a panel should show: `cap:<id>` (Captions) or `callout:<span>` (Text); `edit` opens its text box. */
+export type PanelFocus = { key: string; edit: boolean; nonce: number };
+
+type Toast = { text: string; tone?: string; action?: { label: string; run: () => void } };
 
 const edits = (n: number) => `${n} edit${n === 1 ? "" : "s"}`;
 

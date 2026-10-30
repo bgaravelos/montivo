@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { PanelFocus } from "./Editor";
 import { api, fileUrl, tc, usd } from "./api";
 import { originKind, originLabel, parentOf } from "./edit";
 import { Icon, MarkLoader } from "./icons";
@@ -67,8 +68,8 @@ export type CaptionEdit = { at: number; text: string };
 
 /** The caption lines of a version; each can be retexted where Voice misheard a word. Edits are staged here and applied
  *  together as the next version (the reviewer's caption_text patch, $0, a re-render), so four fixes are one render. */
-export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk }: {
-  v: Version | null; t: number; next: number; canEdit: string | null; onSeek: (a: number) => void;
+export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, focus }: {
+  v: Version | null; t: number; next: number; canEdit: string | null; onSeek: (a: number) => void; focus?: PanelFocus | null;
   onApply: (edits: CaptionEdit[]) => void;
   onAsk?: (line: CaptionLine) => void; // the line goes to the chat as "this" (UX B3)
 }) {
@@ -81,6 +82,14 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk }: {
   useEffect(() => { setStaged({}); setEditing(null); }, [v?.n]);
   const n = Object.keys(staged).length;
   const open = (id: string, text: string) => { if (canEdit) return; setEditing(id); setDraft(staged[id] ?? text); };
+  const body = useRef<HTMLDivElement>(null);
+  useEffect(() => { // A2: the line picked on the timeline, scrolled into view (and its text box open on Enter)
+    const id = focus?.key.startsWith("cap:") ? focus.key.slice(4) : null;
+    const c = id ? lines.find((x) => x.id === id) : null;
+    if (!c) return;
+    if (focus!.edit) open(c.id, c.text);
+    window.requestAnimationFrame(() => body.current?.querySelector(`[data-line="${CSS.escape(c.id)}"]`)?.scrollIntoView({ block: "nearest" }));
+  }, [focus?.nonce]); // eslint-disable-line
   const commit = (id: string, text: string) => {
     const clean = draft.split(/\s+/).filter(Boolean).join(" ");
     setStaged((s) => {
@@ -113,9 +122,9 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk }: {
           ) : <p className="mute small">This version was rendered without captions.</p>}
         </div>
         {lines.length > 0 && <p className="mute small">Double-click a line (or its pencil) to fix a word Voice misheard; the timing stays.</p>}
-        <div className="list">
+        <div className="list" ref={body}>
           {lines.map((c) => editing === c.id ? (
-            <div key={c.id} className="list-row cap-edit">
+            <div key={c.id} data-line={c.id} className="list-row cap-edit">
               <span className="lr-t mono">{tc(c.t_in)}</span>
               <input autoFocus value={draft} maxLength={200} aria-label={`Caption at ${tc(c.t_in)}`} onFocus={(e) => e.currentTarget.select()}
                 onChange={(e) => setDraft(e.target.value)} onBlur={() => commit(c.id, c.text)}
@@ -125,7 +134,8 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk }: {
                 }} />
             </div>
           ) : (
-            <div key={c.id} role="button" tabIndex={0} className={`list-row cap-row ${t >= c.t_in && t < c.t_out ? "on" : ""} ${staged[c.id] ? "staged" : ""}`}
+            <div key={c.id} data-line={c.id} role="button" tabIndex={0}
+              className={`list-row cap-row ${t >= c.t_in && t < c.t_out ? "on" : ""} ${staged[c.id] ? "staged" : ""} ${focus?.key === `cap:${c.id}` ? "picked" : ""}`}
               onClick={() => onSeek(c.t_in)} onDoubleClick={() => open(c.id, c.text)}
               onKeyDown={(e) => { if (e.key === "Enter") open(c.id, c.text); }}>
               <span className="lr-t mono">{tc(c.t_in)}</span>
@@ -163,8 +173,8 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk }: {
 /** A text edit for montivo.human text: callouts by span ("" removes one), new title words, the card on or off. */
 export type TextEdit = { callouts?: Record<string, string>; title?: string; title_card?: boolean };
 
-export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply }: {
-  state: RunState; v: Version | null; t: number; next: number; canEdit: string | null; onSeek: (a: number) => void;
+export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus }: {
+  state: RunState; v: Version | null; t: number; next: number; canEdit: string | null; onSeek: (a: number) => void; focus?: PanelFocus | null;
   onApply: (e: TextEdit) => void;
 }) {
   const calls = v?.callouts ?? [];
@@ -174,6 +184,14 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply }: {
   const [editing, setEditing] = useState<string | null>(null); // a span id or "title"
   const [draft, setDraft] = useState("");
   useEffect(() => { setStaged({}); setTitle(null); setCard(null); setEditing(null); }, [v?.n]);
+  const body = useRef<HTMLDivElement>(null);
+  useEffect(() => { // A2: the callout picked on the timeline, scrolled into view (its text box open on Enter)
+    const sid = focus?.key.startsWith("callout:") ? focus.key.slice(8) : null;
+    const sp = sid ? v?.spans.find((x) => x.id === sid) : null;
+    if (!sp) return;
+    if (focus!.edit && !canEdit) { setEditing(sp.id); setDraft((staged[sp.id] ?? sp.callout ?? "").trim()); }
+    window.requestAnimationFrame(() => body.current?.querySelector(`[data-span="${sp.id}"]`)?.scrollIntoView({ block: "nearest" }));
+  }, [focus?.nonce]); // eslint-disable-line
   if (!v) return <section className="side-panel"><div className="panel-head"><span className="ph-title">Text</span></div></section>;
   const cardOn = v.title_card !== false;
   const callout = (sid: string) => (staged[sid] ?? v.spans.find((x) => x.id === sid)?.callout ?? "").trim();
@@ -223,16 +241,17 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply }: {
         ) : <p className="mute small">No title card.</p>}
         <div className="pn-k">Callouts</div>
         <p className="mute small">One callout per clip at most, anchored to the speaker. Double-click to rewrite; empty removes it.</p>
-        <div className="list">
+        <div className="list" ref={body}>
           {v.spans.map((sp) => {
             const c = calls.find((x) => x.span === sp.id);
             const text = callout(sp.id);
             const was = (sp.callout ?? "").trim();
             if (!text && !was && !(sp.id in staged) && editing !== sp.id) return null;
             return editing === sp.id ? (
-              <div key={sp.id} className="list-row cap-edit"><span className="lr-t mono">{sp.id}</span>{editor(`Callout of ${sp.id}`)}</div>
+              <div key={sp.id} data-span={sp.id} className="list-row cap-edit"><span className="lr-t mono">{sp.id}</span>{editor(`Callout of ${sp.id}`)}</div>
             ) : (
-              <div key={sp.id} role="button" tabIndex={0} className={`list-row cap-row ${c && t >= c.t_in && t < c.t_out ? "on" : ""} ${sp.id in staged ? "staged" : ""}`}
+              <div key={sp.id} data-span={sp.id} role="button" tabIndex={0}
+                className={`list-row cap-row ${c && t >= c.t_in && t < c.t_out ? "on" : ""} ${sp.id in staged ? "staged" : ""} ${focus?.key === `callout:${sp.id}` ? "picked" : ""}`}
                 onClick={() => c && onSeek(c.t_in)} onDoubleClick={() => open(sp.id, text)} onKeyDown={(e) => { if (e.key === "Enter") open(sp.id, text); }}>
                 <span className="lr-t mono">{c ? tc(c.t_in) : sp.id}</span>
                 <span className="lr-txt">{text ? <b>{text}</b> : <i className="mute">removed</i>}

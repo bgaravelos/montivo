@@ -178,6 +178,7 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .lr-edit { width: 24px; height: 24px; opacity: 0; }
 .cap-row:hover .lr-edit, .cap-row.on .lr-edit, .cap-row:focus-visible .lr-edit, .lr-edit:focus-visible { opacity: 1; }
 .cap-row.staged { box-shadow: inset 2px 0 0 var(--accent); }
+.cap-row.picked { outline: 1px solid var(--accent); outline-offset: -1px; }
 .lr-flag.edited { color: var(--accent); }
 .cap-edit { grid-template-columns: 52px 1fr; align-items: center; background: var(--panel-3); }
 .cap-edit input { background: var(--bg); color: var(--text); border: 1px solid var(--accent); border-radius: 5px; padding: 4px 6px; font: inherit; min-width: 0; }
@@ -520,6 +521,8 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .item.text.callout { background: #8a6a2c; font-weight: 600; }
 .item.text.sel { box-shadow: inset 0 0 0 2px var(--accent); }
 .item.caption { background: var(--caption); padding: 0 4px; }
+.item.caption.sel { box-shadow: inset 0 0 0 2px var(--accent); }
+.item.cap-inline { z-index: 5; font: inherit; font-size: 11px; color: var(--text); border: 1px solid var(--accent); outline: none; background: var(--panel-3); }
 .item:hover { filter: brightness(1.15); }
 .clip {
   position: absolute; top: 3px; bottom: 3px; border-radius: 5px; overflow: hidden; background: var(--clip); cursor: pointer;
@@ -687,6 +690,9 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .ledger tfoot td { font-weight: 700; color: var(--text); border-bottom: 0; }
 .toast { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); background: var(--panel-3); border: 1px solid var(--line-2); color: var(--text); padding: 8px 14px; border-radius: 8px; z-index: 50; max-width: 560px; animation: rise 0.15s ease-out; box-shadow: 0 10px 30px -10px #000; }
 .toast.error { border-color: var(--blocker); }
+.toast-act { margin-left: 12px; color: var(--accent); font-weight: 600; }
+.panel-job { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-top: 1px solid var(--line); background: var(--panel-2); font-size: 12px; min-width: 0; }
+.panel-job .prog-inline { flex: 1; min-width: 0; overflow: hidden; }
 .toast.bottom { top: auto; bottom: 24px; } /* Home: clear of the search and filter bar */
 
 /* ------------------------------------------------------------- compare */

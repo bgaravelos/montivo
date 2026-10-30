@@ -3,7 +3,7 @@ import { api, crit, fileUrl, tc } from "./api";
 import { blockAt, edgeSnaps, flatWords, ghostRestore, punchLabel, selRange, sevRank, spanText, unusedRuns, type Block, type Snap, type WordSel } from "./edit";
 import { Icon } from "./icons";
 import { LEVEL_RANGE, VOICE_RANGE, type Mix } from "./Mix";
-import type { Issue, Overlay, PausePlan, Version, Word } from "./types";
+import type { CaptionLine, Issue, Overlay, PausePlan, Version, Word } from "./types";
 
 export type TrimAsk = { span: string; edge: "in" | "out"; word: number; words: number; dt: number; label: string };
 export type ClipMenu = { x: number; y: number; span: string };
@@ -39,6 +39,9 @@ type Props = {
   onMusicPanel: () => void;
   /** A Batch D edit (insert, pauses, overlay): the route, its body (the editor adds `from`), a note for the toast. */
   onEdit: (path: string, body: Record<string, unknown>, note: string) => void;
+  /** A2: a caption line or a callout picked on the timeline (`cap:<id>`, `callout:<span>`): the editor selects it and
+   *  opens its panel there; a caption retexted in place (double-click, Enter). */
+  onPick: (key: string) => void; onCaptionText: (line: CaptionLine, text: string) => void;
 };
 
 /** The bottom of the editor: a read-mostly multi-track timeline of the selected version (select, seek, delete from the
@@ -201,6 +204,7 @@ function Canvas(p: Props & { v: Version; pps: number; dur: number; scroller: Rea
       <Tracks id={p.id} v={v} blocks={p.blocks} words={p.words} selected={p.selected} selection={p.selection} canTrim={p.canTrim} pps={pps} dur={dur}
         snap={p.snap} getT={getT}
         timeAt={timeAt} onSelect={p.onSelect} onSeek={p.onSeek} onMenu={p.onMenu} onTrim={p.onTrim} onMove={p.onMove}
+        onPick={p.onPick} onCaptionText={p.onCaptionText}
         mix={p.mix} base={p.base} onMusicPanel={p.onMusicPanel} bar={p.bar} setBar={p.setBar} plan={p.plan} />
       <div className="playhead" style={{ transform: `translateX(${t * pps}px)` }}>
         <span className="ph-handle" onPointerDown={scrub} />
@@ -279,7 +283,7 @@ type Move = { key: string; slot: number; t: number; target: number | null }; // 
 const MOVE_PX = 6; // a press that travels further than this is a drag, not a click
 
 type TrackProps = Pick<Props, "id" | "blocks" | "words" | "selected" | "selection" | "canTrim" | "onSelect" | "onSeek" | "onMenu" | "onTrim" | "onMove"
-  | "mix" | "base" | "onMusicPanel" | "snap"> & BarProps & {
+  | "mix" | "base" | "onMusicPanel" | "snap" | "onPick" | "onCaptionText"> & BarProps & {
   v: Version; pps: number; dur: number; timeAt: (x: number) => number; getT: () => number; plan: PausePlan | null;
 };
 
@@ -297,6 +301,8 @@ const Tracks = memo(function Tracks(p: TrackProps) {
   const gain = (a?: number, b?: number) => 10 ** (((a ?? 0) - (b ?? 0)) / 20);
   const [drag, setDrag] = useState<Drag | null>(null);
   const [move, setMove] = useState<Move | null>(null);
+  const [capEdit, setCapEdit] = useState<{ id: string; text: string } | null>(null); // a caption retexted in place
+  useEffect(() => setCapEdit(null), [v.n]);
   const live = blocks.filter((b) => b.kind !== "ghost");
   const tileW = (TRACK_H.video - 6) * (9 / 16);
   const multi = selection.length > 1;
@@ -412,17 +418,38 @@ const Tracks = memo(function Tracks(p: TrackProps) {
           </button>
         )}
         {v.callouts.map((c, k) => (
-          <button key={k} className="item text callout" style={{ left: c.t_in * pps, width: Math.max(4, (c.t_out - c.t_in) * pps - 1) }}
-            onClick={() => onSeek(c.t_in)} title={`Callout “${c.text}” · clip ${c.span}`}>
+          <button key={k} className={`item text callout ${selected === `callout:${c.span}` ? "sel" : ""}`}
+            style={{ left: c.t_in * pps, width: Math.max(4, (c.t_out - c.t_in) * pps - 1) }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => { p.onPick(`callout:${c.span}`); onSeek(c.t_in + 0.01); }}
+            title={`Callout “${c.text}” · clip ${c.span}\nClick: open it in Text · ⌫ removes it`}>
             <span>{c.text}</span>
           </button>
         ))}
       </div>
       {/* captions */}
       <div className="track" style={{ height: TRACK_H.captions }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); onSeek(timeAt(e.clientX)); } }}>
-        {v.caption_lines.map((c) => (
-          <button key={c.id} className="item caption" style={{ left: c.t_in * pps, width: Math.max(3, (c.t_out - c.t_in) * pps - 1) }}
-            onClick={() => onSeek(c.t_in + 0.01)} title={`${tc(c.t_in)} “${c.text}”`}>
+        {v.caption_lines.map((c) => capEdit?.id === c.id ? (
+          <input key={c.id} className="item caption cap-inline" autoFocus value={capEdit.text} maxLength={200}
+            aria-label={`Caption at ${tc(c.t_in)}`} style={{ left: c.t_in * pps, width: Math.max(220, (c.t_out - c.t_in) * pps - 1) }}
+            onPointerDown={(e) => e.stopPropagation()} onFocus={(e) => e.currentTarget.select()}
+            onChange={(e) => setCapEdit({ id: c.id, text: e.target.value })}
+            onBlur={() => setCapEdit(null)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                const x = capEdit.text.split(/\s+/).filter(Boolean).join(" ");
+                setCapEdit(null);
+                if (x && x !== c.text) p.onCaptionText(c, x);
+              } else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setCapEdit(null); }
+            }} />
+        ) : (
+          <button key={c.id} className={`item caption ${selected === `cap:${c.id}` ? "sel" : ""}`}
+            style={{ left: c.t_in * pps, width: Math.max(3, (c.t_out - c.t_in) * pps - 1) }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => { p.onPick(`cap:${c.id}`); onSeek(c.t_in + 0.01); }}
+            onDoubleClick={() => { if (canTrim) setCapEdit({ id: c.id, text: c.text }); }}
+            title={`${tc(c.t_in)} “${c.text}”\nClick: open it in Captions · double-click: retext it here`}>
             <span>{c.text}</span>
           </button>
         ))}
