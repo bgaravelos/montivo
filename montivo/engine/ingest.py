@@ -302,7 +302,9 @@ def standardise(p: Probe, hflip: bool = False) -> tuple[list[str], float | None,
     return reasons, fps, sdr
 
 
-def ingest(source: Path, out: Path, ledger: Ledger, log=print, hflip: bool = False) -> Ingested:
+def ingest(source: Path, out: Path, ledger: Ledger, log=print, hflip: bool = False, on_wav=None) -> Ingested:
+    """`on_wav(wav)` is called the moment audio.wav exists, before the proxy, shot detection and upload: the run
+    starts Muse Voice there, since Voice needs only the wav (on 016 it used to wait 9 s for the proxy upload)."""
     out.mkdir(parents=True, exist_ok=True)
     original = source
     probe = ffprobe(source)
@@ -331,8 +333,10 @@ def ingest(source: Path, out: Path, ledger: Ledger, log=print, hflip: bool = Fal
     proxy = out / "proxy.mp4"
     wav = out / "audio.wav"
     with Timer() as t_proxy:
-        pp = make_proxy(source, proxy, probe, log=log)
         make_wav(source, wav, log=log)
+        if on_wav is not None:
+            on_wav(wav)
+        pp = make_proxy(source, proxy, probe, log=log)
     ledger.add(Entry(stage="ingest.ffmpeg", model="ffmpeg", seconds=t_proxy.seconds, cost_usd=0.0,
                      note=f"proxy {pp.width}x{pp.height} @ {pp.fps:g} fps, wav 24 kHz mono"))
     log(f"ingest: proxy {pp.width}x{pp.height} ({proxy.stat().st_size / 1e6:.1f} MB), wav {wav.stat().st_size / 1e6:.1f} MB in {t_proxy.seconds}s")

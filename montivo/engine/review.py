@@ -52,6 +52,7 @@ import re
 import shutil
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -1372,20 +1373,29 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
     open_model = is_open_model(spark.model)
     heard = open_model if heard is None else heard
     log(f"review: {name}: facts, review copy and upload ...")  # the UI's progress: prep starts here, not at the facts
-    with Timer() as t:
+
+    def copy_and_upload() -> tuple[Path, dict]:
+        cp = review_copy(cut, rdir, clock=clock)
+        return cp, {"id": None} if open_model else upload_file(cp, "video/mp4")
+
+    with Timer() as t, ThreadPoolExecutor(max_workers=2) as pool:
+        # Voice on the cut and the review copy + upload are the slow parts (7-8 s each on 016): they run beside the
+        # measured facts instead of one after another
         duration = media_duration(cut)
         speech = speech_audio(edl, cut)  # with a music bed, the speech stem the render kept
+        f_heard = pool.submit(heard_words, speech, heard_dir or rdir / "heard", ledger, log)
+        f_copy = pool.submit(copy_and_upload)
         sil = silences_in(speech)
         caps = caption_face_facts(edl)
         audio = Audio.load(run_dir)
         edges = cut_edge_levels(edl, audio) if audio else None
         timeline = caption_timeline(edl)
-        words_heard = heard_words(speech, heard_dir or rdir / "heard", ledger, log=log)
+        head = head_frame_facts(run_dir, edl)
+        words_heard = f_heard.result()
         vpath = run_dir / "voice" / "voice.json"
         edge_words = (edge_words_unheard(kept_words(edl, Words(json.loads(vpath.read_text())["words"])), words_heard,
                                          edge_speech(edl, audio) if audio else None)
                       if vpath.is_file() else None)
-        head = head_frame_facts(run_dir, edl)
         facts = facts_text(sil, caps, duration, edges, timeline, words_heard if heard else None, edge_words=edge_words,
                            head=head, diff_heard=words_heard, music=(edl.get("render") or {}).get("music"),
                            not_in_source=edl.get("brief_missing"),
@@ -1393,8 +1403,7 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
                            pauses=shortened_pauses(edl))
         gate = gate_check(caps, edges, edge_words, head)
         gate["checked_captions"] = [[c["t_in"], c["t_out"]] for c in timeline if c.get("checked")]
-        copy_path = review_copy(cut, rdir, clock=clock)
-        up = {"id": None} if open_model else upload_file(copy_path, "video/mp4")
+        copy_path, up = f_copy.result()
     ledger.add(Entry(stage="review.prep", model="ffmpeg" if open_model else "ffmpeg+files", seconds=t.seconds, cost_usd=0.0,
                      note=f"{name}: {copy_path.name} {copy_path.stat().st_size / 1e6:.1f} MB, file {up.get('id')}, "
                           f"{len(sil)} silences, {len(caps['over_face'])} captions over the face, "

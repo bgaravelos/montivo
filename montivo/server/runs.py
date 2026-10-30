@@ -216,6 +216,8 @@ def progress(lines: list[dict], label: str | None = None, ledger: dict | None = 
         if msg.startswith(("voice:", "track:", "spark: watch", "watch")):
             if msg.startswith("voice:") and re.match(r"voice: \d+ turns", msg):
                 analyse["voice"] = True
+            if msg.startswith("voice:") and cur and cur["stage"] == "ingest" and "t1" not in cur:
+                continue  # Voice starts on the wav while ingest still uploads: the ingest step stays the one shown
             if msg.startswith("spark: watch"):
                 analyse["watch"] = "completed" in msg or "->" not in msg
             m = re.match(r"track: ([^:]+): \d+ ids", msg)

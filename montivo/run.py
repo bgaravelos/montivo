@@ -143,6 +143,8 @@ def run(opts: RunOptions) -> dict:
         return opts.resume and (out.joinpath(*parts)).is_file()
 
     # 1. ingest: proxy + wav + one upload for Spark
+    early: dict = {}  # Voice started by ingest the moment the wav exists
+    early_pool = ThreadPoolExecutor(max_workers=1)
     if have("ingest.json"):
         d = json.loads((out / "ingest.json").read_text())
         was = Path(d.get("original_source") or d["source"])
@@ -159,7 +161,11 @@ def run(opts: RunOptions) -> dict:
             log(f"resume: {len(ing.shots)} camera cut(s) found in the proxy")
         log(f"resume: ingest from ingest.json (file_id {ing.file_id}{', hflip' if d.get('hflip') else ''})")
     else:
-        ing = ingest(opts.footage, out, ledger, log, hflip=opts.hflip)
+        # Voice starts on the wav while ingest makes the proxy and uploads it (watch needs both, Voice only the wav)
+        def start_voice(wav: Path) -> None:
+            if not have("voice", "voice.json"):
+                early["voice"] = early_pool.submit(transcribe, wav, out / "voice", ledger, language=opts.language, log=log)
+        ing = ingest(opts.footage, out, ledger, log, hflip=opts.hflip, on_wav=start_voice)
     # from here on `ing.source` is the footage every stage reads: the mirrored copy when --hflip, else opts.footage
     spark = Spark(out, ledger, model=opts.model, log=log)
 
@@ -175,7 +181,8 @@ def run(opts: RunOptions) -> dict:
             voice = VoiceResult.from_json(json.loads((out / "voice" / "voice.json").read_text()))
             log(f"resume: voice from voice/voice.json ({len(voice.turns)} turns, {len(voice.words)} words)")
         else:
-            voice = transcribe(ing.wav, out / "voice", ledger, language=opts.language, log=log)
+            voice = early["voice"].result() if "voice" in early else \
+                transcribe(ing.wav, out / "voice", ledger, language=opts.language, log=log)
             fresh.add("voice")
         if not voice.turns:
             raise RuntimeError("voice: no speech found in the footage")
@@ -243,6 +250,7 @@ def run(opts: RunOptions) -> dict:
         except Exception:
             errors.append(("track", traceback.format_exc()))
             tracks = {}
+    early_pool.shutdown()
     for stage, tb in errors:
         log(f"ERROR in {stage}:\n{tb}")
     if voice is None or watch is None:
