@@ -83,6 +83,7 @@ export type Version = {
   speaker_pins: Record<string, string>; // reframe_speaker_ids: Voice speaker -> the head the crop follows (a human pin)
   speaker_names?: Record<string, string>; // SP1: "A" -> "Billy"
   speaker_merge?: Record<string, string>; // SP2: "B" -> "A", one person Voice split in two
+  brief_edited?: string | null; // ME2: the brief this version was re-planned from (else the run's)
   planner: { model: string; name: string } | null; // the paper edit's planner: v1 and every re-plan
   overlays: Overlay[]; // the B-roll stills (engine/broll.py): cut seconds from the render, null when not shown
   plan_compare: PlanCompare | null;

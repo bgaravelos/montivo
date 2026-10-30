@@ -1689,11 +1689,14 @@ def target_from(instruction: str) -> float | None:
 
 
 def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s: float | None = None,
-           passes: int = 0, budget: float = 0.15, model: str | None = None, reasoning_effort: str | None = None) -> dict:
+           passes: int = 0, budget: float = 0.15, model: str | None = None, reasoning_effort: str | None = None,
+           brief: str | None = None) -> dict:
     """Plan again with the instruction added to the brief and the current paper edit for reference, reusing voice,
     watch and the tracks (no ingest, Voice or SAM spend), -> edl_vN on word boundaries with the edge pass, render.
     With no instruction it is a fresh plan from the run's own brief, blind to the current cut (`montivo plan`, the
-    planner A/B); `model` picks the planner (default muse-spark-1.3, config.OPEN_MODEL for Muse Spark Open)."""
+    planner A/B); `model` picks the planner (default muse-spark-1.3, config.OPEN_MODEL for Muse Spark Open). `brief`
+    (ME2) is a new brief for the project: a fresh plan from it, kept as the EDL's `brief_edited` so later re-plans of
+    this line of versions start from it (run.json keeps the brief the project was made with)."""
     from .config import SPARK_MODEL
     from .engine.spark import Spark
     log = RunLog(run_dir / "run.log")
@@ -1701,6 +1704,8 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
     from_v = from_version(run_dir, from_v)
     prev = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
     run = json.loads((run_dir / "run.json").read_text())
+    new_brief = " ".join((brief or "").split()) or None
+    run["brief"] = new_brief or prev.get("brief_edited") or run["brief"]
     n = next_version(run_dir)
     target = target_s or (target_from(instruction) if instruction else None) or float(run.get("target_s") or 40.0)
     log(f"montivo replan: edl_v{from_v} + \"{instruction or 'fresh plan'}\" -> edl_v{n} (target {target:.0f} s, {model})")
@@ -1712,7 +1717,7 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
         plan_brief = f"{brief}\n\nThe current cut (v{from_v}), for reference:\n{edl_summary(prev)}"
     else:
         brief = plan_brief = run["brief"]
-        instruction = f"plan again from scratch with {model}"
+        instruction = f"a new brief: {new_brief}" if new_brief else f"plan again from scratch with {model}"
     ledger = Ledger.resume(run_dir / "ledger.json")
     v1_call = next((e for e in ledger.entries if e.stage == "spark.plan"), None)  # read before this call adds its own
     spark = Spark(run_dir, ledger, model=model, log=log)
@@ -1738,6 +1743,8 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
                     reframe_concept=prev.get("reframe_concept") or "person", audio=Audio.load(run_dir))
     if not new["spans"]:
         raise SystemExit("the new plan placed no span on the transcript")
+    if new_brief or prev.get("brief_edited"):  # ME2: the brief this line of versions plans from
+        new["brief_edited"] = new_brief or prev["brief_edited"]
     if new["role_fixes"]:
         log(f"roles set by position (one hook first, the payoff last): {', '.join(new['role_fixes'])}")
     if new.get("brief_missing"):
@@ -1893,7 +1900,8 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--word", type=int, required=True, help="turn word index the edge lands on (new word_from / word_to)")
     r = sub.add_parser("replan", help="plan again with an instruction -> edl_vN -> cut_vN (one Spark plan call)")
     r.add_argument("run_dir", type=Path)
-    r.add_argument("--instruction", required=True)
+    r.add_argument("--instruction", default="", help="what to change (empty: a fresh plan from the brief)")
+    r.add_argument("--brief", default=None, help="a new brief for the project: a fresh plan from it (ME2)")
     r.add_argument("--target", type=float, default=None, help="runtime target in seconds (default: from the instruction or run.json)")
     r.add_argument("--model", default=None, help="planner model id (default muse-spark-1.3)")
     pu = sub.add_parser("punch", help="punch-ins on or off, or remove one -> edl_vN -> cut_vN ($0 without --review)")
@@ -2124,7 +2132,7 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "pin":
         out = pin(a.run_dir, a.speaker, None if a.head.lower() == "none" else a.head, a.from_v, a.review, a.budget)
     else:
-        out = replan(a.run_dir, a.instruction, a.from_v, a.target, a.review, a.budget, model=a.model)
+        out = replan(a.run_dir, a.instruction, a.from_v, a.target, a.review, a.budget, model=a.model, brief=a.brief)
     print(json.dumps(out, indent=2))
     return 0
 

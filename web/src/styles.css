@@ -1269,3 +1269,22 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .score-line { margin-bottom: 8px; }
 .sl-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .sl-dot { cursor: pointer; }
+/* ME1-ME3: the source transcript, the brief, the assets */
+.src-text { max-height: 52vh; overflow: auto; border: 1px solid var(--line); border-radius: var(--r); padding: 8px 10px; margin-top: 6px; }
+.src-turn { margin: 0 0 8px; line-height: 1.6; font-size: 13px; }
+.src-t { font-size: 10.5px; color: var(--mute); margin-right: 6px; }
+.sw { cursor: pointer; border-radius: 3px; }
+.sw.kept { color: var(--text); }
+.sw.unused { color: var(--mute); }
+.sw.unused:hover { color: var(--text-2); background: var(--panel-3); }
+.sw.wsel { background: color-mix(in srgb, var(--accent) 35%, transparent); color: var(--text); }
+.sw.hit { outline: 1px solid var(--accent); }
+.brief-edit { width: 100%; resize: vertical; font: inherit; }
+.asset-row { display: flex; gap: 10px; align-items: center; margin-bottom: 6px; }
+.asset-tall { width: 44px; height: 78px; object-fit: cover; border-radius: 5px; }
+.asset-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 6px; }
+.asset-grid figure { margin: 0; font-size: 10.5px; color: var(--text-2); }
+.asset-grid img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 5px; display: block; }
+.asset-grid figcaption { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.src-apply { flex-wrap: wrap; }
+.src-apply .sa-what { flex-basis: 100%; font-size: 12px; }

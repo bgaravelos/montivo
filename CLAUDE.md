@@ -815,6 +815,13 @@ Rail panels Versions V1-V4 (30/10, $0, same branch): V1 each card has a clean po
 filter (localStorage) and a Montivo / You tag. V3 a star and a name per version (double-click the name): GET/POST
 /api/runs/{id}/labels -> `ui/labels.json`, per judge on the hosted demo (`ui/labels/<judge>.json`), no version made; a
 starred version shows under every filter. V4 the blind scores as a line above the list (a dot picks its version).
+Rail panels Media ME1-ME3 (30/10, $0, same branch): the Media panel has Source / Brief / Assets tabs. ME1 the whole
+recording turn by turn, words in the cut bright (click plays there), the rest dim; word search; click + Shift-click an
+unused passage -> Insert (source order) or At the playhead = the transcript's insert (draft in Live). ME2 the brief as
+a text box, "Re-plan with this brief" (~$0.05, needs the key): POST /replan {"brief"} -> `human replan --brief` (a fresh
+plan from it, kept as EDL `brief_edited` so later re-plans of that line start from it; run.json keeps the original).
+ME3 GET /api/runs/{id}/assets?v=N: B-roll stills, the title card image, the covers made on Export (ui/cache/cover/),
+the music bed, with the source clip's facts. Checked on rp-015: "Okay. Is it" inserted into the draft, 2 covers listed.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

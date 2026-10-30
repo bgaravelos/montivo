@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PanelFocus } from "./Editor";
 import { api, fileUrl, frameUrl, tc, usd } from "./api";
-import { originKind, originLabel, parentOf, speakerColor } from "./edit";
+import { flatWords, originKind, originLabel, parentOf, speakerColor, type Block } from "./edit";
 import { Icon, MarkLoader } from "./icons";
 import { whatChanged } from "./Loop";
 import type { CaptionLine, Costs, HeadsInfo, Planner, RunState, Version } from "./types";
@@ -38,31 +38,130 @@ export function PlannerPicker({ value, onChange, hasOpen, costs, hint }: {
   );
 }
 
-export function MediaPanel({ state }: { state: RunState }) {
+type MediaTab = "source" | "brief" | "assets";
+type Assets = { stills: { id: string; prompt: string | null; placement: string | null; url: string | null }[];
+  title: { url: string; text: string | null; on: boolean } | null; covers: { url: string; template: string; t_s: number | null }[];
+  music: { track: string; url: string } | null; footage: string | null };
+
+/** Media: the source clip and its whole transcript with what the cut uses and what it leaves out (ME1: word search,
+ *  Insert a passage that is not in the cut), the brief as an editable text with "Re-plan with this brief" (ME2), and
+ *  the project's assets in one list (ME3). */
+export function MediaPanel({ state, v, blocks, canEdit, hasKey, planCost, onSeek, onInsert, onReplan }: {
+  state: RunState; v: Version | null; blocks: Block[]; canEdit: string | null; hasKey: boolean; planCost: number;
+  onSeek: (t: number) => void; onInsert: (turn: number, a: number, b: number, where: "source" | "playhead") => void;
+  onReplan: (brief: string) => void;
+}) {
   const m = state.media;
   const name = m.footage?.split("/").pop() ?? "source";
+  const [tab, setTabState] = useState<MediaTab>(() => { try { return (localStorage.getItem("montivo.media.tab") as MediaTab) || "source"; } catch { return "source"; } });
+  const setTab = (x: MediaTab) => { setTabState(x); try { localStorage.setItem("montivo.media.tab", x); } catch { /* this tab */ } };
+  const [q, setQ] = useState("");
+  const [sel, setSel] = useState<{ turn: number; a: number; b: number } | null>(null);
+  const brief0 = v?.brief_edited ?? state.run.brief ?? "";
+  const [brief, setBrief] = useState(brief0);
+  useEffect(() => setBrief(brief0), [brief0]);
+  const [assets, setAssets] = useState<Assets | null>(null);
+  useEffect(() => {
+    if (tab !== "assets" || !v || v.draft) return;
+    api<Assets>(`/api/runs/${state.id}/assets?v=${v.n}`).then(setAssets).catch(() => setAssets(null));
+  }, [tab, v?.n, v?.draft, state.id]); // eslint-disable-line
+  useEffect(() => setSel(null), [v?.n]);
+  const cutAt = new Map(flatWords(blocks).map((f) => [`${f.span.turn_id}:${f.w.i}`, f.t]));
+  const needle = q.trim().toLowerCase();
+  const turns = Object.entries(state.words).map(([turn, ws]) => ({ turn: Number(turn), ws })).sort((a, b) => (a.ws[0]?.t ?? 0) - (b.ws[0]?.t ?? 0));
+  const hits = needle ? turns.reduce((n, x) => n + x.ws.filter((w) => w.w.toLowerCase().includes(needle)).length, 0) : 0;
+  const keptN = cutAt.size, allN = turns.reduce((n, x) => n + x.ws.length, 0);
+  const pick = (turn: number, i: number, shift: boolean) => { // unused words only, one turn, one run
+    if (shift && sel && sel.turn === turn) {
+      const a = Math.min(sel.a, i), b = Math.max(sel.b, i);
+      const free = state.words[String(turn)].filter((w) => w.i >= a && w.i <= b).every((w) => !cutAt.has(`${turn}:${w.i}`));
+      if (free) return setSel({ turn, a, b });
+    }
+    setSel({ turn, a: i, b: i });
+  };
+  const selWords = sel ? state.words[String(sel.turn)].filter((w) => w.i >= sel.a && w.i <= sel.b) : [];
   return (
     <section className="side-panel">
-      <div className="panel-head"><span className="ph-title">Media</span><span className="ph-sub">1 clip</span></div>
+      <div className="panel-head"><span className="ph-title">Media</span><span className="ph-sub">{name}</span></div>
       <div className="panel-body">
-        <div className="media-card">
-          {m.proxy ? <video src={fileUrl(state.id, m.proxy)} controls muted preload="metadata" /> : <div className="media-ph">no preview</div>}
-          <div className="mc-name" title={m.footage ?? ""}>{name}</div>
-          <dl className="props">
-            <dt>Duration</dt><dd className="mono">{tc(m.duration)}</dd>
-            <dt>Frame</dt><dd>{m.width && m.height ? `${m.width} × ${m.height}` : "–"}{m.fps ? ` · ${Math.round(m.fps)} fps` : ""}</dd>
-            <dt>Codec</dt><dd>{m.codec ?? "–"}</dd>
-            <dt>Size</dt><dd>{mb(m.bytes)}</dd>
-            {m.hflip && <><dt>Mirror</dt><dd>flipped horizontally</dd></>}
-            <dt>Transcript</dt><dd>{m.words ? `${m.words} words · ${m.speakers} speaker${m.speakers === 1 ? "" : "s"}` : "–"}</dd>
-          </dl>
+        <div className="seg-group st-tabs" role="tablist" aria-label="Media sections">
+          {([["source", "Source"], ["brief", "Brief"], ["assets", "Assets"]] as [MediaTab, string][]).map(([k, label]) =>
+            <button key={k} role="tab" aria-selected={tab === k} className={`seg ${tab === k ? "on" : ""}`} onClick={() => setTab(k)}>{label}</button>)}
         </div>
-        <div className="panel-note">
+
+        {tab === "source" && <>
+          <p className="mute small">The whole recording, in order: <b>bright</b> words are in the cut (click to play there), dim ones are not.
+            Click a dim word, Shift-click another of the same passage, then Insert. {keptN} of {allN} words used.</p>
+          <input className="st-input" value={q} placeholder="Find a word in the recording" onChange={(e) => setQ(e.target.value)} aria-label="Find a word" />
+          {needle && <p className="mute small">{hits} match{hits === 1 ? "" : "es"}</p>}
+          <div className="src-text">
+            {turns.map(({ turn, ws }) => (
+              <p key={turn} className="src-turn">
+                <span className="src-t mono" title={`Turn ${turn}`}>{tc(ws[0]?.t ?? 0)}</span>
+                {ws.map((w) => {
+                  const at = cutAt.get(`${turn}:${w.i}`);
+                  const on = sel && sel.turn === turn && w.i >= sel.a && w.i <= sel.b;
+                  const hit = needle && w.w.toLowerCase().includes(needle);
+                  return <span key={w.i} className={`sw ${at != null ? "kept" : "unused"} ${on ? "wsel" : ""} ${hit ? "hit" : ""}`}
+                    title={at != null ? `In the cut at ${tc(at)}` : `${tc(w.t)} in the recording: not in the cut`}
+                    onClick={(e) => (at != null ? onSeek(at) : pick(turn, w.i, e.shiftKey))}>{w.w} </span>;
+                })}
+              </p>
+            ))}
+          </div>
+          {sel && (
+            <div className="cap-apply src-apply">
+              <span className="sa-what">“{selWords.map((w) => w.w).join(" ").slice(0, 60)}” · {selWords.length} word{selWords.length === 1 ? "" : "s"}, {selWords.length ? (selWords.at(-1)!.e - selWords[0].t).toFixed(1) : 0} s</span>
+              <button className="btn quiet" onClick={() => setSel(null)}>Clear</button>
+              <button className="btn quiet" disabled={!!canEdit || selWords.length < 2} title={canEdit ?? "Next to the clip under the playhead"}
+                onClick={() => { onInsert(sel.turn, sel.a, sel.b, "playhead"); setSel(null); }}>At the playhead</button>
+              <button className="btn" disabled={!!canEdit || selWords.length < 2} title={canEdit ?? (selWords.length < 2 ? "A clip keeps at least two words" : "Between the clips around it in the recording ($0)")}
+                onClick={() => { onInsert(sel.turn, sel.a, sel.b, "source"); setSel(null); }}>Insert</button>
+            </div>
+          )}
+        </>}
+
+        {tab === "brief" && <>
           <div className="pn-k">Brief</div>
-          <p>{state.run.brief}</p>
+          <textarea className="st-input brief-edit" rows={6} value={brief} maxLength={2000} onChange={(e) => setBrief(e.target.value)} aria-label="The brief" />
+          <p className="mute small">{v?.brief_edited ? "This version was planned from an edited brief. " : ""}Muse Spark plans the cut again from these words: a new version, the clips chosen afresh (your captions and callouts carry where the same lines come back).</p>
+          <button className="btn wide" disabled={!!canEdit || !hasKey || !brief.trim() || brief.trim() === brief0.trim()}
+            title={canEdit ?? (!hasKey ? state.key_note ?? "Set MODEL_API_KEY to plan with Muse Spark" : `One Muse Spark plan call, about ${usd(planCost)}, then a render`)}
+            onClick={() => onReplan(brief.trim())}><Icon name="spark" size={13} /> Re-plan with this brief <span className="btn-cost">~{usd(planCost)}</span></button>
           <div className="pn-k">Target</div>
           <p>{state.run.target_s ?? 40} s, vertical 9:16</p>
-        </div>
+        </>}
+
+        {tab === "assets" && <>
+          <div className="media-card">
+            {m.proxy ? <video src={fileUrl(state.id, m.proxy)} controls muted preload="metadata" /> : <div className="media-ph">no preview</div>}
+            <div className="mc-name" title={m.footage ?? ""}>{name}</div>
+            <dl className="props">
+              <dt>Duration</dt><dd className="mono">{tc(m.duration)}</dd>
+              <dt>Frame</dt><dd>{m.width && m.height ? `${m.width} × ${m.height}` : "–"}{m.fps ? ` · ${Math.round(m.fps)} fps` : ""}</dd>
+              <dt>Codec</dt><dd>{m.codec ?? "–"}</dd>
+              <dt>Size</dt><dd>{mb(m.bytes)}</dd>
+              {m.hflip && <><dt>Mirror</dt><dd>flipped horizontally</dd></>}
+              <dt>Transcript</dt><dd>{m.words ? `${m.words} words · ${m.speakers} speaker${m.speakers === 1 ? "" : "s"}` : "–"}</dd>
+            </dl>
+          </div>
+          {v?.draft && <p className="mute small">The draft's assets show once it is a version.</p>}
+          {assets && <>
+            <div className="pn-k">Title card</div>
+            {assets.title ? <div className="asset-row"><img src={assets.title.url} alt="" className="asset-tall" /><span>{assets.title.text}<span className="mute small"> · {assets.title.on ? "on" : "off"} in v{v?.n}</span></span></div>
+              : <p className="mute small">None made.</p>}
+            <div className="pn-k">B-roll stills</div>
+            {assets.stills.length ? <div className="asset-grid">{assets.stills.map((x) => <figure key={x.id} title={x.prompt ?? ""}>
+              {x.url ? <img src={x.url} alt="" /> : <span className="media-ph">not drawn yet</span>}<figcaption>{x.prompt}</figcaption></figure>)}</div>
+              : <p className="mute small">None in this version: double-click the B-roll lane to add one.</p>}
+            <div className="pn-k">Covers</div>
+            {assets.covers.length ? <div className="asset-grid">{assets.covers.map((x) => <figure key={x.url}><img src={x.url} alt="" /><figcaption>{x.template}{x.t_s != null ? ` · ${tc(x.t_s)}` : ""}</figcaption></figure>)}</div>
+              : <p className="mute small">None yet: Export makes them.</p>}
+            <div className="pn-k">Music</div>
+            {assets.music ? <div className="asset-row"><audio src={assets.music.url} controls preload="none" /><span>{assets.music.track.replace(/_/g, " ")}</span></div>
+              : <p className="mute small">No music in this version.</p>}
+          </>}
+        </>}
       </div>
     </section>
   );

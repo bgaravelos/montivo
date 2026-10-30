@@ -2086,6 +2086,29 @@ def create_app(root: Path) -> FastAPI:
     def run_heads(run_id: str):
         return heads(st.run_dir(run_id))
 
+    @app.get("/api/runs/{run_id}/assets")
+    def run_assets(run_id: str, v: int = 0):
+        """ME3: the project's assets in one list for version v: its B-roll stills (Muse Image), the title card image,
+        the covers made on the Export page (ui/cache/cover/, newest first) and the music bed. $0."""
+        d = st.run_dir(run_id)
+        d, edl = edl_of(run_id, v or latest_version(d))
+        f = lambda p: f"/api/runs/{run_id}/file/{p}"  # noqa: E731
+        stills = [{"id": o.get("id"), "prompt": o.get("prompt"), "placement": o.get("placement"),
+                   "url": f(o["image"]) if o.get("image") and (d / o["image"]).is_file() else None}
+                  for o in edl.get("overlays") or []]
+        title_png = d / "title" / "title_card.png"
+        covers = []
+        for j in sorted((d / "ui" / "cache" / "cover").glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:12]:
+            img = j.with_suffix(".jpg")
+            meta = read_json(j) or {}
+            if img.is_file() and "template" in meta:
+                covers.append({"url": f(img.relative_to(d).as_posix()), "template": meta.get("template"), "t_s": meta.get("t_s")})
+        music = edl.get("music")
+        return {"version": edl.get("version"), "footage": (read_json(d / "run.json") or {}).get("footage"),
+                "stills": stills, "title": {"url": f("title/title_card.png"), "text": edl.get("title_card_text"),
+                                            "on": edl.get("title_card", True) is not False} if title_png.is_file() else None,
+                "covers": covers, "music": {"track": music["track"], "url": f"/api/music/{music['track']}"} if music else None}
+
     @app.get("/api/runs/{run_id}/heads/at")
     def run_heads_at(run_id: str, request: Request, t: float, v: int = 0, draft_: int = Query(0, alias="draft")):
         """SP4: the tracked heads on screen at cut second t of version v (or the open draft) in frame pixels, and the
@@ -2151,17 +2174,19 @@ def create_app(root: Path) -> FastAPI:
         b = await request.json()
         model = planner_of(b)
         text = (b.get("instruction") or "").strip()
-        if not text:
+        brief = " ".join(str(b.get("brief") or "").split())[:2000]  # ME2: a new brief, a fresh plan from it
+        if not text and not brief:
             raise HTTPException(400, "the instruction is empty")
         frm = int(b.get("from") or latest_version(d))
         passes = review_passes(b)
         need_key("Re-planning", COST["plan_open" if model else "plan"] + COST["review"] * passes)
         chips = [str(c) for c in b.get("chips") or []]
-        instr = text + (f" (about {', '.join(chips)})" if chips else "")
-        args = ["-m", "montivo.human", "replan", f"runs/{run_id}", "--instruction", instr, "--from", str(frm),
-                "--review", str(passes), *(["--model", model] if model else [])]
-        job = start_job(st, run_id, "replan", "Ask Montivo" + (" (Muse Spark Open)" if model else ""), args,
-                        chat={"role": "user", "text": text, "chips": chips + [f"v{frm}"], "kind": "instruction"})
+        instr = text + (f" (about {', '.join(chips)})" if chips and text else "")
+        args = ["-m", "montivo.human", "replan", f"runs/{run_id}", "--instruction", instr, *(["--brief", brief] if brief else []),
+                "--from", str(frm), "--review", str(passes), *(["--model", model] if model else [])]
+        job = start_job(st, run_id, "replan", ("Re-plan with the new brief" if brief else "Ask Montivo") + (" (Muse Spark Open)" if model else ""), args,
+                        chat={"role": "user", "text": text or f"New brief: {brief}", "chips": chips + [f"v{frm}"],
+                              "kind": "instruction"})
         return {"job": job.public()}
 
     @app.post("/api/runs/{run_id}/ask")

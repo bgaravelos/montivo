@@ -41,7 +41,7 @@ type Current = { version: number | null; newest: number | null };
 const currentKey = (id: string) => `montivo.current.${id}`;
 // the requests that make a version from the one on screen: after an undo they branch from an older version
 const MAKES_VERSION = ["drop", "trim", "reorder", "cut", "split", "punch", "caption", "glossary", "linebreak", "text", "style", "music", "pin", "ask", "review", "hook",
-  "insert", "pauses", "overlay", "kit", "op", "speakers"];
+  "insert", "pauses", "overlay", "kit", "op", "speakers", "replan"];
 
 const typing = (el: EventTarget | null) => {
   const e = el as HTMLElement | null;
@@ -632,7 +632,22 @@ export function Editor({ id, replay, go }: Props) {
             onCompare={(a, b) => go(`${base}/compare?a=${a}&b=${b}${replay ? `&replay=${replay}` : ""}`)}
             onRestore={canEdit ? null : (n) => edit("restore", { from: n })} />
         )}
-        {panel === "media" && <MediaPanel state={state} />}
+        {panel === "media" && <MediaPanel state={state} v={v} blocks={blocks} canEdit={canEdit} hasKey={state.has_key}
+          planCost={state.costs?.plan ?? 0.05} onSeek={(x) => { player.current?.pause(); seek(x); }}
+          onInsert={(turn, a, b, where) => { // ME1: a passage the cut does not use, from the source transcript
+            if (canEdit) return flash(`Cannot edit now: ${canEdit.toLowerCase()}.`);
+            let before: string | undefined;
+            if (where === "playhead") { // next to the clip under the playhead, as the transcript's At the playhead
+              const live = blocks.filter((k) => k.kind === "span"), x = playhead();
+              const at = live.find((k) => x >= k.t0 && x < k.t1);
+              const k = at ? live.indexOf(at) + (x > (at.t0 + at.t1) / 2 ? 1 : 0) : live.length;
+              before = live[k]?.span!.id ?? "end";
+            }
+            const body = { turn, word_from: a, word_to: b, ...(before ? { before } : {}) };
+            if (live0) return void edit("insert", body);
+            made(edit("insert", { ...body, from: v?.n }));
+          }}
+          onReplan={(brief) => made(edit("replan", { brief, instruction: "", from: v?.n }))} />}
         {panel === "captions" && (
           <CaptionsPanel v={v} t={t} next={next} canEdit={canEdit} onSeek={seek} focus={focus} rev={rev} live={live0}
             onAsk={(c) => { setCapSel({ t_in: c.t_in, t_out: c.t_out, text: c.text }); setPanel("assistant"); setAskNonce((n) => n + 1); }}

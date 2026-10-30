@@ -407,3 +407,54 @@ def test_version_labels(tmp_path, monkeypatch):
     assert c.post("/api/runs/h1/labels", json={"version": 9, "star": True}).status_code == 404
     assert c.post("/api/runs/h1/labels", json={"version": 1, "star": "yes"}).status_code == 400
     assert (d / "ui" / "labels.json").is_file() and not list(d.glob("edl_v2.json"))  # no version made
+
+
+# --------------------------------------------------------------------------- ME2, ME3: a new brief, the assets
+
+
+def test_replan_with_a_new_brief_reaches_the_planner(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    import montivo.human as H
+    from montivo.server import app as A
+    _panel_run(tmp_path, monkeypatch)
+    monkeypatch.setenv("MODEL_API_KEY", "test")
+    started = []
+    monkeypatch.setattr(A, "start_job", lambda st_, rid, kind, label, args, chat=None: started.append((args, label, chat)) or
+                        SimpleNamespace(public=lambda: {"id": "j"}))
+    c = TestClient(A.create_app(tmp_path))
+    assert c.post("/api/runs/h1/replan", json={"instruction": "", "from": 1}).status_code == 400  # neither
+    r = c.post("/api/runs/h1/replan", json={"brief": "A 30 s reel  about the review loop", "instruction": "", "from": 1})
+    assert r.status_code == 200, r.text
+    args, label, chat = started[0]
+    assert args[args.index("--brief") + 1] == "A 30 s reel about the review loop" and label == "Re-plan with the new brief"
+    assert chat["text"] == "New brief: A 30 s reel about the review loop"
+    got = {}
+    monkeypatch.setattr(H, "replan", lambda *a, **k: got.update(a=a, k=k) or {})
+    H.main([args[2], str(tmp_path / args[3]), *args[4:]])
+    assert got["k"]["brief"] == "A 30 s reel about the review loop" and got["a"][1] == ""
+
+
+def test_assets_of_a_version(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from montivo.server import app as A
+    d = _panel_run(tmp_path, monkeypatch)
+    edl = json.loads((d / "edl_v1.json").read_text())
+    (d / "broll").mkdir()
+    (d / "broll" / "o1.png").write_bytes(b"png")
+    edl.update(overlays=[{"id": "o1", "prompt": "a server rack", "placement": "full", "image": "broll/o1.png"},
+                         {"id": "o2", "prompt": "not drawn", "placement": "pip"}], music={"track": "ukulele", "level_db": -18, "duck_db": -6})
+    (d / "edl_v1.json").write_text(json.dumps(edl))
+    (d / "title").mkdir()
+    (d / "title" / "title_card.png").write_bytes(b"png")
+    cov = d / "ui" / "cache" / "cover"
+    cov.mkdir(parents=True)
+    (cov / "abc.jpg").write_bytes(b"jpg")
+    (cov / "abc.json").write_text(json.dumps({"template": "headline", "t_s": 1.5}))
+    (cov / "mask.json").write_text("{}")  # not a cover record
+    a = TestClient(A.create_app(tmp_path)).get("/api/runs/h1/assets?v=1").json()
+    assert [s["url"] for s in a["stills"]] == ["/api/runs/h1/file/broll/o1.png", None]
+    assert a["title"] == {"url": "/api/runs/h1/file/title/title_card.png", "text": "Raw In", "on": True}
+    assert a["covers"] == [{"url": "/api/runs/h1/file/ui/cache/cover/abc.jpg", "template": "headline", "t_s": 1.5}]
+    assert a["music"]["track"] == "ukulele"
