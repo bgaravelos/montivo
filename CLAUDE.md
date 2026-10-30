@@ -843,7 +843,7 @@ punch-in). 575 tests. Modal smoke 31.9 s (30/10): not the code. On the Mac, drop
 worker or Volume reads). Merged into main (fast-forward to 5853b8d), pushed and deployed 30/10 on Billy's go from a clean
 worktree (no container was running before it); /api/health 200, /api/runs 401, /s/nope 404; two smoke drops on 015 in a
 row: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 10.75 s and 10.13 s (the same segments as the 31.9 s one): Modal variance.
-Smarter chat (30/10 evening, $0.52 incl. the bench rounds, branch `claude/chat-agent`, commits 4081926 7f201dc cc5fdc3
+Smarter chat (30/10 evening, $0.84: Meta $0.66 incl. five bench rounds and the browser checks, Baseten $0.18, branch `claude/chat-agent`, commits 4081926 7f201dc cc5fdc3
 96f3604; research in `docs/notes/chat-research_2026-10-30.md`; not merged, pushed or deployed): `tools/chat_bench.py`
 (38 messages, EN + GR, on clones of 015 v5 / 012 v2 / 014 v1 in runs/chatbench/, router only, intents + argument
 checks; `--model open`, `--compare A B`): before 22/38 (both models). `agent.context` now adds `footage()` (every
