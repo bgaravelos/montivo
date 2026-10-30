@@ -245,14 +245,14 @@ def scope_spans(scope: dict) -> set[str]:
 
 
 def route(run_dir: Path, edl: dict, message: str, ledger: Ledger, log, scope: dict | None = None,
-          note: str = "") -> tuple[dict, float]:
+          note: str = "", model: str = SPARK_MODEL) -> tuple[dict, float]:
     """The router call: Spark 1.3 reads the message and the version and answers {reply, question, ops}."""
     from .engine.spark import Spark
     prompt = PROMPT.format(version=edl.get("version"), context=context(run_dir, edl),
                            tracks="; ".join(f"{t['id']}: {t['name']}, {t.get('mood', '')}" for t in music_mod.tracks()),
                            presets=", ".join(f"{k}: {PRESET_NAMES[k]}" for k in PRESETS),
                            scope=scope_text(scope or {}), note=note, message=message.replace('"', "'"))
-    call = Spark(run_dir, ledger, model=SPARK_MODEL, log=log).call("ask", prompt, SCHEMA, max_output_tokens=6000,
+    call = Spark(run_dir, ledger, model=model, log=log).call("ask", prompt, SCHEMA, max_output_tokens=6000,
                                                                     reasoning_effort="low", stage="spark.ask",
                                                                     schema_name="ask_montivo")
     return dict(call.parsed), call.cost_usd
