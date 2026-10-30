@@ -373,7 +373,7 @@ def speakers_run(run_dir: Path, log=print) -> dict:
     if result["inverted_heads"]:
         log(f"speakers: upside-down heads {', '.join(result['inverted_heads'])} (mouth and eyes bands flipped)")
     for spk, s in result["speakers"].items():
-        ev = ", ".join(f"{oid} mic {s['mic_share']:.0%}" if s["method"] == "microphone" else f"{oid} d={result['heads'][oid]['d']}"
+        ev = ", ".join(f"{oid} mic {s['mic_share']:.0%}" if s["method"] == "microphone" else f"{oid} d={result['heads'].get(oid, {}).get('d', '?')}"
                        for oid in s["ids"])
         log(f"speakers: {spk} ({s.get('who') or '?'}) -> {s['method']}{': ' + ev if ev else ''}")
     return result

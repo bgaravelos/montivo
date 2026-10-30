@@ -172,7 +172,8 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
 # --------------------------------------------------------------------------- the brief as a checklist (C1, A4)
 
 QUOTE_MATCH = 0.8  # a quote counts as kept when a run of the kept words matches it this well (difflib ratio)
-DROP_MATCH = 0.6  # a drop item counts as left in when a run of the kept words matches it this well
+DROP_MATCH = 0.8  # a drop item counts as left in when a run of the kept words matches it this well (0.6 took 012's
+# kept second take "this is the part that matters" for the dropped first one, "this is the part I care about")
 LENGTH_SLACK_S = 0.5
 REPEAT_N = 4  # the same REPEAT_N words kept twice is a repeated take
 

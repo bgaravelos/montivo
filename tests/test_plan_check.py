@@ -54,3 +54,10 @@ def test_the_reviewer_gets_the_checklist():
     caps = {"lines": 0, "over_face": [], "min_clearance_px": None}
     text = facts_text([], caps, 38.0, brief_checks=E.check_brief(edl, 38.0))
     assert "met: " in text and "missed: \"Open on 'Hi. I'm Billy.'\"" in text and "yours to judge: \"Make it fun\"" in text
+
+
+def test_a_kept_second_take_does_not_count_as_the_dropped_first():
+    edl = {"spans": [{"id": "s1", "words": "this is the the part that matters Spark watches its own render"}],
+           "brief_checks": [{"item": "Drop the repeated take", "kind": "drop", "quote": "this is the part I care about",
+                             "min_s": -1, "max_s": -1}], "runtime_s": 40.0}
+    assert E.check_brief(edl)[0]["status"] == "met"  # run 012: the 0.6 line asked for a repair plan for nothing
