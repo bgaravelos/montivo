@@ -889,8 +889,13 @@ loop patch's render; the loop stops when only measured fixes ran and could not c
 (`edl.check_brief`, a reviewer fact) and `edl.plan_check` + one repair plan call (`plan_check` in the EDL). Fresh run of
 the 016 clip (`runs/a1run-016`): first review 88 pass at 106.6 s, $0.22 (was 200 s, $0.31). Benchmark on seven clones
 (`runs/fc-*`): first review mean 65.9 -> 78.7, first-review passes 0 -> 2 (015, 016), title hook issues 7 -> 0; 013,
-nasa, tedx, heli still no pass. Not pushed or deployed. C2 pairwise judge, C3 glossary asks, C4 escalate, A3
-close-up captions: side session `review-loop-c2-a3` on its own branch.
+nasa, tedx, heli still no pass. Side session `review-loop-c2-a3` ($0.18), merged as 7dc0c65 on Billy's go: C2
+`Spark.compare` / `review.pairwise` (both cuts in one call, asked twice swapped, the second wins only in both orders;
+hook A/B and the loop's regression guard), C3 plan `likely_mishearings` -> EDL `glossary_suggestions` ("Did you say
+...?" in the chat and Captions panel, Accept = glossary edit, never applied unasked; 016: "four Meta models", "SAM
+tracks me"), C4 a stuck loop escalates to one re-plan from the reviewer's open notes (loop.json `escalation`; nasa: 56,
+not kept), A3 `captions.room_for` (a line with no room tries down to 70 % size; moves none of 013 / usgs: SAM's head
+box fills those close-ups, needs a face measure). 632 tests. Not pushed or deployed.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
