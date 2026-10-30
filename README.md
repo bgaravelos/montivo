@@ -36,7 +36,7 @@ issue, the fix and the result, then make an edit of your own. Details under [Try
 
 | Role | Model | What it does |
 |---|---|---|
-| Eyes and judgement | **Muse Spark 1.3** | shot log and speaker map (`watch`), paper edit by turn id with verbatim words (`plan`), the blind rubric review with fix ops (`review`), the Ask Montivo router |
+| Eyes and judgement | **Muse Spark 1.3** | shot log and speaker map (`watch`), paper edit by turn id with verbatim words (`plan`), the blind rubric review with fix ops (`review`), the Ask Montivo router, Monti's answers |
 | Open-weight planner | **Muse Spark Open** (on Baseten) | the paper edit (`plan`) when you pick it, in place of Spark 1.3: see [Open weight](#open-weight-muse-spark-open) |
 | Ears and clock | **Muse Voice Transcribe 1.0** | turns, speakers and word timings of the footage, and each rendered cut transcribed again so the review can check its edge words |
 | Camera operator | **SAM 3.1** | tracks the speaker's head (5 fps) for the 9:16 reframe and the person plus any callout concept per frame; the cutout on a cover |
@@ -294,6 +294,14 @@ numbered contact sheet, writes the headline, checks the cover and its grid tile 
 The Voice and Music tracks of a version with music have a fader each that plays live in the browser before "Make
 Version" renders the mix. Under 900 px the editor is a review mode (player, review, chat, export).
 
+Monti, the gecko in the corner of the editor and the project list (key ?), is the app's help: ask "where do I add
+music?" or "πώς διορθώνω έναν υπότιτλο;" and it answers from one guide file (`montivo/monti_guide.md`, every panel,
+key, op, price and model per stage), with steps and a Show me that runs along the window's edges to the place and frames
+it between an in and an out bracket. It never edits: an edit request goes into Ask Montivo's box, unsent. One Muse
+Spark 1.3 call per question (about $0.013, counted by the hosted budget), or the guide's keywords for $0 without a key;
+`tools/monti_bench.py` scores it on 24 questions in English and Greek: 20 of 20 run on Spark 1.3 (30/10), 21 of 24 on
+the keywords.
+
 ## Built during the hackathon
 
 Everything in this repository was written from scratch for the Meta Global AI Developer Hackathon, from the kickoff
@@ -331,7 +339,7 @@ and the run folder layout are in [docs/pipeline.md](docs/pipeline.md).
 | 27/10 | the edge pass (loops 76 to 100 and 65 to 85); two-pass loudness and a minimum caption duration; a second source (run 013) and its three fixes; SAM at 5 fps for every concept; the API and the review room, then the NLE editor with trim by drag; the bundled caption font and CI; speaker to head mapping; the Open Weight planner; punch-ins, then their switch, markers and removal in the editor; the hook A/B; the brand (logo, tokens in the editor and the render, social preview, title and end cards, logo sting) |
 | 28/10 | the hosted demo on Modal and its first upload; the Codex review fixes; caption looks and the canvas drag; the Export page with its pre-flight; style by prompt; saved looks; the Spark cover; Feed 4:5 and Square 1:1 exports; a music bed with ducking (eight CC0 tracks from OpenGameArt) and live voice and music faders; the Ask Montivo agent over the edit operations, with a preview and its cost for a structural change and a queue for messages typed during a job; restore and share links; split, snapping and multi-select on the timeline; a segment cache (a caption edit re-renders in about 2.5 s instead of 10); adding back a passage, removing pauses and Muse Image B-roll stills; the cover maker (Spark designs it, SAM 3.1 cuts the speaker out of the still) and post text per platform; picture and sound (an eased reframe, a crossfade at every cut, phrase-aware caption lines, camera cuts, VFR and HDR sources) |
 | 28/10 night | debugging: a combination matrix of chained edits (`tools/combo_check.py`, 44 versions with every invariant checked, 0 failures), real runs again on the NASA, USGS and TEDx clips, a code review and a bug bash as a judge on the hosted setup, 27 fixes each with a test first; then the feature freeze (tag `freeze-2026-10-31`) |
-| 30/10 | a faster and smarter first cut: the title over the opening speech, plan and watch at effort low, Voice and the plan started earlier, the review prep in parallel, the brief as a checklist with a plan check, a $0 preflight of the measured checks before every render |
+| 30/10 | a faster and smarter first cut: the title over the opening speech, plan and watch at effort low, Voice and the plan started earlier, the review prep in parallel, the brief as a checklist with a plan check, a $0 preflight of the measured checks before every render; Monti, the help gecko |
 | 29/10 to 4/11 | the samples for the hosted demo, the demo video, the submission; after the freeze, only fixes for what breaks the demo |
 
 ## Before the kickoff

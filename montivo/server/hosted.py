@@ -41,6 +41,7 @@ COOKIE = "montivo_auth"
 JUDGE = "montivo_judge"  # one id per browser: the judge's own copies of the samples and their own runs
 OPEN_PATHS = ("/login", "/api/login", "/api/health", "/favicon", "/apple-touch-icon", "/s/")  # /s/: share links (share.py)
 MIN_PAID_USD = 0.01  # the cheapest paid action (a Muse Image title card)
+MONTI = "_monti"  # the budget key of Monti's ledger (no run has a name starting with _)
 ARCHIVED = "_archive"  # runs/_archive/<id> (app.ARCHIVE)
 
 
@@ -90,6 +91,10 @@ class Budget:
                     out[pre + p.parent.name] = float(json.loads(p.read_text()).get("total_cost_usd") or 0.0)
                 except (OSError, ValueError):
                     continue
+        try:  # Monti's questions are not a run: <root>/monti/ledger.json (montivo/monti.py)
+            out[MONTI] = float(json.loads((self.root / "monti" / "ledger.json").read_text()).get("total_cost_usd") or 0.0)
+        except (OSError, ValueError):
+            pass
         return out
 
     def move(self, old: str, new: str) -> None:

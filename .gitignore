@@ -42,6 +42,7 @@ docs/notes/
 # sample zips for the GitHub release
 dist/
 shares.json
+/monti/
 judge.key
 
 # private notes for Claude Code (agency background, hosted address, task board)

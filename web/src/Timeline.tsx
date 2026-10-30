@@ -82,7 +82,7 @@ export function Timeline(p: Props) {
   return (
     <div className="timeline">
       <div className="tl-bar">
-        <div className="seg-group">
+        <div className="seg-group" data-monti="tl.tabs">
           <button className={`seg ${mode === "timeline" ? "on" : ""}`} onClick={() => setMode("timeline")}><Icon name="film" size={13} />Timeline</button>
           <button className={`seg ${mode === "transcript" ? "on" : ""}`} onClick={() => setMode("transcript")}><Icon name="transcript" size={13} />Transcript</button>
         </div>
@@ -93,7 +93,7 @@ export function Timeline(p: Props) {
           const locked = !p.canTrim ? "Not while an edit runs or in replay" : null;
           const del = !b && many.length < 2 ? pick : locked ?? (many.length >= v.spans.length || v.spans.length < 2 ? "That is every clip" : null);
           return (
-            <span className="tl-tools">
+            <span className="tl-tools" data-monti="tl.tools">
               <button className="icon-btn" disabled={!!locked} onClick={p.onSplit} title={locked ?? "Split the clip at the playhead (S · ⌘K)"}><Icon name="scissors" /></button>
               <button className="icon-btn" disabled={!b} onClick={() => b && p.onSeek(b.t0, b.t1)} title={b ? `Play ${pick} on a loop` : pick}><Icon name="repeat" /></button>
               <button className="icon-btn" disabled={!b} onClick={() => b && p.onAsk(b.span!.id)} title={b ? `Ask Montivo about ${pick}` : pick}><Icon name="spark" /></button>
@@ -115,13 +115,13 @@ export function Timeline(p: Props) {
           </span>
         )}
         {mode === "timeline" && (
-          <button className={`icon-btn ${p.snap ? "on" : ""}`} onClick={() => p.setSnap(!p.snap)} aria-pressed={p.snap}
+          <button data-monti="tl.snap" className={`icon-btn ${p.snap ? "on" : ""}`} onClick={() => p.setSnap(!p.snap)} aria-pressed={p.snap}
             title={`Snapping ${p.snap ? "on" : "off"}: a dragged edge or clip lands on the playhead, clip edges and review issues (N). Hold ⇧ while dragging to move freely. Trims always land on a word.`}>
             <Icon name="magnet" />
           </button>
         )}
         {mode === "timeline" && (
-          <span className="zoom">
+          <span className="zoom" data-monti="tl.zoom">
             <button className="icon-btn" onClick={() => zoomTo(pps / 1.4)} title="Zoom out (⌘−)"><Icon name="zoomOut" /></button>
             <input type="range" min={Math.log(ZOOM_MIN)} max={Math.log(ZOOM_MAX)} step={0.01} value={Math.log(pps)}
               onChange={(e) => zoomTo(Math.exp(Number(e.target.value)))} aria-label="Timeline zoom" />
@@ -137,19 +137,19 @@ export function Timeline(p: Props) {
           <div className="tl-body">
             <div className="tl-heads">
               <div style={{ height: RULER_H }} />
-              <div className="tl-head" style={{ height: TRACK_H.overlays }}><Icon name="media" size={13} />B-roll
+              <div className="tl-head" data-monti="tl.broll" style={{ height: TRACK_H.overlays }}><Icon name="media" size={13} />B-roll
                 <button className="head-add" disabled={!p.canTrim || !v.cut} onClick={() => setBar({ kind: "new" })}
                   title={!p.canTrim ? "Not while an edit runs or in replay" : "Add a Muse Image still at the playhead ($0.01)"}><Icon name="plus" size={11} /></button>
               </div>
-              <div className="tl-head" style={{ height: TRACK_H.text }}><Icon name="text" size={13} />Text</div>
-              <div className="tl-head" style={{ height: TRACK_H.captions }}><Icon name="captions" size={13} />Captions</div>
-              <div className="tl-head video" style={{ height: TRACK_H.video }}><Icon name="film" size={13} />Video</div>
-              <Fader label="Voice" icon="wave" height={TRACK_H.audio} unit="dB" range={VOICE_RANGE}
+              <div className="tl-head" data-monti="tl.text" style={{ height: TRACK_H.text }}><Icon name="text" size={13} />Text</div>
+              <div className="tl-head" data-monti="tl.captions" style={{ height: TRACK_H.captions }}><Icon name="captions" size={13} />Captions</div>
+              <div className="tl-head video" data-monti="tl.video" style={{ height: TRACK_H.video }}><Icon name="film" size={13} />Video</div>
+              <Fader monti="tl.voice" label="Voice" icon="wave" height={TRACK_H.audio} unit="dB" range={VOICE_RANGE}
                 value={p.mix?.voice_db ?? 0} base={p.base?.voice_db ?? 0} none={!p.mix} disabled={!p.mix || !!mixOff}
                 title={!p.mix ? "The cut is normalised to −14 LUFS for Reels, TikTok and Shorts: with one track there is nothing to balance. Add music to set the voice against it."
                   : mixOff ?? "The voice against the music, heard live (double-click: back to this version's)"}
                 onChange={(x) => p.mix && p.onMix({ ...p.mix, voice_db: x })} />
-              <Fader label="Music" icon="music" height={TRACK_H.music} unit="LUFS" range={LEVEL_RANGE}
+              <Fader monti="tl.music" label="Music" icon="music" height={TRACK_H.music} unit="LUFS" range={LEVEL_RANGE}
                 value={p.mix?.level_db ?? -20} base={p.base?.level_db ?? -20} none={!p.mix} disabled={!p.mix || !!mixOff}
                 shown={under != null ? dbs(-under) : null}
                 title={!p.mix ? "No music in this version: add a track in the Music panel" : mixOff ?? `${under != null ? `The music sits about ${under} dB under the voice. ` : ""}The fader sets the bed's level where nobody speaks (${p.mix.level_db} LUFS), heard live; it ducks ${-(v?.music?.duck_db ?? 0)} dB under the voice (double-click: back to this version's)`}
@@ -617,14 +617,14 @@ const Tracks = memo(function Tracks(p: TrackProps) {
 const dbs = (x: number) => `${x > 0 ? "+" : x < 0 ? "−" : "±"}${Math.abs(x)} dB`;
 
 /** A track head with its fader: the value moves the track live; double-click puts it back on the version's own. */
-function Fader({ label, icon, height, unit, range, value, base, none, disabled, title, onChange, shown }: {
-  label: string; icon: string; height: number; unit: "dB" | "LUFS"; range: [number, number]; value: number; base: number;
+function Fader({ monti, label, icon, height, unit, range, value, base, none, disabled, title, onChange, shown }: {
+  monti: string; label: string; icon: string; height: number; unit: "dB" | "LUFS"; range: [number, number]; value: number; base: number;
   none: boolean; disabled: boolean; title: string; onChange: (x: number) => void; // none: the version has no music
   shown?: string | null; // the value as it is heard, in place of the fader's own
 }) {
   const moved = value !== base;
   return (
-    <div className={`tl-head fader-head ${disabled ? "off" : ""}`} style={{ height }} title={title}>
+    <div className={`tl-head fader-head ${disabled ? "off" : ""}`} data-monti={monti} style={{ height }} title={title}>
       <div className="fh-top"><Icon name={icon} size={13} />{label}
         <span className={`fh-val ${moved ? "moved" : ""}`}>{none ? "" : shown ?? (unit === "dB" ? dbs(value) : `${value}`)}</span>
       </div>

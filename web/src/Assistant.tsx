@@ -456,9 +456,10 @@ export function wordScope(flat: FlatWord[], sel: WordSel | null): Selection["wor
 type Queued = { text: string; review: number; planner: Planner; scope: AskScope; chips: string[]; failed?: boolean };
 const queueKey = (id: string) => `montivo.queue.${id}`;
 
-export function Assistant({ state, versions, lines, job, seen, progress, replay, v, selection, getTime, focusNonce, onSend, onStop, onPick, onSeek, onCompare, onRestore, onApply, onRetry, onRetryJob, onGlossary }: {
+export function Assistant({ state, versions, lines, job, seen, progress, replay, v, selection, getTime, focusNonce, prefill, onSend, onStop, onPick, onSeek, onCompare, onRestore, onApply, onRetry, onRetryJob, onGlossary }: {
   state: RunState; versions: Version[]; lines: LogLine[]; job: Job | null; seen: Seen; progress: Progress | null; replay: number; v: Version | null;
   selection: Selection; getTime: () => number; focusNonce: number;
+  prefill?: { text: string; nonce: number } | null; // Monti's hand-off: an edit request put in the box, not sent
   onSend: (text: string, chips: string[], review: number, planner: Planner, scope: AskScope, latest: boolean) => Promise<boolean>; onStop: () => void;
   onPick: (n: number) => void; onSeek: (t: number) => void; onCompare: (a: number, b: number) => void;
   onRestore: ((n: number) => void) | null; // null while an edit runs or in replay
@@ -482,6 +483,7 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
   const selKey = JSON.stringify(selection);
   useEffect(() => setUse({ clips: true, words: true, caption: true }), [selKey]); // a new selection is in until clicked off
   useEffect(() => { if (focusNonce) { setUse({ clips: true, words: true, caption: true }); box.current?.focus(); } }, [focusNonce]);
+  useEffect(() => { if (prefill?.text) { setText(prefill.text); window.setTimeout(() => box.current?.focus(), 30); } }, [prefill?.nonce]); // eslint-disable-line
   useEffect(() => { try { localStorage.setItem(queueKey(state.id), JSON.stringify(queue)); } catch { /* this tab only */ } }, [queue, state.id]);
   useLayoutEffect(() => { // the box grows with the text, up to about six lines
     const el = box.current;
@@ -574,7 +576,7 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
         <div ref={end} />
       </div>
       {tips.length > 0 && <div className="sugg">{tips.map((s) => <button key={s} onClick={() => { setText(s); box.current?.focus(); }}>{s}</button>)}</div>}
-      <div className="composer">
+      <div className="composer" data-monti="chat.composer">
         <Tray state={state} lines={lines} job={job} seen={seen} progress={progress} replay={replay} onStop={onStop} />
         {queue.map((q, k) => (
           <div key={k} className="queued">

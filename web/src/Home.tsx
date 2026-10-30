@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, crit, dur, fileUrl, frameUrl, tc, usd } from "./api";
 import { fixText, nameOf, originLabel, parentOf, sevRank } from "./edit";
+import { Monti } from "./Monti";
 import { Icon, MarkLoader } from "./icons";
 import { PlannerPicker } from "./Panels";
 import { askToNotify, ProgressMini } from "./Progress";
@@ -205,12 +206,12 @@ export function Home({ go }: { go: (h: string) => void }) {
         <a className="mark" href="#/"><img src="/montivo-lockup-dark.svg" alt="Montivo" /></a>
         <nav className="hm-nav" aria-label="Montivo">
           <a className="on" href="#/" aria-current="page">Projects</a>
-          <a href={`${REPO}#how-the-loop-works`} target="_blank" rel="noreferrer">How it works</a>
+          <a data-monti="home.how" href={`${REPO}#how-the-loop-works`} target="_blank" rel="noreferrer">How it works</a>
           <a href={REPO} target="_blank" rel="noreferrer">GitHub</a>
         </nav>
         <span className="grow" />
         {budget && <BudgetMeter b={budget} />}
-        <button className="btn hm-new" onClick={() => setSheet(true)}><Icon name="plus" size={14} />New project <kbd>N</kbd></button>
+        <button className="btn hm-new" data-monti="home.new" onClick={() => setSheet(true)}><Icon name="plus" size={14} />New project <kbd>N</kbd></button>
       </header>
 
       <main className="hm-body">
@@ -222,7 +223,7 @@ export function Home({ go }: { go: (h: string) => void }) {
             <span className="mute">{shown.length < all.length ? `${shown.length} of ${all.length}` : all.length || ""}</span>
             <span className="grow" />
             {all.length > 1 && (
-              <div className="seg-group">{tabs.map((o) => <button key={o.id} className={`seg ${only === o.id ? "on" : ""}`} onClick={() => setOnly(o.id)}>{o.label}</button>)}</div>
+              <div className="seg-group" data-monti="home.tabs">{tabs.map((o) => <button key={o.id} className={`seg ${only === o.id ? "on" : ""}`} onClick={() => setOnly(o.id)}>{o.label}</button>)}</div>
             )}
             {many && <>
               <label className="search"><Icon name="search" size={14} />
@@ -237,7 +238,7 @@ export function Home({ go }: { go: (h: string) => void }) {
           {!runs && <div className="hm-grid" aria-busy="true">{[0, 1, 2, 3].map((k) => <div key={k} className="hm-tile skeleton"><div className="hm-poster" /></div>)}</div>}
           {runs && !!all.length && !shown.length && <div className="mute">No project matches. <button className="link" onClick={() => { setQ(""); setOnly("all"); }}>Show all</button></div>}
           {runs && (
-            <div className="hm-grid">
+            <div className="hm-grid" data-monti="home.grid">
               <button className="hm-tile hm-newtile" onClick={() => setSheet(true)}>
                 <div className="hm-poster">
                   <div><span className="hm-plus"><Icon name="plus" size={20} /></span><b>New project</b>
@@ -270,6 +271,7 @@ export function Home({ go }: { go: (h: string) => void }) {
         <NewProject go={go} close={() => setSheet(false)} footage={footage} f={f} setF={setF} put={put} upload={upload}
           limits={limits} hasKey={hasKey} hasOpen={hasOpen} keyNote={keyNote} budget={budget} costs={costs} />
       )}
+      {!sheet && <Monti place="home" hasKey={hasKey} budget={budget} ctx={{ page: "home" }} />}
       {dragging && !sheet && <div className="hm-drop" aria-hidden><div><Icon name="plus" size={22} />Drop the clip to start a new project</div></div>}
       {toast && (
         <div className={`toast bottom ${toast.tone ?? ""}`}>
@@ -284,7 +286,7 @@ export function Home({ go }: { go: (h: string) => void }) {
 function BudgetMeter({ b }: { b: Budget }) {
   const frac = b.cap > 0 ? Math.max(0, Math.min(1, b.left / b.cap)) : 0;
   return (
-    <span className={`hm-budget ${frac < 0.2 ? "low" : ""}`} title="Demo budget for Meta model calls, shared by everyone on this server">
+    <span data-monti="home.budget" className={`hm-budget ${frac < 0.2 ? "low" : ""}`} title="Demo budget for Meta model calls, shared by everyone on this server">
       <span className="hm-meter"><i style={{ width: `${frac * 100}%` }} /></span>
       {usd(b.left)} of {usd(b.cap)} left
     </span>
@@ -309,7 +311,7 @@ function Models() {
 /** No cut to show yet (a fresh install): what Montivo does and the models, with the way in. */
 function Intro({ onNew }: { onNew: () => void }) {
   return (
-    <section className="hm-hero hm-intro">
+    <section className="hm-hero hm-intro" data-monti="home.hero">
       <div className="hm-hero-r">
         <div className="hm-eyebrow">Agent-first video editor</div>
         <h1>Raw footage in, <em>a cut that reviewed itself</em> out.</h1>
@@ -372,7 +374,7 @@ function Featured({ r, hosted, costs }: { r: RunCard; hosted: boolean; costs: Co
   const human = steps.some((s) => s.who === "You");
   const open = `#/run/${r.id}`;
   return (
-    <section className="hm-hero">
+    <section className="hm-hero" data-monti="home.hero">
       <div className="hm-feat">
         <video ref={video} src={fileUrl(r.id, `cut_v${card.shown}.mp4`)} poster={frameUrl(r.id, card.shown, card.poster_t, true)}
           autoPlay={!paused} muted loop playsInline preload="metadata" aria-label={`${nameFor(r)}, version ${card.shown}`} />

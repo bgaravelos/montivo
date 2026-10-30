@@ -79,7 +79,8 @@ OP_LABEL = {"kit": "Brand kit", "speakers": "Speakers", "style": "Style", "text"
 COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 13, "plan_open_s": 7, "review": 0.035, "run_fixed": 0.045,
         "run_per_s": 0.0026, "run_wall_fixed_s": 30, "run_wall_per_s": 0.5, "review_loop": 0.05, "review_loop_s": 60,
         "hook_ab": 0.04, "compare": 0.075, "ask": 0.006, "look": 0.008, "titles": 0.009, "cover": 0.025, "cover_design": 0.05, "cover_mask": 0.01,
-        "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175}
+        "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175, "monti": 0.014}
+MONTI_PER_HOUR = 40  # Monti answers from the model per judge and hour on the hosted demo; past it, from the guide ($0)
 
 
 class WebFiles(StaticFiles):
@@ -546,6 +547,44 @@ def create_app(root: Path) -> FastAPI:
                 "budget": budget.public() if budget else None,
                 # the hosted limits, so the browser refuses a clip before minutes of upload (None: no limit)
                 "limits": {"footage_s": max_footage_s, "upload_mb": max_upload_mb, "uploads": max_uploads}}
+
+    monti_seen: dict[str, list[float]] = {}  # judge -> times of their model answers (the hosted hourly cap)
+
+    @app.post("/api/monti")
+    def monti_ask(request: Request, b: dict):
+        """Monti, the help gecko: {"message", "context": {page, version, panel, live, draft, selection},
+        "history": [{q, a}]} -> {reply, steps, target, open_panel, handoff, suggestions, source, cost_usd}. One
+        muse-spark-1.3 call over montivo/monti_guide.md (montivo/monti.py), logged in <root>/monti/ledger.json, which
+        the hosted budget counts. Without the key, past the budget or past MONTI_PER_HOUR answers from the model in an
+        hour (hosted, per judge), the $0 keyword match over the guide answers instead. Not a run and no job: it runs
+        beside any job, one Monti call at a time."""
+        from .. import monti
+        message = str(b.get("message") or "").strip()
+        if not message:
+            raise HTTPException(400, "message: the question")
+        ctx = b.get("context") if isinstance(b.get("context"), dict) else {}
+        ctx = {**ctx, "hosted": budget is not None}
+        history = [h for h in b.get("history") or [] if isinstance(h, dict)][-2:]
+        page = ctx.get("page") if ctx.get("page") in monti.PAGES else "editor"
+        who = judge_of(request) if budget is not None else "local"
+        now = time.time()
+        recent = [x for x in monti_seen.get(who, []) if now - x < 3600]
+        why = ("no MODEL_API_KEY on this server" if not has_key()
+               else "the demo's model budget is spent" if budget is not None and budget.left() < monti.COST_USD
+               else f"more than {MONTI_PER_HOUR} questions this hour" if budget is not None and len(recent) >= MONTI_PER_HOUR
+               else None)
+        out = None
+        if why is None:
+            try:
+                out = monti.ask(st.root, message, ctx, history)
+                monti_seen[who] = [*recent, now]
+            except Exception as e:  # noqa: BLE001 - a failed call still gets the guide's answer
+                why = f"the model call failed ({str(e)[:120]})"
+        if out is None:
+            out = monti.fallback(message, page) | {"source": "guide", "model": None, "cost_usd": 0.0, "seconds": 0.0,
+                                                    "why": why}
+        monti.log_question(st.root, who, message, out)
+        return {**out, "budget": budget.public() if budget else None}
 
     @app.get("/api/health")
     def health():

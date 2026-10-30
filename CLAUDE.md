@@ -911,6 +911,20 @@ today are untouched. Found on the way: 013's speaker map gave A to a 25 px passe
 21:56; the idle 23:37 web container stopped after the deploy); /api/health 200 (one 500 while the old container
 stopped, then 200 five times), /api/runs 401, /s/nope 404, host spend $3.37 of $15; smoke drop on 015: 34.3 s,
 -14.0 LUFS / -1.7 dBTP, render 10.1 s.
+Monti, the help gecko (30/10 night, $0.28 incl. the bench, committed on Billy's go after the screenshots in
+`docs/notes/monti-screens/`, branch `claude/monti-0641d4`; not merged, pushed or deployed): `montivo/monti.py` + `montivo/monti_guide.md` (47 sections, each with a `monti:` line:
+target, panel, keywords), `POST /api/monti {message, context, history}` -> one muse-spark-1.3 call over the whole guide
+(strict schema {reply, steps, target, open_panel, handoff_to_ask, suggestions, section}, effort low, 9K tokens in, no
+prompt cache on the Meta API: $0.013-0.014), the target checked against the page; ledger `<root>/monti/ledger.json`
+(hosted.Budget key `_monti`), questions in `<root>/monti/questions.jsonl`; keyless / past the budget / past
+MONTI_PER_HOUR 40 per judge: the guide's keywords ($0). UI `web/src/Monti.tsx`: the peek drawing over the timeline's
+right end (Home: bottom right), first-visit "Hi, I'm Monti", ? opens it (the shortcuts moved to More and the panel's
+chip), panel option A (in / out brackets, context chips, steps with keycaps, Show me, Open <panel>, suggestions, model
+and cost), Show me = the climb drawing runs the bottom edge and up to the `data-monti` element (opening its panel or
+Export first), then the point pose (mirrored near the right edge) beside it, framed and the rest dimmed; an edit
+request fills Ask Montivo's composer unsent (Assistant `prefill`); under 900 px a bottom sheet, Show me hidden for
+targets the layout hides. Drawings: ChatGPT's character sheet cut out (`web/public/monti/*.webp`, 256 + 512 px).
+`tools/monti_bench.py`: Spark 1.3 20/20 of the 24 (4 left unrun for the cap), keywords 21/24. 661 tests pass.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

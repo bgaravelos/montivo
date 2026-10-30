@@ -8,6 +8,7 @@ import { Icon, MarkLoader } from "./icons";
 import { Inspector, type PunchAsk } from "./Inspector";
 import { Palette, type Command } from "./Palette";
 import { mixOf, sameMix, useLiveMix, type Mix } from "./Mix";
+import { Monti } from "./Monti";
 import { MusicPanel, type MusicDraft } from "./Music";
 import { askToNotify, ProgressInline, useJobSignals } from "./Progress";
 import { GUIDE_NAME, GUIDES, SafeArea, type Guide } from "./SafeArea";
@@ -80,6 +81,8 @@ export function Editor({ id, replay, go }: Props) {
   const [menu, setMenu] = useState(false);
   const [ctx, setCtx] = useState<ClipMenu | null>(null);
   const [askNonce, setAskNonce] = useState(0);
+  const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null); // Monti hands an edit to the chat
+  const [montiNonce, setMontiNonce] = useState(0);
   const [toast, setToast] = useState<Toast | null>(null);
   const [guide, setGuideState] = useState<Guide>(() => {
     try { const g = localStorage.getItem("montivo.viewer.guide") as Guide | null; return g && GUIDES.includes(g) ? g : "off"; } catch { return "off"; }
@@ -546,7 +549,6 @@ export function Editor({ id, replay, go }: Props) {
         flash(`Issue ${iss.indexOf(to) + 1} of ${iss.length} at ${tc(to.t_s)} · ${to.severity}: ${to.what}`);
         break;
       }
-      case "?": setDialog({ kind: "keys" }); break;
       case "/": e.preventDefault(); setDialog({ kind: "palette" }); break;
       case "1": case "2": case "3": case "4": case "5": case "6": case "7": case "8": // A5: the rail's panels in order
         setPanel(PANELS[Number(e.key) - 1].id); break;
@@ -578,7 +580,7 @@ export function Editor({ id, replay, go }: Props) {
   return (
     <div className="editor">
       <header className="top">
-        <button className="icon-btn" onClick={() => go("#/")} title="All projects"><Icon name="back" /></button>
+        <button className="icon-btn" data-monti="top.home" onClick={() => go("#/")} title="All projects"><Icon name="back" /></button>
         <a className="mark" href="#/" title="All projects"><img src="/montivo-lockup-dark.svg" alt="Montivo" /></a>
         <span className="divider" />
         <div className="title-block">
@@ -588,7 +590,7 @@ export function Editor({ id, replay, go }: Props) {
             : v ? <>Saved · Version {v.n} of {newest}</> : "No version yet"}</span>
         </div>
         {draftV && !busy && (
-          <span className="draft-bar">
+          <span className="draft-bar" data-monti="top.draft">
             <button className="btn quiet" onClick={discardDraft} title="Drop the draft's edits: the viewer goes back to the version they started from">Discard</button>
             <button className="btn primary" onClick={commitDraft} disabled={!draftSum?.ops.length}
               title="One render of every edit in the draft ($0); the version list gains one version, not one per edit">
@@ -596,22 +598,22 @@ export function Editor({ id, replay, go }: Props) {
             </button>
           </span>
         )}
-        <span className="undo-redo">
+        <span className="undo-redo" data-monti="top.undo">
           <button className="icon-btn" disabled={!undoTo} onClick={() => step(-1)} title={undoTo ? `Undo: back to Version ${undoTo.n} (⌘Z)` : "Nothing to undo"}><Icon name="undo" /></button>
           <button className="icon-btn" disabled={!redoTo} onClick={() => step(1)} title={redoTo ? `Redo: Version ${redoTo.n} (⇧⌘Z)` : "Nothing to redo"}><Icon name="redo" /></button>
         </span>
         <span className="grow" />
         <span className="chip-aspect" title="Vertical 1080 × 1920">9:16</span>
-        <button className={`score-chip ${top?.review!.pass ? "pass" : ""} ${!top ? "none" : ""}`} title={scoreTip}
+        <button data-monti="top.score" className={`score-chip ${top?.review!.pass ? "pass" : ""} ${!top ? "none" : ""}`} title={scoreTip}
           onClick={() => { if (top) { setSel(top.n); setSelKey(null); } }}>
           {top ? <>{top.review!.pass && <Icon name="check" size={13} />}<b>{top.review!.overall}</b><span>review</span></> : <span>not reviewed</span>}
         </button>
-        <button className="btn quiet loop-btn" onClick={() => go(`${base}/loop${replay ? `?replay=${replay}` : ""}`)}
+        <button className="btn quiet loop-btn" data-monti="top.loop" onClick={() => go(`${base}/loop${replay ? `?replay=${replay}` : ""}`)}
           title="Every version side by side: the blind scores, the reviewer's notes and the fixes between them">
           <Icon name="loop" /> Loop
         </button>
         <div className="menu-wrap" onPointerDown={(e) => e.stopPropagation()}>
-          <button className={`icon-btn ${menu ? "on" : ""}`} onClick={() => setMenu(!menu)} title="More"><Icon name="more" /></button>
+          <button className={`icon-btn ${menu ? "on" : ""}`} data-monti="top.more" onClick={() => setMenu(!menu)} title="More"><Icon name="more" /></button>
           {menu && (
             <div className="menu">
               <div className="menu-label">Replay the agent run</div>
@@ -632,14 +634,14 @@ export function Editor({ id, replay, go }: Props) {
           )}
         </div>
         <ShareMenu id={id} version={v?.cut ? v.n : null} disabled={!!replay} onShare={shareLink} flash={flash} />
-        <button className="btn export" disabled={!v?.cut} onClick={() => setDialog({ kind: "export" })} aria-label="Export"><Icon name="export" /> <span className="btn-label">Export</span></button>
+        <button className="btn export" data-monti="top.export" disabled={!v?.cut} onClick={() => setDialog({ kind: "export" })} aria-label="Export"><Icon name="export" /> <span className="btn-label">Export</span></button>
       </header>
 
       <div className="mobile-note">Review mode: watch the cut, read the review, ask Montivo, export. The timeline and the editing panels open on a desktop.</div>
 
       <nav className="rail">
         {PANELS.map((x, i) => (
-          <button key={x.id} className={`rail-btn ${panel === x.id ? "on" : ""}`} onClick={() => setPanel(x.id)} title={`${x.label} (${i + 1})`}>
+          <button key={x.id} data-monti={`rail.${x.id}`} className={`rail-btn ${panel === x.id ? "on" : ""}`} onClick={() => setPanel(x.id)} title={`${x.label} (${i + 1})`}>
             <Icon name={x.icon} size={19} />
             <span>{x.label}</span>
             {x.id === "assistant" && busy && <span className="rail-dot" />}
@@ -650,7 +652,7 @@ export function Editor({ id, replay, go }: Props) {
       <aside className="panel">
         {panel === "assistant" && (
           <Assistant state={state} versions={visible} lines={lines} job={job} seen={seen} progress={progress} replay={replay} v={v}
-            selection={selection} getTime={getTime} focusNonce={askNonce}
+            selection={selection} getTime={getTime} focusNonce={askNonce} prefill={prefill}
             onSend={(text, chips, review, planner, scope, latest) => edit("ask", { message: text, chips, scope, from: latest ? undefined : v?.n, review, planner, preview: true, live: live0 && !replay })}
             onApply={(pending, review) => act("ask/apply", { pending, review })} onRetry={(pending) => act("ask/retry", { pending })}
             onRetryJob={() => act("retry", {})}
@@ -716,9 +718,9 @@ export function Editor({ id, replay, go }: Props) {
         )}
       </aside>
 
-      <main className="viewer">
+      <main className="viewer" data-monti="viewer.player">
         {!replay && v && (
-          <div className="view-mode" role="group" aria-label="What the viewer plays">
+          <div className="view-mode" data-monti="viewer.mode" role="group" aria-label="What the viewer plays">
             <button className={liveOn ? "on" : ""} aria-pressed={liveOn} onClick={() => setLive(true)}
               title="Live: every cut, move or delete plays at once, straight from the footage; Make Version renders them into a file (V)">
               <span className="vm-dot" />Live
@@ -755,7 +757,7 @@ export function Editor({ id, replay, go }: Props) {
         )}
       </main>
 
-      <aside className="insp">
+      <aside className="insp" data-monti="insp">
         <Inspector id={id} state={state} versions={visible} v={v} block={block} punch={punch} next={next} words={state.words} busy={busy}
           item={selKey && (selKey.startsWith("cap:") || selKey.startsWith("callout:") || selKey === "music") ? selKey : null} edits={{
             caption: (c, text) => made(edit("caption", { edits: [{ at: (c.t_in + c.t_out) / 2, text }], from: v?.n })),
@@ -865,9 +867,22 @@ export function Editor({ id, replay, go }: Props) {
         { id: "loop", label: "Watch the agent loop", group: "Agent", icon: "loop", run: () => go(`${base}/loop${replay ? `?replay=${replay}` : ""}`) },
         { id: "export", label: "Export", group: "Project", icon: "export", off: !v?.cut ? "No rendered version" : null, run: () => setDialog({ kind: "export" }) },
         { id: "cost", label: "Cost and time", group: "Project", run: () => setDialog({ kind: "ledger" }) },
-        { id: "keys", label: "Keyboard shortcuts", group: "Help", key: "?", run: () => setDialog({ kind: "keys" }) },
+        { id: "monti", label: "Ask Monti: where is it, how do I…", group: "Help", key: "?", run: () => setMontiNonce(Date.now()) },
+        { id: "keys", label: "Keyboard shortcuts", group: "Help", run: () => setDialog({ kind: "keys" }) },
         { id: "home", label: "All projects", group: "Project", icon: "back", run: () => go("#/") },
       ]} />}
+      <Monti place="editor" hasKey={state.has_key} budget={state.budget} nonce={montiNonce}
+        ctx={{ page: dialog?.kind === "export" ? "export" : "editor", version: v?.draft ? null : v?.n ?? null, panel, live: replay ? null : liveOn, draft: !!draftV,
+          selection: selKeys.length ? selKeys.join(", ") : block?.kind === "span" ? block.span!.id : wordSel ? "transcript words" : capSel ? "a caption line" : null }}
+        prepare={(target, needs) => {
+          if (needs === "export") { if (v?.cut) setDialog({ kind: "export" }); return; }
+          if (dialog) setDialog(null); // an editor place: the Export page (or any dialog) steps aside
+          if (needs) setPanel(needs as PanelId);
+          if (target.startsWith("tl.") && target !== "tl.tabs" && tlMode !== "timeline") setTlMode("timeline");
+        }}
+        onOpen={(x) => { if (x === "export") { if (v?.cut) setDialog({ kind: "export" }); } else { setDialog(null); setPanel(x as PanelId); } }}
+        onHandoff={(text) => { setDialog(null); setPanel("assistant"); setPrefill({ text, nonce: Date.now() }); }}
+        onShortcuts={() => setDialog({ kind: "keys" })} />
       {toast && (
         <div className={`toast ${toast.tone ?? ""}`} onClick={() => setToast(null)}>
           {toast.text}

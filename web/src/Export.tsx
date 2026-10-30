@@ -164,7 +164,7 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
       <div ref={box} tabIndex={-1} className="modal export-page" onPointerDown={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Export">
         <div className="modal-head"><span className="mh-title">Export</span><button className="icon-btn" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button></div>
         <div className="ex-grid">
-          <div className="ex-left">
+          <div className="ex-left" data-monti="export.cover">
             <CoverMaker id={id} v={v} total={total} aspect={aspect} W={W} H={H} grid={saved.grid} bands={bands}
               cover={cover} setCover={setCover} record={record} setRecord={setRecord}
               hasKey={hasKey} keyNote={keyNote} costs={costs} onErr={setErr} />
@@ -182,7 +182,7 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
               </select>
             </label>
             <div className="pn-k">Destination</div>
-            <div className="ex-dest">
+            <div className="ex-dest" data-monti="export.dest">
               <button className={`ex-card ${!p720 && !feed ? "on" : ""}`} onClick={() => setSaved({ ...saved, preset: "full", aspect: "9:16" })}>
                 <b>Reels · TikTok · Shorts</b><span>1080 × 1920 · 9:16 · as rendered</span></button>
               <button className={`ex-card ${aspect === "4:5" ? "on" : ""}`} onClick={() => setSaved({ ...saved, preset: "full", aspect: "4:5" })}>
@@ -193,7 +193,7 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
                 <b>Small</b><span>720 × 1280 · for messages and review links</span></button>
             </div>
             <div className="pn-k">Include</div>
-            <div className="ex-kinds">
+            <div className="ex-kinds" data-monti="export.include">
               {KINDS.map(({ k, label, note }) => (
                 <label key={k} className={`ex-kind ${inc.includes(k) ? "on" : ""} ${k === "post" && !post?.platforms ? "off" : ""}`}
                   title={k === "post" && !post?.platforms ? "Write the post text below first" : undefined}>
@@ -203,10 +203,10 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
                 </label>
               ))}
             </div>
-            <div className="pn-k">Post text</div>
+            <div className="pn-k" data-monti="export.post">Post text</div>
             <PostText id={id} n={n} post={post} setPost={setPost} hasKey={hasKey} keyNote={keyNote} onErr={setErr} />
             <div className="pn-k">Pre-flight {checks && <span className={`ex-sum s-${worst}`}>{worst === "ok" ? "ready" : worst === "fail" ? "fix first" : worst === "info" ? "–" : "check these"}</span>}</div>
-            <div className="ex-checks">
+            <div className="ex-checks" data-monti="export.checks">
               {!checks && <span className="mute small"><MarkLoader /> checking…</span>}
               {checks?.map((c) => (
                 <div key={c.id} className={`ex-check s-${c.status}`}>

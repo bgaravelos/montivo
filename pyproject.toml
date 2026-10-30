@@ -31,7 +31,7 @@ include = ["montivo*"]
 
 [tool.setuptools.package-data]
 "montivo.server" = ["static/**/*"]
-"montivo" = ["fonts/*", "fonts/licenses/*", "music/*.m4a", "music/tracks.json", "music/README.md"]
+"montivo" = ["fonts/*", "fonts/licenses/*", "music/*.m4a", "music/tracks.json", "music/README.md", "monti_guide.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

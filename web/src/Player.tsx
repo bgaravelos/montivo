@@ -258,7 +258,7 @@ export const Player = forwardRef<PlayerHandle, {
           </div>
         </>
       ) : (
-        <div className="transport">
+        <div className="transport" data-monti="viewer.transport">
           <button className="tp-tc" onClick={flipMode} title={mode === "sec" ? "Minutes, seconds and hundredths (click: frames)" : `Minutes, seconds and frames at ${FPS} fps (click: seconds)`}>
             <b>{timecode(t, mode)}</b><span>/ {timecode(d, mode)}</span>{mode === "frames" && <i>fr</i>}
           </button>
@@ -273,7 +273,7 @@ export const Player = forwardRef<PlayerHandle, {
             <button className={`tp-tool tp-rate ${rate !== 1 ? "on" : ""}`} onClick={nextRate} title="Playback speed (J · K · L shuttle)">{rate < 0 ? `◀ ${-rate}×` : `${rate}×`}</button>
             <button className={`tp-tool ${looping || whole ? "on" : ""}`} onClick={loopBtn} title={looping ? "Stop looping the clip" : whole ? "Stop looping the cut" : "Loop the cut"}><Icon name="repeat" /></button>
             <button className={`tp-tool ${mute ? "on" : ""}`} onClick={() => setMute(!mute)} title={mute ? "Unmute (⇧M)" : "Mute (⇧M)"}><Icon name={mute ? "mute" : "volume"} /></button>
-            {safe && <button className={`tp-tool ${safe.on ? "on" : ""}`} onClick={safe.next} title={`Safe-area guides: ${safe.label} (G cycles Reels, TikTok, Shorts, off)`}><Icon name="safe" /></button>}
+            {safe && <button data-monti="viewer.safe" className={`tp-tool ${safe.on ? "on" : ""}`} onClick={safe.next} title={`Safe-area guides: ${safe.label} (G cycles Reels, TikTok, Shorts, off)`}><Icon name="safe" /></button>}
             <button className="tp-tool" onClick={api.fullscreen} title="Full screen (F)"><Icon name="fit" /></button>
           </span>
         </div>
