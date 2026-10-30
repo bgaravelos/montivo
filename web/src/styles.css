@@ -215,7 +215,7 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .btn.small { padding: 3px 8px; font-size: 11.5px; gap: 4px; }
 .add-callout { margin-top: 10px; }
 .versions { display: flex; flex-direction: column; gap: 6px; }
-.ver { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); }
+.ver { display: flex; flex-direction: row; gap: 10px; cursor: pointer; text-align: left; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); }
 .ver:hover { border-color: var(--line-2); }
 .ver.on { border-color: var(--accent); background: var(--panel-3); }
 .ver-top { display: flex; align-items: center; gap: 8px; }
@@ -1255,3 +1255,17 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 /* SP3: a thin strip per speaker on the video clips; the transcript's speaker chip */
 .spk-strip { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; z-index: 2; pointer-events: auto; }
 .b-spk { font-size: 10.5px; padding: 0 6px; border: 1px solid var(--line-2); border-radius: 99px; color: var(--text-2); }
+/* V1-V4: the Versions panel's poster, what changed, author, star and name, the score line */
+.ver-poster { width: 38px; height: 68px; object-fit: cover; border-radius: 5px; flex: none; background: #000; }
+.ver-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.ver-change { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ver-by { font-size: 10.5px; font-weight: 650; border-radius: 99px; padding: 0 6px; margin-right: 6px; border: 1px solid var(--line-2); }
+.ver-by.agent { color: var(--accent); border-color: #6b5517; }
+.ver-by.you { color: var(--text); }
+.ver-star { width: 20px; height: 20px; color: var(--mute); }
+.ver-star.on { color: var(--accent); }
+.ver-star.on svg path { fill: var(--accent); }
+.ver-name-in { flex: 1; min-width: 0; height: 22px; }
+.score-line { margin-bottom: 8px; }
+.sl-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.sl-dot { cursor: pointer; }

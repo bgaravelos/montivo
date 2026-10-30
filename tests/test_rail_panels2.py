@@ -388,3 +388,22 @@ def test_heads_on_the_frame_at_a_cut_second(tmp_path, monkeypatch):
     x0, y0, x1, y1 = at["heads"][0]["box"]
     assert (x0, x1) == (round((800 - 656) * 1080 / 608), round((1000 - 656) * 1080 / 608)) and y0 == round(100 * 1920 / 1080)
     assert P.heads_at(tmp_path, edl, 0.5)["heads"] == []  # the title card
+
+
+# --------------------------------------------------------------------------- V3: a version's name and star
+
+
+def test_version_labels(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from montivo.server import app as A
+    d = _panel_run(tmp_path, monkeypatch)
+    c = TestClient(A.create_app(tmp_path))
+    assert c.get("/api/runs/h1/labels").json() == {"labels": {}}
+    r = c.post("/api/runs/h1/labels", json={"version": 1, "name": "  for the X   post ", "star": True})
+    assert r.status_code == 200 and r.json()["labels"] == {"1": {"name": "for the X post", "star": True}}
+    assert c.post("/api/runs/h1/labels", json={"version": 1, "star": False}).json()["labels"] == {"1": {"name": "for the X post"}}
+    assert c.post("/api/runs/h1/labels", json={"version": 1, "name": ""}).json()["labels"] == {}
+    assert c.post("/api/runs/h1/labels", json={"version": 9, "star": True}).status_code == 404
+    assert c.post("/api/runs/h1/labels", json={"version": 1, "star": "yes"}).status_code == 400
+    assert (d / "ui" / "labels.json").is_file() and not list(d.glob("edl_v2.json"))  # no version made

@@ -117,15 +117,18 @@ function Card({ id, state, v, best }: { id: string; state: RunState; v: Version;
 
 const planner = (model: string) => (model.startsWith("meta-models/") ? "Muse Spark Open" : "Muse Spark 1.3");
 
-/** What made `v`: the reviewer's fixes (each with the criterion score it moved), a human edit, a re-plan or a hook A/B. */
-function Link({ state, v, prev, compare }: { state: RunState; v: Version; prev: Version; compare: (a: number, b: number) => void }) {
+/** What made `v`, in a few lines: the reviewer's fixes (each with the criterion score it moved), a human edit, a
+ *  re-plan or a hook A/B; `who` names the author ("Agent", "Hook A/B", "You"). The Loop film's links and the Versions
+ *  panel's cards (V1) show the same. */
+export function whatChanged(state: RunState, v: Version): { who: string; lines: string[] } {
   const o = v.origin;
   const parent = parentOf(v, state.versions);
-  const kind = originKind(v);
-  const jump = parent && parent.n !== prev.n ? `from v${parent.n}` : null;
   const side = v.plan_compare?.[`v${v.n}`] as PlanSide | undefined;
   let who = "You", lines: string[] = [];
-  if (o.source === "review") {
+  if (o.source === "plan") {
+    who = "Agent";
+    lines = [`the first cut, planned by ${v.planner?.name ?? "Muse Spark"}`];
+  } else if (o.source === "review") {
     who = "Agent";
     lines = (o.fixes ?? []).map((f) => {
       const pr = parent?.review;
@@ -145,9 +148,21 @@ function Link({ state, v, prev, compare }: { state: RunState; v: Version; prev: 
       v.planner ? `${v.planner.name}${side?.plan_cost_usd != null ? ` · ${usd(side.plan_cost_usd, 3)} · ${side.plan_seconds?.toFixed(1)} s` : ""}` : "",
       one?.plan_cost_usd != null ? `v1 on ${planner(one.planner)}: ${usd(one.plan_cost_usd, 3)} · ${one.plan_seconds?.toFixed(1)} s` : ""].filter(Boolean);
   } else {
-    lines = [originLabel(v).replace(/^your edit · /, "")];
+    const own = originLabel(v).replace(/^your edit · /, "");
+    // a draft, a kit or a style edit has no label of its own: the patch's notes say what it did
+    lines = own !== "your edit" ? [own] : o.instruction ? [o.instruction.replace(/\.$/, "")]
+      : (o.fixes ?? []).map((f) => f.note ?? f.op).filter((x): x is string => !!x).slice(0, 4);
+    if (!lines.length) lines = [own];
     if (o.action === "caption") lines = [`${o.fixes?.length ?? 0} caption line${o.fixes?.length === 1 ? "" : "s"} retexted`];
   }
+  return { who, lines };
+}
+
+function Link({ state, v, prev, compare }: { state: RunState; v: Version; prev: Version; compare: (a: number, b: number) => void }) {
+  const parent = parentOf(v, state.versions);
+  const kind = originKind(v);
+  const jump = parent && parent.n !== prev.n ? `from v${parent.n}` : null;
+  const { who, lines } = whatChanged(state, v);
   return (
     <div className={`lf-link ${kind}`}>
       <span className="lfl-arrow"><Icon name="chevron" size={16} /></span>

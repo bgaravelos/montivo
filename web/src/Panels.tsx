@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import type { PanelFocus } from "./Editor";
-import { api, fileUrl, tc, usd } from "./api";
+import { api, fileUrl, frameUrl, tc, usd } from "./api";
 import { originKind, originLabel, parentOf, speakerColor } from "./edit";
 import { Icon, MarkLoader } from "./icons";
+import { whatChanged } from "./Loop";
 import type { CaptionLine, Costs, HeadsInfo, Planner, RunState, Version } from "./types";
 
 /** A3: in Live a panel's Apply goes into the draft with the timeline's edits. */
@@ -454,40 +455,103 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, 
   );
 }
 
+type Labels = Record<string, { name?: string; star?: boolean }>;
+type VerFilter = "all" | "agent" | "you";
+
+/** V4: every reviewed version's blind score in order, the one on screen marked; a dot picks its version. */
+function ScoreLine({ versions, sel, onPick }: { versions: Version[]; sel: number | null; onPick: (n: number) => void }) {
+  const pts = versions.filter((x) => x.review);
+  if (pts.length < 2) return null;
+  const W = 260, H = 46, pad = 6;
+  const lo = Math.min(...pts.map((x) => x.review!.overall)) - 4, hi = Math.max(...pts.map((x) => x.review!.overall)) + 4;
+  const x = (k: number) => pad + (k * (W - 2 * pad)) / (pts.length - 1);
+  const y = (s: number) => H - pad - ((s - lo) * (H - 2 * pad)) / Math.max(1, hi - lo);
+  const first = pts[0].review!.overall, best = Math.max(...pts.map((p) => p.review!.overall));
+  return (
+    <div className="score-line">
+      <div className="sl-head"><span className="pn-k">Blind scores</span><span className="mute small">{first} → best {best} over {pts.length} reviews</span></div>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} role="img" aria-label={`Scores ${pts.map((p) => p.review!.overall).join(", ")}`}>
+        <polyline points={pts.map((p, k) => `${x(k)},${y(p.review!.overall)}`).join(" ")} fill="none" stroke="var(--accent)" strokeWidth={1.6} />
+        {pts.map((p, k) => (
+          <g key={p.n} className="sl-dot" onClick={() => onPick(p.n)}>
+            <title>{`Version ${p.n}: ${p.review!.overall}${p.review!.pass ? ", passes" : ""}`}</title>
+            <circle cx={x(k)} cy={y(p.review!.overall)} r={p.n === sel ? 4.5 : 3} fill={p.review!.pass ? "var(--pass)" : "var(--accent)"}
+              stroke={p.n === sel ? "var(--text)" : "none"} strokeWidth={1.5} />
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 export function VersionsPanel({ id, state, versions, sel, onPick, go, replay, opening, canEdit, onRestore }: {
   id: string; state: RunState; versions: Version[]; sel: number | null; onPick: (n: number) => void; go: (h: string) => void; replay: number;
   canEdit: string | null; onRestore: (n: number) => void;
   opening: number | null; // the version the editor opens on (a human edit or the hook A/B's pick, else the loop's best)
 }) {
+  const [labels, setLabels] = useState<Labels>({});
+  const [naming, setNaming] = useState<number | null>(null);
+  const [nameDraft, setNameDraft] = useState("");
+  const [filter, setFilterState] = useState<VerFilter>(() => { try { return (localStorage.getItem("montivo.versions.filter") as VerFilter) || "all"; } catch { return "all"; } });
+  const setFilter = (f: VerFilter) => { setFilterState(f); try { localStorage.setItem("montivo.versions.filter", f); } catch { /* this tab */ } };
+  useEffect(() => { api<{ labels: Labels }>(`/api/runs/${id}/labels`).then((r) => setLabels(r.labels)).catch(() => {}); }, [id]);
+  const label = (n: number, b: { name?: string; star?: boolean }) =>
+    api<{ labels: Labels }>(`/api/runs/${id}/labels`, { version: n, ...b }).then((r) => setLabels(r.labels)).catch(() => {});
   const v = versions.find((x) => x.n === sel);
   const parent = v ? parentOf(v, state.versions) : undefined;
   const pair = v && versions.length > 1 ? (parent && versions.some((x) => x.n === parent.n) ? [parent.n, v.n] : [v.n, versions.find((x) => x.n !== v.n)!.n]) : null;
   const best = state.loop?.best?.version;
+  const by = (x: Version) => (originKind(x) === "human" ? "you" : "agent");
+  const shown = versions.filter((x) => filter === "all" || by(x) === filter || labels[x.n]?.star);
+  const count = (f: VerFilter) => versions.filter((x) => by(x) === f).length;
   return (
     <section className="side-panel">
       <div className="panel-head"><span className="ph-title">Versions</span><span className="ph-sub">{versions.length}</span></div>
       <div className="panel-body">
+        <ScoreLine versions={versions} sel={sel} onPick={onPick} />
+        <div className="seg-group" role="group" aria-label="Which versions">
+          <button className={`seg ${filter === "all" ? "on" : ""}`} onClick={() => setFilter("all")}>All {versions.length}</button>
+          <button className={`seg ${filter === "agent" ? "on" : ""}`} onClick={() => setFilter("agent")} title="The planner, the reviewer's fixes and the hook A/B">Agent {count("agent")}</button>
+          <button className={`seg ${filter === "you" ? "on" : ""}`} onClick={() => setFilter("you")} title="Your edits and what you asked Montivo for">You {count("you")}</button>
+        </div>
         <div className="versions">
-          {[...versions].reverse().map((x) => {
+          {[...shown].reverse().map((x) => {
             const p = parentOf(x, state.versions);
+            const lb = labels[x.n] ?? {};
+            const change = whatChanged(state, x);
             return (
-              <button key={x.n} className={`ver ${x.n === sel ? "on" : ""} ${originKind(x)}`} onClick={() => onPick(x.n)}>
-                <span className="ver-top">
-                  <span className="ver-name">Version {x.n}</span>
-                  {x.n === opening && <span className="ver-kept" title="The project opens here: the newest version a human edit made or the hook A/B kept, else the review loop's best">opens here</span>}
-                  {x.n === best && <span className="ver-best" title="The review loop's highest blind score">loop best</span>}
-                  <span className="grow" />
-                  {x.review ? <span className={`ver-score ${x.review.pass ? "pass" : ""}`}>{x.review.pass && <Icon name="check" size={12} />}{x.review.overall}</span>
-                    : <span className="ver-score none" title="not reviewed">–</span>}
+              <div key={x.n} role="button" tabIndex={0} className={`ver ${x.n === sel ? "on" : ""} ${originKind(x)}`} onClick={() => onPick(x.n)}
+                onKeyDown={(e) => { if (e.key === "Enter" && naming !== x.n) onPick(x.n); }}>
+                {x.cut && <img className="ver-poster" src={frameUrl(id, x.n, Math.min((x.duration_s ?? x.runtime_s) - 0.2, x.title_s + 1.2), true)} alt="" loading="lazy" />}
+                <span className="ver-body">
+                  <span className="ver-top">
+                    <button className={`icon-btn ver-star ${lb.star ? "on" : ""}`} title={lb.star ? "Unstar" : "Star this version (it stays in every filter)"}
+                      onClick={(e) => { e.stopPropagation(); label(x.n, { star: !lb.star }); }}><Icon name="star" size={13} /></button>
+                    {naming === x.n ? (
+                      <input className="st-input ver-name-in" autoFocus value={nameDraft} maxLength={40} placeholder={`Version ${x.n}`}
+                        onClick={(e) => e.stopPropagation()} onChange={(e) => setNameDraft(e.target.value)}
+                        onBlur={() => { label(x.n, { name: nameDraft }); setNaming(null); }}
+                        onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") { label(x.n, { name: nameDraft }); setNaming(null); } else if (e.key === "Escape") setNaming(null); }} />
+                    ) : (
+                      <span className="ver-name" title="Double-click to name it" onDoubleClick={(e) => { e.stopPropagation(); setNaming(x.n); setNameDraft(lb.name ?? ""); }}>
+                        {lb.name ? <>{lb.name} <span className="mute">v{x.n}</span></> : `Version ${x.n}`}</span>
+                    )}
+                    {x.n === opening && <span className="ver-kept" title="The project opens here: the newest version a human edit made or the hook A/B kept, else the review loop's best">opens here</span>}
+                    {x.n === best && <span className="ver-best" title="The review loop's highest blind score">loop best</span>}
+                    <span className="grow" />
+                    {x.review ? <span className={`ver-score ${x.review.pass ? "pass" : ""}`}>{x.review.pass && <Icon name="check" size={12} />}{x.review.overall}</span>
+                      : <span className="ver-score none" title="not reviewed">–</span>}
+                  </span>
+                  <span className="ver-change" title={change.lines.join("\n")}>
+                    <span className={`ver-by ${by(x)}`}>{by(x) === "you" ? "You" : "Montivo"}</span>
+                    {change.lines[0] ?? originLabel(x)}{change.lines.length > 1 ? ` +${change.lines.length - 1}` : ""}
+                  </span>
+                  <span className="ver-meta mute">{p ? `from v${p.n} · ` : ""}{x.spans.length} clips · {tc(x.duration_s ?? x.runtime_s)}{x.planner ? ` · ${x.planner.name}` : ""}</span>
                 </span>
-                <span className="ver-meta">
-                  <span className={`origin ${originKind(x)}`}>{originLabel(x)}</span>
-                  {p && <span className="mute">from Version {p.n}</span>}
-                </span>
-                <span className="ver-meta mute">{x.spans.length} clips · {tc(x.duration_s ?? x.runtime_s)}{x.planner ? ` · ${x.planner.name}` : ""}</span>
-              </button>
+              </div>
             );
           })}
+          {!shown.length && <p className="mute small pad">No version here: {filter === "you" ? "you have not edited this project yet" : "the agent made none"}.</p>}
         </div>
         {v && v.cut && v.n !== versions.at(-1)?.n && (
           <button className="btn wide" disabled={!!canEdit} onClick={() => onRestore(v.n)}

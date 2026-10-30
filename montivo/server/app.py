@@ -1565,6 +1565,52 @@ def create_app(root: Path) -> FastAPI:
             write_json(p, {"version": n, "newest": newest, "at": round(time.time(), 1)})
         return {"stored": True, "version": n}
 
+    labels_lock = threading.Lock()
+
+    def labels_path(d: Path, request: Request) -> Path:
+        """V3: the names and stars a person gave versions: ui/labels.json, on the hosted demo one file per judge (a
+        sample is shared, a name is not)."""
+        if budget is None:
+            return d / "ui" / "labels.json"
+        return d / "ui" / "labels" / f"{re.sub(r'[^A-Za-z0-9_-]', '', judge_of(request))[:40] or 'guest'}.json"
+
+    @app.get("/api/runs/{run_id}/labels")
+    def labels_get(run_id: str, request: Request):
+        """{"labels": {"7": {"name": "for the X post", "star": true}}}: the versions a person named or starred (V3)."""
+        return {"labels": (read_json(labels_path(st.run_dir(run_id), request)) or {}).get("labels") or {}}
+
+    @app.post("/api/runs/{run_id}/labels")
+    def labels_set(run_id: str, request: Request, b: dict):
+        """{"version": N, "name": "..." | "", "star": bool}: a version's name or star, $0, no new version (V3). A name
+        or star left out keeps the one it has; an empty name and no star takes the label off."""
+        d = st.run_dir(run_id)
+        try:
+            n = int(b.get("version"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "version: a version number")
+        if not (d / f"edl_v{n}.json").is_file():
+            raise HTTPException(404, f"no version {n}")
+        if b.get("star") is not None and not isinstance(b["star"], bool):
+            raise HTTPException(400, "star: true or false")
+        if b.get("name") is not None and not isinstance(b["name"], str):
+            raise HTTPException(400, "name: up to 40 characters")
+        p = labels_path(d, request)
+        with labels_lock:
+            labels = (read_json(p) or {}).get("labels") or {}
+            cur = dict(labels.get(str(n)) or {})
+            if b.get("name") is not None:
+                cur["name"] = " ".join(b["name"].split())[:40]
+            if b.get("star") is not None:
+                cur["star"] = b["star"]
+            cur = {k: v for k, v in cur.items() if v}
+            if cur:
+                labels[str(n)] = cur
+            else:
+                labels.pop(str(n), None)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            write_json(p, {"labels": labels})
+        return {"labels": labels}
+
     @app.post("/api/runs/{run_id}/caption")
     async def caption(run_id: str, request: Request):
         """Retext caption lines ({"edits": [{"at": cut second, "text": words spoken}]}): the next version, ffmpeg only."""

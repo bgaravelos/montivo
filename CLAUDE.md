@@ -810,6 +810,11 @@ talks; both carried by a re-plan. SP3 a 3 px strip per speaker on the video clip
 second, punch-in zoom left out) -> `HeadPicker` on the paused viewer with Speakers open; a click stages the pin for the
 clip's speaker. SP5 the panel is "Speakers & framing"; one voice shows the tracked head and the name field. Checked on
 rp-015 (Billy, one voice) and a clone of 014 (four astronauts: strips, 4 face boxes, "A -> head 1").
+Rail panels Versions V1-V4 (30/10, $0, same branch): V1 each card has a clean poster and one line of what made it
+(`Loop.whatChanged`, the Loop film's own lines; a draft, kit or style edit says its patch notes). V2 All / Agent / You
+filter (localStorage) and a Montivo / You tag. V3 a star and a name per version (double-click the name): GET/POST
+/api/runs/{id}/labels -> `ui/labels.json`, per judge on the hosted demo (`ui/labels/<judge>.json`), no version made; a
+starred version shows under every filter. V4 the blind scores as a line above the list (a dot picks its version).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
