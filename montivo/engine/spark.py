@@ -24,6 +24,11 @@ from ..ledger import Entry, Ledger, Timer
 from . import schemas
 from .api import chat_as_response, chat_create, dump_json, output_text, responses_create
 
+# Reasoning effort of the two editorial calls that used to run at the model's default (30/10 probe, clones of 012 /
+# 015 / 016 and 014): plan low 11-13 s / $0.012-0.016 vs the default 26-40 s / $0.03-0.05, the same kept words on
+# 016 and 015; watch low 10.8 s vs 32.5 s on 016, 18.7 s vs 50.3 s on 014, the same shots and moments.
+PLAN_EFFORT = "low"
+WATCH_EFFORT = "low"
 PARSE_RETRIES = 1  # an incomplete or unparsable answer is asked once more
 PARSE_RETRY_TOKENS = 1.5
 
@@ -129,7 +134,8 @@ class Spark:
 
     # ----------------------------------------------------------------- the three editorial calls
 
-    def watch(self, file_id: str, transcript_text: str, brief: str, duration_s: float) -> SparkCall:
+    def watch(self, file_id: str, transcript_text: str, brief: str, duration_s: float,
+              reasoning_effort: str | None = None) -> SparkCall:
         prompt = (
             "You are the assistant editor logging footage for a short-form video edit.\n"
             f"Brief from the producer: {brief}\n\n"
@@ -145,7 +151,7 @@ class Spark:
             "5) List moments where the on-camera speaker moves out of centre or handles a prop, with seconds "
             "(leans, stands up, picks up or shows an object, points at something).\n\n"
             f"TRANSCRIPT:\n{transcript_text}")
-        return self.call("watch", prompt, schemas.WATCH, file_id=file_id)
+        return self.call("watch", prompt, schemas.WATCH, file_id=file_id, reasoning_effort=reasoning_effort or WATCH_EFFORT)
 
     def plan(self, brief: str, transcript_text: str, watch: dict, target_s: float, file_id: str | None = None,
              reasoning_effort: str | None = None, words_per_s: float = 2.5) -> SparkCall:
@@ -195,7 +201,8 @@ class Spark:
             "- Propose a short title card text (max 6 words), a caption style note and a one-sentence reframe note.\n"
             f"- estimated_runtime_s = total kept words / {wps:.1f}.\n\n"
             f"TRANSCRIPT (authoritative):\n{transcript_text}")
-        return self.call("plan", prompt, schemas.PLAN, file_id=file_id, max_output_tokens=16000, reasoning_effort=reasoning_effort)
+        return self.call("plan", prompt, schemas.PLAN, file_id=file_id, max_output_tokens=16000,
+                         reasoning_effort=reasoning_effort or PLAN_EFFORT)
 
     def review(self, file_id: str | None, brief: str, facts: str, duration_s: float, name: str = "review",
                reasoning_effort: str | None = "low", max_output_tokens: int = 16000, video: Path | None = None,

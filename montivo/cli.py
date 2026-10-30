@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--language", default="English", help="Voice languageBias (default English, 'none' to disable)")
     r.add_argument("--no-track", action="store_true", help="skip SAM")
     r.add_argument("--plan-with-video", action="store_true", help="attach the proxy to the plan call too (watch already saw it)")
-    r.add_argument("--plan-effort", default=None, choices=["low", "medium", "high"], help="reasoning effort for the plan call")
+    r.add_argument("--plan-effort", default=None, choices=["low", "medium", "high"], help="reasoning effort for the plan call (default: low)")
     r.add_argument("--resume", action="store_true",
                    help="reuse ingest, voice, watch and tracks already in --out, and plan.json + edl_v1.json when the "
                         "brief, target and planner are the ones it was made with")
@@ -120,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="open = Muse Spark Open on Baseten (default, needs BASETEN_API_KEY), spark = muse-spark-1.3")
     pl.add_argument("--target", type=float, default=None, help="runtime target in seconds (default: run.json)")
     pl.add_argument("--plan-effort", default=None, choices=["low", "medium", "high"],
-                    help="reasoning effort for the plan call (default: low on the open model, the model's own on Spark)")
+                    help="reasoning effort for the plan call (default: low)")
     pl.add_argument("--review", type=int, default=0, help="review passes after the render (default 0; reviews run on Spark 1.3)")
     pl.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
 

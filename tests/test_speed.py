@@ -33,3 +33,21 @@ def test_progress_keeps_the_ingest_step_while_voice_starts_on_the_wav():
     p = progress(parse_log(log))
     assert [s["title"] for s in p["steps"]] == ["Ingest"] and p["title"] == "Voice · SAM · Watch"
     assert p["detail"].startswith("Voice ✓")  # the early transcript counts once analysis shows
+
+
+def test_plan_and_watch_ask_spark_13_for_low_effort(tmp_path, monkeypatch):
+    import json
+
+    from montivo.engine import spark as S
+    sent = []
+
+    def fake(body):
+        sent.append(body)
+        return {"id": "r", "status": "completed", "usage": {},
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": json.dumps({})}]}]}
+    monkeypatch.setattr(S, "responses_create", fake)
+    sp = S.Spark(tmp_path, Ledger(tmp_path / "ledger.json"), log=lambda m: None)
+    sp.watch("file-1", "A: hi", "a brief", 10.0)
+    sp.plan("a brief", "A: hi", {}, 40.0)
+    sp.plan("a brief", "A: hi", {}, 40.0, reasoning_effort="high")
+    assert [b["reasoning"]["effort"] for b in sent] == ["low", "low", "high"]  # --plan-effort still overrides
