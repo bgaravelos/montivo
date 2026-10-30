@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, tc } from "./api";
-import { Icon } from "./icons";
+import { Icon, MarkLoader } from "./icons";
 import type { Costs, Version } from "./types";
 
 // The cover maker, the Export page's left column: a clean still of the version with a headline laid out around the
@@ -84,9 +84,9 @@ export function CoverMaker({ id, v, total, aspect, W, H, grid, bands, cover, set
               <span>The cutout lays the speaker over the headline: SAM 3.1 cuts them out of this still first.</span>
               <button className="btn small" disabled={!hasKey || masking} onClick={cutOut}
                 title={hasKey ? `One SAM 3.1 image request, about $${maskCost.toFixed(2)}, made once per still` : keyNote ?? "Set MODEL_API_KEY"}>
-                {masking ? <><span className="pulse" /> Cutting out…</> : <>Cut out the speaker · ~${maskCost.toFixed(2)}</>}</button>
+                {masking ? <><MarkLoader size={14} /> Cutting out…</> : <>Cut out the speaker · ~${maskCost.toFixed(2)}</>}</button>
             </div>)}
-          {(rendering || !shown) && !shown?.need_mask && <span className="cm-busy"><span className="pulse" /></span>}
+          {(rendering || !shown) && !shown?.need_mask && <span className="cm-busy"><MarkLoader size={24} label="Rendering the cover" /></span>}
           {grid && (bands.side
             ? <><i className="ex-grid-l" style={{ width: `${bands.pct}%` }} /><i className="ex-grid-r" style={{ width: `${bands.pct}%` }} /></>
             : <><i className="ex-grid-top" /><i className="ex-grid-bot" /></>)}
@@ -107,7 +107,7 @@ export function CoverMaker({ id, v, total, aspect, W, H, grid, bands, cover, set
 
       <button className="btn cm-design" disabled={!v || designing || !hasKey} onClick={design}
         title={hasKey ? `Muse Spark picks the exact still, writes headlines, picks a template and checks the cover at grid size (about $${designCost.toFixed(2)}, 30-60 s)` : keyNote ?? "Set MODEL_API_KEY to let Muse Spark design it"}>
-        {designing ? <><span className="pulse" /> Designing… still, headline, check</> : <><Icon name="spark" size={12} /> Design it with Muse Spark · ~${designCost.toFixed(2)}</>}
+        {designing ? <><MarkLoader size={14} /> Designing… still, headline, check</> : <><Icon name="spark" size={12} /> Design it with Muse Spark · ~${designCost.toFixed(2)}</>}
       </button>
       {d && last && (
         <div className={`cm-verdict ${d.pass ? "ok" : "warn"}`}>

@@ -1,4 +1,6 @@
 // A small stroke icon set (24x24 grid, one stroke width, round caps), so the UI needs no icon library
+import { useId } from "react";
+
 const P: Record<string, string> = {
   play: "M8 5.5v13a1 1 0 001.5.86l10.4-6.5a1 1 0 000-1.72L9.5 4.64A1 1 0 008 5.5z",
   pause: "M7.7 5h1.6a1.2 1.2 0 011.2 1.2v11.6a1.2 1.2 0 01-1.2 1.2H7.7a1.2 1.2 0 01-1.2-1.2V6.2A1.2 1.2 0 017.7 5zM14.7 5h1.6a1.2 1.2 0 011.2 1.2v11.6a1.2 1.2 0 01-1.2 1.2h-1.6a1.2 1.2 0 01-1.2-1.2V6.2A1.2 1.2 0 0114.7 5z",
@@ -71,6 +73,22 @@ export function Icon({ name, size = 16, className }: { name: keyof typeof P | st
     <svg className={`ico ${className ?? ""}`} width={size} height={size} viewBox="0 0 24 24" aria-hidden
       fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth={filled ? 0 : 1.75} strokeLinecap="round" strokeLinejoin="round">
       <path d={P[name] ?? P.dot} />
+    </svg>
+  );
+}
+
+/** The loading mark: the brand symbol on a 1.6 s loop (the brackets close in, a marker V runs through the V shape from
+ *  the top and leaves at the bottom; no rotation, assets/brand/README.md). The brackets take the text colour; `mono` (or a
+ *  marker button) draws the V in it too. Design: docs/notes/montivo-loader_2026-10-30.html. */
+export function MarkLoader({ size = 16, mono, label }: { size?: number; mono?: boolean; label?: string }) {
+  const clip = `ml${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`; // a clipPath id per loader; useId's colons break url(#...)
+  return (
+    <svg className={`mark-loader ${mono ? "mono" : ""}`} viewBox="0 0 64 64" width={size} height={size}
+      {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}>
+      <defs><clipPath id={clip}><path d="M14 14H24L32 28L40 14H50L32 44Z" /></clipPath></defs>
+      <path className="ml-l" d="M6 6H24V14H14V50H24V58H6Z" />
+      <path className="ml-r" d="M58 6H40V14H50V50H40V58H58Z" />
+      <g clipPath={`url(#${clip})`}><rect className="ml-v" x="14" y="14" width="36" height="30" /></g>
     </svg>
   );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import { Icon } from "./icons";
+import { Icon, MarkLoader } from "./icons";
 
 // The Share button and this run's links (montivo/server/share.py): Share makes or copies the version's read-only link,
 // the caret lists every link of the run with Copy and Unshare. An unshared link answers 404 at once; sharing that version
@@ -44,7 +44,7 @@ export function ShareMenu({ id, version, disabled, onShare, flash }: {
       {open && (
         <div className="share-list">
           <div className="menu-label">Share links</div>
-          {links == null ? <div className="mute small sl-empty">Loading…</div>
+          {links == null ? <div className="mute small sl-empty"><MarkLoader /> Loading…</div>
             : !links.length ? <div className="mute small sl-empty">No links yet. Share makes one for the version on screen.</div>
             : links.map((l) => (
               <div key={l.token} className="sl-row">

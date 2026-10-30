@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, dur, frameUrl, tc, usd } from "./api";
 import { nameOf } from "./edit";
-import { Icon } from "./icons";
+import { Icon, MarkLoader } from "./icons";
 import { PlannerPicker } from "./Panels";
 import { askToNotify, ProgressMini } from "./Progress";
 import type { Budget, CardScore, Costs, Planner, RunCard } from "./types";
@@ -191,7 +191,7 @@ export function Home({ go }: { go: (h: string) => void }) {
               {SORTS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
           </div>
-          {!runs && <div className="mute">loading…</div>}
+          {!runs && <div className="mute"><MarkLoader /> Loading…</div>}
           {runs && !all.length && <div className="mute">No run folder with a cut in runs/ yet. Start one, or unpack the sample run (README, “For judges”).</div>}
           {runs && !!all.length && !shown.length && <div className="mute">No project matches. <button className="link" onClick={() => { setQ(""); setOnly("all"); }}>Show all</button></div>}
           {budget && !introGone && sample && (

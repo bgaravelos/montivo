@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, crit, frameUrl, tc, usd, type Seen } from "./api";
 import { selRange, sevRank, type FlatWord, type WordSel } from "./edit";
-import { Icon } from "./icons";
+import { Icon, MarkLoader } from "./icons";
 import { Bar, expTip, measure, useTick } from "./Progress";
 import type { AskScope, ChatLine, Job, LogLine, PendingCard, PlanSide, Planner, Progress, RunState, Stage, Version } from "./types";
 
@@ -67,7 +67,7 @@ function Pipeline({ state, lines, job, seen, replay }: { state: RunState; lines:
       {!folded && rows.map(({ st, status, note }) => (
         <div key={st.id} className={`pl-row ${status}`}>
           <button className="pl-line" onClick={() => toggle(st.id)} title="Show what this step produced">
-            <span className="pl-dot">{status === "done" ? <Icon name="check" size={12} /> : null}</span>
+            <span className="pl-dot">{status === "done" ? <Icon name="check" size={12} /> : status === "running" ? <MarkLoader /> : null}</span>
             <span className="pl-name">{STAGE_TEXT[st.id] ?? st.label}</span>
             <span className="pl-model">{st.model.replace(" · blind", "")}</span>
           </button>
@@ -84,7 +84,7 @@ function Pipeline({ state, lines, job, seen, replay }: { state: RunState; lines:
                 {(() => {
                   const mine = source.filter((l) => l.stage === st.id);
                   return mine.length ? mine.slice(-30).map((l) => <div key={`${l.session}-${l.i}`}><span className="lt">{l.t.toFixed(1)}s</span>{l.msg}</div>)
-                    : <div className="mute">{full || replay ? "No log lines for this step." : "Loading…"}</div>;
+                    : <div className="mute">{full || replay ? "No log lines for this step." : <><MarkLoader /> Loading…</>}</div>;
                 })()}
               </div>
             </div>
@@ -255,7 +255,7 @@ function Steps({ title, lines, live }: { title: string; lines: string[]; live?: 
   return (
     <div className={`fold ${open ? "open" : ""}`}>
       <button className="fold-head" onClick={() => setOpen(!open)}>
-        {live ? <span className="spin" /> : <Icon name={open ? "chevronDown" : "chevron"} size={13} />}
+        {live ? <MarkLoader /> : <Icon name={open ? "chevronDown" : "chevron"} size={13} />}
         <span>{title}</span>
       </button>
       {open && lines.map((l, k) => (
@@ -365,7 +365,7 @@ function Tray({ state, lines, job, seen, progress, replay, onStop }: {
     return (
       <div className="tray live">
         <div className="tr-top">
-          <span className="spin" />
+          <MarkLoader />
           <b>{p.title}</b>
           {p.detail && <span className="tr-detail">{p.detail}</span>}
           <span className="tr-clock" title={expTip(p)}>{tc(m.stage, 0)}{p.expected_s ? ` / ~${tc(p.expected_s, 0)}` : ""}</span>
@@ -384,7 +384,7 @@ function Tray({ state, lines, job, seen, progress, replay, onStop }: {
   if (job?.running) {
     return (
       <div className="tray live">
-        <div className="tr-top"><span className="spin" /><b>{job.label}…</b><span className="grow" /><button className="tr-stop" onClick={onStop}><Icon name="stop" size={10} />Stop</button></div>
+        <div className="tr-top"><MarkLoader /><b>{job.label}…</b><span className="grow" /><button className="tr-stop" onClick={onStop}><Icon name="stop" size={10} />Stop</button></div>
       </div>
     );
   }

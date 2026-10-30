@@ -77,6 +77,25 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .check input { accent-color: var(--accent); margin: 0; }
 .pulse { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: pulse 1.1s ease-in-out infinite; vertical-align: 1px; }
 @keyframes pulse { 0%, 100% { opacity: 0.25; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1.1); } }
+/* the loading mark (icons.tsx MarkLoader): brackets close in, a marker V passes through, 1.6 s; brackets in the text colour */
+.mark-loader { display: inline-block; flex-shrink: 0; overflow: visible; vertical-align: -0.22em; --ml-v: var(--accent); }
+.mark-loader .ml-l, .mark-loader .ml-r { fill: currentColor; }
+.mark-loader .ml-v { fill: var(--ml-v); }
+.mark-loader.mono, .btn:not(.quiet) .mark-loader, .style-tag .mark-loader { --ml-v: currentColor; } /* no marker V on marker */
+.mark-loader .ml-l { animation: ml-l 1.6s infinite; }
+.mark-loader .ml-r { animation: ml-r 1.6s infinite; }
+.mark-loader .ml-v { animation: ml-v 1.6s infinite; }
+@keyframes ml-l { 0% { transform: translateX(-5px); animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
+  28%, 72% { transform: none; animation-timing-function: cubic-bezier(.6, 0, .8, .2); } 100% { transform: translateX(-5px); } }
+@keyframes ml-r { 0% { transform: translateX(5px); animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
+  28%, 72% { transform: none; animation-timing-function: cubic-bezier(.6, 0, .8, .2); } 100% { transform: translateX(5px); } }
+@keyframes ml-v { 0% { transform: translateY(-30px); animation-timing-function: cubic-bezier(.2, .8, .2, 1); }
+  40%, 68% { transform: none; animation-timing-function: cubic-bezier(.6, 0, .8, .2); } 100% { transform: translateY(30px); } }
+@keyframes ml-still { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+@media (prefers-reduced-motion: reduce) { /* as specific as the rules above: the brackets stop, the V only fades */
+  .mark-loader .ml-l, .mark-loader .ml-r { animation: none; }
+  .mark-loader .ml-v { animation: ml-still 2.4s ease-in-out infinite; }
+}
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .seg-group { display: inline-flex; background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); padding: 2px; gap: 2px; }
 .seg { padding: 3px 10px; border-radius: 4px; color: var(--mute); font-size: 12px; font-weight: 550; white-space: nowrap; }
@@ -224,8 +243,6 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .fold-head .ico { color: var(--mute); }
 .fold-step { display: grid; grid-template-columns: 14px 1fr; gap: 8px; align-items: start; padding: 5px 9px; font-size: 12px; color: var(--text-2); border-top: 1px solid var(--line); }
 .fold-step .ico { color: var(--mute); margin-top: 2px; }
-.spin { width: 12px; height: 12px; flex-shrink: 0; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: spin 0.9s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
 .vcard { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 9px; align-items: center; border: 1px solid var(--line-2); border-radius: 10px; padding: 6px 8px 6px 6px; background: var(--panel-2); }
 .vcard.on { border-color: #ffc62966; }
 .vc-thumb { width: 40px; height: 71px; border-radius: 5px; overflow: hidden; background: #000; }
@@ -309,7 +326,7 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .pl-line:hover { background: var(--panel-3); }
 .pl-dot { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--dim); display: grid; place-items: center; color: var(--accent-ink); }
 .pl-row.done .pl-dot { background: var(--pass); border-color: var(--pass); }
-.pl-row.running .pl-dot { border-color: var(--accent); background: var(--accent); animation: pulse 1s infinite; }
+.pl-row.running .pl-dot { border: 0; color: var(--text); width: 16px; height: 16px; }
 .pl-row.error .pl-dot { background: var(--blocker); border-color: var(--blocker); }
 .pl-row.idle .pl-dot { border-style: dashed; }
 .pl-name { font-size: 12.5px; color: var(--text); }

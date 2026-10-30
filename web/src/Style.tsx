@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, tc } from "./api";
-import { Icon } from "./icons";
+import { Icon, MarkLoader } from "./icons";
 import type { Look, LooksInfo, SavedLook, Version } from "./types";
 
 // The Style panel and its canvas handles. A person's look (font, colours, words per line, the caption position) and
@@ -66,7 +66,7 @@ function PresetCard({ id, v, t, look, name, on, onPick, saved, onDelete }: {
   return (
     <div className={`preset-card ${on ? "on" : ""}`} role="button" tabIndex={0} onClick={onPick}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }} title={saved ? `Your look “${name}”` : `The ${name} preset`}>
-      <span className="pc-img">{src ? <img src={src} alt="" /> : <span className="pulse" />}</span>
+      <span className="pc-img">{src ? <img src={src} alt="" /> : <MarkLoader size={22} label="Loading the preview" />}</span>
       <span className="pc-name">{name}</span>
       {onDelete && <button className="pc-del icon-btn" title="Delete this saved look" onClick={(e) => { e.stopPropagation(); onDelete(); }}><Icon name="close" size={11} /></button>}
     </div>
@@ -311,7 +311,7 @@ export function StyleCanvas({ v, t, draft, setDraft, preview, busy, show }: {
   return (
     <div className="style-canvas" ref={ref} onPointerMove={move} onPointerUp={end} onClick={(e) => e.stopPropagation()}>
       {fresh && <img className="style-still" src={preview!.image} alt="Preview of the new version" />}
-      {(fresh || busy) && <span className="style-tag">{busy ? "Preview…" : "Preview · not made yet"}</span>}
+      {(fresh || busy) && <span className="style-tag">{busy ? <><MarkLoader size={14} /> Preview…</> : "Preview · not made yet"}</span>}
       {hb && box([hb[0], hb[1], hb[2] - hb[0], hb[3] - hb[1]], "sc-head", <span>face while it is up</span>)}
       {drag && <span className="sc-guide-v" style={{ left: "50%" }} />}
       {caps.length > 0 && box(caps[0].box, `sc-handle sc-caption ${drag?.kind === "caption" ? "sc-orig" : ""}`, <span className="sc-label">caption · drag up or down</span>,

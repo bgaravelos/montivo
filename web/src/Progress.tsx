@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { MarkLoader } from "./icons";
 import { tc } from "./api";
 import type { Job, Progress } from "./types";
 
@@ -83,7 +84,7 @@ export function ProgressInline({ p }: { p: Progress }) {
   const m = measure(p);
   return (
     <span className="prog-inline" title={`${stepText(p)} · ${clock(m.stage)}${p.expected_s ? ` of ~${clock(p.expected_s)}` : ""}`}>
-      <span className="pulse" /> <b>{p.label}</b> <span className="mono">{clock(m.job)}</span>
+      <MarkLoader /> <b>{p.label}</b> <span className="mono">{clock(m.job)}</span>
       <span className="prog-step">{stepText(p)}</span>
       <Bar key={p.title} frac={m.frac} small />
     </span>
@@ -96,7 +97,7 @@ export function ProgressMini({ p }: { p: Progress }) {
   const m = measure(p);
   return (
     <div className="prog-mini" title={stepText(p)}>
-      <div className="pm-line"><span className="pulse" /> <span>{p.label}: {p.title}{p.detail ? ` · ${p.detail}` : ""}</span><span className="mono mute">{clock(m.job)}</span></div>
+      <div className="pm-line"><MarkLoader /> <span>{p.label}: {p.title}{p.detail ? ` · ${p.detail}` : ""}</span><span className="mono mute">{clock(m.job)}</span></div>
       <Bar key={p.title} frac={m.frac} small />
     </div>
   );

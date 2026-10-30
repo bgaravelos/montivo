@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, fileUrl, tc, usd } from "./api";
 import { originKind, originLabel, parentOf } from "./edit";
-import { Icon } from "./icons";
+import { Icon, MarkLoader } from "./icons";
 import type { CaptionLine, Costs, HeadsInfo, Planner, RunState, Version } from "./types";
 
 const mb = (b: number | null | undefined) => (b == null ? "–" : b > 1e9 ? `${(b / 1e9).toFixed(2)} GB` : `${(b / 1e6).toFixed(1)} MB`);
@@ -340,7 +340,7 @@ export function SpeakersPanel({ id, v, next, canEdit, onApply }: {
     <section className="side-panel">
       <div className="panel-head"><span className="ph-title">Speakers</span><span className="ph-sub">{info ? `${info.speakers.length} voices · ${info.heads.length} heads` : ""}</span></div>
       <div className="panel-body">
-        {!info && <p className="mute small">Loading…</p>}
+        {!info && <p className="mute small"><MarkLoader /> Loading…</p>}
         {info && (info.speakers.length < 2 || !info.heads.length) && (
           <p className="mute small">{!info.heads.length ? "No head track in this run: the crop follows the person." : "One voice: the crop follows the head SAM tracked, nothing to pin."}</p>
         )}

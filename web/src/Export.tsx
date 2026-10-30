@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, tc } from "./api";
 import { CoverMaker, type CoverRecord, type CoverState } from "./CoverMaker";
 import { useModal } from "./Dialogs";
-import { Icon } from "./icons";
+import { Icon, MarkLoader } from "./icons";
 import type { Costs, Version } from "./types";
 
 // The Export page: a cover and a file name on the left, the destination, what goes in the bundle and the pre-flight on
@@ -70,7 +70,7 @@ function PostText({ id, n, post, setPost, hasKey, keyNote, onErr }: {
           <div className="ex-post-row">
             <span className="mute small">{one ? `${one.text.length} / ${lim} characters` : ""}{one?.title ? ` · title ${one.title.length} / 100` : ""}</span>
             <span className="grow" />
-            <button className="btn quiet small" disabled={!hasKey || busy} onClick={write} title={hasKey ? "Write all four again (one Muse Spark call, about $0.01)" : keyNote ?? "Needs MODEL_API_KEY"}>{busy ? <><span className="pulse" /> Writing…</> : "Write again"}</button>
+            <button className="btn quiet small" disabled={!hasKey || busy} onClick={write} title={hasKey ? "Write all four again (one Muse Spark call, about $0.01)" : keyNote ?? "Needs MODEL_API_KEY"}>{busy ? <><MarkLoader size={14} /> Writing…</> : "Write again"}</button>
             <button className="btn small" disabled={!one} onClick={copy}><Icon name={copied === tab ? "check" : "link"} size={12} />{copied === tab ? "Copied" : "Copy"}</button>
           </div>
         </>
@@ -78,7 +78,7 @@ function PostText({ id, n, post, setPost, hasKey, keyNote, onErr }: {
         <div className="ex-post-row">
           <span className="mute small">A title, a description and hashtags for Reels, TikTok, Shorts and LinkedIn, from the brief, the words the cut keeps and the blind review.</span>
           <button className="btn small" disabled={!hasKey || busy} onClick={write} title={hasKey ? "One Muse Spark call, about $0.01" : keyNote ?? "Needs MODEL_API_KEY"}>
-            {busy ? <><span className="pulse" /> Writing…</> : <><Icon name="spark" size={12} />Write with Muse Spark · ~$0.01</>}</button>
+            {busy ? <><MarkLoader size={14} /> Writing…</> : <><Icon name="spark" size={12} />Write with Muse Spark · ~$0.01</>}</button>
         </div>
       )}
     </div>
@@ -207,7 +207,7 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
             <PostText id={id} n={n} post={post} setPost={setPost} hasKey={hasKey} keyNote={keyNote} onErr={setErr} />
             <div className="pn-k">Pre-flight {checks && <span className={`ex-sum s-${worst}`}>{worst === "ok" ? "ready" : worst === "fail" ? "fix first" : worst === "info" ? "–" : "check these"}</span>}</div>
             <div className="ex-checks">
-              {!checks && <span className="mute small"><span className="pulse" /> checking…</span>}
+              {!checks && <span className="mute small"><MarkLoader /> checking…</span>}
               {checks?.map((c) => (
                 <div key={c.id} className={`ex-check s-${c.status}`}>
                   <span className="ex-dot" />
@@ -225,7 +225,7 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
           <span className="grow" />
           <button className="btn quiet" onClick={onClose}>Close</button>
           <button className="btn" disabled={!v || !inc.length || busy} onClick={go}>
-            {busy ? <><span className="pulse" /> {feed && (inc.includes("video") || inc.includes("clean")) ? `Rendering the ${aspect} version…`
+            {busy ? <><MarkLoader size={14} /> {feed && (inc.includes("video") || inc.includes("clean")) ? `Rendering the ${aspect} version…`
               : inc.includes("clean") ? "Rendering the copy without captions…" : "Preparing…"}</> : <><Icon name="export" /> Download</>}
           </button>
         </div>

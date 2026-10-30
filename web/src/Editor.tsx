@@ -4,7 +4,7 @@ import { Assistant, wordScope, type Selection } from "./Assistant";
 import { EditDialog, LedgerDialog, ShortcutsDialog } from "./Dialogs";
 import { ExportPage } from "./Export";
 import { childOf, clipsAsk, cutAsk, flatWords, layout, parentOf, projectName, splitAt, type CutAsk, type WordSel } from "./edit";
-import { Icon } from "./icons";
+import { Icon, MarkLoader } from "./icons";
 import { Inspector, type PunchAsk } from "./Inspector";
 import { mixOf, sameMix, useLiveMix, type Mix } from "./Mix";
 import { MusicPanel } from "./Music";
@@ -469,7 +469,7 @@ export function Editor({ id, replay, go }: Props) {
         <div className="title-block">
           <span className="proj" title={state.run.brief}>{name}</span>
           <span className="saved">{progress?.active && (busy || replay) ? <ProgressInline p={progress} />
-            : busy ? <><span className="pulse" /> {job!.label}…</> : draftV ? <>{edits(draftSum?.ops.length ?? 0)} on Version {draftSum?.base} · not a version yet</>
+            : busy ? <><MarkLoader /> {job!.label}…</> : draftV ? <>{edits(draftSum?.ops.length ?? 0)} on Version {draftSum?.base} · not a version yet</>
             : v ? <>Saved · Version {v.n} of {newest}</> : "No version yet"}</span>
         </div>
         {draftV && !busy && (
