@@ -74,7 +74,7 @@ PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 OP_LABEL = {"kit": "Brand kit", "style": "Style", "text": "Edit text", "music": "Music", "pin": "Pin a speaker"}
 COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_fixed": 0.045,
         "run_per_s": 0.0026, "run_wall_fixed_s": 60, "run_wall_per_s": 0.9, "review_loop": 0.07, "review_loop_s": 85,
-        "hook_ab": 0.04, "ask": 0.006, "look": 0.008, "cover": 0.025, "cover_design": 0.05, "cover_mask": 0.01,
+        "hook_ab": 0.04, "ask": 0.006, "look": 0.008, "titles": 0.009, "cover": 0.025, "cover_design": 0.05, "cover_mask": 0.01,
         "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175}
 
 
@@ -1642,7 +1642,8 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(400, "title: 1 to 80 characters")
         if card is not None and not isinstance(card, bool):
             raise HTTPException(400, "title_card: true or false")
-        if not callouts and title is None and card is None:
+        at = draft.clean_panel_op("text", {"callouts": callouts, "callout_at": b.get("callout_at") or {}, "title_card": False}).get("callout_at") or {}
+        if not callouts and title is None and card is None and not at:
             raise HTTPException(400, "nothing to change")
         if title is not None or passes:
             need_key("New title card words (Muse Image)" if title is not None else "Reviewing the new cut",
@@ -1650,8 +1651,10 @@ def create_app(root: Path) -> FastAPI:
         args = ["-m", "montivo.human", "text", f"runs/{run_id}", *[f"--callout={k}={v}" for k, v in callouts.items()],
                 *([f"--title={title}"] if title is not None else []),
                 *(["--title-on" if card else "--title-off"] if card is not None else []),
+                *[f"--callout-at={k}={v:.2f}" for k, v in at.items()],
                 "--from", str(frm), "--review", str(passes)]
         what = [f"{k}: “{v}”" if v else f"{k}: no callout" for k, v in callouts.items()]
+        what += [f"{k}: callout from {v:.1f} s into the clip" for k, v in at.items()]
         if title is not None:
             what.append(f"title: “{title}”")
         if card is not None:
@@ -1936,6 +1939,35 @@ def create_app(root: Path) -> FastAPI:
             if corrected:
                 log(f"style: corrected Spark's answer: {'; '.join(corrected)}")
         return {"look": look, "why": why, "prompt": prompt}
+
+    @app.post("/api/runs/{run_id}/title/suggest")
+    def title_suggest(run_id: str, request: Request, b: dict):
+        """{"v": N} or {"draft": true}: three title card lines Muse Spark writes from what the cut says (T3,
+        engine/titles.py, one call in the run's ledger: $0.0088, 9.4 s, 1960 output tokens on 015, 30/10), no
+        version: picking one is a text edit."""
+        from ..engine.titles import suggest
+        from ..ledger import Ledger
+        from ..run import RunLog
+        d = st.run_dir(run_id)
+        if b.get("draft"):
+            fd = draft.folder(d, judge_of(request) if budget is not None else None)
+            with draft.run_lock(d):
+                state = draft.load(fd)
+                if state is None:
+                    raise HTTPException(404, "no draft")
+                edl = draft.current(fd, d, state)
+        else:
+            d, edl = edl_of(run_id, int(b.get("v") or latest_version(d)))
+        brief = (read_json(d / "run.json") or {}).get("brief") or ""
+        with one_paid_call(run_id):
+            need_key("Title hooks (Muse Spark)", COST["titles"])
+            log = RunLog(d / "run.log")
+            log("titles: three title card lines (one Spark call)")
+            try:
+                titles = suggest(d, edl, brief, Ledger.resume(d / "ledger.json"), log)
+            except ValueError as e:
+                raise HTTPException(502, str(e))
+        return {"titles": titles}
 
     @app.post("/api/runs/{run_id}/reorder")
     async def reorder(run_id: str, request: Request):

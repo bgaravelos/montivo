@@ -783,6 +783,14 @@ look; `captions.span_looks`), build_overlays groups a segment's words in runs of
 lines and the callout carry `look`, preview_data / LiveOverlay draw them; the style op's `clips` {span: look | null},
 `human style --clip s3=JSON|cut`, the Style panel's Applies to: Whole cut / This clip. A re-plan does not carry clip
 looks (new span ids). EDLs without clip looks lay out as before. rp-015: s1 in Box, the rest Marker, rendered.
+Rail panels Text T1-T3 (30/10, $0.009, same branch): T1 the text op's `callout_at` {span: seconds into the clip} sets
+the existing `callout_shift_s` (`human.callout_shift`: from the lead, keeping CALLOUT_MIN_S of the clip; removing a
+callout drops it; `human text --callout-at s3=1.2`, POST /text `callout_at`, draft op); "New callout at the playhead" in
+Text and a double-click on the timeline's Text lane open the words box of the clip there. T2 the callout inspector:
+words, colours for every callout or only this one (= the clip's own look, S4), place, timing (-0.5 s, at the playhead,
++0.5 s). T3 `engine/titles.py`: "Suggest 3 hooks" = one muse-spark-1.3 call (POST /title/suggest, no version; $0.0088,
+9.4 s on rp-015: "Why do editors skip checking work?", "Every editor stops at first cut", "Raw footage in, reviewed cut
+out"); a pick stages new title words (a $0.01 card at the render).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

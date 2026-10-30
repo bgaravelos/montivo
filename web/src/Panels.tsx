@@ -284,12 +284,16 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, foc
 }
 
 /** A text edit for montivo.human text: callouts by span ("" removes one), new title words, the card on or off. */
-export type TextEdit = { callouts?: Record<string, string>; title?: string; title_card?: boolean };
+// callout_at: seconds into the clip where its callout starts (T1, a callout at the playhead)
+export type TextEdit = { callouts?: Record<string, string>; title?: string; title_card?: boolean; callout_at?: Record<string, number> };
+type Hook = { text: string; why: string };
 
-export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, rev, live }: {
+export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, rev, live, clipAt, onHooks }: {
   state: RunState; v: Version | null; t: number; next: number; canEdit: string | null; onSeek: (a: number) => void; focus?: PanelFocus | null;
   rev: string; live: boolean;
   onApply: (e: TextEdit) => void;
+  clipAt: { span: string; at: number } | null; // the clip under the playhead and how far into it (T1)
+  onHooks: () => Promise<Hook[] | null>; // T3: three title lines from Muse Spark, no version
 }) {
   const calls = v?.callouts ?? [];
   const [staged, setStaged] = useState<Record<string, string>>({}); // span id -> callout text ("" = removed)
@@ -297,8 +301,26 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, 
   const [card, setCard] = useState<boolean | null>(null);
   const [editing, setEditing] = useState<string | null>(null); // a span id or "title"
   const [draft, setDraft] = useState("");
-  useEffect(() => { setStaged({}); setTitle(null); setCard(null); setEditing(null); }, [rev]);
+  const [at, setAt] = useState<Record<string, number>>({}); // span id -> seconds into the clip its callout starts
+  const [hooks, setHooks] = useState<Hook[] | null>(null);
+  const [hooking, setHooking] = useState(false);
+  useEffect(() => { setStaged({}); setTitle(null); setCard(null); setEditing(null); setAt({}); }, [rev]);
   const body = useRef<HTMLDivElement>(null);
+  /** T1: a callout at a moment: the clip there gets one starting at that second (its words box opens), or its
+   *  callout moves to start there. */
+  const calloutHere = (sid: string, sec: number) => {
+    if (canEdit || !v) return;
+    const sp = v.spans.find((x) => x.id === sid);
+    if (!sp) return;
+    setAt((a) => ({ ...a, [sid]: Math.round(sec * 100) / 100 }));
+    const has = (staged[sid] ?? sp.callout ?? "").trim();
+    if (!has) { setEditing(sid); setDraft(""); }
+    window.requestAnimationFrame(() => body.current?.querySelector(`[data-span="${sid}"]`)?.scrollIntoView({ block: "nearest" }));
+  };
+  useEffect(() => { // T1: a double-click on the timeline's Text lane (new:<span>:<seconds into it>)
+    const m = focus?.key.match(/^new:(s\d+):([\d.]+)$/);
+    if (m) calloutHere(m[1], Number(m[2]));
+  }, [focus?.nonce]); // eslint-disable-line
   useEffect(() => { // A2: the callout picked on the timeline, scrolled into view (its text box open on Enter)
     const sid = focus?.key.startsWith("callout:") ? focus.key.slice(8) : null;
     const sp = sid ? v?.spans.find((x) => x.id === sid) : null;
@@ -321,9 +343,32 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, 
     }
     setEditing(null);
   };
-  const n = Object.keys(staged).length + (title != null ? 1 : 0) + (card != null ? 1 : 0);
+  const timed = Object.keys(at).filter((sid) => callout(sid)); // a time for a clip left without words is dropped
+  const n = Object.keys(staged).length + timed.filter((sid) => !(sid in staged)).length + (title != null ? 1 : 0) + (card != null ? 1 : 0);
   const needsKey = title != null && !state.has_key;
-  const apply = () => onApply({ ...(Object.keys(staged).length ? { callouts: staged } : {}), ...(title != null ? { title } : {}), ...(card != null ? { title_card: card } : {}) });
+  const apply = () => onApply({ ...(Object.keys(staged).length ? { callouts: staged } : {}), ...(title != null ? { title } : {}), ...(card != null ? { title_card: card } : {}),
+    ...(timed.length ? { callout_at: Object.fromEntries(timed.map((sid) => [sid, at[sid]])) } : {}) });
+  const hereSp = clipAt ? v.spans.find((x) => x.id === clipAt.span) ?? null : null;
+  const hereHas = hereSp ? !!callout(hereSp.id) : false;
+  const askHooks = async () => {
+    setHooking(true);
+    try { setHooks(await onHooks()); } finally { setHooking(false); }
+  };
+  const hooksBtn = (
+    <button className="btn quiet small" disabled={!!canEdit || !state.has_key || hooking}
+      title={canEdit ?? (!state.has_key ? state.key_note ?? "Set MODEL_API_KEY to ask Muse Spark" : `Muse Spark writes three title lines from what the cut says (about ${usd(state.costs?.titles ?? 0.009)}); picking one makes a new card ($0.01)`)}
+      onClick={askHooks}>{hooking ? <MarkLoader size={12} /> : <Icon name="spark" size={12} />} Suggest 3 hooks · ~{usd(state.costs?.titles ?? 0.009)}</button>
+  );
+  const hookList = hooks && (
+    <div className="hook-opts">
+      {hooks.map((h) => (
+        <button key={h.text} className={`hook-opt ${title === h.text ? "on" : ""}`} disabled={!!canEdit} title={h.why}
+          onClick={() => { setTitle(h.text === v.title_card_text ? null : h.text); if (!cardOn) setCard(true); }}>
+          <b>{h.text}</b><span className="mute small">{h.why}</span>
+        </button>
+      ))}
+    </div>
+  );
   const editor = (label: string) => (
     <input autoFocus value={draft} maxLength={80} aria-label={label} onFocus={(e) => e.currentTarget.select()}
       onChange={(e) => setDraft(e.target.value)} onBlur={commit}
@@ -352,9 +397,15 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, 
                 {(card ?? cardOn) ? "Turn off" : "Turn on"}</button>
             </span>
           </div>
-        ) : <p className="mute small">No title card.</p>}
+        ) : <p className="mute small">{title ? <>New title card: <b>{title}</b> ($0.01 at the render)</> : "No title card."}</p>}
+        <div className="st-row">{hooksBtn}</div>
+        {hookList}
         <div className="pn-k">Callouts</div>
-        <p className="mute small">One callout per clip at most, anchored to the speaker. Double-click to rewrite; empty removes it.</p>
+        <p className="mute small">One callout per clip at most, anchored to the speaker. Double-click to rewrite; empty removes it. Double-click the Text lane to add one at that moment.</p>
+        <button className="btn small" disabled={!!canEdit || !hereSp}
+          title={canEdit ?? (!hereSp ? "Put the playhead in a clip" : hereHas ? `Clip ${hereSp.id}'s callout starts at the playhead` : `A callout on clip ${hereSp.id} from the playhead`)}
+          onClick={() => clipAt && calloutHere(clipAt.span, clipAt.at)}>
+          <Icon name="callout" size={12} /> {hereSp ? (hereHas ? `Start ${hereSp.id}'s callout at ${tc(t)}` : `New callout at ${tc(t)} · ${hereSp.id}`) : "New callout at the playhead"}</button>
         <div className="list" ref={body}>
           {v.spans.map((sp) => {
             const c = calls.find((x) => x.span === sp.id);
@@ -369,7 +420,8 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, 
                 onClick={() => c && onSeek(c.t_in)} onDoubleClick={() => open(sp.id, text)} onKeyDown={(e) => { if (e.key === "Enter") open(sp.id, text); }}>
                 <span className="lr-t mono">{c ? tc(c.t_in) : sp.id}</span>
                 <span className="lr-txt">{text ? <b>{text}</b> : <i className="mute">removed</i>}
-                  {sp.id in staged && <span className="lr-was">was: {was || "no callout"}</span>}</span>
+                  {sp.id in staged && <span className="lr-was">was: {was || "no callout"}</span>}
+                  {sp.id in at && text && <span className="lr-was">starts {at[sp.id].toFixed(1)} s into the clip</span>}</span>
                 <span className="lr-end">
                   <span className="lr-flag">clip {sp.id}</span>
                   <button className="icon-btn lr-edit" disabled={!!canEdit} title={canEdit ?? "Rewrite this callout"}
@@ -391,7 +443,7 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, 
         <div className="cap-apply">
           <span>{n} change{n > 1 ? "s" : ""}</span>
           <span className="grow" />
-          <button className="btn quiet" onClick={() => { setStaged({}); setTitle(null); setCard(null); }}>Discard</button>
+          <button className="btn quiet" onClick={() => { setStaged({}); setTitle(null); setCard(null); setAt({}); }}>Discard</button>
           <button className="btn" disabled={!!canEdit || needsKey}
             title={canEdit ?? (needsKey ? "New title words call Muse Image: set MODEL_API_KEY" : live ? `${LIVE_TIP.replace("($0)", title != null ? "($0.01 for the new card)" : "($0)")}`
               : `Makes Version ${next} (${title != null ? "$0.01 for the new card" : "$0"}, a re-render)`)}

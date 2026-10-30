@@ -62,6 +62,7 @@ from typing import Callable
 
 from .engine import broll
 from .engine.api import dump_json
+from .engine.captions import CALLOUT_LEAD_S, CALLOUT_MIN_S
 from .engine.edges import Audio, Words, reset_edges, tighten_edges
 from .engine.edl import build_edl, carry_run_words, edl_summary, normalize_roles
 from .engine.graphics import Look, normalize_look, restyle
@@ -525,9 +526,18 @@ def _save(run_dir: Path, new: dict, n: int, from_v: int, action: str, fixes: lis
     return edl_path
 
 
-def text_fixes(edl: dict, callouts: dict[str, str], title: str | None, title_card: bool | None) -> list[dict]:
-    """The patch entries of a text edit: callout_text per span ("" removes it), title_text, title_off / title_on.
-    Raises SystemExit for a span that is not in the EDL or an edit that changes nothing."""
+def callout_shift(span: dict, at: float) -> float:
+    """The span's `callout_shift_s` for a callout that starts `at` seconds into the clip (T1: a callout at the
+    playhead): build_overlays starts it CALLOUT_LEAD_S + shift in, and it keeps CALLOUT_MIN_S of the clip on screen."""
+    room = max(0.0, float(span["duration"]) - CALLOUT_LEAD_S - CALLOUT_MIN_S)
+    return round(min(room, max(0.0, at - CALLOUT_LEAD_S)), 2)
+
+
+def text_fixes(edl: dict, callouts: dict[str, str], title: str | None, title_card: bool | None,
+               callout_at: dict[str, float] | None = None) -> list[dict]:
+    """The patch entries of a text edit: callout_text per span ("" removes it), callout_time per span of `callout_at`
+    (seconds into the clip where its callout starts, T1), title_text, title_off / title_on. Raises SystemExit for a
+    span that is not in the EDL, a time for a clip that has no callout, or an edit that changes nothing."""
     by_id = {s["id"]: s for s in edl["spans"]}
     out = []
     for sid, text in callouts.items():
@@ -540,6 +550,18 @@ def text_fixes(edl: dict, callouts: dict[str, str], title: str | None, title_car
         out.append({"op": "callout_text", "target": sid, "issue": -1, "severity": "human", "args": {"text": text, "was": was},
                     "note": f"callout {was!r} -> {text!r}" if text and was else f"callout {text!r} added" if text
                     else f"callout {was!r} removed"})
+    for sid, at in (callout_at or {}).items():
+        if sid not in by_id:
+            raise SystemExit(f"{sid} is not a span of this EDL ({', '.join(by_id)})")
+        has = " ".join(callouts[sid].split()) if sid in callouts else (by_id[sid].get("callout") or "").strip()
+        if not has:
+            raise SystemExit(f"{sid} has no callout to time: give it words first")
+        shift, was = callout_shift(by_id[sid], float(at)), float(by_id[sid].get("callout_shift_s") or 0.0)
+        if shift == was:
+            continue
+        out.append({"op": "callout_time", "target": sid, "issue": -1, "severity": "human",
+                    "args": {"shift_s": shift, "was": was},
+                    "note": f"callout of {sid} starts {CALLOUT_LEAD_S + shift:.2f} s into the clip (was {CALLOUT_LEAD_S + was:.2f})"})
     if title is not None:
         title = " ".join(title.split())
         if not title:
@@ -557,14 +579,20 @@ def text_fixes(edl: dict, callouts: dict[str, str], title: str | None, title_car
 
 
 def text_edit(edl: dict, words: Words, audio: Audio | None, callouts: dict[str, str] | None = None,
-              title: str | None = None, title_card: bool | None = None) -> tuple[dict, Edit]:
-    """Callout and title card text (text_fixes); new title words make a new Muse Image card at the render ($0.01)."""
-    fixes = text_fixes(edl, callouts or {}, title, title_card)
+              title: str | None = None, title_card: bool | None = None,
+              callout_at: dict[str, float] | None = None) -> tuple[dict, Edit]:
+    """Callout and title card text and when a callout starts (text_fixes); new title words make a new Muse Image card
+    at the render ($0.01)."""
+    fixes = text_fixes(edl, callouts or {}, title, title_card, callout_at)
     new, _ = apply_fixes(edl, [], words)  # a clean copy: render fields cleared, order and runtime as they were
     by_id = {s["id"]: s for s in new["spans"]}
     for f in fixes:
         if f["op"] == "callout_text":
             by_id[f["target"]]["callout"] = f["args"]["text"]
+            if not f["args"]["text"]:
+                by_id[f["target"]].pop("callout_shift_s", None)
+        elif f["op"] == "callout_time":
+            by_id[f["target"]]["callout_shift_s"] = f["args"]["shift_s"]
         elif f["op"] == "title_text":
             new["title_card_text"] = f["args"]["text"]
             new["title_card"] = True
@@ -575,9 +603,10 @@ def text_edit(edl: dict, words: Words, audio: Audio | None, callouts: dict[str, 
 
 
 def text(run_dir: Path, callouts: dict[str, str] | None = None, title: str | None = None, title_card: bool | None = None,
-         from_v: int | None = None, passes: int = 0, budget: float = 0.15) -> dict:
+         from_v: int | None = None, passes: int = 0, budget: float = 0.15, callout_at: dict[str, float] | None = None) -> dict:
     """Callout and title card text of edl_v{from} -> edl_vN (text_edit), rendered."""
-    return _run_edit(run_dir, from_v, passes, budget, text_edit, callouts=callouts, title=title, title_card=title_card)
+    return _run_edit(run_dir, from_v, passes, budget, text_edit, callouts=callouts, title=title, title_card=title_card,
+                     **({"callout_at": callout_at} if callout_at else {}))
 
 
 def look_note(was: Look, now: Look) -> str:
@@ -1811,6 +1840,8 @@ def main(argv: list[str] | None = None) -> int:
     tx.add_argument("run_dir", type=Path)
     tx.add_argument("--callout", action="append", default=[], metavar="SPAN=TEXT", help="a span's callout (empty removes it)")
     tx.add_argument("--title", default=None, help="new title card words (one Muse Image call)")
+    tx.add_argument("--callout-at", action="append", default=[], metavar="SPAN=SECONDS",
+                    help="the callout starts this many seconds into its clip")
     tg = tx.add_mutually_exclusive_group()
     tg.add_argument("--title-off", dest="title_card", action="store_const", const=False, default=None)
     tg.add_argument("--title-on", dest="title_card", action="store_const", const=True)
@@ -1915,7 +1946,12 @@ def main(argv: list[str] | None = None) -> int:
         pairs = [x.split("=", 1) for x in a.callout]
         if any(len(x) != 2 for x in pairs):
             ap.error("--callout SPAN=TEXT")
-        out = text(a.run_dir, dict(pairs), a.title, a.title_card, a.from_v, a.review, a.budget)
+        ats = [x.split("=", 1) for x in a.callout_at]
+        try:
+            at = {k: float(x) for k, x in ats}
+        except ValueError:
+            ap.error("--callout-at SPAN=SECONDS")
+        out = text(a.run_dir, dict(pairs), a.title, a.title_card, a.from_v, a.review, a.budget, callout_at=at)
     elif a.cmd == "reorder":
         out = reorder(a.run_dir, a.span, None if a.end else a.before, a.from_v, a.review, a.budget)
     elif a.cmd == "cut":

@@ -12,6 +12,8 @@ export type PunchAsk = { on: boolean } | { skip: string };
 export type ItemEdits = {
   caption: (line: CaptionLine, text: string) => void; callout: (span: string, text: string) => void;
   calloutAuto: (span: string) => void; look: (patch: Partial<Look>) => void;
+  calloutAt: (span: string, how: "playhead" | number) => void; // T2: when the callout starts
+  clipLook: (span: string, patch: Partial<Look>) => void; // T2: colours of this callout only (the clip's own look, S4)
   music: (m: { track: string | null; level_db?: number; duck_db?: number }) => void;
   panel: (p: "captions" | "text" | "style" | "music") => void; ask: (line: CaptionLine) => void;
 };
@@ -162,9 +164,11 @@ function CalloutInspector({ v, span, edits, canEdit, onSeek, onClear }: {
 }) {
   const c = v.callouts.find((x) => x.span === span)!;
   const sp = v.spans.find((x) => x.id === span);
-  const look = v.look;
+  const look = sp?.look ?? v.look; // a clip with a look of its own draws its callout in it
+  const [only, setOnly] = useState(!!sp?.look);
   const [colors, setColors] = useState({ callout_bg: look?.callout_bg ?? "#FFC629", callout_fg: look?.callout_fg ?? "#000000" });
   useEffect(() => setColors({ callout_bg: look?.callout_bg ?? "#FFC629", callout_fg: look?.callout_fg ?? "#000000" }), [look?.callout_bg, look?.callout_fg]);
+  useEffect(() => setOnly(!!sp?.look), [span, !!sp?.look]); // eslint-disable-line
   return (
     <section className="inspector">
       <Head icon="callout" title="Callout" sub={`clip ${span}`} onClear={onClear} />
@@ -176,12 +180,16 @@ function CalloutInspector({ v, span, edits, canEdit, onSeek, onClear }: {
         </div>
         {look && (
           <div className="insp-sec">
-            <div className="pn-k"><Icon name="style" size={12} />Colours <span className="mute small">every callout</span></div>
+            <div className="pn-k"><Icon name="style" size={12} />Colours</div>
+            <div className="seg-group" role="group" aria-label="Which callouts the colours change">
+              <button className={`seg ${!only ? "on" : ""}`} onClick={() => setOnly(false)} disabled={!!sp?.look} title={sp?.look ? "This clip has a look of its own (Style panel, This clip)" : undefined}>Every callout</button>
+              <button className={`seg ${only ? "on" : ""}`} onClick={() => setOnly(true)}>Only this one</button>
+            </div>
             <div className="st-colors">
               <Color label="Pill" value={colors.callout_bg} onChange={(x) => setColors({ ...colors, callout_bg: x })} />
               <Color label="Text" value={colors.callout_fg} onChange={(x) => setColors({ ...colors, callout_fg: x })} />
               {(colors.callout_bg !== look.callout_bg || colors.callout_fg !== look.callout_fg) && (
-                <button className="btn small" disabled={!!canEdit} onClick={() => edits.look(colors)}>Apply</button>
+                <button className="btn small" disabled={!!canEdit} onClick={() => (only ? edits.clipLook(span, colors) : edits.look(colors))}>Apply</button>
               )}
             </div>
           </div>
@@ -195,7 +203,15 @@ function CalloutInspector({ v, span, edits, canEdit, onSeek, onClear }: {
             {sp?.callout_xy && <button className="btn quiet small" disabled={!!canEdit} onClick={() => edits.calloutAuto(span)}>Back to automatic</button>}
           </div>
         </div>
-        <dl className="props"><dt>On screen</dt><dd className="mono">{tc(c.t_in, 2)} – {tc(c.t_out, 2)}</dd></dl>
+        <div className="insp-sec">
+          <div className="pn-k"><Icon name="clock" size={12} />Timing</div>
+          <p className="mono">{tc(c.t_in, 2)} – {tc(c.t_out, 2)}</p>
+          <div className="insp-actions">
+            <button className="btn quiet small" disabled={!!canEdit} onClick={() => edits.calloutAt(span, -0.5)}>−0.5 s</button>
+            <button className="btn quiet small" disabled={!!canEdit} onClick={() => edits.calloutAt(span, "playhead")} title="It starts where the playhead is (inside its clip)">Start at the playhead</button>
+            <button className="btn quiet small" disabled={!!canEdit} onClick={() => edits.calloutAt(span, 0.5)}>+0.5 s</button>
+          </div>
+        </div>
         <div className="insp-actions">
           <button className="btn quiet" onClick={() => onSeek(c.t_in, c.t_out)}><Icon name="play" /> Play it</button>
           <button className="btn danger-quiet" disabled={!!canEdit} onClick={() => edits.callout(span, "")}><Icon name="trash" /> Remove (⌫)</button>

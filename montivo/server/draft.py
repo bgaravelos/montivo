@@ -201,13 +201,18 @@ def clean_panel_op(op: str, a: dict) -> dict:
         if not isinstance(cs, dict) or len(cs) > 200:
             raise HTTPException(400, "callouts: {span id: text up to 80 characters}")
         out = {"callouts": {_span(k): _text(v, "callout", 80) for k, v in cs.items()}}
+        at = a.get("callout_at") or {}
+        if not isinstance(at, dict) or len(at) > 200:
+            raise HTTPException(400, "callout_at: {span id: seconds into the clip}")
+        if at:
+            out["callout_at"] = {_span(k): max(0.0, _seconds(v, "callout_at")) for k, v in at.items()}
         if a.get("title") is not None:
             out["title"] = _text(a["title"], "title", 80, False)
         if a.get("title_card") is not None:
             if not isinstance(a["title_card"], bool):
                 raise HTTPException(400, "title_card: true or false")
             out["title_card"] = a["title_card"]
-        if not out["callouts"] and len(out) == 1:
+        if not out["callouts"] and len(out) == 1:  # callout_at alone is a change too (len 2)
             raise HTTPException(400, "nothing to change")
         return out
     if op == "style":

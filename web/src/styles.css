@@ -1229,3 +1229,8 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 @keyframes vm-pulse { 50% { opacity: 0.35; } }
 @media (prefers-reduced-motion: reduce) { .view-mode button.on .vm-dot { animation: none; } }
 .draft-bar { display: inline-flex; gap: 8px; margin-left: 12px; align-items: center; }
+/* T3: the title lines Muse Spark suggests */
+.hook-opts { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 10px; }
+.hook-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; padding: 8px 10px; border-radius: var(--r); border: 1px solid var(--line); background: var(--panel-2); color: var(--text); }
+.hook-opt:hover { border-color: var(--line-2); }
+.hook-opt.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }

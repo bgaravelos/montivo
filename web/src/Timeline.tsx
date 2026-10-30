@@ -43,6 +43,7 @@ type Props = {
   /** A2: a caption line or a callout picked on the timeline (`cap:<id>`, `callout:<span>`): the editor selects it and
    *  opens its panel there; a caption retexted in place (double-click, Enter). */
   onPick: (key: string) => void; onCaptionText: (line: CaptionLine, text: string) => void;
+  onNewCallout: (t: number) => void; // T1: a double-click on the Text lane: a callout at that moment
 };
 
 /** The bottom of the editor: a read-mostly multi-track timeline of the selected version (select, seek, delete from the
@@ -206,7 +207,7 @@ function Canvas(p: Props & { v: Version; pps: number; dur: number; scroller: Rea
       <Tracks id={p.id} v={v} blocks={p.blocks} words={p.words} selected={p.selected} selection={p.selection} canTrim={p.canTrim} pps={pps} dur={dur}
         snap={p.snap} getT={getT}
         timeAt={timeAt} onSelect={p.onSelect} onSeek={p.onSeek} onMenu={p.onMenu} onTrim={p.onTrim} onMove={p.onMove}
-        onPick={p.onPick} onCaptionText={p.onCaptionText}
+        onPick={p.onPick} onCaptionText={p.onCaptionText} onNewCallout={p.onNewCallout}
         mix={p.mix} base={p.base} onMusicPanel={p.onMusicPanel} bar={p.bar} setBar={p.setBar} plan={p.plan} />
       <div className="playhead" style={{ transform: `translateX(${t * pps}px)` }}>
         <span className="ph-handle" onPointerDown={scrub} />
@@ -285,7 +286,7 @@ type Move = { key: string; slot: number; t: number; target: number | null }; // 
 const MOVE_PX = 6; // a press that travels further than this is a drag, not a click
 
 type TrackProps = Pick<Props, "id" | "blocks" | "words" | "selected" | "selection" | "canTrim" | "onSelect" | "onSeek" | "onMenu" | "onTrim" | "onMove"
-  | "mix" | "base" | "onMusicPanel" | "snap" | "onPick" | "onCaptionText"> & BarProps & {
+  | "mix" | "base" | "onMusicPanel" | "snap" | "onPick" | "onCaptionText" | "onNewCallout"> & BarProps & {
   v: Version; pps: number; dur: number; timeAt: (x: number) => number; getT: () => number; plan: PausePlan | null;
 };
 
@@ -412,7 +413,8 @@ const Tracks = memo(function Tracks(p: TrackProps) {
         {!v.overlays.some((o) => o.shown) && v.cut && <span className="track-hint mute">Double-click to add a Muse Image still at a moment</span>}
       </div>
       {/* text: title card + callouts */}
-      <div className="track" style={{ height: TRACK_H.text }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); onSeek(timeAt(e.clientX)); } }}>
+      <div className="track" style={{ height: TRACK_H.text }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); onSeek(timeAt(e.clientX)); } }}
+        onDoubleClick={(e) => { if (e.target === e.currentTarget && canTrim) p.onNewCallout(timeAt(e.clientX)); }}>
         {v.title_s > 0 && (
           <button className={`item text title ${selected === "title" ? "sel" : ""}`} style={{ left: 0, width: v.title_s * pps - 1 }}
             onClick={() => { onSelect("title"); onSeek(0); }} title={`Title card: ${v.title_card_text}`}>

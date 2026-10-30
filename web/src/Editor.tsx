@@ -266,6 +266,25 @@ export function Editor({ id, replay, go }: Props) {
       return draftOp("style", { look: r.look, prompt: r.prompt, why: r.why });
     } catch (e) { flash(String((e as Error).message), "error"); return false; }
   };
+  /** T3: three title lines from Muse Spark for the version or the open draft (one call, no version). */
+  const suggestHooks = async () => {
+    try {
+      const r = await api<{ titles: { text: string; why: string }[] }>(`/api/runs/${id}/title/suggest`, draftV ? { draft: true } : { v: v?.n });
+      return r.titles;
+    } catch (e) { flash(String((e as Error).message), "error"); return null; }
+  };
+  /** The clip at cut second x and how far into it (T1: a callout there). */
+  const clipAtT = (x: number) => {
+    const b = blocks.find((k) => k.kind === "span" && x >= k.t0 && x < k.t1);
+    return b ? { span: b.span!.id, at: Math.max(0, x - b.t0) } : null;
+  };
+  const newCallout = (x: number) => { // T1: a double-click on the Text lane
+    const c = clipAtT(x);
+    if (!c) return flash("No clip there: double-click over a clip.");
+    if (canEdit) return flash(`Cannot edit now: ${canEdit.toLowerCase()}.`);
+    setPanel("text");
+    setFocus({ key: `new:${c.span}:${c.at.toFixed(2)}`, edit: true, nonce: Date.now() });
+  };
   const discardDraft = async () => {
     try { await api(`/api/runs/${id}/draft`, undefined, "DELETE"); setDraftSum(null); setDraftData(null); }
     catch (e) { flash(String((e as Error).message), "error"); }
@@ -625,6 +644,7 @@ export function Editor({ id, replay, go }: Props) {
         )}
         {panel === "text" && (
           <TextPanel state={state} v={v} t={t} next={next} canEdit={canEdit} onSeek={seek} focus={focus} rev={rev} live={live0}
+            clipAt={clipAtT(t)} onHooks={suggestHooks}
             onApply={(e) => made(edit("text", { ...e, from: v?.n }))} />
         )}
         {panel === "music" && (
@@ -688,6 +708,16 @@ export function Editor({ id, replay, go }: Props) {
             caption: (c, text) => made(edit("caption", { edits: [{ at: (c.t_in + c.t_out) / 2, text }], from: v?.n })),
             callout: (sp, text) => { if (!text) setSelKey(null); made(edit("text", { callouts: { [sp]: text }, from: v?.n })); },
             calloutAuto: (sp) => made(edit("style", { callouts: { [sp]: null }, from: v?.n })),
+            calloutAt: (sp, how) => { // T2: the callout starts at the playhead, or half a second earlier / later
+              const b = blocks.find((k) => k.key === sp), c = v?.callouts.find((x) => x.span === sp);
+              if (!b || !c) return;
+              const at = how === "playhead" ? playhead() - b.t0 : c.t_in - b.t0 + how;
+              made(edit("text", { callout_at: { [sp]: Math.max(0, Math.round(at * 100) / 100) }, from: v?.n }));
+            },
+            clipLook: (sp, patch) => { // T2: colours for this callout only = the clip's own look (S4)
+              const own = v?.spans.find((x) => x.id === sp)?.look ?? v?.look;
+              if (own) made(edit("style", { clips: { [sp]: { ...own, ...patch } }, from: v?.n }));
+            },
             look: (patch) => { if (v?.look) made(edit("style", { look: { ...v.look, ...patch }, from: v.n })); },
             music: (m) => made(edit("music", { ...m, from: v?.n })),
             panel: (x) => setPanel(x),
@@ -706,7 +736,7 @@ export function Editor({ id, replay, go }: Props) {
           wordSel={wordSel} onWordSel={pickWords} onCutWords={askCut} onDelete={askDelete} onAsk={ask}
           mix={mix} base={mixBase} live={live} next={next} liveEdit={live0} canEdit={canEdit} onMix={setMixDraft} onResetMix={() => setMixDraft(null)}
           onMusicPanel={() => setPanel("music")}
-          onPick={(k) => pickItem(k)}
+          onPick={(k) => pickItem(k)} onNewCallout={newCallout}
           onCaptionText={(c, text) => {
             if (canEdit) return flash(`Cannot edit now: ${canEdit.toLowerCase()}.`);
             made(edit("caption", { edits: [{ at: (c.t_in + c.t_out) / 2, text }], from: v?.n }));
@@ -837,7 +867,7 @@ const DRAFT_OPS: Record<string, { op: string; args: (b: Record<string, unknown>)
   caption: { op: "caption", args: (b) => ({ edits: b.edits }) },
   glossary: { op: "glossary", args: (b) => ({ add: b.add ?? {}, drop: b.drop ?? [] }) },
   linebreak: { op: "caption_break", args: (b) => ({ at: b.at, join: !!b.join }) },
-  text: { op: "text", args: (b) => pick(b, ["callouts", "title", "title_card"]) },
+  text: { op: "text", args: (b) => pick(b, ["callouts", "title", "title_card", "callout_at"]) },
   style: { op: "style", args: (b) => pick(b, ["look", "callouts", "prompt", "why", "clips"]) },
   music: { op: "music", args: (b) => ({ track: b.track ?? null, ...pick(b, ["level_db", "duck_db", "voice_db"]) }) },
   pin: { op: "pin", args: (b) => ({ speaker: b.speaker, head: b.head ?? null }) },

@@ -183,3 +183,75 @@ def test_run_kit_sets_the_first_cut(tmp_path):
     with pytest.raises(SystemExit):
         kit_arg(argparse.ArgumentParser(), '{"look": 3}')
 
+
+
+# --------------------------------------------------------------------------- T1-T3: callouts at a moment, title hooks
+
+
+def test_a_callout_starts_where_the_playhead_put_it(tmp_path, monkeypatch):
+    import montivo.human as H
+    from montivo.engine.captions import CALLOUT_LEAD_S, CALLOUT_MIN_S
+    d = _panel_run(tmp_path, monkeypatch)
+    edl = json.loads((d / "edl_v1.json").read_text())
+    s3 = next(s for s in edl["spans"] if s["id"] == "s3")
+    s3["duration"] = 6.0  # room for a callout to start later in the clip (the test clips are 1-2 s)
+    (d / "edl_v1.json").write_text(json.dumps(edl))
+    words = H._words(d)
+    # a new callout on s3, 1 s into it: one text edit with its words and its start
+    new, rec = H.apply_op(edl, words, None, "text", {"callouts": {"s3": "Watch this"}, "callout_at": {"s3": 1.0}})
+    n3 = next(s for s in new["spans"] if s["id"] == "s3")
+    assert n3["callout"] == "Watch this" and n3["callout_shift_s"] == round(1.0 - CALLOUT_LEAD_S, 2)
+    assert [f["op"] for f in rec.fixes] == ["callout_text", "callout_time"]
+    # past the end of the clip it keeps CALLOUT_MIN_S on screen; before the lead it starts at the lead
+    assert H.callout_shift(s3, 99) == round(s3["duration"] - CALLOUT_LEAD_S - CALLOUT_MIN_S, 2)
+    assert H.callout_shift(s3, 0.1) == 0.0 and H.callout_shift({"duration": 1.5}, 1.0) == 0.0  # no room: at the lead
+    # a time for a clip with no callout is refused; removing the callout drops its time
+    with pytest.raises(SystemExit, match="no callout to time"):
+        H.apply_op(edl, words, None, "text", {"callout_at": {"s3": 1.0}})
+    gone, _ = H.apply_op(new, words, None, "text", {"callouts": {"s3": ""}})
+    assert "callout_shift_s" not in next(s for s in gone["spans"] if s["id"] == "s3")
+    # the CLI writes the same EDL byte for byte
+    H.stamp(new, rec, 1, 2)
+    dump_json(tmp_path / "pure.json", new)
+    H.main(["text", str(d), "--callout", "s3=Watch this", "--callout-at", "s3=1.0"])
+    assert (tmp_path / "pure.json").read_bytes() == (d / "edl_v2.json").read_bytes()
+
+
+def test_title_hooks_are_settled(tmp_path, monkeypatch):
+    from montivo.engine import titles as T
+    out = T.settle([{"text": ' "Raw in, cut out" ', "why": "a"}, {"text": "raw in, cut out", "why": "dup"},
+                    {"text": "", "why": "x"}, {"text": "Raw In", "why": "the current"}, {"text": "x" * 60, "why": "long"},
+                    {"text": "Four models, one cut", "why": "b"}, {"text": "Who reviews the editor?", "why": "c"},
+                    {"text": "A fourth", "why": "d"}], current="Raw In")
+    assert [x["text"] for x in out] == ["Raw in, cut out", "Four models, one cut", "Who reviews the editor?"]
+    seen = {}
+
+    class FakeSpark:
+        def __init__(self, *a, **k): pass
+
+        def call(self, name, prompt, schema, **k):
+            seen.update(name=name, prompt=prompt, stage=k.get("stage"))
+            return SimpleNamespace(parsed={"titles": [{"text": "Cut by its own reviewer", "why": "twist"}]})
+    monkeypatch.setattr("montivo.engine.spark.Spark", FakeSpark)
+    edl = {"title_card_text": "Raw In", "spans": [{"words": "Hi. I'm Billy."}, {"words": "Four Meta models do all of it."}]}
+    assert T.suggest(tmp_path, edl, "make a reel", ledger=None) == [{"text": "Cut by its own reviewer", "why": "twist"}]
+    assert seen["stage"] == "spark.titles" and "- Four Meta models do all of it." in seen["prompt"] and '"Raw In"' in seen["prompt"]
+    assert set(T.schema()["required"]) == set(T.schema()["properties"])
+    monkeypatch.setattr(FakeSpark, "call", lambda self, *a, **k: SimpleNamespace(parsed={"titles": [{"text": "Raw In", "why": ""}]}))
+    with pytest.raises(ValueError, match="no usable title"):
+        T.suggest(tmp_path, edl, "b", ledger=None)
+
+
+def test_title_suggest_route(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from montivo.engine import titles as T
+    from montivo.server import app as A
+    _panel_run(tmp_path, monkeypatch)
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    c = TestClient(A.create_app(tmp_path))
+    assert c.post("/api/runs/h1/title/suggest", json={"v": 1}).status_code == 409  # no key: Spark is not called
+    monkeypatch.setenv("MODEL_API_KEY", "test")
+    monkeypatch.setattr(T, "suggest", lambda d, edl, brief, ledger, log: [{"text": f"{edl['title_card_text']} / {brief}", "why": "w"}])
+    r = c.post("/api/runs/h1/title/suggest", json={"v": 1})
+    assert r.status_code == 200 and r.json()["titles"][0]["text"] == "Raw In / b"
