@@ -377,6 +377,9 @@ def result_message(st: State, job: Job) -> dict:
                     "scope": rec.get("scope"), "retry_of": rec.get("retry_of"), "ui": rec.get("ui")}
         if not rec.get("version") and rec.get("ops") and not rec.get("done"):
             said += " Nothing changed, so there is no new version."
+        if isinstance(rec.get("checks"), dict):  # B1: the gate's $0 checks on the version the chat made
+            from ..agent import checked_text
+            said += " " + checked_text(rec["checks"])
         return {"role": "agent", "kind": "ask", "text": said.strip() or "Nothing to change.", "version": rec.get("version"),
                 "after": rec.get("from"), "message": rec.get("message"), "router": rec.get("router"),
                 "pending": rec.get("pending"), "ui": rec.get("ui")}

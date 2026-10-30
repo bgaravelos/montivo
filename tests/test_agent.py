@@ -190,3 +190,11 @@ def test_live_asks_become_draft_ops():
     for no in (op("replan", instruction="x"), op("overlay", at_s=1, text="a"), op("restore", version=2),
                op("style", look_prompt="big yellow")):
         assert agent.draft_ops([op("punch", on=True), no]) is None
+
+
+def test_the_free_checks_in_one_sentence():
+    assert agent.checked_text(None) == ""
+    assert "no cut lands in speech" in agent.checked_text({"ok": True, "reasons": [], "more": 0, "audio": True})
+    assert "no cut" not in agent.checked_text({"ok": True, "reasons": [], "more": 0, "audio": False})
+    t = agent.checked_text({"ok": False, "reasons": ["cut at 2.00 s inside speech"], "more": 2, "audio": True})
+    assert "cut at 2.00 s inside speech (and 2 more)" in t

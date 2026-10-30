@@ -887,12 +887,44 @@ def execute(run_dir: Path, from_v: int, ops: list[dict], record: dict, passes: i
             n = fold(run_dir, from_v, written, record)
             record["version"] = n
             human._finish(run_dir, run_dir / f"edl_v{n}.json", n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+            if (run_dir / f"cut_v{n}.mp4").is_file():
+                record["checks"] = measured(run_dir, n, log)
     elif passes:  # "review it" with nothing to change: the review loop on this version
         from .engine.review import review_loop
         review_loop(run_dir, run_dir / f"edl_v{from_v}.json", passes=passes, budget_usd=budget,
                     ledger=Ledger.resume(run_dir / "ledger.json"), log=log)
         record["reviewed"] = from_v
     return record
+
+
+def measured(run_dir: Path, n: int, log) -> dict | None:
+    """B1: the review gate's $0 checks on the version the chat just made (review.gate_check without Voice on the
+    cut): a cut edge inside speech, a caption forced over the head, the head out of frame. What a blind review would
+    hold the pass on, said in the chat at once, before anyone pays for a review."""
+    from .engine.review import Audio, caption_face_facts, cut_edge_levels, gate_check, head_frame_facts
+    try:
+        edl = json.loads((run_dir / f"edl_v{n}.json").read_text())
+        audio = Audio.load(run_dir)
+        gate = gate_check(caption_face_facts(edl), cut_edge_levels(edl, audio) if audio else None, None,
+                          head_frame_facts(run_dir, edl))
+    except (OSError, KeyError, TypeError, ValueError) as e:
+        log(f"agent: checks on v{n} skipped ({e})")
+        return None
+    out = {"ok": not gate["blocked"], "reasons": gate["reasons"][:4], "more": max(0, len(gate["reasons"]) - 4),
+           "audio": audio is not None}
+    log(f"agent: checks on v{n}: " + ("clear" if out["ok"] else "; ".join(gate["reasons"])))
+    return out
+
+
+def checked_text(c: dict | None) -> str:
+    """The checks in one sentence for the chat."""
+    if not c:
+        return ""
+    if c["ok"]:
+        return ("Checked the new cut: no cut lands in speech, captions clear of the face, the head in frame."
+                if c.get("audio") else "Checked the new cut: captions clear of the face, the head in frame.")
+    return "Checked the new cut: " + "; ".join(c["reasons"]) + (f" (and {c['more']} more)" if c.get("more") else "") \
+        + ". A review fix or an edit there would clear it."
 
 
 def compact(ops: list[dict]) -> list[dict]:
