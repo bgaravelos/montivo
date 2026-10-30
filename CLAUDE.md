@@ -752,6 +752,18 @@ each run `kind` sample / copy / own (Samples / Yours tabs). Checked keyless at 1
 Deployed 30/10 19:20 on Billy's go (no container was running); /api/health 200, /api/runs 401, /s/nope 404; smoke drop on
 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 10.5 s. The new Home not yet seen live with the sign-in; UI shots of the demo
 video that show Home predate it.
+Rail panels A (30/10, $0, branch `claude/rail-panels-b02277`, not merged or deployed; proposals in
+`docs/notes/rail-panels-research_2026-10-30.md`): A1 a panel edit leaves the panel open (toast "Making Version N" + Open
+chat, the job at the panel's foot). A2 a caption line or callout on the timeline selects it and opens Captions / Text on
+it; double-click retexts a caption in place, Enter opens its box, Delete takes a callout off. A3 one draft for every
+panel: caption, text, style, music, pin, punch are pure ops in `human.OPS` (the CLI edits run through them, byte for
+byte), `draft.clean_panel_op` types them, a caption edit is resolved on the draft as laid out (`preview_data`) and kept
+as {span, src_t, text}; new title words show as words on the live player until the commit makes the card ($0.01, the
+commit asks for the key); POST /style/suggest (a look from words, no version) and /preview on a draft; in Live every
+panel's Apply and the mix faders go into the draft, Rendered keeps one version per apply. A4 POST /preview/styled: the
+staged look plays live (Player `liveSwap`). A5 keys 1-8 = panels, ⌘P or / = command palette (`web/src/Palette.tsx`).
+A6 inspectors for a caption line, a callout (words, colours, place) and the music bed. Checked keyless on
+`runs/rp-015` (a clone of 015 in the worktree): 4 panel edits -> one draft -> v7 in one render, -14.0 LUFS.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
