@@ -76,7 +76,7 @@ function PresetCard({ id, v, t, look, name, on, onPick, saved, onDelete }: {
   );
 }
 
-function Color({ label, value, onChange, alpha }: { label: string; value: string; onChange: (x: string) => void; alpha?: boolean }) {
+export function Color({ label, value, onChange, alpha }: { label: string; value: string; onChange: (x: string) => void; alpha?: boolean }) {
   const rgb = value.slice(0, 7);
   const a = alpha && value.length === 9 ? parseInt(value.slice(7), 16) : 255;
   const hexA = (n: number) => Math.round(n).toString(16).padStart(2, "0").toUpperCase();

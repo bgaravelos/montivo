@@ -18,7 +18,7 @@ import { Timeline, ZOOM_MAX, ZOOM_MIN, type ClipMenu, type MoveAsk, type TrimAsk
 import { Waiting } from "./Waiting";
 import type { LiveData } from "./Live";
 import { ShareMenu } from "./Share";
-import type { LogLine, RunState } from "./types";
+import type { LogLine, RunState, Version } from "./types";
 
 type Props = { id: string; replay: number; go: (hash: string) => void };
 type PanelId = "assistant" | "media" | "captions" | "style" | "text" | "music" | "speakers" | "versions";
@@ -159,7 +159,7 @@ export function Editor({ id, replay, go }: Props) {
       flash(`Split: ${ids[0]} | ${ids[1]}. The cut plays the same; select a piece to move or delete it.`);
       return;
     }
-    if (selKey && !blocks.some((b) => b.key === selKey && b.kind !== "ghost")) setSelKey(null);
+    if (selKey && !blocks.some((b) => b.key === selKey && b.kind !== "ghost") && !itemIn(v, selKey)) setSelKey(null);
     setSelKeys((ks) => ks.filter((k) => v.spans.some((sp) => sp.id === k)));
   }, [v?.n]); // eslint-disable-line
   useEffect(() => setWordSel(null), [v?.n, tlMode]);
@@ -677,6 +677,15 @@ export function Editor({ id, replay, go }: Props) {
 
       <aside className="insp">
         <Inspector id={id} state={state} versions={visible} v={v} block={block} punch={punch} next={next} words={state.words} busy={busy}
+          item={selKey && (selKey.startsWith("cap:") || selKey.startsWith("callout:") || selKey === "music") ? selKey : null} edits={{
+            caption: (c, text) => made(edit("caption", { edits: [{ at: (c.t_in + c.t_out) / 2, text }], from: v?.n })),
+            callout: (sp, text) => { if (!text) setSelKey(null); made(edit("text", { callouts: { [sp]: text }, from: v?.n })); },
+            calloutAuto: (sp) => made(edit("style", { callouts: { [sp]: null }, from: v?.n })),
+            look: (patch) => { if (v?.look) made(edit("style", { look: { ...v.look, ...patch }, from: v.n })); },
+            music: (m) => made(edit("music", { ...m, from: v?.n })),
+            panel: (x) => setPanel(x),
+            ask: (c) => { setCapSel({ t_in: c.t_in, t_out: c.t_out, text: c.text }); setPanel("assistant"); setAskNonce((n) => n + 1); },
+          }}
           canEdit={canEdit} onSeek={seek} onPick={pick} onDelete={askDelete} onAsk={ask} onPunch={onPunch} onClear={() => { setSelKey(null); setSelKeys([]); }}
           onReview={() => v && edit("review", { from: v.n, passes: 1 })}
           onHook={() => { if (v) { setPanel("assistant"); edit("hook", { from: v.n }); } }} />
@@ -792,6 +801,10 @@ function replaySpent(lines: LogLine[]): { usd: number; s: number } {
   }
   return { usd, s: s + sessionEnd };
 }
+
+/** A caption line, callout or the music bed (A6) still on version v: its selection survives the edit that made v. */
+const itemIn = (v: Version, key: string) => key.startsWith("cap:") ? v.caption_lines.some((c) => c.id === key.slice(4))
+  : key.startsWith("callout:") ? v.callouts.some((c) => c.span === key.slice(8)) : key === "music" && !!v.music;
 
 /** A timeline item a panel should show: `cap:<id>` (Captions) or `callout:<span>` (Text); `edit` opens its text box. */
 export type PanelFocus = { key: string; edit: boolean; nonce: number };

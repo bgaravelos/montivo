@@ -1,22 +1,38 @@
-import { Fragment } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { crit, fileUrl, frameUrl, tc, usd } from "./api";
 import { chain, fixText, originLabel, parentOf, punchLabel, sevRank, type Block } from "./edit";
 import { CRIT_ICON, Icon } from "./icons";
-import type { Issue, PunchIn, Review, RunState, Version, Word } from "./types";
+import { Color } from "./Style";
+import type { CaptionLine, Issue, Look, PunchIn, Review, RunState, Version, Word } from "./types";
 
 export type PunchAsk = { on: boolean } | { skip: string };
+
+/** A6: what the inspector edits for a caption line, a callout or the music bed picked on the timeline; each one goes
+ *  into the draft in Live, else makes the next version. `panel` opens a rail panel (Captions, Text, Style, Music). */
+export type ItemEdits = {
+  caption: (line: CaptionLine, text: string) => void; callout: (span: string, text: string) => void;
+  calloutAuto: (span: string) => void; look: (patch: Partial<Look>) => void;
+  music: (m: { track: string | null; level_db?: number; duck_db?: number }) => void;
+  panel: (p: "captions" | "text" | "style" | "music") => void; ask: (line: CaptionLine) => void;
+};
 
 type Seek = (a: number, b?: number) => void;
 
 /** The right column: what is selected (a clip, the title card, a punch-in), or with nothing selected the whole cut's
  *  review. */
-export function Inspector({ id, state, versions, v, block, punch, next, words, busy, canEdit, onSeek, onPick, onDelete, onAsk, onReview, onPunch, onHook, onClear }: {
+export function Inspector({ id, state, versions, v, block, punch, item, edits, next, words, busy, canEdit, onSeek, onPick, onDelete, onAsk, onReview, onPunch, onHook, onClear }: {
   id: string; state: RunState; versions: Version[]; v: Version | null; block: Block | null; punch: PunchIn | null; next: number;
+  item: string | null; edits: ItemEdits; // A6: a caption (cap:<id>), callout (callout:<span>) or "music" picked on the timeline
   words: Record<string, Word[]>; busy: boolean; canEdit: string | null; onSeek: Seek; onPick: (n: number) => void;
   onDelete: (span: string) => void; onAsk: (span: string) => void; onReview: () => void; onPunch: (a: PunchAsk) => void;
   onHook: () => void; onClear: () => void;
 }) {
   if (!v) return <section className="inspector"><div className="insp-empty">Nothing rendered yet.</div></section>;
+  const line = item?.startsWith("cap:") ? v.caption_lines.find((c) => c.id === item.slice(4)) : null;
+  if (line) return <CaptionInspector v={v} line={line} edits={edits} canEdit={canEdit} onSeek={onSeek} onClear={onClear} />;
+  const call = item?.startsWith("callout:") ? v.callouts.find((c) => c.span === item.slice(8)) : null;
+  if (call) return <CalloutInspector v={v} span={call.span} edits={edits} canEdit={canEdit} onSeek={onSeek} onClear={onClear} />;
+  if (item === "music" && v.music) return <MusicInspector v={v} edits={edits} canEdit={canEdit} onClear={onClear} />;
   if (punch) return <PunchInspector id={id} v={v} p={punch} next={next} canEdit={canEdit} onSeek={onSeek} onPunch={onPunch} onClear={onClear} />;
   if (block?.kind === "span") return <ClipInspector id={id} state={state} v={v} b={block} words={words} busy={busy} canEdit={canEdit} onSeek={onSeek} onDelete={onDelete} onAsk={onAsk} onClear={onClear} />;
   if (block?.kind === "title") return <TitleInspector state={state} v={v} onClear={onClear} />;
@@ -82,6 +98,131 @@ function ClipInspector({ id, state, v, b, words, busy, canEdit, onSeek, onDelete
           {!v.review && <p className="mute small">Version {v.n} has not been reviewed.</p>}
           {v.review && !issues.length && <p className="mute small">The reviewer flagged nothing here.</p>}
           <div className="issues">{issues.map((i) => <IssueCard key={i.k} id={id} issue={i} v={v} all={state.versions} onSeek={onSeek} />)}</div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** A text box that keeps what you typed until Enter (or the button) applies it; Esc puts the value back. */
+function TextEdit({ value, label, max, disabled, onApply, empty }: {
+  value: string; label: string; max: number; disabled: string | null; onApply: (x: string) => void; empty?: boolean;
+}) {
+  const [x, setX] = useState(value);
+  useEffect(() => setX(value), [value]);
+  const clean = x.split(/\s+/).filter(Boolean).join(" ");
+  const changed = clean !== value && (empty || !!clean);
+  return (
+    <div className="insp-edit">
+      <input value={x} maxLength={max} aria-label={label} disabled={!!disabled} title={disabled ?? undefined}
+        onChange={(e) => setX(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && changed) { e.preventDefault(); onApply(clean); }
+          else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setX(value); }
+        }} />
+      <button className="btn small" disabled={!changed || !!disabled} onClick={() => onApply(clean)}>Apply</button>
+    </div>
+  );
+}
+
+function CaptionInspector({ v, line, edits, canEdit, onSeek, onClear }: {
+  v: Version; line: CaptionLine; edits: ItemEdits; canEdit: string | null; onSeek: Seek; onClear: () => void;
+}) {
+  const fixed = v.look?.position === "fixed";
+  return (
+    <section className="inspector">
+      <Head icon="captions" title="Caption line" sub={`${tc(line.t_in, 2)} – ${tc(line.t_out, 2)}`} onClear={onClear} />
+      <div className="panel-body">
+        <div className="insp-sec">
+          <div className="pn-k"><Icon name="text" size={12} />Words on screen</div>
+          <TextEdit value={line.text} label="Caption words" max={200} disabled={canEdit} onApply={(x) => edits.caption(line, x)} />
+          {line.heard && line.heard !== line.text && <p className="mute small">Voice heard: “{line.heard}”. Your words stay through any style change.</p>}
+        </div>
+        <dl className="props">
+          <dt>Clip</dt><dd>{line.spans.join(", ")}</dd>
+          <dt>Length</dt><dd className="mono">{(line.t_out - line.t_in).toFixed(2)} s</dd>
+          <dt>Place</dt><dd>{fixed ? `fixed at y ${v.look!.top} (your choice)` : line.over_face ? "moved off the face" : "under the face"}</dd>
+          <dt>Style</dt><dd>{v.look ? `${v.look.preset.replace("_", " ")} · ${v.look.size} px` : "the default"}</dd>
+        </dl>
+        <div className="insp-actions">
+          <button className="btn quiet" onClick={() => onSeek(line.t_in, line.t_out)}><Icon name="play" /> Play the line</button>
+          <button className="btn quiet" onClick={() => edits.ask(line)}><Icon name="spark" /> Ask Montivo</button>
+          <button className="btn quiet" onClick={() => edits.panel("style")}><Icon name="style" /> Caption style</button>
+          <button className="btn quiet" onClick={() => edits.panel("captions")}><Icon name="captions" /> Every line</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** A6 / T2: everything about one callout in one place: its words, its colours (the look's, shared by every callout),
+ *  its place (pinned on the viewer in the Style panel, or automatic). */
+function CalloutInspector({ v, span, edits, canEdit, onSeek, onClear }: {
+  v: Version; span: string; edits: ItemEdits; canEdit: string | null; onSeek: Seek; onClear: () => void;
+}) {
+  const c = v.callouts.find((x) => x.span === span)!;
+  const sp = v.spans.find((x) => x.id === span);
+  const look = v.look;
+  const [colors, setColors] = useState({ callout_bg: look?.callout_bg ?? "#FFC629", callout_fg: look?.callout_fg ?? "#000000" });
+  useEffect(() => setColors({ callout_bg: look?.callout_bg ?? "#FFC629", callout_fg: look?.callout_fg ?? "#000000" }), [look?.callout_bg, look?.callout_fg]);
+  return (
+    <section className="inspector">
+      <Head icon="callout" title="Callout" sub={`clip ${span}`} onClear={onClear} />
+      <div className="panel-body">
+        <div className="insp-sec">
+          <div className="pn-k"><Icon name="text" size={12} />Words</div>
+          <TextEdit value={c.text} label="Callout words" max={80} disabled={canEdit} empty onApply={(x) => edits.callout(span, x)} />
+          <p className="mute small">Empty takes it off the clip. One callout per clip.</p>
+        </div>
+        {look && (
+          <div className="insp-sec">
+            <div className="pn-k"><Icon name="style" size={12} />Colours <span className="mute small">every callout</span></div>
+            <div className="st-colors">
+              <Color label="Pill" value={colors.callout_bg} onChange={(x) => setColors({ ...colors, callout_bg: x })} />
+              <Color label="Text" value={colors.callout_fg} onChange={(x) => setColors({ ...colors, callout_fg: x })} />
+              {(colors.callout_bg !== look.callout_bg || colors.callout_fg !== look.callout_fg) && (
+                <button className="btn small" disabled={!!canEdit} onClick={() => edits.look(colors)}>Apply</button>
+              )}
+            </div>
+          </div>
+        )}
+        <div className="insp-sec">
+          <div className="pn-k"><Icon name="move" size={12} />Place</div>
+          <p>{sp?.callout_xy ? <>pinned at x {sp.callout_xy[0]}, y {sp.callout_xy[1]}</> : c.placement ? `automatic: ${c.placement.replace(/_/g, " ")}` : "automatic"}
+            {c.over_face && <span className="mute"> · covers the face</span>}</p>
+          <div className="insp-actions">
+            <button className="btn quiet small" onClick={() => edits.panel("style")} title="Drag it on the viewer with the Style panel open">Move it on the viewer</button>
+            {sp?.callout_xy && <button className="btn quiet small" disabled={!!canEdit} onClick={() => edits.calloutAuto(span)}>Back to automatic</button>}
+          </div>
+        </div>
+        <dl className="props"><dt>On screen</dt><dd className="mono">{tc(c.t_in, 2)} – {tc(c.t_out, 2)}</dd></dl>
+        <div className="insp-actions">
+          <button className="btn quiet" onClick={() => onSeek(c.t_in, c.t_out)}><Icon name="play" /> Play it</button>
+          <button className="btn danger-quiet" disabled={!!canEdit} onClick={() => edits.callout(span, "")}><Icon name="trash" /> Remove (⌫)</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** A6: the music bed picked on the timeline: the track and its level as the faders hear it; the tracks to browse are in
+ *  the Music panel. */
+function MusicInspector({ v, edits, canEdit, onClear }: { v: Version; edits: ItemEdits; canEdit: string | null; onClear: () => void }) {
+  const m = v.music!;
+  return (
+    <section className="inspector">
+      <Head icon="music" title="Music" sub={m.track.replace(/_/g, " ")} onClear={onClear} />
+      <div className="panel-body">
+        <dl className="props">
+          <dt>Track</dt><dd>{m.track.replace(/_/g, " ")}</dd>
+          <dt>Under the voice</dt><dd>{m.margin_db != null ? `about ${Math.round(m.margin_db)} dB` : "not measured yet"}</dd>
+          <dt>Ducked</dt><dd>{-m.duck_db} dB while anyone speaks{m.ducked_s != null ? `, ${m.ducked_s.toFixed(1)} s of the cut` : ""}</dd>
+          {m.voice_db ? <><dt>Voice</dt><dd>{m.voice_db > 0 ? "+" : ""}{m.voice_db} dB</dd></> : null}
+        </dl>
+        <p className="mute small">The Voice and Music faders on the timeline set the balance and play it at once.</p>
+        <div className="insp-actions">
+          <button className="btn quiet" onClick={() => edits.panel("music")}><Icon name="music" /> Change the track</button>
+          <button className="btn danger-quiet" disabled={!!canEdit} onClick={() => edits.music({ track: null })}><Icon name="trash" /> No music</button>
         </div>
       </div>
     </section>

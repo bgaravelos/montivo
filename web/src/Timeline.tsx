@@ -552,11 +552,13 @@ const Tracks = memo(function Tracks(p: TrackProps) {
         })}
         {move && moveGhost(live.find((x) => x.key === move.key)!)}
       </div>
-      <div className="track audio music" style={{ height: TRACK_H.music }} onPointerDown={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).tagName === "CANVAS") { onSelect(null); onSeek(timeAt(e.clientX)); } }}>
+      <div className={`track audio music ${selected === "music" ? "sel" : ""}`} style={{ height: TRACK_H.music }}
+        onPointerDown={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).tagName === "CANVAS") { onSelect(v.music ? "music" : null); onSeek(timeAt(e.clientX)); } }}>
         {v.music ? <>
           <Wave peaks={bedPeaks} pps={pps} height={TRACK_H.music} width={Math.ceil(p.dur * pps)} top={top} color="--wave-music"
             gain={gain(p.mix?.level_db, p.base?.level_db)} />
-          <button className="music-tag" onPointerDown={(e) => e.stopPropagation()} onClick={p.onMusicPanel} title="Change the track or the duck in the Music panel">
+          <button className="music-tag" onPointerDown={(e) => e.stopPropagation()} onClick={() => { onSelect("music"); p.onMusicPanel(); }}
+            title="The bed's settings in the inspector, the tracks in the Music panel">
             <Icon name="music" size={11} /><span className="mt-name">{v.music.track.replace(/_/g, " ")}</span> · ducked {v.music.duck_db} dB under the voice
           </button>
         </> : (
