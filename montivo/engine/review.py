@@ -1510,6 +1510,71 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
     return out
 
 
+# --------------------------------------------------------------------------- the pairwise judge (C2)
+
+def estimate_compare_cost(duration_a: float, duration_b: float) -> float:
+    """Both calls of one pairwise judgement: two videos in (about 280 tokens a second each, 23.5K on 016's two 39 s
+    cuts), about 1.5K out (30/10: $0.035-0.037 a call)."""
+    p = PRICE[SPARK_MODEL]
+    return 2 * ((280 * (duration_a + duration_b) + 3500) * p["in"] + 2500 * p["out"]) / 1_000_000
+
+
+def judge_file(rv: dict, log=print) -> str:
+    """The uploaded review copy of a review: its own upload, else its copy (made again from the cut if gone) uploaded."""
+    if rv.get("file_id"):
+        return rv["file_id"]
+    cp = Path(rv.get("review_copy") or "")
+    if not cp.is_file():
+        cp = review_copy(Path(rv["cut"]), cp.parent if cp.name else Path(rv["cut"]).parent / "review" / rv["name"],
+                         clock=rv.get("clock", True))
+    up = upload_file(cp, "video/mp4")
+    log(f"compare: uploaded {cp.name} ({cp.stat().st_size / 1e6:.1f} MB) as {up.get('id')}")
+    rv["file_id"] = up["id"]
+    return up["id"]
+
+
+def pairwise(run_dir: Path, rv_a: dict, rv_b: dict, spark, brief: str, log=print) -> dict:
+    """Which of two reviewed versions goes out, asked of one Spark 1.3 call that sees both cuts (two uploaded review
+    copies with the clock, Cut A then Cut B, each with its measured facts), twice with the two swapped. The
+    reviewer's absolute score varies by 3-4 points (SD) on the same cut and both real hook A/Bs were decided 7 points
+    apart; a judge that sees both side by side, in both orders, cancels the position bias. B wins only when both
+    calls pick it; anything else (A twice, a split, a tie) keeps A, the version that was there first. Writes
+    review/compare_vA_vB.json and returns it: winner "a" | "b", agree, both calls with their per-criterion picks."""
+    va, vb = rv_a["version"], rv_b["version"]
+    fa, fb = judge_file(rv_a, log), judge_file(rv_b, log)
+
+    def ask(order: str) -> dict:
+        first, second = (rv_a, rv_b) if order == "AB" else (rv_b, rv_a)
+        ids = (fa, fb) if order == "AB" else (fb, fa)
+        call = spark.compare(*ids, brief, first.get("facts_text", ""), second.get("facts_text", ""),
+                             first["duration_s"], second["duration_s"], name=f"compare_v{va}_v{vb}_{order.lower()}")
+        flip = {"A": "a", "B": "b", "tie": "tie"} if order == "AB" else {"A": "b", "B": "a", "tie": "tie"}
+        r = call.parsed
+        return {"order": order, "winner": flip[r["winner"]], "why": r["why"],
+                "criteria": {c: flip[v] for c, v in r["criteria"].items()}, "cost_usd": call.cost_usd,
+                "seconds": call.seconds}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:  # the two orders at once: about 17 s instead of 31 s (015-demo)
+        calls = list(pool.map(ask, ("AB", "BA")))
+    picks = [c["winner"] for c in calls]
+    agree = picks[0] == picks[1]
+    winner = "b" if picks == ["b", "b"] else "a"
+    label = {"a": f"v{va}", "b": f"v{vb}", "tie": "tie"}
+    if agree and picks[0] != "tie":
+        verdict = f"{label[picks[0]]} in both orders"
+    elif agree:
+        verdict = f"a tie in both orders: v{va} stays"
+    else:
+        verdict = f"split ({label[picks[0]]} / {label[picks[1]]}): v{va} stays"
+    out = {"a": va, "b": vb, "winner": winner, "kept": vb if winner == "b" else va, "agree": agree, "verdict": verdict,
+           "mode": "two_files", "calls": calls, "cost_usd": round(sum(c["cost_usd"] for c in calls), 4),
+           "seconds": round(max(c["seconds"] for c in calls), 2), "model": spark.model}
+    (run_dir / "review").mkdir(exist_ok=True)
+    dump_json(run_dir / "review" / f"compare_v{va}_v{vb}.json", out)
+    log(f"compare: v{va} vs v{vb}: {verdict} (AB {picks[0]}, BA {picks[1]}), ${out['cost_usd']:.4f}")
+    return out
+
+
 # --------------------------------------------------------------------------- the loop
 
 def rank(h: dict) -> tuple[bool, bool, float]:
@@ -1519,6 +1584,18 @@ def rank(h: dict) -> tuple[bool, bool, float]:
     return (bool(h.get("pass")), not h.get("checks", h.get("gate")), h["overall"])
 
 
+def best_of(history: list[dict]) -> dict:
+    """The loop's best version: the highest rank, unless the pairwise judge preferred a later version over it in both
+    orders (`preferred_over`, C2), followed as far as such wins go."""
+    best = max(history, key=rank)
+    seen = {best["version"]}
+    while (up := next((h for h in history if h.get("preferred_over") == best["version"] and h["version"] not in seen),
+                      None)):
+        best = up
+        seen.add(best["version"])
+    return best
+
+
 def edl_version(path: Path, edl: dict) -> int:
     m = re.search(r"_v(\d+)\.json$", path.name)
     return int(m.group(1)) if m else int(edl.get("version", 1))
@@ -1526,9 +1603,13 @@ def edl_version(path: Path, edl: dict) -> int:
 
 def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_PASSES, budget_usd: float = BUDGET_USD,
                 ledger: Ledger | None = None, log=print, clock: bool = True, apply: bool = True, spark=None,
-                render_fn=None, review_fn=None) -> dict:
+                render_fn=None, review_fn=None, compare_fn=None) -> dict:
     """review cut_vN -> patch -> edl_vN+1 -> render cut_vN+1 -> review ..., until the cut passes, `passes` reviews are
-    done, the budget would be exceeded, no fix applies, or a fix repeats. Writes review/loop.json, also when a pass
+    done, the budget would be exceeded, no fix applies, or a fix repeats. A version that ranks below the best before
+    it only by its score (same gated pass, same measured checks) is put to the pairwise judge against that best
+    (`pairwise`, C2: both cuts in one call, twice swapped): the loop goes on from it only when it wins both orders,
+    else it stops on the regression. compare_fn(rv_best, rv_new) replaces the judge in tests (none when review_fn is
+    given without it: the score decides, as before). Writes review/loop.json, also when a pass
     fails (a Spark or render error): the reviews before it are kept, `stop` and `error` say what failed, and only a
     loop with no review at all raises (after writing it)."""
     from ..human import next_version  # human.py imports the engine; this one only reads file names
@@ -1539,6 +1620,8 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
     if review_fn is None:
         spark = spark or Spark(run_dir, ledger, log=log)
         review_fn = lambda edl_, cut_, n_: review_render(run_dir, edl_, cut_, n_, ledger, spark, clock=clock, log=log)
+        if compare_fn is None and not is_open_model(spark.model):  # the judge needs two uploaded videos (Spark 1.3)
+            compare_fn = lambda a, b: pairwise(run_dir, a, b, spark, edl["brief"], log=log)  # noqa: E731
     render_fn = render_fn or (lambda ep, out: render_run(run_dir, edl_path=ep, out_name=out, ledger=ledger, log=log))
     words = Words(json.loads((run_dir / "voice" / "voice.json").read_text())["words"])
     audio = Audio.load(run_dir)
@@ -1546,6 +1629,7 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
     n = edl_version(edl_path, edl)
     seen: dict[str, int] = {}
     history: list[dict] = []
+    reviews: dict[int, dict] = {}  # version -> its review, for the pairwise judge
     spent = 0.0
     stop = "max passes"
     error = None
@@ -1572,16 +1656,33 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
                      "cost_usd": rv["cost_usd"], "fixes": [{**asdict(f), "fingerprint": f.fingerprint} for f in fixes],
                      "skipped": skipped}
             history.append(entry)
+            reviews[n] = rv
             rv["fixes"], rv["skipped"] = entry["fixes"], skipped
             dump_json(run_dir / f"{rv['name']}.json", rv)
             if rv["review"]["pass"]:
                 stop = "pass"
                 break
-            best_before = max(history[:-1], key=rank) if len(history) > 1 else None
+            best_before = best_of(history[:-1]) if len(history) > 1 else None
             if best_before and rank(entry) < rank(best_before):
-                stop = (f"regression: v{n} scored {entry['overall']}{' (gated)' if entry['gate'] else ''} < "
-                        f"v{best_before['version']} {best_before['overall']}, the best stays v{best_before['version']}")
-                break
+                judged, why_not = None, ""
+                if compare_fn and rank(entry)[:2] == rank(best_before)[:2] and best_before["version"] in reviews:
+                    # only the score is lower, by a margin the reviewer's noise covers: the judge sees both
+                    est = estimate_compare_cost(reviews[best_before["version"]].get("duration_s") or edl["runtime_s"],
+                                                rv.get("duration_s") or edl["runtime_s"])
+                    if spent + est > budget_usd:
+                        why_not = f"; no budget for the pairwise judge (${spent:.3f} + ${est:.3f} > ${budget_usd:.2f})"
+                    else:
+                        judged = compare_fn(reviews[best_before["version"]], rv)
+                        spent += judged["cost_usd"]
+                        entry["pairwise"] = {k: judged[k] for k in ("a", "b", "winner", "agree", "verdict", "cost_usd")}
+                if not judged or judged["winner"] != "b":
+                    stop = (f"regression: v{n} scored {entry['overall']}{' (gated)' if entry['gate'] else ''} < "
+                            f"v{best_before['version']} {best_before['overall']}, the best stays v{best_before['version']}"
+                            + (f"; the pairwise judge: {judged['verdict']}" if judged else why_not))
+                    break
+                entry["preferred_over"] = best_before["version"]
+                log(f"review: v{n} scored {entry['overall']} < v{best_before['version']} {best_before['overall']}, but the "
+                    f"pairwise judge prefers it in both orders: the loop goes on from v{n}")
             if k == passes - 1:
                 stop = f"max passes ({passes})"
                 break
@@ -1632,7 +1733,7 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
                 edl_path = run_dir / history[-1]["edl"]
                 log(f"review loop: edl_v{n}.json removed (no cut), the last version stays {edl_path.name}")
             break
-    best = max(history, key=rank) if history else None
+    best = best_of(history) if history else None
     summary = {"stop": stop, "passes": history, "reviews": len(history), "review_cost_usd": round(spent, 4),
                "best": {"version": best["version"], "cut": best["cut"], "overall": best["overall"]} if best else None,
                "last_edl": edl_path.name, "budget_usd": budget_usd, **({"error": error} if error else {})}

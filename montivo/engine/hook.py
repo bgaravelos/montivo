@@ -7,7 +7,8 @@ The first 1.5 s decide whether a viewer stays, and the planner's opener is not a
     B = edl_vM, M the next free version: A with one swap_hook patch, the challenger span moved to the front and every
         other span in A's order (the reviewer's own op and patch path, so the edge pass, the title card and the
         captions behave exactly as after a review fix)
-    render cut_vM, review it, keep the higher (pass, overall); a tie keeps A, a change needs evidence
+    render cut_vM, review it, then the pairwise judge (review.pairwise, C2) sees both cuts in one call, twice with
+    the two swapped: B is kept only when both calls pick it, a split or a tie keeps A, a change needs evidence
 
 The challenger is picked deterministically, first match wins:
 
@@ -22,9 +23,12 @@ The challenger is picked deterministically, first match wins:
 A span already compared against this same A (an existing review/hook_ab_vA_*.json) is not tried twice, like the
 loop's same-fix guard. Guards: the dollar budget is checked for every review the A/B still needs before the first one
 is made; nothing is overwritten (B is the next version); the old opener stays in the cut as a body span (the hook is
-never dropped). The reviewer varies by about 10 points on an identical cut (README, kill test (b)), so the record says
-whether the margin is at least that (`decisive`). Both reviews, the challenger, why it was picked, the scores, the
-winner and the reason land in review/hook_ab_vA_vB.json and in B's patch entry (`result`).
+never dropped). Both reviews stay for the record and for the next fixes, but they no longer decide: the reviewer varies
+by 3-4 points (SD) on an identical cut and both real A/Bs were decided on scores 7 points apart (`by_score` keeps what
+the two scores would have said). `decisive` = both calls of the judge agreed. Without the judge (an open-model
+reviewer, tests without compare_fn, no budget left for it) the higher (pass, overall) decides as before. Both reviews,
+the challenger, why it was picked, the scores, the judge's two calls, the winner and the reason land in
+review/hook_ab_vA_vB.json and in B's patch entry (`result`).
 """
 from __future__ import annotations
 
@@ -33,11 +37,13 @@ import re
 from dataclasses import asdict
 from pathlib import Path
 
+from ..config import is_open_model
 from ..ledger import Ledger
 from .api import dump_json
 from .edges import Audio, Words
 from .music import follow_cut
-from .review import Fix, apply_fixes, cut_map, estimate_cost, plan_fixes, review_render, span_at
+from .review import (Fix, apply_fixes, cut_map, estimate_compare_cost, estimate_cost, pairwise, plan_fixes,
+                     review_render, span_at)
 
 NOISE_POINTS = 10  # the same cut reviewed twice scored 72 and 83 (README, kill test (b))
 REVIEWED = re.compile(r"review_v(\d+)\.json")
@@ -100,11 +106,12 @@ def winner(ra: dict, rb: dict) -> tuple[str, str]:
     return "a", f"a tie at {ka[1]}: the opener stays unless the challenger does better"
 
 
-def hook_ab(run_dir: Path, edl_path: Path | None = None, budget_usd: float = 0.10, ledger: Ledger | None = None,
-            log=print, clock: bool = True, spark=None, render_fn=None, review_fn=None) -> dict:
+def hook_ab(run_dir: Path, edl_path: Path | None = None, budget_usd: float = 0.20, ledger: Ledger | None = None,
+            log=print, clock: bool = True, spark=None, render_fn=None, review_fn=None, compare_fn=None) -> dict:
     """The hook A/B on edl_vN (default: the newest EDL). Returns the record also written to review/hook_ab_vA_vB.json,
-    or {"stop": why} when it does not run (no challenger, budget). render_fn(edl_path, out_name) and
-    review_fn(edl, cut, n) -> review dict replace the render and the Spark call in tests."""
+    or {"stop": why} when it does not run (no challenger, budget). render_fn(edl_path, out_name),
+    review_fn(edl, cut, n) -> review dict and compare_fn(rv_a, rv_b) -> pairwise record replace the render and the
+    Spark calls in tests."""
     from ..human import latest_edl, next_version  # human.py imports the engine; these two only read file names
     from ..run import render_run
     from .spark import Spark
@@ -114,6 +121,8 @@ def hook_ab(run_dir: Path, edl_path: Path | None = None, budget_usd: float = 0.1
     if review_fn is None:
         spark = spark or Spark(run_dir, ledger, log=log)
         review_fn = lambda e, c, n: review_render(run_dir, e, c, n, ledger, spark, clock=clock, log=log)  # noqa: E731
+        if compare_fn is None and not is_open_model(spark.model):  # two uploaded videos in one call: Spark 1.3 only
+            compare_fn = lambda ra, rb: pairwise(run_dir, ra, rb, spark, edl_a["brief"], log=log)  # noqa: E731
     render_fn = render_fn or (lambda ep, out: render_run(run_dir, edl_path=ep, out_name=out, ledger=ledger, log=log))
     words = Words(json.loads((run_dir / "voice" / "voice.json").read_text())["words"])
     audio = Audio.load(run_dir)
@@ -137,12 +146,18 @@ def hook_ab(run_dir: Path, edl_path: Path | None = None, budget_usd: float = 0.1
         edl_a = json.loads(edl_path.read_text())
     rv_a = _json(run_dir / f"review_v{a}.json")
     reuse = bool(rv_a and Path(rv_a.get("cut", "")).name == cut_a.name and rv_a.get("review"))
-    est = estimate_cost((edl_a.get("render") or {}).get("duration_s") or edl_a["runtime_s"])
+    dur_a = (edl_a.get("render") or {}).get("duration_s") or edl_a["runtime_s"]
+    est = estimate_cost(dur_a)
     need = est * (1 if reuse else 2)
     if need > budget_usd:
         stop = f"budget: {'one review' if reuse else 'two reviews'} at about ${est:.3f} each > ${budget_usd:.2f}"
         log(f"hook a/b: v{a}: {stop}")
         return {"stop": stop}
+    judge_note = ""
+    if compare_fn and need + estimate_compare_cost(dur_a, dur_a) > budget_usd:
+        compare_fn = None  # the reviews fit, the judge does not: the scores decide and the record says so
+        judge_note = f"no budget for the pairwise judge (~${estimate_compare_cost(dur_a, dur_a):.3f} more)"
+        log(f"hook a/b: v{a}: {judge_note}, the two scores decide")
     spent = 0.0
     if not reuse:
         rv_a = review_fn(edl_a, cut_a, a)
@@ -177,12 +192,24 @@ def hook_ab(run_dir: Path, edl_path: Path | None = None, budget_usd: float = 0.1
     dump_json(run_dir / f"{rv_b['name']}.json", rv_b)
 
     ra, rb = rv_a["review"], rv_b["review"]
-    side, reason = winner(ra, rb)
-    keep = a if side == "a" else b
+    by_score = winner(ra, rb)
+    side, reason = by_score
     margin = abs(rb["overall"] - ra["overall"])
+    decisive = margin >= NOISE_POINTS
+    judged = None
+    if compare_fn:
+        judged = compare_fn(rv_a, rv_b)
+        spent += judged["cost_usd"]
+        side = judged["winner"]
+        reason = f"the pairwise judge: {judged['verdict']}"
+        decisive = judged["agree"] and judged["calls"][0]["winner"] != "tie"
+    keep = a if side == "a" else b
     hook = "hook_in_1_5s"
     result = {"winner": side, "kept": keep, "edl": f"edl_v{keep}.json", "cut": f"cut_v{keep}.mp4", "reason": reason,
-              "margin": margin, "decisive": margin >= NOISE_POINTS,
+              "margin": margin, "decisive": decisive, "by_score": {"winner": by_score[0], "reason": by_score[1]},
+              **({"judge": {k: judged[k] for k in ("winner", "agree", "verdict", "mode", "cost_usd")}
+                            | {"calls": [{k: c[k] for k in ("order", "winner", "why", "criteria")} for c in judged["calls"]]}}
+                 if judged else {"judge": None, **({"judge_note": judge_note} if judge_note else {})}),
               "a": {"version": a, "opener": old["id"], "overall": ra["overall"], "pass": ra["pass"],
                     "hook": (ra.get("scores") or {}).get(hook), "review": rv_a["name"], "reused": reuse},
               "b": {"version": b, "opener": cand, "overall": rb["overall"], "pass": rb["pass"],
@@ -195,5 +222,6 @@ def hook_ab(run_dir: Path, edl_path: Path | None = None, budget_usd: float = 0.1
     dump_json(run_dir / "review" / f"hook_ab_v{a}_v{b}.json", record)
     log(f"hook a/b: v{a} {ra['overall']}{' pass' if ra['pass'] else ''} (hook {result['a']['hook']}) vs "
         f"v{b} {rb['overall']}{' pass' if rb['pass'] else ''} (hook {result['b']['hook']}): keep v{keep}, {reason}"
-        f"{'' if result['decisive'] else f' (within the reviewer noise of {NOISE_POINTS} points)'}; ${spent:.4f}")
+        + ("" if judged or result["decisive"] else f" (within the reviewer noise of {NOISE_POINTS} points)")
+        + f"; ${spent:.4f}")
     return record

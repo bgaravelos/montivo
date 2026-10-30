@@ -128,7 +128,7 @@ def test_cli_hook_and_review_hook_ab(tmp_path, monkeypatch):
     monkeypatch.setattr(R, "review_loop", lambda *a, **kw: {"best": {"version": 2}})
     assert cli.main(["hook", str(tmp_path), "--budget", "0.07"]) == 0
     assert cli.main(["review", str(tmp_path), "--hook-ab"]) == 0
-    assert got == [(None, 0.07), (tmp_path / "edl_v2.json", 0.10)]
+    assert got == [(None, 0.07), (tmp_path / "edl_v2.json", 0.20)]
 
 
 def test_old_edl_with_many_payoffs_offers_the_last_one(tmp_path):

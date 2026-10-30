@@ -82,14 +82,15 @@ def test_the_budget_counts_only_what_the_host_spent(tmp_path, hosted_env):
 def test_paid_actions_stop_at_the_cap_and_free_edits_go_on(tmp_path, hosted_env):
     d = _run_folder(tmp_path)
     ledger(d, 0.0)
-    hosted_env.setenv("MONTIVO_BUDGET_USD", "0.10")
+    hosted_env.setenv("MONTIVO_BUDGET_USD", "0.20")
     seen = fake_jobs(hosted_env)
     c = TestClient(A.create_app(tmp_path))
-    assert c.get("/api/runs/r1").json()["budget"] == {"cap": 0.1, "spent": 0.0, "left": 0.1}
-    assert c.post("/api/runs/r1/hook", json={"from": 2}).status_code == 200  # $0.07 fits in $0.10
+    assert c.get("/api/runs/r1").json()["budget"] == {"cap": 0.2, "spent": 0.0, "left": 0.2}
+    assert c.post("/api/runs/r1/hook", json={"from": 2}).status_code == 200  # $0.145 with the judge fits in $0.20
+    ledger(d, 0.10)  # what the hook A/B spent
     r = c.post("/api/runs/r1/review", json={"from": 2, "passes": 3})  # three reviews, $0.105, do not
-    assert r.status_code == 409 and "$0.10 of its $0.10 budget left" in r.json()["error"]
-    ledger(d, 0.095)  # what the hook A/B spent
+    assert r.status_code == 409 and "$0.10 of its $0.20 budget left" in r.json()["error"]
+    ledger(d, 0.195)
     s = c.get("/api/runs/r1").json()
     assert s["has_key"] is False and "budget" in s["key_note"] and s["budget"]["left"] == 0.01
     r = c.post("/api/runs/r1/replan", json={"instruction": "shorter"})

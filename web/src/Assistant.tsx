@@ -195,7 +195,7 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
     if (missing.length) out.push({ kind: "text", who: "montivo", text: `Your brief asks for ${missing.map((x) => `“${x}”`).join(", ")}, but ${missing.length === 1 ? "it is" : "they are"} not in the footage, so the cut goes without ${missing.length === 1 ? "it" : "them"}. The reviewer is told the same.` });
     if (v.review) out.push({ kind: "review", v });
     const ab = o.source === "hook_ab" ? o.result : null;
-    if (ab) out.push({ kind: "text", who: "montivo", text: `Keeping ${vName(ab.kept)} (${ab.reason}${ab.decisive ? "" : "; within the reviewer's 10-point noise"}).` });
+    if (ab) out.push({ kind: "text", who: "montivo", text: `Keeping ${vName(ab.kept)} (${ab.reason}${ab.judge || ab.decisive ? "" : "; within the reviewer's 10-point noise"}).` });
     if (!replay && state.loop?.stop && v.n === state.loop.passes.at(-1)?.version) {
       const stop = state.loop.stop.split(":")[0];
       out.push({ kind: "text", who: "montivo", text: stop === "pass" ? "The review loop stopped: the cut passes." : `The review loop stopped (${state.loop.stop}).` });

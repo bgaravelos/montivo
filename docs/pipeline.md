@@ -103,17 +103,23 @@ so the hook A/B took a middle line as the punchline; the plan prompt now defines
 position for any planner (one `hook` first, the `payoff` last, `cta` only after it, `body` between; a changed label
 keeps the planner's in `planner_role` and `role_fixes`).
 
-Hook A/B (`engine/hook.py`, `montivo hook runs/001 [--edl edl_vN.json] [--budget 0.10]`, or `montivo review runs/001
---hook-ab [--hook-budget 0.10]` after the loop): version A is the EDL as it is, version B the next free version with one
+Hook A/B (`engine/hook.py`, `montivo hook runs/001 [--edl edl_vN.json] [--budget 0.20]`, or `montivo review runs/001
+--hook-ab [--hook-budget 0.20]` after the loop): version A is the EDL as it is, version B the next free version with one
 `swap_hook` patch through the reviewer's own patch path (the challenger moved to the front, every other span in A's order,
-the old opener kept as a body span), rendered and reviewed blind; the higher (pass, overall) is kept and a tie keeps A.
+the old opener kept as a body span), rendered and reviewed blind; then the pairwise judge decides (`review.pairwise`,
+30/10): one Spark 1.3 call sees both review copies (two `input_file` parts, Cut A then Cut B, each with its measured
+facts), twice with the two swapped, both at once; B is kept only when both calls pick it, a split or a tie keeps A
+(`review/compare_vA_vB.json`, about $0.07 and 17 s on two 38 s cuts). The two scores stay on record (`by_score`); with
+no budget left for the judge, or an open-model reviewer, the higher (pass, overall) decides as before. The review
+loop's regression guard asks the same judge when a version ranks below the best before it only by its score: the loop
+goes on from it (`preferred_over`) only when it wins both orders.
 The challenger is chosen deterministically: the line the reviewer asked to open with (a `swap_hook` target in this run's
 reviews, newest first), else another span the planner marked `hook`, else the planner's `payoff`, the ending (a cold open),
 else the first span after the opener that starts a new passage. A's review is reused when `cut_vA` was already
 reviewed (then the A/B is one review, about $0.03; two reviews about $0.06 on a 45 s cut), the budget is checked for
 every review still needed before the first one, a challenger already compared against the same A is not tried again,
-and nothing is overwritten. The reviewer varies by about 10 points on an identical cut, so the record says whether the
-margin reaches that (`decisive`). Both versions, the challenger and why, both scores with the hook criterion, the
+and nothing is overwritten. `decisive` = the judge's two calls agreed (on an A/B without the judge: the margin reaches
+the reviewer's 10-point noise). Both versions, the challenger and why, both scores with the hook criterion, the
 winner and the reason go into `review/hook_ab_vA_vB.json` and into B's patch entry (`source: hook_ab`, `result`); the
 editor labels B "hook A/B" and the Assistant says which version was kept. Real runs so far: on run 012-open the
 challenger (the payoff as a cold open) scored 81 against A's 88 (hook 3 against 10), on run 015 69 against 82; both

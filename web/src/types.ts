@@ -64,9 +64,11 @@ export type PlanSide = { planner: string; spans: number; runtime_s: number; verb
   plan_cost_usd: number | null; plan_seconds: number | null };
 export type PlanCompare = { target_s: number; v1: PlanSide } & Record<string, PlanSide | number>;
 
-/** The hook A/B's verdict on the version it made (engine/hook.py): which opener the blind reviewer preferred. */
+/** The hook A/B's verdict on the version it made (engine/hook.py): which opener the pairwise judge preferred, both
+ *  cuts side by side in two swapped calls (`judge`, null on an older A/B or without budget: the two scores decided). */
 export type HookResult = {
   winner: "a" | "b"; kept: number; reason: string; margin: number; decisive: boolean;
+  judge?: { winner: "a" | "b"; agree: boolean; verdict: string } | null;
   a: { version: number; opener: string; overall: number; pass: boolean; hook: number | null };
   b: { version: number; opener: string; overall: number; pass: boolean; hook: number | null };
 };
@@ -181,7 +183,7 @@ export type RunState = {
 /** Rough prices and times for the button hints (server COST). */
 export type Costs = { ask?: number; titles?: number; plan: number; plan_open: number; plan_s: number; plan_open_s: number; review: number; run_per_s: number;
   review_s?: number; review_prep_s?: number; image_s?: number; render_s_per_frame?: number;
-  run_fixed?: number; run_wall_fixed_s?: number; run_wall_per_s?: number; review_loop?: number; review_loop_s?: number; hook_ab?: number; look?: number; cover?: number;
+  run_fixed?: number; run_wall_fixed_s?: number; run_wall_per_s?: number; review_loop?: number; review_loop_s?: number; hook_ab?: number; compare?: number; look?: number; cover?: number;
   cover_design?: number; cover_mask?: number };
 
 export type Planner = "spark" | "open";

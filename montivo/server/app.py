@@ -75,7 +75,7 @@ PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 OP_LABEL = {"kit": "Brand kit", "speakers": "Speakers", "style": "Style", "text": "Edit text", "music": "Music", "pin": "Pin a speaker"}
 COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_fixed": 0.045,
         "run_per_s": 0.0026, "run_wall_fixed_s": 60, "run_wall_per_s": 0.9, "review_loop": 0.07, "review_loop_s": 85,
-        "hook_ab": 0.04, "ask": 0.006, "look": 0.008, "titles": 0.009, "cover": 0.025, "cover_design": 0.05, "cover_mask": 0.01,
+        "hook_ab": 0.04, "compare": 0.075, "ask": 0.006, "look": 0.008, "titles": 0.009, "cover": 0.025, "cover_design": 0.05, "cover_mask": 0.01,
         "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175}
 
 
@@ -279,7 +279,7 @@ def retry_estimate(root: Path, kind: str, args: list[str], duration=lambda p: No
     if "replan" in args or (kind == "ask" and "--no-model" not in args):  # the keyword reader is $0
         est += COST["plan"] + COST["ask"]
     if kind == "hook":
-        est += COST["hook_ab"] + COST["review"]
+        est += COST["hook_ab"] + COST["review"] + COST["compare"]
     if "--prompt" in args and "overlay" not in args:  # a look from words; an overlay's --prompt is the still's
         est += COST["look"]
     # new title words go as one "--title=WORDS" argument; a B-roll still costs only when made (--prompt), not when it
@@ -1294,7 +1294,7 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(400, f"this clip is {dur:.0f} s: the demo server takes clips up to {max_footage_s:.0f} s")
         need_key("A new run", COST["run_fixed"] + COST["run_per_s"] * dur
                  + (COST["review_loop"] if b.get("review", True) else 0.0)
-                 + (0.07 if b.get("review", True) and b.get("hook_ab") else 0.0))
+                 + (0.07 + COST["compare"] if b.get("review", True) and b.get("hook_ab") else 0.0))
         brief = (b.get("brief") or "").strip()
         if not brief:
             raise HTTPException(400, "the brief is empty")
@@ -2346,16 +2346,17 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/runs/{run_id}/hook")
     async def hook(run_id: str, request: Request):
-        """The hook A/B on one version: the next version opens on another line, both are reviewed blind, the higher
-        (pass, overall) is kept (`montivo hook`, one or two reviews, $0.10 budget)."""
-        run_id = await own(run_id, request, lambda b: 0.07, "The hook A/B")
+        """The hook A/B on one version: the next version opens on another line, both are reviewed blind and the
+        pairwise judge sees both twice, swapped: the new one is kept only when it wins both (`montivo hook`, one or two
+        reviews + the judge, $0.20 budget)."""
+        run_id = await own(run_id, request, lambda b: 0.07 + COST["compare"], "The hook A/B")
         d = st.run_dir(run_id)
         b = await request.json()
-        need_key("The hook A/B", 0.07)
+        need_key("The hook A/B", 0.07 + COST["compare"])
         frm = int(b.get("from") or latest_version(d))
         if not (d / f"edl_v{frm}.json").is_file():
             raise HTTPException(400, f"no edl_v{frm}.json in this run")
-        args = ["-m", "montivo.cli", "hook", f"runs/{run_id}", "--edl", f"edl_v{frm}.json", "--budget", "0.10"]
+        args = ["-m", "montivo.cli", "hook", f"runs/{run_id}", "--edl", f"edl_v{frm}.json", "--budget", "0.20"]
         job = start_job(st, run_id, "hook", "Hook A/B", args,
                         chat={"role": "user", "text": f"Try another opening line on v{frm}; the blind reviewer judges both.",
                               "chips": [f"v{frm}"], "kind": "hook"})

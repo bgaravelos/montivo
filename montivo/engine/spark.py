@@ -56,14 +56,16 @@ class Spark:
 
     def call(self, name: str, prompt: str, schema: dict, file_id: str | None = None, max_output_tokens: int = 12000,
              reasoning_effort: str | None = None, stage: str | None = None, schema_name: str | None = None,
-             video: Path | None = None, images: list[Path] | None = None) -> SparkCall:
+             video: Path | None = None, images: list[Path] | None = None,
+             files: list[tuple[str, str]] | None = None) -> SparkCall:
         """`name` names the request/response files; `stage` the ledger entry (default spark.<name>). `file_id` is an
-        uploaded file (Meta Files API, Spark 1.3); `video` a local mp4 sent inline (Muse Spark Open only); `images`
-        local JPEG / PNG stills sent inline as data URLs (either model)."""
+        uploaded file (Meta Files API, Spark 1.3); `files` several uploaded files, each (label, file id), the label
+        sent as a text part right before its file (the pairwise judge's two cuts); `video` a local mp4 sent inline
+        (Muse Spark Open only); `images` local JPEG / PNG stills sent inline as data URLs (either model)."""
         urls = [_data_url(p) for p in images or []]
         open_model = is_open_model(self.model)
         if open_model:
-            if file_id:
+            if file_id or files:
                 raise SystemExit(f"spark {name}: {self.model} has no Files API input; "
                                  "drop --plan-with-video or plan with muse-spark-1.3")
             content: list[dict] | str = prompt
@@ -86,6 +88,8 @@ class Spark:
             content = [{"type": "input_text", "text": prompt}]
             if file_id:
                 content.append({"type": "input_file", "file_id": file_id})
+            for label, fid in files or []:
+                content += [{"type": "input_text", "text": label}, {"type": "input_file", "file_id": fid}]
             content += [{"type": "input_image", "image_url": u} for u in urls]
             body = {"model": self.model, "max_output_tokens": max_output_tokens,
                     "input": [{"type": "message", "role": "user", "content": content}],
@@ -94,6 +98,7 @@ class Spark:
                 body["reasoning"] = {"effort": reasoning_effort}
         dump_json(self.dir / f"{name}_request.json", _without_media(body))
         self.log(f"spark: {name} -> {self.model}{' + video' if file_id or video else ''}"
+                 f"{f' + {len(files)} videos' if files else ''}"
                  f"{f' + {len(urls)} image(s)' if urls else ''} ...")
         total_cost, total_s = 0.0, 0.0
         for attempt in range(PARSE_RETRIES + 1):
@@ -243,6 +248,33 @@ class Spark:
             "overall is 0 to 100. pass = true only if overall >= 80 and there is no blocker.")
         return self.call(name, prompt, schemas.REVIEW, file_id=file_id, max_output_tokens=max_output_tokens,
                          reasoning_effort=reasoning_effort, stage="spark.review", schema_name="review", video=video)
+
+    def compare(self, file_a: str, file_b: str, brief: str, facts_a: str, facts_b: str, duration_a: float,
+                duration_b: float, name: str = "compare", reasoning_effort: str | None = "low",
+                max_output_tokens: int = 8000) -> SparkCall:
+        """Pairwise judge (C2): two review copies of cuts of the same footage for the same brief, Cut A the first
+        video, Cut B the second, each with its measured facts; which one goes out, and per criterion which is better.
+        Blind like the review: no EDL, no scores, no word of which cut is newer. The caller asks twice with the two
+        swapped (position bias, arXiv 2406.07791) and reads the labels back. Two input_file parts in one request work
+        on Spark 1.3 (30/10: 23.5K tokens in for two 39 s cuts, both seen)."""
+        prompt = (
+            "You are the senior editor of an automated video editor. You get two finished vertical cuts of the same "
+            "footage, made for the same brief: Cut A is the first video, Cut B the second. Watch both whole, with their "
+            "sound, and decide which one you would send out. They may differ anywhere: the opening line, the order, a "
+            "cut point, the captions, the framing, the length. The order they come in says nothing about which is "
+            "better or newer.\n"
+            f"Brief from the producer: {brief}\n\n"
+            f"Cut A is {duration_a:.1f} s long, Cut B {duration_b:.1f} s. A small clock in the top-left corner of each "
+            "shows its own cut time; it was added for this comparison only, do not judge it.\n\n"
+            f"Rubric (the same one each cut was scored on alone):\n{RUBRIC}\n\n"
+            "Measured facts (deterministic, trust them over your impression).\n"
+            f"Cut A:\n{facts_a}\n\nCut B:\n{facts_b}\n\n"
+            "For every criterion say which cut does it better: A, B, or tie when a viewer would not notice a "
+            "difference. winner is the cut you would publish; tie only when you truly cannot choose. why: one or two "
+            "sentences naming the differences that decided it, with cut times.")
+        return self.call(name, prompt, schemas.COMPARE, files=[("Cut A:", file_a), ("Cut B:", file_b)],
+                         max_output_tokens=max_output_tokens, reasoning_effort=reasoning_effort, stage="spark.compare",
+                         schema_name="compare")
 
 
 RUBRIC = "\n".join(f"- {c}: {d}" for c, d in {

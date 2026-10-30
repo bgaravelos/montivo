@@ -115,3 +115,18 @@ REVIEW = {
     },
     "required": ["pass", "overall", "scores", "issues", "summary"],
 }
+
+# The pairwise judge (C2): one call sees two cuts, Cut A first and Cut B second, and names the better one per criterion
+# and overall. review.pairwise asks twice with the two swapped.
+SIDES = ["A", "B", "tie"]
+
+COMPARE = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "winner": {"type": "string", "enum": SIDES, "description": "the cut you would publish"},
+        "why": {"type": "string", "description": "the differences that decided it, with cut times"},
+        "criteria": {"type": "object", "additionalProperties": False,
+                     "properties": {c: {"type": "string", "enum": SIDES} for c in CRITERIA}, "required": CRITERIA},
+    },
+    "required": ["winner", "why", "criteria"],
+}

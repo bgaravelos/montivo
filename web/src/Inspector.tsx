@@ -315,14 +315,14 @@ function PunchToggle({ v, next, canEdit, onPunch }: { v: Version; next: number; 
 }
 
 /** The hook A/B from the inspector: the next version opens on another line (the reviewer's pick, another hook, the
- *  payoff as a cold open), both are reviewed blind and the higher one is kept. Earlier A/Bs from this version show
+ *  payoff as a cold open), both are reviewed blind and the pairwise judge keeps the new one only when it wins both orders. Earlier A/Bs from this version show
  *  their verdict, so the same challenger is not tried twice. */
 function HookTry({ state, versions, v, next, canEdit, onPick, onHook }: {
   state: RunState; versions: Version[]; v: Version; next: number; canEdit: string | null; onPick: (n: number) => void; onHook: () => void;
 }) {
   const tried = versions.filter((x) => x.origin.source === "hook_ab" && x.origin.from === v.n);
   const reviews = v.review ? 1 : 2;
-  const cost = state.costs.review * reviews;
+  const cost = state.costs.review * reviews + (state.costs.compare ?? 0.075);
   const opener = v.spans[0]?.words ?? "";
   const why = !state.has_key ? state.key_note ?? "The hook A/B reviews both versions on Muse Spark: set MODEL_API_KEY and restart montivo serve."
     : canEdit ? `${canEdit}.` : v.spans.length < 2 ? "One clip only: nothing else to open on." : null;
@@ -335,14 +335,14 @@ function HookTry({ state, versions, v, next, canEdit, onPick, onHook }: {
           const r = x.origin.result;
           return (
             <button key={x.n} className="ht-tried" onClick={() => onPick(r?.kept ?? x.n)}>
-              {r ? <>Version {x.n} opened on {r.b.opener}: {r.b.overall} vs {r.a.overall}, kept <b>Version {r.kept}</b>{r.decisive ? "" : " (within the noise)"}</>
+              {r ? <>Version {x.n} opened on {r.b.opener}: {r.b.overall} vs {r.a.overall}, kept <b>Version {r.kept}</b>{r.judge ? ` (the judge: ${r.judge.verdict})` : r.decisive ? "" : " (within the noise)"}</>
                 : <>Version {x.n} opens on {x.origin.challenger ?? "another clip"}, being reviewed…</>}
             </button>
           );
         })}
       </div>
       <button className="btn quiet" disabled={!!why} onClick={onHook}
-        title={why ?? `Version ${next} opens on another line, then the blind reviewer scores ${reviews === 2 ? "both" : `it against Version ${v.n}'s review`} and the higher one is kept`}>
+        title={why ?? `Version ${next} opens on another line, the blind reviewer scores ${reviews === 2 ? "both" : "it"}, then a judge watches both side by side, twice in swapped order: the new one is kept only when it wins both`}>
         Try another hook <span className="btn-cost">~{usd(cost)}</span>
       </button>
     </div>
