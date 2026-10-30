@@ -104,7 +104,7 @@ function Seg<T extends string | number>({ value, options, onChange }: { value: T
 }
 
 /** What a saved look brings besides the look (a brand kit, S3), or null for a look alone. */
-const kitNote = (x: SavedLook) => {
+export const kitNote = (x: SavedLook) => {
   const parts = [x.music === "off" ? "no music" : x.music ? x.music.track.replace(/_/g, " ") : null,
     x.title_card == null ? null : x.title_card ? "title card" : "no title card"].filter(Boolean);
   return parts.length ? parts.join(", ") : null;

@@ -4,7 +4,7 @@ The EDL's `music` = {"track": id, "level_db": -18, "duck_db": -6, "voice_db": 0}
 only when not 0), and a person's choices (rail panels M4, M5, each kept only when set): `start_s`, where in the loop
 the bed starts; `fade_out_s`, the fade at the end of the cut (default FADE_OUT_S); `duck_edits`, cut-second windows
 [{"a", "b", "duck": true|false}] where the bed is held down although nobody speaks, or lifted although someone does
-(edit_ducks; anchored to the cut's clock, so a later structural edit leaves them where they were). The tracks are files in
+(edit_ducks; a structural edit carries each window with the source seconds it covers, follow_cut). The tracks are files in
 montivo/music/ (CC0 tracks from OpenGameArt cut into loops by build.py; tracks.json holds each loop's measured
 loudness, author and source page), so the bed is plain DSP: no model is called. `level_db` is the bed's loudness in LUFS where nobody speaks (the speech sits at the
 render's -14 LUFS); under speech it drops by `duck_db`, so the defaults keep the bed about 9 dB under the voice. `voice_db`
@@ -113,6 +113,89 @@ def edit_ducks(intervals: list[tuple[float, float]], music: dict | None) -> list
             cur = [x for a, b in cur for x in ((a, min(b, e["a"])), (max(a, e["b"]), b)) if x[1] - x[0] > 1e-3]
         cur = merge(cur)
     return cur
+
+
+FOLLOW_JOIN_S = 0.06  # pieces of one window closer than this in the new cut are one window (clips abut, a frame apart)
+
+
+def _card(edl: dict) -> bool:
+    return edl.get("title_card", True) is not False and bool(edl.get("title_card_text"))
+
+
+def _lead(edl: dict) -> float:
+    """The title card's seconds in front of the cut as follow_cut counts them: 0 with the card off, else what the
+    EDL's render record says (an op's EDL carries the version's record, or none), else the length a render gives it."""
+    from .render import TITLE_S
+    from .review import title_seconds
+    if not _card(edl):
+        return 0.0
+    if "title" in (edl.get("render") or {}):
+        return title_seconds(edl)
+    fps = float(edl["source"]["fps"])
+    return round(TITLE_S * fps) / fps
+
+
+def follow_cut(prev: dict, new: dict, severity: str = "human") -> list[dict]:
+    """M5's duck edits through a structural edit (prev -> new): each window goes with the source seconds it covers
+    (prev's cut map back to the recording, new's forward), so a trim, move, drop, insert, split, a re-plan or the title
+    card on or off keep it on its words. The pieces that stay in the cut and meet there are one window; pieces apart
+    become windows of their own; a window whose words left the cut goes (a lifted piece under HOLD_GAP_S too). Writes
+    new's `music.duck_edits` and returns a patch fix per window that moved or went. Nothing to do when the op set the
+    duck edits itself, or the spans and the card are as they were."""
+    from .review import cut_map
+    edits = ((prev.get("music") or {}).get("duck_edits")) or []
+    m = new.get("music")
+    if not edits or not m or m.get("duck_edits") != edits:
+        return []
+    lp = _lead(prev)
+    ln = lp if _card(new) == _card(prev) else _lead(new)  # the same card: the same seconds, whatever new's record
+    shape = lambda e: [(s["t_in"], s["t_out"]) for s in e["spans"]]  # noqa: E731
+    if shape(prev) == shape(new) and abs(lp - ln) < 1e-6:
+        return []
+    cp = cut_map({**prev, "render": {"title": {"seconds": lp} if lp else None}})
+    cn = cut_map({**new, "render": {"title": {"seconds": ln} if ln else None}})
+    out, fixes = [], []
+    for e in edits:
+        a, b = float(e["a"]), float(e["b"])
+        got: list[tuple[float, float]] = []
+        if a < lp and min(b, lp, ln) > a:  # the part over the title card stays over the card
+            got.append((a, min(b, lp, ln)))
+        for c in cp:
+            x, y = max(a, c.cut_in), min(b, c.cut_out)
+            if y <= x:
+                continue
+            s = prev["spans"][c.index]
+            sa, sb = s["t_in"] + x - c.cut_in, s["t_in"] + y - c.cut_in
+            for d in cn:
+                t = new["spans"][d.index]
+                u, v = max(sa, t["t_in"]), min(sb, t["t_out"])
+                if v > u:
+                    got.append((max(d.cut_in, d.cut_in + u - t["t_in"]), min(d.cut_out, d.cut_in + v - t["t_in"])))
+        runs: list[list[float]] = []
+        for x, y in sorted(got):
+            if runs and x - runs[-1][1] < FOLLOW_JOIN_S:
+                runs[-1][1] = max(runs[-1][1], y)
+            else:
+                runs.append([x, y])
+        keep = [(round(x, 2), round(y, 2)) for x, y in runs if y - x >= (0.05 if e["duck"] else HOLD_GAP_S)]
+        what = "held down" if e["duck"] else "lifted"
+        if keep == [(round(a, 2), round(b, 2))]:
+            out.append(dict(e))
+            continue
+        out.extend({"a": x, "b": y, "duck": e["duck"]} for x, y in keep)
+        to = ", ".join(f"{x:.2f}-{y:.2f} s" for x, y in keep)
+        note = (f"music {what} {a:.2f}-{b:.2f} s follows its words to {to}" if keep else
+                f"music {what} {a:.2f}-{b:.2f} s removed: its words left the cut" if not runs else
+                f"music {what} {a:.2f}-{b:.2f} s removed: under {HOLD_GAP_S:g} s of it is left in the cut")
+        fixes.append({"op": "duck_follow", "target": "music", "issue": -1, "severity": severity,
+                      "args": {"from": [a, b], "to": [list(k) for k in keep], "duck": e["duck"]}, "note": note})
+    if len(out) > MAX_DUCK_EDITS:
+        fixes.append({"op": "duck_follow", "target": "music", "issue": -1, "severity": severity, "args": {},
+                      "note": f"music: {len(out) - MAX_DUCK_EDITS} duck edit(s) past the {MAX_DUCK_EDITS} kept removed"})
+        out = out[:MAX_DUCK_EDITS]
+    new["music"] = {**m, "duck_edits": sorted(out, key=lambda e: (e["a"], e["b"]))} if out else \
+        {k: v for k, v in m.items() if k != "duck_edits"}
+    return fixes
 
 
 def merge(intervals: list[tuple[float, float]], gap_s: float = HOLD_GAP_S) -> list[tuple[float, float]]:

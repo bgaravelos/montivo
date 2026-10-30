@@ -873,6 +873,7 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .hm-len > .on { border-color: var(--accent); color: var(--text); background: #ffc6290d; }
 .home .hm-len input { width: 42px; appearance: textfield; -moz-appearance: textfield; padding: 0; background: none; border: 0; color: inherit; font: inherit; text-align: right; outline: none; }
 .hm-len input::-webkit-inner-spin-button, .hm-len input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.hm-kits .hm-kit-sw { display: inline-grid; place-items: center; width: 24px; height: 18px; border-radius: 4px; font-style: normal; font-size: 10.5px; font-weight: 800; margin-right: 3px; }
 .hm-adv { border: 1px solid var(--line); border-radius: 10px; }
 .hm-adv summary { padding: 10px 12px; cursor: pointer; font-size: 12.5px; color: var(--text-2); }
 .hm-adv summary b { color: var(--text); font-weight: 600; }

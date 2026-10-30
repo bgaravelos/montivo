@@ -6,7 +6,7 @@ import type { HeadsAt, Version } from "./types";
 const W = 1080, H = 1920; // the editor's viewer is the 9:16 frame
 
 /** SP4: the tracked heads on the paused viewer while the Speakers panel is open (GET /heads/at: frame pixels through
- *  the crop): a click on a face stages "follow this head when the speaker of this clip talks", the same pin the
+ *  the crop and a punch-in's zoom): a click on a face stages "follow this head when the speaker of this clip talks", the same pin the
  *  Speakers panel's head cards stage. */
 export function HeadPicker({ id, v, t, show, staged, onPick }: {
   id: string; v: Version; t: number; show: boolean; staged: { speaker: string; head: string | null } | null;

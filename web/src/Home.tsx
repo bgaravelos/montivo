@@ -4,7 +4,8 @@ import { fixText, nameOf, originLabel, parentOf, sevRank } from "./edit";
 import { Icon, MarkLoader } from "./icons";
 import { PlannerPicker } from "./Panels";
 import { askToNotify, ProgressMini } from "./Progress";
-import type { Budget, CardScore, Costs, Planner, RunCard, RunState, Version } from "./types";
+import { kitNote } from "./Style";
+import type { Budget, CardScore, Costs, LooksInfo, Planner, RunCard, RunState, SavedLook, Version } from "./types";
 
 type Footage = { path: string; name: string; mb: number; duration_s: number | null };
 const COSTS: Costs = { plan: 0.05, plan_open: 0.012, plan_s: 35, plan_open_s: 7, review: 0.035, run_per_s: 0.0026, run_fixed: 0.045,
@@ -512,10 +513,19 @@ function NewProject({ go, close, footage, f, setF, put, upload, limits, hasKey, 
   const [punch, setPunch] = useState(false);
   const [hookAb, setHookAb] = useState(false);
   const [planner, setPlanner] = useState<Planner>("spark");
+  const [kits, setKits] = useState<SavedLook[]>([]);
+  const [kit, setKitId] = useState<string | null>(() => { try { return localStorage.getItem("montivo.kit"); } catch { return null; } });
+  const setKit = (x: string | null) => {
+    setKitId(x);
+    try { if (x) localStorage.setItem("montivo.kit", x); else localStorage.removeItem("montivo.kit"); } catch { /* this tab only */ }
+  };
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
   useEffect(() => { panel.current?.focus(); }, []);
+  // S3: the looks and brand kits this person saved in the Style panel; the first cut can start with one
+  useEffect(() => { api<LooksInfo>("/api/looks").then((r) => setKits(r.saved)).catch(() => setKits([])); }, []);
+  const picked = kits.find((x) => x.id === kit) ?? null;
   const clip = footage.find((x) => x.path === f) ?? null;
   const est = clip?.duration_s ? estimate(costs, clip.duration_s, { review, hookAb, open: planner === "open" }) : null;
   const ready = hasKey && !!f && !!brief.trim() && !busy;
@@ -524,11 +534,12 @@ function NewProject({ go, close, footage, f, setF, put, upload, limits, hasKey, 
     askToNotify(); // the first cut takes minutes: a notification when it is ready
     setErr(null); setBusy(true);
     try {
-      const r = await api<{ id: string }>("/api/runs", { footage: f, brief, target, hflip, review, planner, punch, hook_ab: review && hookAb });
+      const r = await api<{ id: string }>("/api/runs", { footage: f, brief, target, hflip, review, planner, punch, hook_ab: review && hookAb,
+        ...(picked ? { kit: picked.id } : {}) });
       go(`#/run/${r.id}`);
     } catch (e) { setErr((e as Error).message); setBusy(false); }
   };
-  const on = [review && "blind review loop", punch && "punch-ins", review && hookAb && "hook A/B", hflip && "mirrored",
+  const on = [picked && `kit ${picked.name}`, review && "blind review loop", punch && "punch-ins", review && hookAb && "hook A/B", hflip && "mirrored",
     planner === "open" ? "Spark Open planner" : "Spark 1.3 planner"].filter(Boolean).join(" · ");
   const steps = ["Voice", "SAM 3.1", planner === "open" ? "Spark Open plan" : "Spark plan", "render", ...(review ? ["blind review"] : []), ...(review && hookAb ? ["hook A/B"] : [])];
   return (
@@ -582,6 +593,25 @@ function NewProject({ go, close, footage, f, setF, put, upload, limits, hasKey, 
               </label>
             </div>
           </div>
+          {kits.length > 0 && (
+            <div>
+              <div className="hm-lbl">Brand kit <span>a look you saved in the Style panel, with its music and title card</span></div>
+              <div className="hm-len hm-kits">
+                <button className={picked ? "" : "on"} aria-pressed={!picked} onClick={() => setKit(null)}>None</button>
+                {kits.map((x) => {
+                  const note = kitNote(x);
+                  return (
+                    <button key={x.id} className={picked?.id === x.id ? "on" : ""} aria-pressed={picked?.id === x.id}
+                      onClick={() => setKit(x.id)} title={note ? `${x.name}: its look, ${note}` : `${x.name}: its caption look`}>
+                      <i className="hm-kit-sw" aria-hidden="true" style={{ color: x.look.text, background: x.look.box || "#141414",
+                        boxShadow: `inset 0 -3px 0 ${x.look.active === "none" ? x.look.text : x.look.active_bg}` }}>Aa</i>
+                      {x.name}{note && <span className="mute"> · {note}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <details className="hm-adv">
             <summary><b>Advanced</b><span className="mute"> · {on}</span></summary>
             <div className="hm-adv-b">

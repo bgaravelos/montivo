@@ -217,10 +217,11 @@ def preview_data(run_dir: Path, edl: dict, overlays: bool = True, laid: bool = F
 def heads_at(run_dir: Path, edl: dict, t: float) -> dict:
     """Every tracked head on screen at cut second t of `edl` (SP4: click a face in the viewer to pin it): the source
     second there, the speaker of the clip there, and each head box of the SAM head track through the crop into frame
-    pixels [x0, y0, x1, y1] (a punch-in's zoom is left out: the box is the face before it). Empty on the title card or
-    without a head track."""
+    pixels [x0, y0, x1, y1], scaled about the anchor of a punch-in playing there (punch.zoom_at: the picture the viewer
+    shows, zoomed). Empty on the title card or without a head track."""
     from .captions import interp_box, to_output
-    data = preview_data(run_dir, edl, overlays=False)
+    from .punch import zoom_at
+    data = preview_data(run_dir, edl, overlays=bool(edl.get("punch")))  # the punch-ins are planned with the layout
     track = load_track(run_dir, edl, "head")
     seg = next((s for s in data["segments"] if s["cut_t0"] <= t < s["cut_t0"] + s["frames"] / data["fps"]), None)
     if seg is None or not track:
@@ -232,6 +233,9 @@ def heads_at(run_dir: Path, edl: dict, t: float) -> dict:
     fx = float(edl["source"]["width"]) / float(track["source"]["width"])
     fy = float(edl["source"]["height"]) / float(track["source"]["height"])
     frame, crop = frame_for(edl), seg["crop"]
+    zoom = seg.get("zoom")
+    z = zoom_at(zoom, t - seg["cut_t0"]) if zoom else 1.0
+    ax, ay = zoom["anchor"] if zoom else (0.0, 0.0)
     heads = []
     for oid, recs in (track.get("objects") or {}).items():
         b = interp_box([r for r in recs if r.get("box")], src_t)
@@ -239,6 +243,8 @@ def heads_at(run_dir: Path, edl: dict, t: float) -> dict:
             continue
         x0, y0, x1, y1 = to_output([b[0] * fx, b[1] * fy, b[2] * fx, b[3] * fy], crop["xs"][k], crop["w"], crop["h"],
                                    crop.get("y") or 0, frame)
+        x0, x1 = ax + (x0 - ax) * z, ax + (x1 - ax) * z
+        y0, y1 = ay + (y0 - ay) * z, ay + (y1 - ay) * z
         if x1 <= 0 or x0 >= frame.w or y1 <= 0 or y0 >= frame.h:
             continue  # outside the 9:16 window
         heads.append({"id": str(oid), "box": [round(x0), round(y0), round(x1), round(y1)]})

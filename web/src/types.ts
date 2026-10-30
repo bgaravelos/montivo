@@ -123,7 +123,7 @@ export type Look = {
 /** A music bed (EDL `music`): a bundled track, its level where nobody speaks (LUFS), the drop under speech (dB) and the
  *  timeline's Voice fader (dB on the speech against it). */
 // start_s: where in the loop the bed starts; fade_out_s: its fade at the end (M4); duck_edits: windows held down or
-// lifted by hand, in cut seconds (M5, engine/music.py edit_ducks)
+// lifted by hand, in cut seconds (M5, engine/music.py edit_ducks; a structural edit carries them with their words, follow_cut)
 export type MusicSetting = { track: string; level_db: number; duck_db: number; voice_db?: number; start_s?: number; fade_out_s?: number; duck_edits?: DuckEdit[] };
 export type DuckEdit = { a: number; b: number; duck: boolean };
 export type MusicInfo = {

@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import functools
 import inspect
 import json
 import re
@@ -67,6 +68,7 @@ from .engine.edges import Audio, Words, reset_edges, tighten_edges
 from .engine.edl import build_edl, carry_run_words, edl_summary, normalize_roles
 from .engine.graphics import Look, normalize_look, restyle
 from .engine.music import DUCK_DB as MUSIC_DUCK_DB, FADE_OUT_S as MUSIC_FADE_OUT_S, LEVEL_DB as MUSIC_LEVEL_DB, normalize_music
+from .engine.music import follow_cut
 from .engine.music import track as music_track
 from .engine.punch import parse_key
 from .engine.render import TITLE_S, merge_segments
@@ -150,9 +152,10 @@ class Edit:
     lines: Callable[[int, int], list[str]] | None = None
 
     def log_lines(self, from_v: int, n: int) -> list[str]:
-        if self.lines:
-            return self.lines(from_v, n)
-        return [f"patch v{from_v} -> v{n}: {f['op']} {f['target']}: {f['note']} (human)" for f in self.fixes]
+        line = lambda f: f"patch v{from_v} -> v{n}: {f['op']} {f['target']}: {f['note']} (human)"  # noqa: E731
+        if self.lines:  # the op's own lines, and the duck edits that followed the cut (follows_cut)
+            return self.lines(from_v, n) + [line(f) for f in self.fixes if f["op"] == "duck_follow"]
+        return [line(f) for f in self.fixes]
 
     def patch(self, from_v: int) -> dict:
         return {"from": from_v, "review": None, "source": "human", "action": self.action, "fixes": self.fixes,
@@ -196,6 +199,19 @@ class RunWords(Words):
         return self._words.by_turn
 
 
+def follows_cut(op):
+    """A pure op that moves the cut (a structural edit, the title card on or off): the bed's duck edits go with the
+    words they cover (music.follow_cut), each window that moved or went said in the op's patch."""
+    @functools.wraps(op)
+    def run(edl: dict, words: Words, audio: Audio | None, *args, **kwargs) -> tuple[dict, Edit]:
+        new, rec = op(edl, words, audio, *args, **kwargs)
+        if moved := follow_cut(edl, new):
+            rec.fixes = [*rec.fixes, *moved]
+            rec.say += f"; {len(moved)} music duck edit(s) followed"
+        return new, rec
+    return run
+
+
 def _run_edit(run_dir: Path, from_v: int | None, passes: int, budget: float, op, **args) -> dict:
     """A CLI edit: edl_v{from} through the pure op -> edl_vN, rendered (and reviewed with passes > 0)."""
     log = RunLog(run_dir / "run.log")
@@ -205,6 +221,7 @@ def _run_edit(run_dir: Path, from_v: int | None, passes: int, budget: float, op,
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
 
 
+@follows_cut
 def drop_edit(edl: dict, words: Words, audio: Audio | None, span: str) -> tuple[dict, Edit]:
     """Drop one span: the reviewer's drop_span patch, then the two edges that now meet are tightened to the speech
     again (they used to face the dropped span)."""
@@ -267,6 +284,7 @@ def trim_fix(edl: dict, words: Words, span_id: str, edge: str, word: int) -> Fix
     return mk("extend_span", edge=edge, seconds=round(seconds if edge == "out" else -seconds, 3))
 
 
+@follows_cut
 def trim_edit(edl: dict, words: Words, audio: Audio | None, span: str, edge: str, word: int) -> tuple[dict, Edit]:
     """Move one edge of one span to a word boundary, through apply_fixes like a review fix."""
     span_id = span
@@ -579,6 +597,7 @@ def text_fixes(edl: dict, callouts: dict[str, str], title: str | None, title_car
     return out
 
 
+@follows_cut
 def text_edit(edl: dict, words: Words, audio: Audio | None, callouts: dict[str, str] | None = None,
               title: str | None = None, title_card: bool | None = None,
               callout_at: dict[str, float] | None = None) -> tuple[dict, Edit]:
@@ -810,6 +829,7 @@ def music(run_dir: Path, track: str | None, level_db: float | None = None, duck_
                      voice_db=voice_db, **{k: v for k, v in more.items() if v is not None})
 
 
+@follows_cut
 def kit_edit(edl: dict, words: Words, audio: Audio | None, kit: dict, name: str | None = None) -> tuple[dict, Edit]:
     """A brand kit in one edit (engine/kit.py, rail panels S3): the saved look with its callout colours, the music and
     the title card on or off, whichever of them the version does not have yet; ffmpeg only. Raises SystemExit for a
@@ -846,6 +866,30 @@ def carry_callout_places(prev: dict, new: dict) -> list[str]:
     return out
 
 
+def carry_clip_looks(prev: dict, new: dict) -> list[dict]:
+    """A re-plan keeps a clip's own look (S4) on the new clip over the same words: a new span takes the look of the old
+    span it shares the most source time with, when that is over half of the shorter of the two (a re-plan gives
+    every clip a new id). An old clip's look that no new span takes is dropped. The patch fixes: clip_look per carried
+    look (args `from`, the old id), clip_look_off per dropped one."""
+    looks = [s for s in prev["spans"] if s.get("look")]
+    out, taken = [], set()
+    for s in new["spans"]:
+        best = max(((min(s["t_out"], o["t_out"]) - max(s["t_in"], o["t_in"]), o) for o in looks),
+                   key=lambda x: x[0], default=None)
+        if best is None or best[0] <= 0.5 * min(s["t_out"] - s["t_in"], best[1]["t_out"] - best[1]["t_in"]):
+            continue
+        o = best[1]
+        s["look"] = copy.deepcopy(o["look"])
+        taken.add(o["id"])
+        out.append({"op": "clip_look", "target": s["id"], "issue": -1, "severity": "human",
+                    "args": {"look": s["look"], "from": o["id"]}, "note": f"clip {s['id']} keeps the look {o['id']} had"})
+    for o in looks:
+        if o["id"] not in taken:
+            out.append({"op": "clip_look_off", "target": o["id"], "issue": -1, "severity": "human",
+                        "note": f"clip {o['id']}'s own look dropped: the new plan does not keep its words"})
+    return out
+
+
 def roles_by_position(spans: list[dict]) -> list[str]:
     """edl.normalize_roles on EDL span dicts: after a move, the first clip is the hook and the last the payoff."""
     ns = [SimpleNamespace(id=s["id"], role=s["role"], planner_role=s.get("planner_role")) for s in spans]
@@ -857,6 +901,7 @@ def roles_by_position(spans: list[dict]) -> list[str]:
     return notes
 
 
+@follows_cut
 def reorder_edit(edl: dict, words: Words, audio: Audio | None, span: str, before: str | None) -> tuple[dict, Edit]:
     """Move one clip before another (or to the end, before=None): the reviewer's reorder patch; the cuts that now meet
     (around the gap it left and around its new place) are tightened to the speech."""
@@ -1091,6 +1136,7 @@ def hold_trimmed_edges(edl: dict, new: dict, fixes: list[Fix], plog: list[dict],
         new["runtime_s"] = round(sum(x["duration"] for x in new["spans"]), 2)
 
 
+@follows_cut
 def cut_edit(edl: dict, words: Words, audio: Audio | None, ranges: list[tuple[str, int, int]]) -> tuple[dict, Edit]:
     """Delete the words of a transcript selection ((span id, first, last turn word index) per range) in one edit: drops
     and trims through apply_fixes like the reviewer's, splits as new spans on the kept words' boundaries; every cut that
@@ -1169,6 +1215,7 @@ def split_plan(edl: dict, words: Words, span_id: str, word: int) -> tuple[dict, 
     return s, [(a, word - 1), (word, b)]
 
 
+@follows_cut
 def split_edit(edl: dict, words: Words, audio: Audio | None, span: str, word: int) -> tuple[dict, Edit]:
     """Split one clip in two in front of turn word `word`. No word is removed: both pieces meet on one point, the
     quietest 40 ms between the two words, so the render joins them again into the same cut (render.merge_segments);
@@ -1257,6 +1304,7 @@ def join_at_dip(left: dict, right: dict, words: Words, audio: Audio | None) -> f
     return t
 
 
+@follows_cut
 def insert_edit(edl: dict, words: Words, audio: Audio | None, turn: int, a: int, b: int,
                 before: str | None = None) -> tuple[dict, Edit]:
     """Add a passage the cut does not use back: words a..b of a Voice turn as a new clip (placed by source time unless
@@ -1416,6 +1464,7 @@ def pauses(run_dir: Path, over: float = PAUSE_OVER_S, keep: float = PAUSE_KEEP_S
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
 
 
+@follows_cut
 def pauses_edit(edl: dict, words: Words, audio: Audio | None, over: float = PAUSE_OVER_S,
                 keep: float = PAUSE_KEEP_S) -> tuple[dict, Edit]:
     """Shorten every pause longer than `over` to about `keep` seconds. No word is removed: the clip splits at the pause
@@ -1653,6 +1702,7 @@ def edges(run_dir: Path, from_v: int | None = None, passes: int = 0, budget: flo
         refresh_span(s, words)
     if not fixes:
         raise SystemExit(f"the edge pass moves nothing in edl_v{from_v} with today's rules")
+    fixes += follow_cut(edl, new)
     log(f"montivo edges: the edge pass again on edl_v{from_v} -> edl_v{n}")
     edl_path = _save(run_dir, new, n, from_v, "edges", fixes, log)
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
@@ -1772,6 +1822,9 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
     if prev.get("overlays"):  # each stays on its source second, shown where the new plan keeps those words
         new["overlays"] = [dict(o) for o in prev["overlays"]]
     carry_run_words(prev, new)
+    carried_fixes = carry_clip_looks(prev, new) + follow_cut(prev, new)
+    for f in carried_fixes:
+        log(f"replan: {f['note']}")
     if pinned := carry_callout_places(prev, new):
         log(f"callout places carried from v{from_v}: " + ", ".join(repr(t) for t in pinned))
     carried = carry_caption_text(prev, new)
@@ -1782,7 +1835,8 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
     note =f"replanned: {len(new['spans'])} spans, {new['runtime_s']} s (was {len(prev['spans'])} spans, {prev['runtime_s']} s)"
     new["patches"] = list(prev.get("patches") or []) + [
         {"from": from_v, "review": None, "source": "human", "action": "replan", "instruction": instruction,
-         "model": model, "fixes": [{"op": "replan", "target": "plan", "issue": -1, "severity": "human", "note": note}]}]
+         "model": model, "fixes": [{"op": "replan", "target": "plan", "issue": -1, "severity": "human", "note": note},
+                                   *carried_fixes]}]
     log(f"patch v{from_v} -> v{n}: replan: {note} (human)")
     for s in new["spans"]:
         log(f"  {s['id']} {s['role']:6s} {s['t_in']:7.2f}-{s['t_out']:7.2f}s {s['words'][:80]}")

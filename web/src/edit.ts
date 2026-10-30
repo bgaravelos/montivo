@@ -118,6 +118,7 @@ export function fixText(op: string, target?: string | null): string {
     case "swap_hook": return "Open on another line";
     case "reorder": return "Change the clip order";
     case "drop_title": return "Drop the title card";
+    case "duck_follow": return "Keep the music's duck edits on their words";
     default: return op.replace(/_/g, " ");
   }
 }

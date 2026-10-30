@@ -36,6 +36,7 @@ from pathlib import Path
 from ..ledger import Ledger
 from .api import dump_json
 from .edges import Audio, Words
+from .music import follow_cut
 from .review import Fix, apply_fixes, cut_map, estimate_cost, plan_fixes, review_render, span_at
 
 NOISE_POINTS = 10  # the same cut reviewed twice scored 72 and 83 (README, kill test (b))
@@ -156,6 +157,7 @@ def hook_ab(run_dir: Path, edl_path: Path | None = None, budget_usd: float = 0.1
     b = next_version(run_dir)
     fix = Fix(op="swap_hook", target=cand, issue=-1, severity="hook_ab", t_s=0.0)
     edl_b, plog = apply_fixes(edl_a, [fix], words, audio)
+    plog += follow_cut(edl_a, edl_b, severity="hook_ab")
     edl_b["version"] = b
     entry = {"from": a, "review": None, "source": "hook_ab", "action": "hook_ab", "challenger": cand, "why": why,
              "fixes": plog}

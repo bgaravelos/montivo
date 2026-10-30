@@ -65,6 +65,7 @@ from .edges import Audio, Words, level_db, tighten_edges  # noqa: F401 (level_db
 from .edl import norm, norm_tokens
 from .graphics import font
 from .ingest import make_wav
+from .music import follow_cut
 from .render import frame_align, merge_segments
 
 APPLY_SEVERITY = ("blocker", "major")
@@ -1515,6 +1516,7 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
             for p in patch_log:
                 if not p.get("skipped"):
                     seen[p["fingerprint"]] = n
+            patch_log += follow_cut(edl, new, severity="loop")  # duck edits stay on their words
             new.setdefault("patches", []).append({"from": n, "review": rv["name"], "fixes": patch_log})
             nxt = next_version(run_dir)  # past every version in the folder: reviewing v1 of v1-v5 makes v6, never a new v2
             for p in patch_log:
