@@ -721,6 +721,16 @@ lanes narrowed, the fit shrank, every frame (a draft edit changed the duration a
 Reproduced only with scrollbars shown (Playwright headless passes `--hide-scrollbars`: `ignoreDefaultArgs`): old 29 of 30
 frames changed, new 0 over 1225 width x height cases. Deployed 30/10 17:11 on Billy's go (no job since 00:25; the 17:09
 container stopped); /api/health 200, /api/runs 401, /s/nope 404; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP.
+Linked voice, draft music, music level (30/10, $0, commit `29f3b65`, Billy's asks after the flicker fix): the Voice lane
+draws one piece per clip (the video track's gaps and corners) that selects, drags and opens the menu of its clip; the
+bed stays one lane (Premiere / Resolve / CapCut keep music on its own track; J/L cuts would need per-span audio in/out in
+render and Live, after the freeze). A draft's version entry had no music (`runs._music` needs a render): `runs.draft_music`,
+GET /peaks?draft=1&track=music (`media.draft_bed_peaks`, the loop shaped like Live.ts bedGain), faders locked in a draft
+until Make Version. Music default -20 / -12 -> -18 / -6 (`music.LEVEL_DB`, `DUCK_DB`): 015 is ducked the whole cut, so the
+old default sat 17.1 dB under the voice and the fader's top 7.1; Billy chose 9 dB by ear from 17 / 12 / 9 / 7 (files in
+`runs/_listen-music/`); with Ukulele the new default measures 7.5 dB. The Music fader and the mix bar show the bed under
+the voice (the render's margin_db moved by both faders): a mix commit at -16 / -12 predicted -13, measured 13.1.
+514 tests. Not deployed yet (needs Billy's go).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
