@@ -540,6 +540,10 @@ def create_app(root: Path) -> FastAPI:
             ids = {r["id"] for r in out}
             out = [r for r in out if (o := owner(st.runs / r["id"])) == judge
                    or (o is None and f"{r['id']}-{judge}" not in ids)]
+            for r in out:  # Home's Samples / Yours tabs: a sample, this judge's copy of one, or their own project
+                base = r["id"].removesuffix(f"-{judge}")
+                r["kind"] = ("sample" if is_sample(st.runs / r["id"]) else
+                             "copy" if base != r["id"] and is_sample(st.runs / base) else "own")
         for r in out:
             j = st.job(r["id"])
             r["job"] = j.public() if j else None

@@ -156,10 +156,10 @@ def test_a_judges_first_edit_on_a_sample_goes_to_their_own_copy(tmp_path, hosted
     assert c.get("/api/runs").json()["budget"]["spent"] == 0  # the copy brings the sample's ledger, not new spend
     assert c.post("/api/runs/r1/drop", json={"span": "s1"}).json()["job"]["run"] == "r1-aa11"  # one copy per judge
     assert c.post("/api/runs/r1-aa11/drop", json={"span": "s1"}).json()["job"]["run"] == "r1-aa11"
-    assert [r["id"] for r in c.get("/api/runs").json()["runs"]] == ["r1-aa11"]  # their copy instead of the sample
+    assert [(r["id"], r["kind"]) for r in c.get("/api/runs").json()["runs"]] == [("r1-aa11", "copy")]  # their copy instead of the sample
     other = TestClient(A.create_app(tmp_path))
     other.cookies.set(H.JUDGE, "bb22")
-    assert [r["id"] for r in other.get("/api/runs").json()["runs"]] == ["r1"]  # the sample, untouched
+    assert [(r["id"], r["kind"]) for r in other.get("/api/runs").json()["runs"]] == [("r1", "sample")]  # the sample, untouched
     # another judge can neither edit nor archive this judge's copy, nor see or restore it once archived
     assert other.post("/api/runs/r1-aa11/drop", json={"span": "s1"}).status_code == 404
     assert other.post("/api/runs/r1-aa11/archive").status_code == 404

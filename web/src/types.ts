@@ -173,6 +173,7 @@ export type RunCard = {
   id: string; footage: string; brief: string; started: string | null; versions: number[]; scores: number[];
   stop: string | null; cost_usd: number | null; has_cut: boolean; job: Job | null; progress: Progress | null;
   card: ProjectCard | null;
+  kind?: "sample" | "copy" | "own"; // the hosted demo only: a seeded sample, this judge's copy of one, or their own project
 };
 
 /** A project's card on Home (runs.project_card): the version the editor opens on, its poster time, its blind score
