@@ -5,6 +5,9 @@ import { originKind, originLabel, parentOf } from "./edit";
 import { Icon, MarkLoader } from "./icons";
 import type { CaptionLine, Costs, HeadsInfo, Planner, RunState, Version } from "./types";
 
+/** A3: in Live a panel's Apply goes into the draft with the timeline's edits. */
+export const LIVE_TIP = "Into the draft: it plays at once; Make Version in the top bar renders every draft edit once ($0)";
+
 const mb = (b: number | null | undefined) => (b == null ? "–" : b > 1e9 ? `${(b / 1e9).toFixed(2)} GB` : `${(b / 1e6).toFixed(1)} MB`);
 
 /** Which model writes the paper edit: Muse Spark 1.3, or Muse Spark Open (open weights, served by Baseten). The reviews
@@ -68,8 +71,9 @@ export type CaptionEdit = { at: number; text: string };
 
 /** The caption lines of a version; each can be retexted where Voice misheard a word. Edits are staged here and applied
  *  together as the next version (the reviewer's caption_text patch, $0, a re-render), so four fixes are one render. */
-export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, focus }: {
+export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, focus, rev, live }: {
   v: Version | null; t: number; next: number; canEdit: string | null; onSeek: (a: number) => void; focus?: PanelFocus | null;
+  rev: string; live: boolean; // what the staged lines belong to (a version, or the draft as it stands); Live: Apply goes to the draft
   onApply: (edits: CaptionEdit[]) => void;
   onAsk?: (line: CaptionLine) => void; // the line goes to the chat as "this" (UX B3)
 }) {
@@ -79,7 +83,7 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, foc
   const [staged, setStaged] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  useEffect(() => { setStaged({}); setEditing(null); }, [v?.n]);
+  useEffect(() => { setStaged({}); setEditing(null); }, [rev]);
   const n = Object.keys(staged).length;
   const open = (id: string, text: string) => { if (canEdit) return; setEditing(id); setDraft(staged[id] ?? text); };
   const body = useRef<HTMLDivElement>(null);
@@ -161,8 +165,8 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, foc
           <span>{n} line{n > 1 ? "s" : ""} edited</span>
           <span className="grow" />
           <button className="btn quiet" onClick={() => setStaged({})}>Discard</button>
-          <button className="btn" disabled={!!canEdit} title={canEdit ?? `Makes Version ${next} with the new text ($0, a re-render)`} onClick={apply}>
-            Make Version {next}
+          <button className="btn" disabled={!!canEdit} title={canEdit ?? (live ? LIVE_TIP : `Makes Version ${next} with the new text ($0, a re-render)`)} onClick={apply}>
+            {live ? "Apply" : `Make Version ${next}`}
           </button>
         </div>
       )}
@@ -173,8 +177,9 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, foc
 /** A text edit for montivo.human text: callouts by span ("" removes one), new title words, the card on or off. */
 export type TextEdit = { callouts?: Record<string, string>; title?: string; title_card?: boolean };
 
-export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus }: {
+export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, rev, live }: {
   state: RunState; v: Version | null; t: number; next: number; canEdit: string | null; onSeek: (a: number) => void; focus?: PanelFocus | null;
+  rev: string; live: boolean;
   onApply: (e: TextEdit) => void;
 }) {
   const calls = v?.callouts ?? [];
@@ -183,7 +188,7 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus }
   const [card, setCard] = useState<boolean | null>(null);
   const [editing, setEditing] = useState<string | null>(null); // a span id or "title"
   const [draft, setDraft] = useState("");
-  useEffect(() => { setStaged({}); setTitle(null); setCard(null); setEditing(null); }, [v?.n]);
+  useEffect(() => { setStaged({}); setTitle(null); setCard(null); setEditing(null); }, [rev]);
   const body = useRef<HTMLDivElement>(null);
   useEffect(() => { // A2: the callout picked on the timeline, scrolled into view (its text box open on Enter)
     const sid = focus?.key.startsWith("callout:") ? focus.key.slice(8) : null;
@@ -279,8 +284,9 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus }
           <span className="grow" />
           <button className="btn quiet" onClick={() => { setStaged({}); setTitle(null); setCard(null); }}>Discard</button>
           <button className="btn" disabled={!!canEdit || needsKey}
-            title={canEdit ?? (needsKey ? "New title words call Muse Image: set MODEL_API_KEY" : `Makes Version ${next} (${title != null ? "$0.01 for the new card" : "$0"}, a re-render)`)}
-            onClick={apply}>Make Version {next}</button>
+            title={canEdit ?? (needsKey ? "New title words call Muse Image: set MODEL_API_KEY" : live ? `${LIVE_TIP.replace("($0)", title != null ? "($0.01 for the new card)" : "($0)")}`
+              : `Makes Version ${next} (${title != null ? "$0.01 for the new card" : "$0"}, a re-render)`)}
+            onClick={apply}>{live ? "Apply" : `Make Version ${next}`}</button>
         </div>
       )}
     </section>
@@ -345,13 +351,14 @@ export function VersionsPanel({ id, state, versions, sel, onPick, go, replay, op
 
 /** Who the crop follows: every Voice speaker with the head the speaker map gave it (or a human pin), and every SAM
  *  head to pin instead. One pin makes the next version (montivo.human pin), $0. */
-export function SpeakersPanel({ id, v, next, canEdit, onApply }: {
+export function SpeakersPanel({ id, v, next, canEdit, onApply, rev, live }: {
   id: string; v: Version | null; next: number; canEdit: string | null; onApply: (speaker: string, head: string | null) => void;
+  rev: string; live: boolean;
 }) {
   const [info, setInfo] = useState<HeadsInfo | null>(null);
   const [staged, setStaged] = useState<{ speaker: string; head: string | null } | null>(null);
   useEffect(() => { api<HeadsInfo>(`/api/runs/${id}/heads`).then(setInfo).catch(() => setInfo({ speakers: [], heads: [], video: null })); }, [id]);
-  useEffect(() => { setStaged(null); }, [v?.n]);
+  useEffect(() => { setStaged(null); }, [rev]);
   const pins = v?.speaker_pins ?? {};
   const thumb = (h: string) => `/api/runs/${id}/head/${h}.jpg`;
   const follows = (spk: string) => (pins[spk] ? [pins[spk]] : info?.speakers.find((s) => s.id === spk)?.ids ?? []);
@@ -405,8 +412,8 @@ export function SpeakersPanel({ id, v, next, canEdit, onApply }: {
           <span>{staged.head ? `${staged.speaker} → head ${staged.head}` : `${staged.speaker} → speaker map`}</span>
           <span className="grow" />
           <button className="btn quiet" onClick={() => setStaged(null)}>Discard</button>
-          <button className="btn" disabled={!!canEdit} title={canEdit ?? `Makes Version ${next} with the crop on that head ($0, a re-render)`}
-            onClick={() => onApply(staged.speaker, staged.head)}>Make Version {next}</button>
+          <button className="btn" disabled={!!canEdit} title={canEdit ?? (live ? LIVE_TIP : `Makes Version ${next} with the crop on that head ($0, a re-render)`)}
+            onClick={() => onApply(staged.speaker, staged.head)}>{live ? "Apply" : `Make Version ${next}`}</button>
         </div>
       )}
     </section>

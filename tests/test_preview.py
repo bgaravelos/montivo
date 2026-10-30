@@ -41,7 +41,7 @@ def test_segments_and_crop_are_the_renders(tmp_path):
 def test_the_title_card_comes_first(tmp_path):
     rendered = _edl(tmp_path / "x.mp4", render={"title": {"png": "t.png", "seconds": 1.5}})
     data = P.preview_data(tmp_path, rendered)
-    assert data["title"] == {"seconds": 1.5, "png": "t.png", "fade_s": 0.3} and data["segments"][0]["cut_t0"] == 1.5
+    assert data["title"] == {"seconds": 1.5, "png": "t.png", "fade_s": 0.3, "text": ""} and data["segments"][0]["cut_t0"] == 1.5
     assert P.title_seconds(tmp_path, _edl(tmp_path / "x.mp4", render={"title": None})) == (0.0, None)  # rendered without one
     draft = _edl(tmp_path / "x.mp4", title_card_text="Raw in")
     assert P.title_seconds(tmp_path, draft) == (0.0, None)  # a draft never generates a card
@@ -49,6 +49,11 @@ def test_the_title_card_comes_first(tmp_path):
     (tmp_path / "title" / "title_card.png").write_bytes(b"png")
     assert P.title_seconds(tmp_path, draft)[0] == 1.5
     assert P.title_seconds(tmp_path, {**draft, "title_card": False}) == (0.0, None)
+    # new words in a draft (A3): the card on disk was made for other words, so the browser draws these until the commit
+    (tmp_path / "title" / "request.json").write_text(json.dumps({"prompt": 'a card that reads "Raw in"'}))
+    assert P.title_seconds(tmp_path, draft) == (1.5, (tmp_path / "title" / "title_card.png").as_posix())
+    assert P.title_seconds(tmp_path, {**draft, "title_card_text": "Cut out"}) == (1.5, None)
+    assert P.preview_data(tmp_path, {**draft, "title_card_text": "Cut out"}, overlays=False)["title"]["text"] == "Cut out"
 
 
 def _keyframes(path):

@@ -98,7 +98,13 @@ export class LiveOverlay {
       const el = document.createElement("div");
       el.className = "lo-title";
       const img = document.createElement("img");
-      img.src = d.title.url;
+      if (d.title.url) img.src = d.title.url;
+      else { // new title words in a draft: Muse Image draws the card at Make Version; until then the words on ink
+        el.classList.add("lo-title-words");
+        const w = document.createElement("span");
+        w.textContent = d.title.text ?? "";
+        el.append(w);
+      }
       el.append(img);
       this.root.append(el);
       this.title = { el, img, s: d.title.seconds, fade: d.title.fade_s ?? 0.3 };

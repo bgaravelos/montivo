@@ -1,6 +1,6 @@
-"""The editor's live preview drafts: structural edits (split, trim, reorder, drop, cut, insert, pauses) run in this
-process on a draft EDL, in milliseconds and without a render, while the browser plays the draft from the edit proxy;
-one render happens at "Make Version N".
+"""The editor's live preview drafts: structural edits (split, trim, reorder, drop, cut, insert, pauses) and the panels'
+edits (caption, text, style, music, pin, punch) run in this process on a draft EDL, in milliseconds and without a
+render, while the browser plays the draft from the edit proxy; one render happens at "Make Version N".
 
     GET    /api/runs/{id}/draft[?edl=1]   the open draft (its ops, spans, runtime; the whole EDL with edl=1), or none
     POST   /api/runs/{id}/draft           {"op": "split", "args": {"span": "s3", "word": 12}[, "from": 5]} -> one op more
@@ -16,7 +16,10 @@ stack, a commit in flight) and `edl.json`, the draft EDL as it stands (what the 
 `human.step`, the pure op the CLI edit runs, so the committed version is byte for byte the EDL the draft showed. The
 ops take the pure functions' arguments (human.OPS): split {span, word}, trim {span, edge, word}, reorder {span,
 before|null}, drop {span}, cut {ranges: [[span, first, last], ...]}, insert {turn, a, b, before: span|"end"|null},
-pauses {over, keep}. $0: no model is called. An op never runs beside a job on its run (a job writes the run's versions),
+pauses {over, keep}; caption {edits: [{at, text}]} (resolved here against the draft as laid out, and kept as
+{lines: [{span, src_t, text, was, t}]}), text {callouts, title, title_card}, style {look, callouts, prompt, why}, music
+{track|null, level_db, duck_db, voice_db}, pin {speaker, head|null}, punch {on} | {skip}. $0: no model is called (new
+title words make one Muse Image card at the commit, $0.01). An op never runs beside a job on its run (a job writes the run's versions),
 and one lock per run keeps two ops of one draft in order. A version made after the draft started (another tab, the
 chat) is not lost: the commit replays the ops on the newest version, or refuses with the op that no longer applies.
 """
@@ -36,8 +39,13 @@ from fastapi import APIRouter, HTTPException, Request
 
 from .. import human
 from ..engine.api import dump_json
+from ..engine.preview import preview_data
 
 SPAN = re.compile(r"s\d{1,4}")
+SPEAKER = re.compile(r"[A-Za-z0-9]{1,8}")
+HEAD = re.compile(r"\d{1,4}")
+PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")  # app.PUNCH_KEY
+TITLE_COST = 0.01  # Muse Image, one new title card at the commit
 JUDGE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 MAX_OPS = 200  # one draft; a person dragging clips makes a few dozen
 CACHE_RUNS = 8  # runs whose words and audio stay in memory
@@ -151,10 +159,110 @@ def clean_op(b: dict) -> dict:
             before = _span(before, "before")
         out = {"turn": _int(a.get("turn"), "turn"), "a": _int(a.get("a"), "a"), "b": _int(a.get("b"), "b"),
                "before": before}
-    else:
+    elif op == "pauses":
         out = {"over": _seconds(a.get("over", human.PAUSE_OVER_S), "over"),
                "keep": _seconds(a.get("keep", human.PAUSE_KEEP_S), "keep")}
+    else:
+        out = clean_panel_op(op, a)
     return {"op": op, "args": out}
+
+
+def _text(x, what: str, most: int, empty: bool = True) -> str:
+    if not isinstance(x, str) or len(x) > most or (not empty and not x.strip()):
+        raise HTTPException(400, f"{what}: {'up to' if empty else '1 to'} {most} characters")
+    return " ".join(x.split())
+
+
+def _num(x, what: str) -> float | None:
+    return None if x is None else _seconds(x, what)
+
+
+def clean_panel_op(op: str, a: dict) -> dict:
+    """The panels' op arguments, typed and bounded as their own routes check them (/caption, /text, /style, /music,
+    /pin, /punch); what the op makes of them (a look that does not normalise, a pin already there) is its refusal."""
+    if op == "caption":
+        if "lines" in a:  # already resolved (a draft replayed, a test): the op checks them
+            ls = a["lines"]
+            if not isinstance(ls, list) or not 1 <= len(ls) <= 40 or not all(isinstance(x, dict) for x in ls):
+                raise HTTPException(400, "lines: 1 to 40 resolved caption lines")
+            return {"lines": [{"span": _span(x.get("span")), "src_t": _seconds(x.get("src_t"), "src_t"),
+                               "text": _text(x.get("text"), "caption text", 200, False),
+                               "was": _text(x.get("was") or "", "was", 400), "t": _seconds(x.get("t", 0), "t")} for x in ls]}
+        es = a.get("edits")
+        if not isinstance(es, list) or not 1 <= len(es) <= 40 or not all(isinstance(e, dict) for e in es):
+            raise HTTPException(400, "edits: 1 to 40 of {at, text}")
+        return {"edits": [{"at": _seconds(e.get("at"), "at"), "text": _text(e.get("text"), "caption text", 200, False)}
+                          for e in es]}
+    if op == "text":
+        cs = a.get("callouts") or {}
+        if not isinstance(cs, dict) or len(cs) > 200:
+            raise HTTPException(400, "callouts: {span id: text up to 80 characters}")
+        out = {"callouts": {_span(k): _text(v, "callout", 80) for k, v in cs.items()}}
+        if a.get("title") is not None:
+            out["title"] = _text(a["title"], "title", 80, False)
+        if a.get("title_card") is not None:
+            if not isinstance(a["title_card"], bool):
+                raise HTTPException(400, "title_card: true or false")
+            out["title_card"] = a["title_card"]
+        if not out["callouts"] and len(out) == 1:
+            raise HTTPException(400, "nothing to change")
+        return out
+    if op == "style":
+        look, places = a.get("look"), a.get("callouts") or {}
+        if look is not None and not isinstance(look, dict):
+            raise HTTPException(400, "look: an object")
+        if not isinstance(places, dict) or len(places) > 200:
+            raise HTTPException(400, "callouts: {span id: [x, y] or null}")
+        out = {"look": look, "callouts": {}}
+        for k, xy in places.items():
+            if xy is not None and not (isinstance(xy, (list, tuple)) and len(xy) == 2):
+                raise HTTPException(400, "callouts: {span id: [x, y] or null}")
+            out["callouts"][_span(k)] = None if xy is None else [_seconds(xy[0], "x"), _seconds(xy[1], "y")]
+        for k in ("prompt", "why"):
+            if a.get(k):
+                out[k] = _text(a[k], k, 600)
+        return out
+    if op == "music":
+        track = a.get("track")
+        if track is not None and (not isinstance(track, str) or not re.fullmatch(r"[a-z0-9_]{1,40}", track)):
+            raise HTTPException(400, "track: a bundled track id, or null for none")
+        return {"track": track, **{k: _num(a.get(k), k) for k in ("level_db", "duck_db", "voice_db")}}
+    if op == "pin":
+        spk, head = a.get("speaker"), a.get("head")
+        if not isinstance(spk, str) or not SPEAKER.fullmatch(spk) or (head is not None and not HEAD.fullmatch(str(head))):
+            raise HTTPException(400, "speaker: a Voice label like A; head: a head id or null")
+        return {"speaker": spk, "head": None if head is None else str(head)}
+    if a.get("skip") is not None:  # punch
+        if not isinstance(a["skip"], str) or not PUNCH_KEY.fullmatch(a["skip"]):
+            raise HTTPException(400, "skip: a punch-in key like emphasis:Montivo@47.120 or jump_cut:s4")
+        return {"skip": a["skip"]}
+    if not isinstance(a.get("on"), bool):
+        raise HTTPException(400, "on: true or false, or skip: a punch-in key")
+    return {"on": a["on"]}
+
+
+def resolve(run_dir: Path, edl: dict, o: dict) -> dict:
+    """An op as the draft keeps it: a caption edit's cut seconds become the lines they name in the draft as it is laid
+    out now (preview_data, the render's layout; a version's own rendered captions when it has them), so a replay or the
+    commit retexts the same lines whatever comes after; a pin is checked against the run's speakers and heads."""
+    if o["op"] == "caption" and "edits" in o["args"]:
+        laid = edl if edl.get("captions") else preview_data(run_dir, edl, laid=True)["_edl"]
+        try:
+            lines = human.caption_lines(laid, [(e["at"], e["text"]) for e in o["args"]["edits"]])
+        except SystemExit as e:
+            raise HTTPException(409, str(e))
+        return {"op": "caption", "args": {"lines": lines}}
+    if o["op"] == "pin":
+        try:
+            human.pin_check(run_dir, o["args"]["speaker"], o["args"]["head"])
+        except (SystemExit, OSError, ValueError) as e:
+            raise HTTPException(409, str(e))
+    return o
+
+
+def cost(ops: list[dict]) -> float:
+    """What a commit of these ops spends: one Muse Image card for new title words, else nothing."""
+    return TITLE_COST if any(o["op"] == "text" and o["args"].get("title") for o in ops) else 0.0
 
 
 # --------------------------------------------------------------------------- the draft on disk
@@ -309,6 +417,7 @@ def router(st, own, judge_of, need_key, hosted: bool = False) -> APIRouter:
                 cur = current(fd, d, state)
             words, audio = inputs(d)
             t0 = time.perf_counter()
+            o = resolve(d, cur, o)
             try:
                 new, rec = human.step(cur, words, audio, o)
             except SystemExit as e:
@@ -387,8 +496,9 @@ def router(st, own, judge_of, need_key, hosted: bool = False) -> APIRouter:
         b = await request.json() if (await request.body()) else {}
         b = b if isinstance(b, dict) else {}
         passes = review_passes(b)
-        if passes:
-            need_key("Reviewing the new cut", COST["review"] * passes)
+        title = cost((await asyncio.to_thread(load, fd) or {}).get("ops") or [])
+        if passes or title:
+            need_key("New title card words (Muse Image)" if title else "Reviewing the new cut", title + COST["review"] * passes)
         rebase = b.get("rebase", True) is not False
         td = st.runs / target
 

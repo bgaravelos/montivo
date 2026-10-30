@@ -1185,6 +1185,9 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .lo-callout { position: absolute; box-sizing: border-box; display: flex; align-items: center; justify-content: center; white-space: nowrap; font-weight: normal; font-synthesis: none; }
 .lo-title { position: absolute; inset: 0; background: #000; }
 .lo-title img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lo-title-words { display: grid; place-items: center; background: #141414; }
+.lo-title-words img { display: none; }
+.lo-title-words span { color: #F3F0E8; font: 800 7cqw/1.1 "Inter Tight", system-ui, sans-serif; text-align: center; padding: 0 10%; text-wrap: balance; }
 .live-wait { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--text-2); font-size: 13px; }
 .live-wait.err { color: var(--blocker); }
 .vlabel.draft { background: var(--accent); color: #141414; }

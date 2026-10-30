@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
 import { Icon } from "./icons";
+import { LIVE_TIP } from "./Panels";
 import type { MusicInfo, MusicSetting, Version } from "./types";
 
 // The Music panel: a bundled CC0 bed (montivo/music, from OpenGameArt) under the speech, ducked while anyone talks (engine/music.py).
@@ -15,15 +16,15 @@ const getInfo = () => (infoCache ??= api<MusicInfo>("/api/music"));
 const same = (a: MusicSetting | null, b: MusicSetting | null) =>
   (!a && !b) || (!!a && !!b && a.track === b.track && a.level_db === b.level_db && a.duck_db === b.duck_db);
 
-export function MusicPanel({ v, next, canEdit, onApply }: {
-  v: Version | null; next: number; canEdit: string | null; onApply: (e: MusicEdit) => void;
+export function MusicPanel({ v, next, canEdit, onApply, rev, live }: {
+  v: Version | null; next: number; canEdit: string | null; onApply: (e: MusicEdit) => void; rev: string; live: boolean;
 }) {
   const [info, setInfo] = useState<MusicInfo | null>(null);
   const [draft, setDraft] = useState<MusicSetting | null | undefined>(undefined); // undefined = nothing staged
   const [playing, setPlaying] = useState<string | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
   useEffect(() => { getInfo().then(setInfo).catch(() => {}); }, []);
-  useEffect(() => { setDraft(undefined); }, [v?.n]);
+  useEffect(() => { setDraft(undefined); }, [rev]);
   useEffect(() => () => audio.current?.pause(), []);
   const cur: MusicSetting | null = v?.music ? { track: v.music.track, level_db: v.music.level_db, duck_db: v.music.duck_db } : null;
   const want = draft === undefined ? cur : draft;
@@ -90,8 +91,8 @@ export function MusicPanel({ v, next, canEdit, onApply }: {
           <span>{want ? `${name(want.track)}, ${want.level_db} LUFS` : "Music off"}</span>
           <span className="grow" />
           <button className="btn quiet" onClick={() => setDraft(undefined)}>Discard</button>
-          <button className="btn" disabled={!!canEdit} title={canEdit ?? `Makes Version ${next} ($0, a re-render)`}
-            onClick={() => { audio.current?.pause(); setPlaying(null); onApply(want ? { ...want } : { track: null }); }}>Make Version {next}</button>
+          <button className="btn" disabled={!!canEdit} title={canEdit ?? (live ? LIVE_TIP : `Makes Version ${next} ($0, a re-render)`)}
+            onClick={() => { audio.current?.pause(); setPlaying(null); onApply(want ? { ...want } : { track: null }); }}>{live ? "Apply" : `Make Version ${next}`}</button>
         </div>
       )}
     </section>

@@ -75,7 +75,12 @@ def title_seconds(run_dir: Path, edl: dict) -> tuple[float, str | None]:
     if not png.is_file():
         return 0.0, None
     fps = float(edl["source"]["fps"])
-    return round(round(TITLE_S * fps) / fps, 4), png.as_posix()
+    req = run_dir / "title" / "request.json"
+    try:  # new words in a draft: the card made at "Make Version N" is not there yet, the browser shows the words
+        same = f'"{edl["title_card_text"]}"' in json.loads(req.read_text()).get("prompt", "")
+    except (OSError, ValueError):
+        same = True  # an older run folder without the request: its card is the one there is
+    return round(round(TITLE_S * fps) / fps, 4), png.as_posix() if same else None
 
 
 def loudness_gain(edl: dict | None) -> float | None:
@@ -135,7 +140,8 @@ def preview_data(run_dir: Path, edl: dict, overlays: bool = True, laid: bool = F
     src = edl["source"]
     data = {"fps": fps, "source": {"width": src["width"], "height": src["height"]},
             "frame": {"aspect": frame.aspect, "width": frame.w, "height": frame.h},
-            "title": {"seconds": title_s, "png": title_png, "fade_s": TITLE_FADE_S} if title_s else None,
+            "title": {"seconds": title_s, "png": title_png, "fade_s": TITLE_FADE_S,
+                      "text": edl.get("title_card_text") or ""} if title_s else None,
             "duration_s": round(t, 6), "segments": out, "reframe_concept": concept,
             "gain_db": loudness_gain(edl), "captions": [], "callouts": [], "stills": [], "punch_ins": []}
     music = bed.normalize_music(edl.get("music"))

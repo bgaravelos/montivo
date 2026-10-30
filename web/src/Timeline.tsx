@@ -36,6 +36,7 @@ type Props = {
   /** The faders: the staged mix, the version's own, the live player's state, and what to do with them. */
   mix: Mix | null; base: Mix | null; live: { ready: boolean; active: boolean; failed: string | null };
   next: number; canEdit: string | null; onMix: (m: Mix) => void; onResetMix: () => void; onApplyMix: () => void;
+  liveEdit: boolean; // Live: the mix goes into the draft (A3) instead of making a version
   onMusicPanel: () => void;
   /** A Batch D edit (insert, pauses, overlay): the route, its body (the editor adds `from`), a note for the toast. */
   onEdit: (path: string, body: Record<string, unknown>, note: string) => void;
@@ -69,8 +70,8 @@ export function Timeline(p: Props) {
   const [bar, setBar] = useState<Bar | null>(null); // a selected still, a ghost clip or the new-still prompt
   useEffect(() => setBar(null), [v?.n]);
   const plan = usePausePlan(p.id, v);
-  // the mix is set on a version: a draft plays its bed, its faders wait for Make Version
-  const mixOff = p.canEdit ?? (v?.draft ? `Make Version ${v.n} first: the mix is set on a version, and the draft's edits are not one yet` : null);
+  // A3: a draft takes the mix like any other edit, so the faders stay free while one is open
+  const mixOff = p.canEdit;
   // the Music fader as it is heard: on a talking head the bed is ducked nearly all the time, so its level where nobody
   // speaks (the fader's LUFS) said little; this is the bed under the voice, the render's measure moved by both faders
   const under = v?.music?.margin_db != null && p.mix && p.base
@@ -106,8 +107,9 @@ export function Timeline(p: Props) {
             <span className={`mix-live ${p.live.active ? "on" : ""}`}>{p.live.active ? "live" : p.live.failed ? "no preview" : "loading…"}</span>
             <span>Voice {dbs(p.mix.voice_db)} · Music {under != null ? `${dbs(-under)} under the voice` : `${p.mix.level_db} LUFS`}</span>
             <button className="btn quiet small" onClick={p.onResetMix}>Reset</button>
-            <button className="btn small" disabled={!!p.canEdit} title={p.canEdit ?? `Makes Version ${p.next} with this mix ($0, a re-render)`}
-              onClick={p.onApplyMix}>Make Version {p.next}</button>
+            <button className="btn small" disabled={!!p.canEdit} title={p.canEdit ?? (p.liveEdit ? "Into the draft: the mix plays at once; Make Version renders it with the draft's other edits ($0)"
+              : `Makes Version ${p.next} with this mix ($0, a re-render)`)}
+              onClick={p.onApplyMix}>{p.liveEdit ? "Apply" : `Make Version ${p.next}`}</button>
           </span>
         )}
         {mode === "timeline" && (

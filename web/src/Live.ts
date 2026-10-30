@@ -16,7 +16,7 @@ export type LiveLook = {
 export type LiveData = {
   version: number | null; fps: number; duration_s: number; segments: LiveSeg[];
   source: { width: number; height: number }; frame: { aspect: string; width: number; height: number };
-  title: { seconds: number; url: string; fade_s?: number } | null;
+  title: { seconds: number; url: string | null; fade_s?: number; text?: string } | null;
   media: { video: string; audio: string; width: number; height: number; bytes: number };
   gain_db: number | null;
   look?: LiveLook;

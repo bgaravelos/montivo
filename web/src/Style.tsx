@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, tc } from "./api";
+import { LIVE_TIP } from "./Panels";
 import { Icon, MarkLoader } from "./icons";
 import type { Look, LooksInfo, SavedLook, Version } from "./types";
 
@@ -31,13 +32,15 @@ export function usePreview(id: string, v: Version | null, t: number, draft: Styl
   const [p, setP] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
   const tq = Math.round(t * 10) / 10;
-  const key = on && v ? JSON.stringify([v.n, tq, draft.look, draft.callouts]) : null;
+  // a draft keeps its number while its edits change: its clips, look and callouts are part of the key
+  const dk = v?.draft ? [v.spans.map((s) => `${s.id}:${s.t_in}:${s.t_out}:${s.callout ?? ""}:${s.callout_xy ?? ""}`).join("|"), v.look] : null;
+  const key = on && v ? JSON.stringify([v.n, tq, draft.look, draft.callouts, dk]) : null;
   useEffect(() => {
     if (!key || !v) { setP(null); return; }
     let live = true;
     const h = window.setTimeout(() => {
       setBusy(true);
-      api<Preview>(`/api/runs/${id}/preview`, { v: v.n, t: tq, look: draft.look, callouts: draft.callouts })
+      api<Preview>(`/api/runs/${id}/preview`, { ...(v.draft ? { draft: true } : { v: v.n }), t: tq, look: draft.look, callouts: draft.callouts })
         .then((r) => { if (live) setP(r); }).catch(() => { if (live) setP(null); }).finally(() => { if (live) setBusy(false); });
     }, 160);
     return () => { live = false; window.clearTimeout(h); };
@@ -94,8 +97,8 @@ function Seg<T extends string | number>({ value, options, onChange }: { value: T
   );
 }
 
-export function StylePanel({ id, v, t, next, canEdit, draft, setDraft, onSeek, onApply, hasKey, keyNote, cost, onPrompt }: {
-  id: string; v: Version | null; t: number; next: number; canEdit: string | null;
+export function StylePanel({ id, v, t, next, canEdit, live, draft, setDraft, onSeek, onApply, hasKey, keyNote, cost, onPrompt }: {
+  id: string; v: Version | null; t: number; next: number; canEdit: string | null; live: boolean;
   draft: StyleDraft; setDraft: (d: StyleDraft) => void; onSeek: (a: number) => void; onApply: () => void;
   hasKey: boolean; keyNote: string | null; cost: number; onPrompt: (text: string) => void;
 }) {
@@ -134,8 +137,10 @@ export function StylePanel({ id, v, t, next, canEdit, draft, setDraft, onSeek, o
             onChange={(e) => setAsk(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && ask.trim() && hasKey && !canEdit) { e.preventDefault(); onPrompt(ask.trim()); setAsk(""); } }} />
           <button className="btn small" disabled={!ask.trim() || !hasKey || !!canEdit}
-            title={canEdit ?? (hasKey ? `Muse Spark picks the look and Montivo renders Version ${next} (about $${cost.toFixed(3)})` : keyNote ?? "Set MODEL_API_KEY to style from a sentence")}
-            onClick={() => { onPrompt(ask.trim()); setAsk(""); }}><Icon name="spark" size={12} /> Make Version {next} · ~${cost.toFixed(3)}</button>
+            title={canEdit ?? (!hasKey ? keyNote ?? "Set MODEL_API_KEY to style from a sentence" : live
+              ? `Muse Spark picks the look (about $${cost.toFixed(3)}) and it goes into the draft: it plays at once`
+              : `Muse Spark picks the look and Montivo renders Version ${next} (about $${cost.toFixed(3)})`)}
+            onClick={() => { onPrompt(ask.trim()); setAsk(""); }}><Icon name="spark" size={12} /> {live ? "Apply" : `Make Version ${next}`} · ~${cost.toFixed(3)}</button>
         </div>
         <p className="mute small">Muse Spark reads the current look and how light the picture is behind the captions, then picks fonts and colours from the options below. Tweak the result here after.</p>
         <div className="pn-k">Presets</div>
@@ -253,7 +258,7 @@ export function StylePanel({ id, v, t, next, canEdit, draft, setDraft, onSeek, o
           <span>{n} change{n > 1 ? "s" : ""}</span>
           <span className="grow" />
           <button className="btn quiet" onClick={() => setDraft(EMPTY_DRAFT)}>Discard</button>
-          <button className="btn" disabled={!!canEdit} title={canEdit ?? `Makes Version ${next} ($0, a re-render)`} onClick={onApply}>Make Version {next}</button>
+          <button className="btn" disabled={!!canEdit} title={canEdit ?? (live ? LIVE_TIP : `Makes Version ${next} ($0, a re-render)`)} onClick={onApply}>{live ? "Apply" : `Make Version ${next}`}</button>
         </div>
       )}
     </section>

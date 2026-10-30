@@ -129,8 +129,8 @@ def _finish(run_dir: Path, edl_path: Path, n: int, passes: int, budget: float, l
 
 
 # --------------------------------------------------------------------------- pure edit ops
-# The structural edits (drop, trim, reorder, cut, split, insert, pauses) as pure functions of (edl, words, audio, args):
-# no file is read or written, nothing is logged. Each returns (the new EDL, its Edit); the CLI wrappers below read
+# The structural edits (drop, trim, reorder, cut, split, insert, pauses) and the panels' (caption, text, style, music,
+# pin, punch) as pure functions of (edl, words, audio, args): no file is read or written, nothing is logged. Each returns (the new EDL, its Edit); the CLI wrappers below read
 # edl_v{from}, call the op, stamp version and patch, write edl_vN and render, and the editor's draft
 # (montivo/server/draft.py) chains them in memory and renders once at "Make Version N".
 
@@ -339,37 +339,57 @@ def carry_caption_text(prev: dict, new: dict) -> list[dict]:
     return out
 
 
+def caption_lines(edl: dict, edits: list[tuple[float, str]]) -> list[dict]:
+    """The lines a caption edit retexts, resolved from the cut seconds the editor sends to where the text sticks: the
+    span and source second of the line (caption_fixes), its words before and the cut second. The pure op takes these,
+    so a draft's line keeps its place whatever is laid out after it."""
+    return [{"span": f.args["span"], "src_t": f.args["src_t"], "text": f.args["text"], "was": f.args["was"],
+             "t": round(float(f.t_s), 3)} for f in caption_fixes(edl, edits)]
+
+
+def caption_edit(edl: dict, words: Words, audio: Audio | None, lines: list[dict]) -> tuple[dict, Edit]:
+    """Retext caption lines (caption_lines: span, src_t, text, was, t): the reviewer's caption_text patch, the timing of
+    each line stays. $0."""
+    if not lines:
+        raise SystemExit("no caption line to retext")
+    ids = {s["id"] for s in edl["spans"]}
+    fixes, seen = [], set()
+    for ln in lines:
+        text = " ".join(str(ln.get("text") or "").split())
+        if not text or len(text) > 200:
+            raise SystemExit("the caption text: 1 to 200 characters")
+        sid, src_t = ln.get("span"), round(float(ln.get("src_t")), 3)
+        if sid not in ids:
+            raise SystemExit(f"{sid} is not a span of {_of(edl)}")
+        if (sid, src_t) in seen:
+            raise SystemExit(f"two edits for the line at {src_t:.2f} s of {sid}")
+        seen.add((sid, src_t))
+        fixes.append(Fix(op="caption_text", target=f"{sid}@{src_t:.2f}", issue=-1, severity="human",
+                         t_s=float(ln.get("t") or 0.0), args={"span": sid, "src_t": src_t, "text": text,
+                                                             "was": str(ln.get("was") or "")}))
+    new, plog = apply_fixes(edl, fixes, words)
+    say = "; ".join(f"caption “{f.args['text']}”" for f in fixes)
+    return new, Edit("caption", plog, say,
+                     head=lambda f, n: f"montivo caption: {len(fixes)} line(s) in edl_v{f} -> edl_v{n}",
+                     lines=lambda f, n: [f"patch v{f} -> v{n}: caption_text at {x.t_s:.2f} s: {x.args['was']!r} -> "
+                                         f"{x.args['text']!r} (human)" for x in fixes])
+
+
 def caption(run_dir: Path, edits: list[tuple[float, str]], from_v: int | None = None, passes: int = 0,
             budget: float = 0.15) -> dict:
     """Retext caption lines of edl_v{from} -> edl_vN, rendered: for the words Voice misheard (run 015: "meta meta
     models" for "Four Meta models"). $0 without --review."""
-    log = RunLog(run_dir / "run.log")
     from_v = from_version(run_dir, from_v)
-    edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
-    fixes = caption_fixes(edl, edits)
-    n = next_version(run_dir)
-    log(f"montivo caption: {len(fixes)} line(s) in edl_v{from_v} -> edl_v{n}")
-    new, plog = apply_fixes(edl, fixes, _words(run_dir))
-    new["version"] = n
-    new.setdefault("patches", []).append({"from": from_v, "review": None, "source": "human", "action": "caption",
-                                          "fixes": plog})
-    for f in fixes:
-        log(f"patch v{from_v} -> v{n}: caption_text at {f.t_s:.2f} s: {f.args['was']!r} -> {f.args['text']!r} (human)")
-    edl_path = run_dir / f"edl_v{n}.json"
-    dump_json(edl_path, new)
-    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+    lines = caption_lines(json.loads((run_dir / f"edl_v{from_v}.json").read_text()), edits)
+    return _run_edit(run_dir, from_v, passes, budget, caption_edit, lines=lines)
 
 
-def punch(run_dir: Path, on: bool | None = None, skip: str | None = None, from_v: int | None = None, passes: int = 0,
-          budget: float = 0.15) -> dict:
-    """Punch-ins on or off (`on`), or one punch-in removed (`skip`, a key from edl_v{from}'s `punch_ins`) ->
-    edl_vN, rendered. The EDL's `punch` and `punch_skip` travel with every later version (review patches deep-copy the
-    EDL, replan carries them), so a removed punch-in stays removed and the next render plans the rest again."""
+def punch_edit(edl: dict, words: Words, audio: Audio | None, on: bool | None = None,
+               skip: str | None = None) -> tuple[dict, Edit]:
+    """Punch-ins on or off (`on`), or one removed (`skip`, a key of the EDL's `punch_ins`). The render plans the rest
+    again, so the layout fields are cleared."""
     if (on is None) == (skip is None):
         raise SystemExit("give --on, --off or --skip KEY")
-    log = RunLog(run_dir / "run.log")
-    from_v = from_version(run_dir, from_v)
-    edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
     new = copy.deepcopy(edl)
     if skip is not None:
         try:
@@ -379,30 +399,34 @@ def punch(run_dir: Path, on: bool | None = None, skip: str | None = None, from_v
         entry = next((e for e in edl.get("punch_ins") or [] if e.get("key") == skip), None)
         if not edl.get("punch") or entry is None:
             have = ", ".join(e["key"] for e in edl.get("punch_ins") or [] if e.get("key")) or "none"
-            raise SystemExit(f"{skip} is not a punch-in of edl_v{from_v} (punch-ins: {have})")
+            raise SystemExit(f"{skip} is not a punch-in of {_of(edl)} (punch-ins: {have})")
         new["punch_skip"] = list(edl.get("punch_skip") or []) + [skip]
         what = entry.get("word") or f"the jump cut into {entry.get('span')}"
         fix = {"op": "punch_skip", "target": skip, "issue": -1, "severity": "human",
                "note": f"punch-in removed: {what} at {entry['t_in']:.2f} s (x{entry['zoom']})"}
+        say = f"remove the punch-in on {what}"
     else:
         if bool(edl.get("punch")) == on:
-            raise SystemExit(f"punch-ins are already {'on' if on else 'off'} in edl_v{from_v}")
+            raise SystemExit(f"punch-ins are already {'on' if on else 'off'} in {_of(edl)}")
         new["punch"] = on
         n_skip = len(edl.get("punch_skip") or [])
         fix = {"op": "punch_on" if on else "punch_off", "target": "cut", "issue": -1, "severity": "human",
                "note": f"punch-ins {'on' if on else 'off'}" + (f" ({n_skip} removed by hand stay removed)" if n_skip else "")}
-    n = next_version(run_dir)
-    log(f"montivo punch: {fix['op']} {fix['target']} in edl_v{from_v} -> edl_v{n}")
+        say = f"punch-ins {'on' if on else 'off'}"
     for k in ("captions", "callouts", "reframe", "punch_ins"):
         new[k] = []
     new.pop("render", None)
-    new["version"] = n
-    new.setdefault("patches", []).append({"from": from_v, "review": None, "source": "human", "action": "punch",
-                                          "fixes": [fix]})
-    log(f"patch v{from_v} -> v{n}: {fix['op']} {fix['target']}: {fix['note']} (human)")
-    edl_path = run_dir / f"edl_v{n}.json"
-    dump_json(edl_path, new)
-    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+    return new, Edit("punch", [fix], say, head=lambda f, n: f"montivo punch: {fix['op']} {fix['target']} in edl_v{f} -> edl_v{n}")
+
+
+def punch(run_dir: Path, on: bool | None = None, skip: str | None = None, from_v: int | None = None, passes: int = 0,
+          budget: float = 0.15) -> dict:
+    """Punch-ins on or off, or one punch-in removed (punch_edit) -> edl_vN, rendered. The EDL's `punch` and
+    `punch_skip` travel with every later version (review patches deep-copy the EDL, replan carries them), so a removed
+    punch-in stays removed and the next render plans the rest again."""
+    if (on is None) == (skip is None):
+        raise SystemExit("give --on, --off or --skip KEY")
+    return _run_edit(run_dir, from_v, passes, budget, punch_edit, on=on, skip=skip)
 
 
 def _new_version(run_dir: Path, from_v: int | None) -> tuple[int, dict, int]:
@@ -453,14 +477,11 @@ def text_fixes(edl: dict, callouts: dict[str, str], title: str | None, title_car
     return out
 
 
-def text(run_dir: Path, callouts: dict[str, str] | None = None, title: str | None = None, title_card: bool | None = None,
-         from_v: int | None = None, passes: int = 0, budget: float = 0.15) -> dict:
-    """Callout and title card text of edl_v{from} -> edl_vN, rendered."""
-    log = RunLog(run_dir / "run.log")
-    from_v, edl, n = _new_version(run_dir, from_v)
+def text_edit(edl: dict, words: Words, audio: Audio | None, callouts: dict[str, str] | None = None,
+              title: str | None = None, title_card: bool | None = None) -> tuple[dict, Edit]:
+    """Callout and title card text (text_fixes); new title words make a new Muse Image card at the render ($0.01)."""
     fixes = text_fixes(edl, callouts or {}, title, title_card)
-    log(f"montivo text: {len(fixes)} change(s) in edl_v{from_v} -> edl_v{n}")
-    new, _ = apply_fixes(edl, [], _words(run_dir))  # a clean copy: render fields cleared, order and runtime as they were
+    new, _ = apply_fixes(edl, [], words)  # a clean copy: render fields cleared, order and runtime as they were
     by_id = {s["id"]: s for s in new["spans"]}
     for f in fixes:
         if f["op"] == "callout_text":
@@ -470,8 +491,14 @@ def text(run_dir: Path, callouts: dict[str, str] | None = None, title: str | Non
             new["title_card"] = True
         else:
             new["title_card"] = f["op"] == "title_on"
-    edl_path = _save(run_dir, new, n, from_v, "text", fixes, log)
-    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+    say = "; ".join(f["note"].split(" (")[0] for f in fixes)
+    return new, Edit("text", fixes, say, head=lambda f, n: f"montivo text: {len(fixes)} change(s) in edl_v{f} -> edl_v{n}")
+
+
+def text(run_dir: Path, callouts: dict[str, str] | None = None, title: str | None = None, title_card: bool | None = None,
+         from_v: int | None = None, passes: int = 0, budget: float = 0.15) -> dict:
+    """Callout and title card text of edl_v{from} -> edl_vN (text_edit), rendered."""
+    return _run_edit(run_dir, from_v, passes, budget, text_edit, callouts=callouts, title=title, title_card=title_card)
 
 
 def look_note(was: Look, now: Look) -> str:
@@ -520,30 +547,17 @@ def style_fixes(edl: dict, look: dict | None, callouts: dict[str, list[float] | 
     return new_look, out
 
 
-def style(run_dir: Path, look: dict | None = None, callouts: dict[str, list[float] | None] | None = None,
-          from_v: int | None = None, passes: int = 0, budget: float = 0.15, prompt: str | None = None) -> dict:
-    """The look of the captions and callouts and the callout places of edl_v{from} -> edl_vN, rendered, $0. The EDL's
-    `look` and every span's `callout_xy` travel with later versions (review patches deep-copy the EDL, replan carries
-    them), and the review loop keeps a fixed caption position (review.gate_check, resolve)."""
-    log = RunLog(run_dir / "run.log")
-    from_v, edl, n = _new_version(run_dir, from_v)
-    ledger = Ledger.resume(run_dir / "ledger.json")
-    why = None
-    if prompt:
-        from .engine.look import suggest
-        log(f"montivo style: the look for {prompt!r} (one Spark call)")
-        try:
-            look, why, corrected = suggest(run_dir, edl, prompt, ledger, log)
-        except ValueError as e:
-            raise SystemExit(f"Spark's look did not check out: {e}")
-        if corrected:
-            log(f"style: corrected Spark's answer: {'; '.join(corrected)}")
+def style_edit(edl: dict, words: Words, audio: Audio | None, look: dict | None = None,
+               callouts: dict[str, list[float] | None] | None = None, prompt: str | None = None,
+               why: str | None = None) -> tuple[dict, Edit]:
+    """The look of the captions and callouts and the callout places (style_fixes). `prompt` and `why` record a look
+    Spark suggested from words (look.suggest), in the patch's note and instruction."""
     new_look, fixes = style_fixes(edl, look, callouts or {})
     if why and fixes[0]["op"] == "look":
         fixes[0]["note"] += f" ({why})"
+    if prompt and fixes[0]["op"] == "look":
         fixes[0]["args"]["prompt"] = prompt
-    log(f"montivo style: {len(fixes)} change(s) in edl_v{from_v} -> edl_v{n}")
-    new, _ = apply_fixes(edl, [], _words(run_dir))
+    new, _ = apply_fixes(edl, [], words)
     if new_look is not None:
         new["look"] = new_look
     by_id = {s["id"]: s for s in new["spans"]}
@@ -552,11 +566,33 @@ def style(run_dir: Path, look: dict | None = None, callouts: dict[str, list[floa
             by_id[f["target"]]["callout_xy"] = f["args"]["xy"]
         elif f["op"] == "callout_auto":
             by_id[f["target"]].pop("callout_xy", None)
-    edl_path = _save(run_dir, new, n, from_v, "style", fixes, log)
+    say = "; ".join(("caption style" if f["op"] == "look" else f"callout {f['target']} "
+                     + ("pinned" if f["op"] == "callout_pin" else "back to auto")) for f in fixes)
+    return new, Edit("style", fixes, f"style: {prompt}" if prompt else say, instruction=prompt,
+                     head=lambda f, n: f"montivo style: {len(fixes)} change(s) in edl_v{f} -> edl_v{n}")
+
+
+def style(run_dir: Path, look: dict | None = None, callouts: dict[str, list[float] | None] | None = None,
+          from_v: int | None = None, passes: int = 0, budget: float = 0.15, prompt: str | None = None) -> dict:
+    """The look of the captions and callouts and the callout places of edl_v{from} -> edl_vN (style_edit), rendered,
+    $0 (a prompt: one Spark call for the look first). The EDL's `look` and every span's `callout_xy` travel with later
+    versions (review patches deep-copy the EDL, replan carries them), and the review loop keeps a fixed caption
+    position (review.gate_check, resolve)."""
+    why = None
     if prompt:
-        new["patches"][-1]["instruction"] = prompt
-        dump_json(edl_path, new)
-    return _finish(run_dir, edl_path, n, passes, budget, ledger, log)
+        from .engine.look import suggest
+        log = RunLog(run_dir / "run.log")
+        from_v = from_version(run_dir, from_v)
+        edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
+        log(f"montivo style: the look for {prompt!r} (one Spark call)")
+        try:
+            look, why, corrected = suggest(run_dir, edl, prompt, Ledger.resume(run_dir / "ledger.json"), log)
+        except ValueError as e:
+            raise SystemExit(f"Spark's look did not check out: {e}")
+        if corrected:
+            log(f"style: corrected Spark's answer: {'; '.join(corrected)}")
+    return _run_edit(run_dir, from_v, passes, budget, style_edit, look=look, callouts=callouts, prompt=prompt or None,
+                     why=why)
 
 
 def music_fix(edl: dict, track: str | None, level_db: float | None = None, duck_db: float | None = None,
@@ -595,21 +631,24 @@ def music_fix(edl: dict, track: str | None, level_db: float | None = None, duck_
     return now, {"op": "music", "target": "audio", "issue": -1, "severity": "human", "args": {"music": now}, "note": note}
 
 
-def music(run_dir: Path, track: str | None, level_db: float | None = None, duck_db: float | None = None,
-          from_v: int | None = None, passes: int = 0, budget: float = 0.15, voice_db: float | None = None) -> dict:
-    """A music bed under edl_v{from}'s speech, another track or level, or none -> edl_vN, rendered, $0 (ffmpeg only).
-    The EDL's `music` travels with later versions like `look` (review patches deep-copy the EDL, replan carries it)."""
-    log = RunLog(run_dir / "run.log")
-    from_v, edl, n = _new_version(run_dir, from_v)
+def music_edit(edl: dict, words: Words, audio: Audio | None, track: str | None, level_db: float | None = None,
+               duck_db: float | None = None, voice_db: float | None = None) -> tuple[dict, Edit]:
+    """A music bed under the speech, another track or level, or none (track None): music_fix, ffmpeg only."""
     now, fix = music_fix(edl, track, level_db, duck_db, voice_db)
-    log(f"montivo music: {fix['note']} in edl_v{from_v} -> edl_v{n}")
-    new, _ = apply_fixes(edl, [], _words(run_dir))
+    new, _ = apply_fixes(edl, [], words)
     if now:
         new["music"] = now
     else:
         new.pop("music", None)
-    edl_path = _save(run_dir, new, n, from_v, "music", [fix], log)
-    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+    return new, Edit("music", [fix], fix["note"], head=lambda f, n: f"montivo music: {fix['note']} in edl_v{f} -> edl_v{n}")
+
+
+def music(run_dir: Path, track: str | None, level_db: float | None = None, duck_db: float | None = None,
+          from_v: int | None = None, passes: int = 0, budget: float = 0.15, voice_db: float | None = None) -> dict:
+    """A music bed under edl_v{from}'s speech, another track or level, or none -> edl_vN (music_edit), rendered, $0.
+    The EDL's `music` travels with later versions like `look` (review patches deep-copy the EDL, replan carries it)."""
+    return _run_edit(run_dir, from_v, passes, budget, music_edit, track=track, level_db=level_db, duck_db=duck_db,
+                     voice_db=voice_db)
 
 
 def carry_callout_places(prev: dict, new: dict) -> list[str]:
@@ -1312,26 +1351,27 @@ def head_ids(run_dir: Path) -> list[str]:
     return sorted((json.loads(p.read_text()).get("objects") or {}) if p.is_file() else {}, key=lambda x: int(x) if x.isdigit() else 0)
 
 
-def pin(run_dir: Path, speaker: str, head: str | None, from_v: int | None = None, passes: int = 0,
-        budget: float = 0.15) -> dict:
-    """The crop follows head `head` whenever `speaker` talks (EDL `reframe_speaker_ids`, render.load_speaker_ids);
-    head None drops that speaker's pin, back to the speaker map. -> edl_vN, rendered, $0."""
-    log = RunLog(run_dir / "run.log")
-    from_v, edl, n = _new_version(run_dir, from_v)
+def pin_check(run_dir: Path, speaker: str, head: str | None) -> None:
+    """A pin names a Voice speaker of the run and a head SAM tracked (SystemExit otherwise): the run's files, so the
+    callers check it before the pure op (the CLI, the draft's route)."""
     voice = json.loads((run_dir / "voice" / "voice.json").read_text())
     speakers = [str(x) for x in voice.get("speakers") or []]
     if speaker not in speakers:
         raise SystemExit(f"{speaker} is not a Voice speaker of this run ({', '.join(speakers) or 'none'})")
-    if (edl.get("reframe_concept") or "head") != "head":
-        raise SystemExit("this cut's crop follows the person track, not heads: a pin has nothing to follow")
     heads = head_ids(run_dir)
     if head is not None and head not in heads:
         raise SystemExit(f"head {head} is not in track/head/tracks.json ({', '.join(heads) or 'no head track'})")
+
+
+def pin_edit(edl: dict, words: Words, audio: Audio | None, speaker: str, head: str | None) -> tuple[dict, Edit]:
+    """The crop follows head `head` whenever `speaker` talks (EDL `reframe_speaker_ids`, render.load_speaker_ids);
+    head None drops that speaker's pin, back to the speaker map (pin_check first)."""
+    if (edl.get("reframe_concept") or "head") != "head":
+        raise SystemExit("this cut's crop follows the person track, not heads: a pin has nothing to follow")
     pins = dict(edl.get("reframe_speaker_ids") or {})
     if pins.get(speaker) == head or (head is None and speaker not in pins):
         raise SystemExit(f"speaker {speaker} is already {'on head ' + head if head else 'unpinned'}")
-    log(f"montivo pin: speaker {speaker} -> {'head ' + head if head else 'the speaker map'} in edl_v{from_v} -> edl_v{n}")
-    new, _ = apply_fixes(edl, [], _words(run_dir))
+    new, _ = apply_fixes(edl, [], words)
     if head is None:
         pins.pop(speaker, None)
     else:
@@ -1341,8 +1381,16 @@ def pin(run_dir: Path, speaker: str, head: str | None, from_v: int | None = None
         new.pop("reframe_speaker_ids")
     fix = {"op": "pin_speaker", "target": speaker, "issue": -1, "severity": "human", "args": {"head": head},
            "note": f"the crop follows head {head} when {speaker} talks" if head else f"{speaker} follows the speaker map again"}
-    edl_path = _save(run_dir, new, n, from_v, "pin", [fix], log)
-    return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+    return new, Edit("pin", [fix], f"follow head {head} when {speaker} talks" if head else f"{speaker} back on the speaker map",
+                     head=lambda f, n: f"montivo pin: speaker {speaker} -> {'head ' + head if head else 'the speaker map'} "
+                                       f"in edl_v{f} -> edl_v{n}")
+
+
+def pin(run_dir: Path, speaker: str, head: str | None, from_v: int | None = None, passes: int = 0,
+        budget: float = 0.15) -> dict:
+    """pin_edit on edl_v{from} -> edl_vN, rendered, $0."""
+    pin_check(run_dir, speaker, head)
+    return _run_edit(run_dir, from_v, passes, budget, pin_edit, speaker=speaker, head=head)
 
 
 def edges(run_dir: Path, from_v: int | None = None, passes: int = 0, budget: float = 0.15) -> dict:
@@ -1523,7 +1571,10 @@ def compare_plans(v1: dict, new: dict, v1_model: str, model: str, v1_call, plann
 
 OPS: dict[str, Callable[..., tuple[dict, Edit]]] = {
     "split": split_edit, "trim": trim_edit, "reorder": reorder_edit, "drop": drop_edit, "cut": cut_edit,
-    "insert": insert_edit, "pauses": pauses_edit}
+    "insert": insert_edit, "pauses": pauses_edit,
+    # the panels' edits (A3): one draft holds them next to the structural ones, one render at "Make Version N"
+    "caption": caption_edit, "text": text_edit, "style": style_edit, "music": music_edit, "pin": pin_edit,
+    "punch": punch_edit}
 
 
 def apply_op(edl: dict, words: Words, audio: Audio | None, op: str, args: dict) -> tuple[dict, Edit]:

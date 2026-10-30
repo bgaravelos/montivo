@@ -607,7 +607,10 @@ def create_app(root: Path) -> FastAPI:
         data = live_preview_engine.preview_data(d, edl, laid=laid)
         if data["gain_db"] is None and base is not None:
             data["gain_db"] = live_preview_engine.loudness_gain(base)
-        if data["title"]:
+        if data["title"] and data["title"].get("png") is None:  # new title words in a draft: the browser draws them
+            data["title"].pop("png")
+            data["title"]["url"] = None
+        elif data["title"]:
             png = Path(data["title"].pop("png") or "")
             inside = png.name != "" and d.resolve() in png.resolve().parents
             data["title"]["url"] = (f"/api/runs/{run_id}/file/{png.resolve().relative_to(d.resolve()).as_posix()}" if inside
@@ -1701,32 +1704,46 @@ def create_app(root: Path) -> FastAPI:
         return look, places
 
     @app.post("/api/runs/{run_id}/preview")
-    def preview(run_id: str, b: dict):
+    def preview(run_id: str, request: Request, b: dict):
         """The Style panel's still ({"v": N, "t": cut second, "look": {...}, "callouts": {span: [x, y] | null}}): the
         frame of version N at t as a new version with that look would burn it (engine/look.py), saved under
         ui/cache/preview/, and the caption and callout boxes on screen then. "aspect" 4:5 or 1:1 lays it out in that
-        frame (the Export page's feed cover). $0, about 0.4 s."""
+        frame (the Export page's feed cover). "draft": true takes the open draft's EDL instead (A3). $0, about 0.4 s."""
         from ..engine.frame import with_aspect
         from ..engine.look import preview as still, with_style
         d = st.run_dir(run_id)
         try:
-            v, t = int(b.get("v")), round(finite(b.get("t")), 2)
+            v, t = int(b.get("v") or 0), round(finite(b.get("t")), 2)
         except (TypeError, ValueError):
             raise HTTPException(400, "v: a version, t: a cut second")
         look, places = style_body(b)
         aspect = b.get("aspect") or "9:16"
         if aspect not in ASPECTS:
             raise HTTPException(400, f"aspect: one of {', '.join(ASPECTS)}")
-        edl_path = d / f"edl_v{v}.json"
-        if not edl_path.is_file():
-            raise HTTPException(404, f"no edl_v{v}.json")
-        key_in = [v, t, look, places, edl_path.stat().st_mtime_ns] + ([aspect] if aspect != "9:16" else [])
+        if b.get("draft"):  # the draft as it stands: its title card in front as the live player shows it
+            fd = draft.folder(d, judge_of(request) if budget is not None else None)
+            with draft.run_lock(d):
+                state = draft.load(fd)
+                if state is None:
+                    raise HTTPException(404, "no draft")
+                base = draft.current(fd, d, state)
+            edl_path = fd / "edl.json"
+            base.setdefault("render", {"title": {"seconds": live_preview_engine.title_seconds(d, base)[0]}})
+            v, tag = state["base"], [state["id"], len(state["ops"])]
+        else:
+            edl_path = d / f"edl_v{v}.json"
+            if not edl_path.is_file():
+                raise HTTPException(404, f"no edl_v{v}.json")
+            base, tag = None, []
+        key_in = [v, t, look, places, edl_path.stat().st_mtime_ns if edl_path.is_file() else tag] + tag + \
+            ([aspect] if aspect != "9:16" else [])
         key = hashlib.sha1(json.dumps(key_in, sort_keys=True).encode()).hexdigest()[:16]
         out = d / "ui" / "cache" / "preview" / f"{key}.jpg"
         meta = out.with_suffix(".json")
         if not (out.is_file() and meta.is_file()):
             try:
-                img, info = still(d, with_aspect(with_style(read_json(edl_path), look, places), aspect), t, d / f"cut_v{v}.mp4")
+                img, info = still(d, with_aspect(with_style(base if base is not None else read_json(edl_path), look, places), aspect),
+                                  t, d / f"cut_v{v}.mp4")
             except (FileNotFoundError, subprocess.CalledProcessError) as e:
                 raise HTTPException(500, f"preview failed: {e}")
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -1772,6 +1789,39 @@ def create_app(root: Path) -> FastAPI:
         job = start_job(st, run_id, "style", "Style", args,
                         chat={"role": "user", "text": f"Style in v{frm}: {'; '.join(what)}.", "chips": [f"v{frm}"], "kind": "style"})
         return {"job": job.public()}
+
+    @app.post("/api/runs/{run_id}/style/suggest")
+    def style_suggest(run_id: str, request: Request, b: dict):
+        """{"prompt": "...", "v": N} or {"prompt", "draft": true}: the look Muse Spark suggests for those words on that
+        version or the open draft (look.suggest, one call, about $0.008, in the run's ledger), without making a
+        version: the editor puts it in the draft as a style edit (A3), so a look from words is one more draft edit."""
+        from ..engine.look import suggest
+        from ..ledger import Ledger
+        from ..run import RunLog
+        prompt = " ".join(str(b.get("prompt") or "").split())[:300]
+        if not prompt:
+            raise HTTPException(400, "prompt: the look in a few words")
+        d = st.run_dir(run_id)
+        if b.get("draft"):
+            fd = draft.folder(d, judge_of(request) if budget is not None else None)
+            with draft.run_lock(d):
+                state = draft.load(fd)
+                if state is None:
+                    raise HTTPException(404, "no draft")
+                edl = draft.current(fd, d, state)
+        else:
+            d, edl = edl_of(run_id, int(b.get("v") or latest_version(d)))
+        with one_paid_call(run_id):
+            need_key("Styling from a sentence (Muse Spark)", COST["look"])
+            log = RunLog(d / "run.log")
+            log(f"style: the look for {prompt!r} (one Spark call, for the draft)")
+            try:
+                look, why, corrected = suggest(d, edl, prompt, Ledger.resume(d / "ledger.json"), log)
+            except ValueError as e:
+                raise HTTPException(502, f"Spark's look did not check out: {e}")
+            if corrected:
+                log(f"style: corrected Spark's answer: {'; '.join(corrected)}")
+        return {"look": look, "why": why, "prompt": prompt}
 
     @app.post("/api/runs/{run_id}/reorder")
     async def reorder(run_id: str, request: Request):

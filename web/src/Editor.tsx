@@ -168,11 +168,13 @@ export function Editor({ id, replay, go }: Props) {
     clips: selKeys.length ? selKeys : block?.kind === "span" ? [block.span!.id] : [],
     words: wordScope(flatWords(blocks), wordSel), caption: capSel,
   }), [selKeys, block, blocks, wordSel, capSel]);
-  useEffect(() => setStyleDraft(EMPTY_DRAFT), [v?.n]);
+  // what the panels' staged edits belong to: the version, or the draft as it stands (an edit into it clears them)
+  const rev = draftV ? `d${draftData?.draft?.id}-${draftSum?.ops.length ?? 0}` : `v${v?.n}`;
+  useEffect(() => setStyleDraft(EMPTY_DRAFT), [rev]);
   // the timeline's faders: staged against the version's own mix and heard live through its stems (Mix.ts)
   const mixBase = mixOf(v);
   const [mixDraft, setMixDraft] = useState<Mix | null>(null);
-  useEffect(() => setMixDraft(null), [v?.n]);
+  useEffect(() => setMixDraft(null), [rev]);
   const mix = mixDraft ?? mixBase;
   const mixStaged = !!mixDraft && !sameMix(mixDraft, mixBase);
   const getVideo = useCallback(() => player.current?.el() ?? null, []);
@@ -237,6 +239,16 @@ export function Editor({ id, replay, go }: Props) {
       await api(`/api/runs/${id}/draft/commit`, { review: 0 });
       flash(`Making Version ${draftData?.draft?.n ?? ""}: one render of the draft's ${edits(draftSum?.ops.length ?? 0)} ($0).`);
     } catch (e) { flash(String((e as Error).message), "error"); }
+  };
+  /** A look from words: in Live, Muse Spark suggests it (one call, no version) and it goes into the draft (A3). */
+  const stylePrompt = async (text: string) => {
+    if (!live0) return edit("style", { prompt: text, from: v?.n });
+    try {
+      flash("Muse Spark is picking the look…");
+      const r = await api<{ look: Record<string, unknown>; why: string; prompt: string }>(`/api/runs/${id}/style/suggest`,
+        draftSum ? { prompt: text, draft: true } : { prompt: text, v: v?.n });
+      return draftOp("style", { look: r.look, prompt: r.prompt, why: r.why });
+    } catch (e) { flash(String((e as Error).message), "error"); return false; }
   };
   const discardDraft = async () => {
     try { await api(`/api/runs/${id}/draft`, undefined, "DELETE"); setDraftSum(null); setDraftData(null); }
@@ -576,26 +588,26 @@ export function Editor({ id, replay, go }: Props) {
         )}
         {panel === "media" && <MediaPanel state={state} />}
         {panel === "captions" && (
-          <CaptionsPanel v={v} t={t} next={next} canEdit={canEdit} onSeek={seek} focus={focus}
+          <CaptionsPanel v={v} t={t} next={next} canEdit={canEdit} onSeek={seek} focus={focus} rev={rev} live={live0}
             onAsk={(c) => { setCapSel({ t_in: c.t_in, t_out: c.t_out, text: c.text }); setPanel("assistant"); setAskNonce((n) => n + 1); }}
             onApply={(edits) => made(edit("caption", { edits, from: v?.n }))} />
         )}
         {panel === "style" && (
-          <StylePanel id={id} v={v} t={t} next={next} canEdit={canEdit} draft={styleDraft} setDraft={setStyleDraft} onSeek={(a) => { player.current?.pause(); seek(a); }}
+          <StylePanel id={id} v={v} t={t} next={next} canEdit={canEdit} live={live0} draft={styleDraft} setDraft={setStyleDraft} onSeek={(a) => { player.current?.pause(); seek(a); }}
             hasKey={state.has_key} keyNote={state.key_note ?? null} cost={state.costs?.look ?? 0.004}
-            onPrompt={(text) => made(edit("style", { prompt: text, from: v?.n }))}
+            onPrompt={(text) => made(stylePrompt(text))}
             onApply={() => { const d = styleDraft; made(edit("style", { look: d.look, callouts: d.callouts, from: v?.n })); }} />
         )}
         {panel === "text" && (
-          <TextPanel state={state} v={v} t={t} next={next} canEdit={canEdit} onSeek={seek} focus={focus}
+          <TextPanel state={state} v={v} t={t} next={next} canEdit={canEdit} onSeek={seek} focus={focus} rev={rev} live={live0}
             onApply={(e) => made(edit("text", { ...e, from: v?.n }))} />
         )}
         {panel === "music" && (
-          <MusicPanel v={v} next={next} canEdit={canEdit}
+          <MusicPanel v={v} next={next} canEdit={canEdit} rev={rev} live={live0}
             onApply={(e) => made(edit("music", { ...e, from: v?.n }))} />
         )}
         {panel === "speakers" && (
-          <SpeakersPanel id={id} v={v} next={next} canEdit={canEdit}
+          <SpeakersPanel id={id} v={v} next={next} canEdit={canEdit} rev={rev} live={live0}
             onApply={(speaker, head) => made(edit("pin", { speaker, head, from: v?.n }))} />
         )}
         {panel === "versions" && <VersionsPanel id={id} state={state} versions={visible} sel={sel} onPick={pick} go={go} replay={replay} opening={opening}
@@ -658,7 +670,7 @@ export function Editor({ id, replay, go }: Props) {
           onDeleteClips={askDeleteClips} onSplit={doSplit}
           onSelect={select} onSeek={seek} onScrub={scrub} onMenu={setCtx} onTrim={askTrim} onMove={askMove}
           wordSel={wordSel} onWordSel={pickWords} onCutWords={askCut} onDelete={askDelete} onAsk={ask}
-          mix={mix} base={mixBase} live={live} next={next} canEdit={canEdit} onMix={setMixDraft} onResetMix={() => setMixDraft(null)}
+          mix={mix} base={mixBase} live={live} next={next} liveEdit={live0} canEdit={canEdit} onMix={setMixDraft} onResetMix={() => setMixDraft(null)}
           onMusicPanel={() => setPanel("music")}
           onPick={(k) => pickItem(k)}
           onCaptionText={(c, text) => {
@@ -763,4 +775,15 @@ const DRAFT_OPS: Record<string, { op: string; args: (b: Record<string, unknown>)
   cut: { op: "cut", args: (b) => ({ ranges: (b.words as { span: string; from: number; to: number }[]).map((r) => [r.span, r.from, r.to]) }) },
   insert: { op: "insert", args: (b) => ({ turn: b.turn, a: b.word_from, b: b.word_to, before: b.before ?? null }) },
   pauses: { op: "pauses", args: (b) => ({ over: b.over, keep: b.keep }) },
+  // the panels' edits (A3): the same draft, one render at Make Version N
+  caption: { op: "caption", args: (b) => ({ edits: b.edits }) },
+  text: { op: "text", args: (b) => pick(b, ["callouts", "title", "title_card"]) },
+  style: { op: "style", args: (b) => pick(b, ["look", "callouts", "prompt", "why"]) },
+  music: { op: "music", args: (b) => ({ track: b.track ?? null, ...pick(b, ["level_db", "duck_db", "voice_db"]) }) },
+  pin: { op: "pin", args: (b) => ({ speaker: b.speaker, head: b.head ?? null }) },
+  punch: { op: "punch", args: (b) => pick(b, ["on", "skip"]) },
 };
+
+/** The keys of `b` that are set (a draft op's arguments leave the rest to the op's defaults). */
+const pick = (b: Record<string, unknown>, keys: string[]) =>
+  Object.fromEntries(keys.filter((k) => b[k] !== undefined && b[k] !== null).map((k) => [k, b[k]]));
