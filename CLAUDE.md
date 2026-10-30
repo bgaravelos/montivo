@@ -764,6 +764,13 @@ panel's Apply and the mix faders go into the draft, Rendered keeps one version p
 staged look plays live (Player `liveSwap`). A5 keys 1-8 = panels, ⌘P or / = command palette (`web/src/Palette.tsx`).
 A6 inspectors for a caption line, a callout (words, colours, place) and the music bed. Checked keyless on
 `runs/rp-015` (a clone of 015 in the worktree): 4 panel edits -> one draft -> v7 in one render, -14.0 LUFS.
+Rail panels Captions C1-C6 (30/10, $0, same branch): the style card is one line; Correct all / Find and replace =
+the run's `glossary` (`human.glossary_edit`, `human glossary`, POST /glossary, draft op; kept by re-plans; a lower-case
+fix keeps the capital it replaces); lines to check from the reviewer's captions_match_speech and the review's
+`heard_diff` (runs._heard_diff, served per review); Enter at a word / Backspace at a line's start = EDL `caption_breaks`
+(`captions.apply_breaks`, `human linebreak`, POST /linebreak, draft op `caption_break` resolved like a caption edit);
+Follow the playhead; a human retext now keeps `until` and `captions.isolate` holds those words as one line under any
+look (old overrides without `until` behave as before). rp-015 v8: a split + "every" -> "each" in one render.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
