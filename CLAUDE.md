@@ -895,7 +895,11 @@ hook A/B and the loop's regression guard), C3 plan `likely_mishearings` -> EDL `
 ...?" in the chat and Captions panel, Accept = glossary edit, never applied unasked; 016: "four Meta models", "SAM
 tracks me"), C4 a stuck loop escalates to one re-plan from the reviewer's open notes (loop.json `escalation`; nasa: 56,
 not kept), A3 `captions.room_for` (a line with no room tries down to 70 % size; moves none of 013 / usgs: SAM's head
-box fills those close-ups, needs a face measure). 632 tests. Not pushed or deployed.
+box fills those close-ups, needs a face measure). 632 tests. Pushed and deployed to Modal 30/10 on Billy's go at
+748fff6 from a clean worktree (no container was running, so no job and no old container to stop); /api/health 200,
+/api/runs 401, /s/nope 404, the new time hints live (plan_s 13), host spend $3.37 of $15; smoke drop on 015: 34.3 s,
+-14.0 LUFS / -1.7 dBTP, render 10.2 s. The hosted samples are card-style EDLs and render as before; a judge's new
+upload gets the header title, the preflight and the plan check.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
