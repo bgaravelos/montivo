@@ -477,7 +477,8 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .zoom { display: inline-flex; align-items: center; gap: 2px; }
 .zoom input { width: 120px; accent-color: var(--text-2); }
 .tl-empty { display: grid; place-items: center; flex: 1; }
-.tl-body { flex: 1; min-height: 0; display: flex; align-items: flex-start; overflow-x: hidden; overflow-y: auto; } /* heads and lanes scroll together */
+.tl-body { flex: 1; min-height: 0; display: flex; align-items: flex-start; overflow-x: hidden; overflow-y: auto;
+  scrollbar-gutter: stable; } /* heads and lanes scroll together; the gutter keeps the lanes' width when the scrollbar comes and goes */
 .tl-heads { width: 132px; flex-shrink: 0; min-height: 100%; border-right: 1px solid var(--line); background: var(--panel); }
 .tl-head { display: flex; align-items: center; gap: 7px; padding-left: 12px; font-size: 11px; font-weight: 600; color: var(--mute); border-top: 1px solid var(--line); }
 .tl-scroll { flex: 1; min-width: 0; min-height: 100%; overflow-x: auto; overflow-y: hidden; position: relative; background: var(--bg); }

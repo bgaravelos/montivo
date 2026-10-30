@@ -57,7 +57,9 @@ export function Timeline(p: Props) {
     return () => ro.disconnect();
   }, [mode, !!v]); // eslint-disable-line
   const dur = v ? Math.max(v.duration_s ?? v.runtime_s + v.title_s, 1) : 30;
-  const fit = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, (width - 40) / dur));
+  // fit leaves a pixel spare: clientWidth is rounded, so a canvas of exactly that width could overflow by a fraction, show
+  // a horizontal scrollbar, push a vertical one into .tl-body, narrow this and refit, 30 times a second
+  const fit = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, (width - 42) / dur));
   const pps = zoom ?? fit;
   p.ppsRef.current = pps;
   const zoomTo = (z: number) => setZoom(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)));
@@ -239,23 +241,25 @@ const Ruler = memo(function Ruler({ pps, dur, issues, onScrub, onSeek }: {
 
 // ------------------------------------------------------------------- tracks
 
-function useSprite(url: string | null): number | null {
-  const [n, setN] = useState<number | null>(null);
+/** The filmstrip sprite and its frame count. A new url (every draft edit makes one) keeps the last sprite on screen
+ *  until the new one has loaded, so the tiles swap in place instead of blinking out. */
+function useSprite(url: string | null): { url: string; frames: number } | null {
+  const [s, setS] = useState<{ url: string; frames: number } | null>(null);
   useEffect(() => {
-    setN(null);
-    if (!url) return;
+    if (!url) return setS(null);
+    let live = true;
     const img = new Image();
-    img.onload = () => setN(Math.max(1, Math.round(img.naturalWidth / THUMB.w)));
+    img.onload = () => { if (live) setS({ url, frames: Math.max(1, Math.round(img.naturalWidth / THUMB.w)) }); };
     img.src = url;
+    return () => { live = false; };
   }, [url]);
-  return n;
+  return s;
 }
 
 function usePeaks(url: string | null): { rate: number; peaks: number[] } | null {
   const [d, setD] = useState<{ rate: number; peaks: number[] } | null>(null);
-  useEffect(() => {
-    setD(null);
-    if (!url) return;
+  useEffect(() => { // like useSprite: the last waveform stays until the new one arrives
+    if (!url) return setD(null);
     let live = true;
     fetch(url).then((r) => (r.ok ? r.json() : null)).then((x) => { if (live) setD(x); }).catch(() => {});
     return () => { live = false; };
@@ -278,7 +282,7 @@ const Tracks = memo(function Tracks(p: TrackProps) {
   // a draft (live preview) has no cut: its thumbnails and waveform come from the source through its clips
   const dq = v.draft ? `draft=1&k=${hashKey(v.spans.map((s) => `${s.id}:${s.t_in}:${s.t_out}`).join("|"))}` : "";
   const sprite = v.cut ? `/api/runs/${id}/filmstrip?v=${v.n}${q}` : v.draft ? `/api/runs/${id}/filmstrip?${dq}` : null;
-  const frames = useSprite(sprite);
+  const strip = useSprite(sprite);
   // with music the cut's audio is two stems: the voice lane draws the speech alone, the music lane the ducked bed
   const peaks = usePeaks(v.cut ? `/api/runs/${id}/peaks?v=${v.n}${v.music ? "&track=voice" : ""}${q}` : v.draft ? `/api/runs/${id}/peaks?${dq}` : null);
   const bedPeaks = usePeaks(v.cut && v.music ? `/api/runs/${id}/peaks?v=${v.n}&track=music${q}` : null);
@@ -421,11 +425,11 @@ const Tracks = memo(function Tracks(p: TrackProps) {
               onContextMenu={(e) => { e.preventDefault(); if (b.kind === "span") { onSelect(b.key); onMenu({ x: e.clientX, y: e.clientY, span: b.span!.id }); } }}
               title={b.kind === "span" ? `${b.span!.id} · ${b.span!.role} · ${(b.t1 - b.t0).toFixed(1)} s\n${spanText(v, b.span!)}` : "Title card"}>
               <div className="film">
-                {sprite && frames != null && Array.from({ length: n }, (_, k) => {
+                {strip && Array.from({ length: n }, (_, k) => {
                   const at = b.t0 + ((k + 0.5) * tileW) / pps;
-                  const idx = Math.min(frames - 1, Math.max(0, Math.floor(at / THUMB.step)));
-                  return <span key={k} className="tile" style={{ left: k * tileW, width: tileW, backgroundImage: `url(${sprite})`,
-                    backgroundSize: `${frames * tileW}px 100%`, backgroundPosition: `-${idx * tileW}px 0` }} />;
+                  const idx = Math.min(strip.frames - 1, Math.max(0, Math.floor(at / THUMB.step)));
+                  return <span key={k} className="tile" style={{ left: k * tileW, width: tileW, backgroundImage: `url(${strip.url})`,
+                    backgroundSize: `${strip.frames * tileW}px 100%`, backgroundPosition: `-${idx * tileW}px 0` }} />;
                 })}
               </div>
               <span className="clip-label">
