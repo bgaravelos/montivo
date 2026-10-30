@@ -656,6 +656,35 @@ def create_app(root: Path) -> FastAPI:
         out["version_entry"] = ver
         return out
 
+    @app.post("/api/runs/{run_id}/preview/styled")
+    def live_preview_styled(run_id: str, request: Request, b: dict):
+        """The live player's data for version v (or the open draft, "draft": true) with the Style panel's staged look
+        and callout places ({"look", "callouts"}, as POST /preview): the viewer plays the new look while the panel is
+        open (A4), laid out by the render's own code; the paused still (POST /preview) stays the burned-in truth."""
+        from ..engine.look import with_style
+        look, places = style_body(b)
+        d = st.run_dir(run_id)
+        if b.get("draft"):
+            fd = draft.folder(d, judge_of(request) if budget is not None else None)
+            with draft.run_lock(d):
+                state = draft.load(fd)
+                if state is None:
+                    raise HTTPException(404, "no draft")
+                edl = draft.current(fd, d, state)
+            v, base = None, read_json(d / f"edl_v{state['base']}.json")
+        else:
+            try:
+                v = int(b.get("v"))
+            except (TypeError, ValueError):
+                raise HTTPException(400, "v: a version")
+            d, edl = edl_of(run_id, v)
+            base = edl
+        try:
+            styled = with_style(edl, look, places)
+        except ValueError as e:
+            raise HTTPException(400, f"look: {e}")
+        return preview_payload(run_id, d, styled, v, base)
+
     @app.get("/api/fonts/{key}")
     def font_file(key: str):
         if key not in FONTS:

@@ -179,9 +179,22 @@ export function Editor({ id, replay, go }: Props) {
   const mixStaged = !!mixDraft && !sameMix(mixDraft, mixBase);
   const getVideo = useCallback(() => player.current?.el() ?? null, []);
   const live = useLiveMix(id, v, getVideo, mix, mixStaged);
-  const styling = panel === "style" && !!v?.cut && !replay;
+  const styling = panel === "style" && !!(v?.cut || v?.draft) && !replay;
   const staged = draftCount(styleDraft, v);
   const { p: stylePreview, busy: previewBusy } = usePreview(id, v, t, styleDraft, styling && staged > 0 && !playing);
+  // A4: in Live the staged look plays at once (the same cut laid out with it by the server); paused, the still above
+  // stays what the render burns
+  const [styled, setStyled] = useState<LiveData | null>(null);
+  const styleKey = live0 && styling && staged > 0 && v ? JSON.stringify([rev, styleDraft.look, styleDraft.callouts]) : null;
+  useEffect(() => {
+    if (!styleKey || !v) return setStyled(null);
+    let on = true;
+    const tm = window.setTimeout(() => {
+      api<LiveData>(`/api/runs/${id}/preview/styled`, { ...(v.draft ? { draft: true } : { v: v.n }), look: styleDraft.look, callouts: styleDraft.callouts })
+        .then((d) => { if (on) setStyled(d); }).catch(() => { if (on) setStyled(null); });
+    }, 250);
+    return () => { on = false; window.clearTimeout(tm); };
+  }, [styleKey]); // eslint-disable-line
 
   const undoTo = v && state ? visible.find((x) => x.n === parent?.n) : undefined;
   const redoTo = v ? childOf(v, visible) : undefined;
@@ -643,7 +656,7 @@ export function Editor({ id, replay, go }: Props) {
           <Player ref={player} key={draftV ? `draft-${draftData!.draft!.id}` : `${v.n}${live0 ? "-live" : ""}`}
             src={v.cut ? fileUrl(id, v.cut) : ""} onTime={onTime} onPlaying={setPlaying}
             live={draftV ? draftData! : live0 ? `/api/runs/${id}/preview?v=${v.n}` : undefined}
-            liveMix={live0 && mixStaged ? mix : null}
+            liveMix={live0 && mixStaged ? mix : null} liveSwap={styleKey ? styled : null}
             marks={blocks.filter((b) => b.kind !== "ghost").map((b) => b.t0)}
             label={draftV ? `Draft · ${edits(draftSum?.ops.length ?? 0)}` : `v${v.n}${live0 ? " · live" : ""}`} labelTone={draftV ? "draft" : undefined}
             safe={{ label: GUIDE_NAME[guide], on: guide !== "off", next: nextGuide }} overlay={<>

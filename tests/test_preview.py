@@ -217,3 +217,29 @@ def test_draft_preview_and_its_timeline_media(tmp_path):
     assert "music" not in p
     c.delete("/api/runs/r1/draft")
     assert c.get("/api/runs/r1/filmstrip?draft=1").status_code == 404
+
+
+def test_a_staged_look_plays_live_on_a_version_and_on_a_draft(tmp_path):
+    """A4: POST /preview/styled lays the version (or the open draft) out with the Style panel's staged look and callout
+    places, nothing written; the same caption lines in the look's own font and size."""
+    from fastapi.testclient import TestClient
+
+    from montivo.server import draft
+    from montivo.server.app import create_app
+    d, _ = _talk_run(tmp_path, clip_s=34)
+    draft._inputs.clear()
+    c = TestClient(create_app(tmp_path))
+    plain = c.get("/api/runs/r1/preview?v=1").json()
+    r = c.post("/api/runs/r1/preview/styled", json={"v": 1, "look": {"preset": "bold_pop"}, "callouts": {"s2": [100, 300]}})
+    assert r.status_code == 200, r.text
+    styled = r.json()
+    assert styled["version"] == 1 and styled["segments"] == plain["segments"]
+    assert styled["look"] != plain["look"] and styled["captions"][0]["size"] != plain["captions"][0]["size"]
+    assert styled["callouts"][0]["box"][:2] == [100, 300]
+    assert json.loads((d / "edl_v1.json").read_text()).get("look") is None and not list(d.glob("edl_v2.json"))
+    assert c.post("/api/runs/r1/preview/styled", json={"v": 1, "look": {"preset": "nope"}}).status_code == 400
+    assert c.post("/api/runs/r1/preview/styled", json={"draft": True, "look": {"preset": "box"}}).status_code == 404
+    c.post("/api/runs/r1/draft", json={"op": "drop", "args": {"span": "s3"}, "from": 1})
+    r = c.post("/api/runs/r1/preview/styled", json={"draft": True, "look": {"preset": "box"}})
+    assert r.status_code == 200 and r.json()["version"] is None
+    assert r.json()["segments"] == c.get("/api/runs/r1/draft/preview").json()["segments"]  # the draft's clips, s3 gone

@@ -40,7 +40,8 @@ export const Player = forwardRef<PlayerHandle, {
   live?: string | LiveData;
   labelTone?: string;
   liveMix?: { level_db: number; voice_db: number } | null; // the timeline's faders while they are moved (live mode)
-}>(function Player({ src, onTime, bands = [], marks = [], compact, muted, label, scrub, overlay, onPlaying, safe, live, labelTone, liveMix }, ref) {
+  liveSwap?: LiveData | null; // A4: the same cut with the Style panel's staged look, played in place while it is staged
+}>(function Player({ src, onTime, bands = [], marks = [], compact, muted, label, scrub, overlay, onPlaying, safe, live, labelTone, liveMix, liveSwap }, ref) {
   const video = useRef<HTMLVideoElement>(null);
   const lm = useRef<LiveMedia | null>(null);
   const media = (): Media | null => (live ? lm.current : video.current);
@@ -48,6 +49,7 @@ export const Player = forwardRef<PlayerHandle, {
   const liveRef = useRef(live);
   liveRef.current = live;
   const mediaKey = typeof live === "string" ? live : live ? live.media.video : null;
+  const loaded = useRef<LiveData | null>(null); // the data the player loaded or a draft edit handed it
   const [liveData, setLiveData] = useState<LiveData | null>(null);
   const [liveErr, setLiveErr] = useState<string | null>(null);
   const loop = useRef<[number, number] | null>(null);
@@ -139,6 +141,7 @@ export const Player = forwardRef<PlayerHandle, {
       made.onstate = () => { const p = !made!.paused; setPlaying(p); onPlaying?.(p); };
       made.muted = mute;
       lm.current = made;
+      loaded.current = data;
       setLiveData(data); setD(data.duration_s); setT(0); last.current = -1;
       made.ready.catch((e) => on && setLiveErr(String(e.message ?? e)));
     }).catch((e) => on && setLiveErr(String(e.message ?? e)));
@@ -149,9 +152,17 @@ export const Player = forwardRef<PlayerHandle, {
   useEffect(() => { // a draft edit: the same source with another EDL, swapped in place (the playhead stays)
     const m = lm.current;
     if (!m || !live || typeof live === "string" || m.data === live) return;
+    loaded.current = live;
+    if (liveSwap) return;
     m.setData(live);
     setLiveData(live); setD(live.duration_s); last.current = -1;
-  }, [live]);
+  }, [live]); // eslint-disable-line
+  useEffect(() => { // A4: a staged look over what is loaded, and back to it when the look is applied or dropped
+    const m = lm.current, want = liveSwap ?? loaded.current;
+    if (!m || !want || m.data === want) return;
+    m.setData(want);
+    setLiveData(want); setD(want.duration_s); last.current = -1;
+  }, [liveSwap]); // eslint-disable-line
   useEffect(() => { if (lm.current) lm.current.muted = mute; }, [mute]);
   useEffect(() => { lm.current?.setMix(liveMix ?? null); }, [liveMix?.level_db, liveMix?.voice_db, liveData]); // eslint-disable-line
 
