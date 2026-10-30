@@ -76,6 +76,7 @@ export type Version = {
   look: Look | null; // the caption look this version was rendered with (graphics.normalize_look)
   music: (MusicSetting & { voice_db: number; margin_db: number | null; ducked_s: number | null; ducked: [number, number][] }) | null; // the bed under the speech (engine/music.py)
   glossary?: Record<string, string>; // the run's caption corrections {"heard words": "written words"} (C2)
+  highlight?: { words: string[]; shown: number; sentences: number }; // the coloured names: which, how many on screen, in how many sentences (S2)
   caption_lines: CaptionLine[]; caption_style: CaptionStyle | null; caption_style_note: string | null; brief_missing?: string[]; bytes: number | null;
   punch: boolean; punch_skip: string[]; punch_ins: PunchIn[];
   speaker_pins: Record<string, string>; // reframe_speaker_ids: Voice speaker -> the head the crop follows (a human pin)

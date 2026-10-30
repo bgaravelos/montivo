@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 from ..config import SPARK_MODEL
-from ..engine.captions import run_glossary
+from ..engine.captions import highlight_words, norm, run_glossary
 from ..engine.graphics import normalize_look
 from ..engine.review import caption_heard_diff
 
@@ -465,6 +465,18 @@ def _review(rv: dict, run_dir: Path) -> dict:
             "clock": rv.get("clock"), "has_copy": bool(copy) and (run_dir / "review" / rv["name"] / Path(copy).name).is_file()}
 
 
+def _highlight(edl: dict) -> dict | None:
+    """The words the captions colour (captions.highlight_words), how many of the version's caption words are coloured
+    and in about how many sentences (words ending a sentence, at least one): the Style panel's hint (S2)."""
+    caps = edl.get("captions") or []
+    if not caps:
+        return None
+    names = highlight_words(edl)
+    said = [w.get("w") or "" for c in caps for w in c.get("words") or []]
+    shown = sum(1 for w in said if norm(w).replace("'s", "") in names)
+    return {"words": sorted(names), "shown": shown, "sentences": max(1, sum(1 for w in said if re.search(r"[.!?]$", w)))}
+
+
 def _heard_diff(facts: dict) -> list[dict]:
     """Where the caption words and the words Voice heard in the cut's own audio differ (review.caption_heard_diff on
     the review's stored facts): the Captions panel marks those lines to check (C3)."""
@@ -543,6 +555,7 @@ def version_entry(run_dir: Path, n: int, name: str, edl: dict, cut: str | None, 
                                    "words": [[w.get("w"), w.get("t_in")] for w in c.get("words") or []]}
                                   for c in edl.get("captions") or []],
                 "glossary": run_glossary(edl), "caption_breaks": list(edl.get("caption_breaks") or []),
+                "highlight": _highlight(edl),
                 "caption_style": edl.get("caption_style"), "caption_style_note": edl.get("caption_style_note"),
                 "brief_missing": list(edl.get("brief_missing") or []),
                 "punch": bool(edl.get("punch")), "punch_skip": list(edl.get("punch_skip") or []),

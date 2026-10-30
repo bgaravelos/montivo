@@ -97,6 +97,10 @@ function Seg<T extends string | number>({ value, options, onChange }: { value: T
   );
 }
 
+/** S1: the panel's four sections, one at a time ("Describe it" stays above them). */
+type StyleTab = "presets" | "text" | "word" | "position";
+const STYLE_TABS: [StyleTab, string][] = [["presets", "Presets"], ["text", "Text"], ["word", "Active word"], ["position", "Position"]];
+
 export function StylePanel({ id, v, t, next, canEdit, live, draft, setDraft, onSeek, onApply, hasKey, keyNote, cost, onPrompt }: {
   id: string; v: Version | null; t: number; next: number; canEdit: string | null; live: boolean;
   draft: StyleDraft; setDraft: (d: StyleDraft) => void; onSeek: (a: number) => void; onApply: () => void;
@@ -106,6 +110,8 @@ export function StylePanel({ id, v, t, next, canEdit, live, draft, setDraft, onS
   const [words, setWords] = useState("");
   const [ask, setAsk] = useState("");
   const [saveName, setSaveName] = useState("");
+  const [tab, setTabState] = useState<StyleTab>(() => { try { return (localStorage.getItem("montivo.style.tab") as StyleTab) || "presets"; } catch { return "presets"; } });
+  const setTab = (x: StyleTab) => { setTabState(x); try { localStorage.setItem("montivo.style.tab", x); } catch { /* this tab */ } };
   const setSaved = (saved: SavedLook[]) => setInfo((i) => (i ? { ...i, saved } : i));
   useEffect(() => { getLooks().then(setInfo).catch(() => {}); }, []);
   const base = v?.look ?? info?.default ?? null;
@@ -143,6 +149,11 @@ export function StylePanel({ id, v, t, next, canEdit, live, draft, setDraft, onS
             onClick={() => { onPrompt(ask.trim()); setAsk(""); }}><Icon name="spark" size={12} /> {live ? "Apply" : `Make Version ${next}`} · ~${cost.toFixed(3)}</button>
         </div>
         <p className="mute small">Muse Spark reads the current look and how light the picture is behind the captions, then picks fonts and colours from the options below. Tweak the result here after.</p>
+        <div className="seg-group st-tabs" role="tablist" aria-label="Style sections">
+          {STYLE_TABS.map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} className={`seg ${tab === k ? "on" : ""}`}
+            onClick={() => setTab(k)}>{label}</button>)}
+        </div>
+        {tab === "presets" && <>
         <div className="pn-k">Presets</div>
         <div className="preset-grid">
           {info.presets.map((p) => <PresetCard key={p.id} id={id} v={v} t={presetT} look={p.look} name={p.name}
@@ -161,7 +172,9 @@ export function StylePanel({ id, v, t, next, canEdit, live, draft, setDraft, onS
             onChange={(e) => setSaveName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveLook(); }} />
           <button className="btn quiet small" disabled={!saveName.trim()} onClick={saveLook} title="Keep the look as it is now (with your staged changes) for other projects">Save look</button>
         </div>
+        </>}
 
+        {tab === "text" && <>
         <div className="pn-k">Text</div>
         <div className="st-row">
           <label className="field grow">Font
@@ -191,7 +204,9 @@ export function StylePanel({ id, v, t, next, canEdit, live, draft, setDraft, onS
           <label className="st-check"><input type="checkbox" checked={!!look.box} onChange={(e) => set({ box: e.target.checked ? "#000000C8" : "" })} /> Box behind the line</label>
         </div>
         {look.box && <Color label="Box" value={look.box} alpha onChange={(x) => set({ box: x })} />}
+        </>}
 
+        {tab === "word" && <>
         <div className="pn-k">The word being said</div>
         <Seg value={look.active} options={[["pill", "Pill"], ["color", "Colour"], ["karaoke", "Karaoke"], ["none", "None"]]} onChange={(a) => set({ active: a })} />
         {look.active !== "none" && (
@@ -205,13 +220,22 @@ export function StylePanel({ id, v, t, next, canEdit, live, draft, setDraft, onS
           <label className="st-check"><input type="checkbox" checked={!!look.highlight} onChange={(e) => set({ highlight: e.target.checked ? "#FFC629" : "" })} /> Colour names</label>
           {look.highlight && <Color label="" value={look.highlight} onChange={(x) => set({ highlight: x })} />}
         </div>
+        {look.highlight && v.highlight && (
+          <p className={`mute small ${v.highlight.shown > 3 * Math.max(1, v.highlight.sentences) ? "st-warn-text" : ""}`}>
+            {v.highlight.shown} coloured word{v.highlight.shown === 1 ? "" : "s"} in about {v.highlight.sentences} sentence{v.highlight.sentences === 1 ? "" : "s"} of this version
+            {v.highlight.words.length ? ` (${v.highlight.words.slice(0, 8).join(", ")}${v.highlight.words.length > 8 ? "…" : ""})` : ""}.
+            Two or three per sentence read best; more and nothing stands out.
+          </p>
+        )}
         {look.highlight && (
           <label className="field">Also highlight <span className="mute small">(Montivo, Muse, Spark, Voice, SAM, Meta always)</span>
             <input className="st-input" value={words} placeholder="agent, reviewed" onChange={(e) => setWords(e.target.value)}
               onBlur={() => set({ highlight_add: words.split(",").map((w) => w.trim().toLowerCase()).filter(Boolean) })} />
           </label>
         )}
+        </>}
 
+        {tab === "position" && <>
         <div className="pn-k">Position</div>
         <Seg value={look.position} options={[["auto", "Auto: keep off the face"], ["fixed", "Fixed"]]}
           onChange={(p) => set({ position: p, top: p === "fixed" ? look.top : look.top })} />
@@ -252,6 +276,7 @@ export function StylePanel({ id, v, t, next, canEdit, live, draft, setDraft, onS
             );
           })}
         </div>
+        </>}
       </div>
       {n > 0 && (
         <div className="cap-apply">

@@ -288,3 +288,12 @@ def test_a_lower_case_correction_keeps_the_capital_it_replaces():
     assert [w.w for w in out] == ["Each", "editor", "hears", "each", "word."] and len(fixes) == 2
     out, _ = apply_glossary(ws, {"every": "EACH"})
     assert out[0].w == "EACH"
+
+
+def test_the_style_panel_counts_the_coloured_words():
+    """S2: which words the captions colour, how many of this version's caption words are, in about how many sentences."""
+    from montivo.server.runs import _highlight
+    edl = {"highlight": ["montivo"], "look": {"highlight_add": ["agent"]},
+           "captions": [{"words": [{"w": "Montivo's"}, {"w": "agent"}, {"w": "edits."}]}, {"words": [{"w": "Montivo"}, {"w": "again"}]}]}
+    assert _highlight(edl) == {"words": ["agent", "montivo"], "shown": 3, "sentences": 1}
+    assert _highlight({"captions": []}) is None

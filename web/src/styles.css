@@ -1012,6 +1012,8 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .pc-name { font-weight: 600; text-align: center; }
 .st-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
 .st-colors { display: flex; gap: 14px; flex-wrap: wrap; }
+.st-tabs { margin: 4px 0 2px; flex-wrap: wrap; }
+.st-warn-text { color: var(--major); }
 .st-color { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12.5px; }
 .st-color input[type="color"] { width: 26px; height: 22px; padding: 0; border: 1px solid var(--line-2); border-radius: 4px; background: none; cursor: pointer; }
 .st-color input[type="range"] { width: 80px; accent-color: var(--accent); }
