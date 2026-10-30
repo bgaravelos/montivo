@@ -740,6 +740,18 @@ maker, Style, the Loading texts; brackets take the text colour, the V turns ink 
 a fade; `.spin` removed; the Waiting sting, rail dot, Live light and new-version notice unchanged. Deployed 30/10 on
 Billy's go (no container was running before it); /api/health 200, /api/runs 401, /s/nope 404; smoke drop on 015:
 34.3 s, -14.0 LUFS / -1.7 dBTP, render 8.0 s.
+Home redesign (30/10, $0, commit `76ae2ac`, Billy's pick A from `docs/notes/home-dashboard_2026-10-30.html`, without
+its stats band): top bar (Projects, How it works -> README, GitHub, the hosted budget as a meter, New project / N);
+a hero where the best cut plays muted (pause, none with reduced motion; on the hosted demo always a sample) beside its
+loop (each reviewed version on the path to the one it opens on: score, worst note, the fix between two, from GET
+/api/runs/{id}); the Meta models under their official marks (`web/public/logos`: Meta's Muse icon for Spark 1.3, Voice,
+Image and Spark Open, the Meta symbol for SAM 3.1; no model has a mark of its own); 9:16 tiles (the cut plays on hover,
+score ring, a bar per version, "first -> best"); New project as a sheet (footage thumbnails, kind cards, length chips,
+Advanced, cost / time / Create always in view, Cmd+Enter; a clip dropped anywhere opens it). `/api/runs` on the host marks
+each run `kind` sample / copy / own (Samples / Yours tabs). Checked keyless at 1440 and 375 px (Playwright), 514 tests.
+Deployed 30/10 19:20 on Billy's go (no container was running); /api/health 200, /api/runs 401, /s/nope 404; smoke drop on
+015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 10.5 s. The new Home not yet seen live with the sign-in; UI shots of the demo
+video that show Home predate it.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
