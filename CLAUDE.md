@@ -730,7 +730,9 @@ until Make Version. Music default -20 / -12 -> -18 / -6 (`music.LEVEL_DB`, `DUCK
 old default sat 17.1 dB under the voice and the fader's top 7.1; Billy chose 9 dB by ear from 17 / 12 / 9 / 7 (files in
 `runs/_listen-music/`); with Ukulele the new default measures 7.5 dB. The Music fader and the mix bar show the bed under
 the voice (the render's margin_db moved by both faders): a mix commit at -16 / -12 predicted -13, measured 13.1.
-514 tests. Not deployed yet (needs Billy's go).
+514 tests. Deployed 30/10 17:33 on Billy's go (no job since 00:25; the 17:11 container stopped); /api/health 200,
+/api/runs 401, /s/nope 404; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP; `--music midnight_cruiser` at the new
+default: 37.9 s, -14.0 / -1.6 dBTP, speech 9.1 dB over the bed (was 17.1).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
