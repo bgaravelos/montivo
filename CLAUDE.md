@@ -823,6 +823,10 @@ a text box, "Re-plan with this brief" (~$0.05, needs the key): POST /replan {"br
 plan from it, kept as EDL `brief_edited` so later re-plans of that line start from it; run.json keeps the original).
 ME3 GET /api/runs/{id}/assets?v=N: B-roll stills, the title card image, the covers made on Export (ui/cache/cover/),
 the music bed, with the source clip's facts. Checked on rp-015: "Okay. Is it" inserted into the draft, 2 covers listed.
+Rail panels deployed 30/10 on Billy's go: main pushed at 2dbae3f, `modal deploy` from a clean worktree (no container was
+running before it, so no job and no old container to stop); /api/health 200, /api/runs 401, /s/nope 404; smoke drop on
+015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 31.9 s (was 8-11 s on earlier smokes; not looked into); smoke --live: preview
+data 174 ms, draft drop 69 ms. The new panels not yet clicked live with the sign-in.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
