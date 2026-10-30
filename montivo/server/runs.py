@@ -560,6 +560,14 @@ def _music(edl: dict, render: dict) -> dict | None:
             "ducked": (render.get("music") or {}).get("ducked") or []}
 
 
+def draft_music(edl: dict, played: dict | None) -> dict | None:
+    """A draft's music bed: it has no render yet, so the EDL's bed with the duck the live player plays (preview data's
+    `music`) and nothing measured. Without it the Music lane said "Add music" while the draft played the bed."""
+    if not edl.get("music") or not played:
+        return None
+    return {"voice_db": 0.0, **edl["music"], "margin_db": None, "ducked_s": None, "ducked": played.get("ducked") or []}
+
+
 def _look(edl: dict) -> dict | None:
     try:
         return normalize_look(edl.get("look")).to_json()

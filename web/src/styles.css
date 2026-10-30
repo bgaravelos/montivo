@@ -24,6 +24,7 @@
   --textclip: #7a5a2c;
   --wave: #5fae86;
   --wave-music: #c7a24a;
+  --wave-clip: #16231c;
   --punch: #ff9ad5;
   --sans: "Inter", ui-sans-serif, -apple-system, "Helvetica Neue", sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -554,6 +555,11 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .ghost-mark { position: absolute; top: 4px; bottom: 4px; width: 3px; margin-left: -2px; background: var(--blocker); border-radius: 2px; opacity: 0.8; z-index: 1; }
 .track.audio { background: #0e1311; cursor: text; }
 .track.audio.music { background: #13110c; }
+/* the voice under each clip: the canvas paints the piece, this frame takes the clicks and shows the selection */
+.aclip { position: absolute; top: 3px; bottom: 3px; z-index: 2; border-radius: 5px; cursor: pointer; box-shadow: inset 0 0 0 1px #ffffff14; }
+.aclip.title { box-shadow: none; }
+.aclip:hover { background: #ffffff0a; }
+.aclip.sel { box-shadow: inset 0 0 0 2px var(--accent); }
 .music-tag, .music-add {
   position: absolute; left: 6px; top: 3px; z-index: 2; display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px;
   border-radius: 4px; font-size: 10.5px; color: var(--text-2); background: #000a; white-space: nowrap;

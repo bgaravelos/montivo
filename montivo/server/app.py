@@ -36,7 +36,7 @@ from ..engine.frame import ASPECTS
 from ..engine import preview as live_preview_engine
 from ..engine.graphics import FONTS, PRESET_NAMES, PRESETS, font_path, normalize_look
 from . import draft, hosted, media, preflight, share
-from .runs import fingerprint, heads, list_runs, parse_log, progress, read_json, replay_script, run_state, version_entry
+from .runs import draft_music, fingerprint, heads, list_runs, parse_log, progress, read_json, replay_script, run_state, version_entry
 
 STATIC = Path(__file__).parent / "static"
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".mkv", ".webm"}
@@ -644,6 +644,7 @@ def create_app(root: Path) -> FastAPI:
         run = read_json(d / "run.json") or {}
         ver = version_entry(d, n, "draft", laid_edl, None, run.get("planner_model") or run.get("model") or "muse-spark-1.3")
         ver["draft"] = True
+        ver["music"] = ver["music"] or draft_music(laid_edl, out.get("music"))
         out["draft"] = {"id": state["id"], "base": state["base"], "ops": len(state["ops"]), "n": n}
         out["version_entry"] = ver
         return out
@@ -744,9 +745,17 @@ def create_app(root: Path) -> FastAPI:
     @app.get("/api/runs/{run_id}/peaks")
     def peaks(run_id: str, request: Request, v: int | None = None, track: str = "cut", draft_: int = Query(0, alias="draft")):
         """An audio track's waveform: the absolute peak of every 10 ms of cut_vN.mp4, or of its voice or music stem
-        (cached in ui/cache/). draft=1: the open draft's, from the source audio's peaks (no render)."""
+        (cached in ui/cache/). draft=1: the open draft's, from the source audio's peaks (no render); with track=music
+        its bed, from the track's peaks shaped the way the live player plays it."""
         if draft_:
             d, data, em = draft_media(run_id, request)
+            if track == "music":
+                from ..engine import music as bed
+                if not data.get("music"):
+                    raise HTTPException(404, "no music in the draft")
+                m = data["music"]
+                src = media.peaks(bed.MUSIC_DIR / bed.track(m["track"])["file"], d / "ui" / "cache" / "edit" / f"peaks_music_{m['track']}.json")
+                return media.draft_bed_peaks(src, m, data["duration_s"])
             src = media.peaks(d / em["audio"], d / "ui" / "cache" / "edit" / "peaks_source.json")
             return media.draft_peaks(src, data["segments"], data["fps"], (data["title"] or {}).get("seconds", 0.0))
         if v is None:
@@ -1592,7 +1601,7 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/runs/{run_id}/music")
     async def music_edit(run_id: str, request: Request):
-        """A music bed under the speech ({"track": id, "level_db": -20, "duck_db": -12, "voice_db": 0}), another track
+        """A music bed under the speech ({"track": id, "level_db": -18, "duck_db": -6, "voice_db": 0}), another track
         or level, or none ({"track": null}): the next version, ffmpeg only. "mix": true names it the timeline faders'."""
         from ..engine.music import normalize_music
         run_id = await own(run_id, request)

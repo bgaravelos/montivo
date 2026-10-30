@@ -29,8 +29,8 @@ export function MusicPanel({ v, next, canEdit, onApply }: {
   const want = draft === undefined ? cur : draft;
   const staged = draft !== undefined && !same(draft, cur);
   const set = (m: MusicSetting | null) => setDraft(same(m, cur) ? undefined : m);
-  const level = want?.level_db ?? info?.default.level_db ?? -20;
-  const duck = want?.duck_db ?? info?.default.duck_db ?? -12;
+  const level = want?.level_db ?? info?.default.level_db ?? -18;
+  const duck = want?.duck_db ?? info?.default.duck_db ?? -6;
   const vol = (db: number) => Math.max(0.02, Math.min(1, 10 ** ((db + 14) / 20))); // the bed against speech at -14 LUFS
   useEffect(() => { if (audio.current) audio.current.volume = vol(level); }, [level]);
   const preview = (id: string, url: string) => {

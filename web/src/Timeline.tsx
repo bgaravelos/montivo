@@ -66,6 +66,12 @@ export function Timeline(p: Props) {
   const [bar, setBar] = useState<Bar | null>(null); // a selected still, a ghost clip or the new-still prompt
   useEffect(() => setBar(null), [v?.n]);
   const plan = usePausePlan(p.id, v);
+  // the mix is set on a version: a draft plays its bed, its faders wait for Make Version
+  const mixOff = p.canEdit ?? (v?.draft ? `Make Version ${v.n} first: the mix is set on a version, and the draft's edits are not one yet` : null);
+  // the Music fader as it is heard: on a talking head the bed is ducked nearly all the time, so its level where nobody
+  // speaks (the fader's LUFS) said little; this is the bed under the voice, the render's measure moved by both faders
+  const under = v?.music?.margin_db != null && p.mix && p.base
+    ? Math.round(v.music.margin_db - (p.mix.level_db - p.base.level_db) + (p.mix.voice_db - p.base.voice_db)) : null;
 
   return (
     <div className="timeline">
@@ -95,7 +101,7 @@ export function Timeline(p: Props) {
         {v && p.mix && p.base && (p.mix.voice_db !== p.base.voice_db || p.mix.level_db !== p.base.level_db) && (
           <span className="mix-apply" title="The mix is normalised to −14 LUFS after the faders, so what moves is the balance between the tracks">
             <span className={`mix-live ${p.live.active ? "on" : ""}`}>{p.live.active ? "live" : p.live.failed ? "no preview" : "loading…"}</span>
-            <span>Voice {dbs(p.mix.voice_db)} · Music {p.mix.level_db} LUFS</span>
+            <span>Voice {dbs(p.mix.voice_db)} · Music {under != null ? `${dbs(-under)} under the voice` : `${p.mix.level_db} LUFS`}</span>
             <button className="btn quiet small" onClick={p.onResetMix}>Reset</button>
             <button className="btn small" disabled={!!p.canEdit} title={p.canEdit ?? `Makes Version ${p.next} with this mix ($0, a re-render)`}
               onClick={p.onApplyMix}>Make Version {p.next}</button>
@@ -132,13 +138,14 @@ export function Timeline(p: Props) {
               <div className="tl-head" style={{ height: TRACK_H.captions }}><Icon name="captions" size={13} />Captions</div>
               <div className="tl-head video" style={{ height: TRACK_H.video }}><Icon name="film" size={13} />Video</div>
               <Fader label="Voice" icon="wave" height={TRACK_H.audio} unit="dB" range={VOICE_RANGE}
-                value={p.mix?.voice_db ?? 0} base={p.base?.voice_db ?? 0} none={!p.mix} disabled={!p.mix || !!p.canEdit}
+                value={p.mix?.voice_db ?? 0} base={p.base?.voice_db ?? 0} none={!p.mix} disabled={!p.mix || !!mixOff}
                 title={!p.mix ? "The cut is normalised to −14 LUFS for Reels, TikTok and Shorts: with one track there is nothing to balance. Add music to set the voice against it."
-                  : p.canEdit ?? "The voice against the music, heard live (double-click: back to this version's)"}
+                  : mixOff ?? "The voice against the music, heard live (double-click: back to this version's)"}
                 onChange={(x) => p.mix && p.onMix({ ...p.mix, voice_db: x })} />
               <Fader label="Music" icon="music" height={TRACK_H.music} unit="LUFS" range={LEVEL_RANGE}
-                value={p.mix?.level_db ?? -20} base={p.base?.level_db ?? -20} none={!p.mix} disabled={!p.mix || !!p.canEdit}
-                title={!p.mix ? "No music in this version: add a track in the Music panel" : p.canEdit ?? "The bed's level where nobody speaks, heard live; it still ducks under the voice (double-click: back to this version's)"}
+                value={p.mix?.level_db ?? -20} base={p.base?.level_db ?? -20} none={!p.mix} disabled={!p.mix || !!mixOff}
+                shown={under != null ? dbs(-under) : null}
+                title={!p.mix ? "No music in this version: add a track in the Music panel" : mixOff ?? `${under != null ? `The music sits about ${under} dB under the voice. ` : ""}The fader sets the bed's level where nobody speaks (${p.mix.level_db} LUFS), heard live; it ducks ${-(v?.music?.duck_db ?? 0)} dB under the voice (double-click: back to this version's)`}
                 onChange={(x) => p.mix && p.onMix({ ...p.mix, level_db: x })} />
             </div>
             <div className="tl-scroll" ref={scroller}>
@@ -285,7 +292,7 @@ const Tracks = memo(function Tracks(p: TrackProps) {
   const strip = useSprite(sprite);
   // with music the cut's audio is two stems: the voice lane draws the speech alone, the music lane the ducked bed
   const peaks = usePeaks(v.cut ? `/api/runs/${id}/peaks?v=${v.n}${v.music ? "&track=voice" : ""}${q}` : v.draft ? `/api/runs/${id}/peaks?${dq}` : null);
-  const bedPeaks = usePeaks(v.cut && v.music ? `/api/runs/${id}/peaks?v=${v.n}&track=music${q}` : null);
+  const bedPeaks = usePeaks(!v.music ? null : v.cut ? `/api/runs/${id}/peaks?v=${v.n}&track=music${q}` : v.draft ? `/api/runs/${id}/peaks?${dq}&track=music` : null);
   const top = peaks ? Math.max(...peaks.peaks, 0.01) : 1; // both lanes on the voice's scale: the bed looks as loud as it is
   const gain = (a?: number, b?: number) => 10 ** (((a ?? 0) - (b ?? 0)) / 20);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -365,6 +372,20 @@ const Tracks = memo(function Tracks(p: TrackProps) {
     window.addEventListener("pointerup", up);
   };
 
+  // a clip's video and its audio piece answer the same way: a click selects (⇧ / ⌘ more), a drag moves it
+  const pressClip = (e: React.PointerEvent, b: Block) => { // a click selects and leaves the playhead where it is (double-click: seek there)
+    if (e.button !== 0) return;
+    if (b.kind === "span" && (e.shiftKey || e.metaKey || e.ctrlKey)) { onSelect(b.key, e.shiftKey ? "range" : "toggle"); return; }
+    onSelect(b.key);
+    if (b.kind === "span" && canTrim) startMove(e, b);
+  };
+  const clipMenu = (e: React.MouseEvent, b: Block) => {
+    e.preventDefault();
+    if (b.kind === "span") { onSelect(b.key); onMenu({ x: e.clientX, y: e.clientY, span: b.span!.id }); }
+  };
+  const clipX = (b: Block) => [b.t0 * pps + 1, Math.max(2, (b.t1 - b.t0) * pps - 2)] as const; // left, width: a 2 px gap at every cut
+  const moveGhost = (b: Block) => <span className="move-ghost" style={{ left: clipX(b)[0], width: clipX(b)[1] }} />;
+
   return (
     <div className="tracks" onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); onSeek(timeAt(e.clientX)); } }}>
       {/* B-roll: the Muse Image stills over the cut (a person's ask only) */}
@@ -409,20 +430,15 @@ const Tracks = memo(function Tracks(p: TrackProps) {
       {/* video: one clip per span, filmstrip */}
       <div className="track video" style={{ height: TRACK_H.video }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); onSeek(timeAt(e.clientX)); } }}>
         {live.map((b) => {
-          const w = Math.max(2, (b.t1 - b.t0) * pps - 2);
+          const [left, w] = clipX(b);
           const n = Math.ceil(w / tileW);
           const sel = selected === b.key || selection.includes(b.key);
           const isDrag = drag?.key === b.key;
           return (
-            <div key={b.key} className={`clip ${b.kind} ${b.span?.role ?? ""} ${sel ? "sel" : ""} ${sel && multi ? "multi" : ""}`} style={{ left: b.t0 * pps + 1, width: w }}
-              onPointerDown={(e) => { // a click selects and leaves the playhead where it is (double-click: seek there)
-                if (e.button !== 0) return;
-                if (b.kind === "span" && (e.shiftKey || e.metaKey || e.ctrlKey)) { onSelect(b.key, e.shiftKey ? "range" : "toggle"); return; }
-                onSelect(b.key);
-                if (b.kind === "span" && canTrim) startMove(e, b);
-              }}
+            <div key={b.key} className={`clip ${b.kind} ${b.span?.role ?? ""} ${sel ? "sel" : ""} ${sel && multi ? "multi" : ""}`} style={{ left, width: w }}
+              onPointerDown={(e) => pressClip(e, b)}
               onDoubleClick={(e) => onSeek(b.kind === "title" ? 0 : timeAt(e.clientX))}
-              onContextMenu={(e) => { e.preventDefault(); if (b.kind === "span") { onSelect(b.key); onMenu({ x: e.clientX, y: e.clientY, span: b.span!.id }); } }}
+              onContextMenu={(e) => clipMenu(e, b)}
               title={b.kind === "span" ? `${b.span!.id} · ${b.span!.role} · ${(b.t1 - b.t0).toFixed(1)} s\n${spanText(v, b.span!)}` : "Title card"}>
               <div className="film">
                 {strip && Array.from({ length: n }, (_, k) => {
@@ -470,7 +486,7 @@ const Tracks = memo(function Tracks(p: TrackProps) {
           const same = move.slot === spans.findIndex((x) => x.key === move.key);
           return <>
             {move.target != null && <span className="snap-line" style={{ left: move.target * pps }} />}
-            <span className="move-ghost" style={{ left: b.t0 * pps + 1, width: Math.max(2, (b.t1 - b.t0) * pps - 2) }} />
+            {moveGhost(b)}
             <span className={`move-mark ${same ? "same" : ""}`} style={{ left: move.t * pps - 1 }} />
             <span className="trim-tip" style={{ left: move.t * pps }}>
               {same ? "drop elsewhere to move it" : `move ${b.span!.id} ${move.slot < spans.length - 1 ? `before ${spans.filter((x) => x.key !== move.key)[move.slot].span!.id}` : "to the end"}`}
@@ -494,9 +510,18 @@ const Tracks = memo(function Tracks(p: TrackProps) {
         })()}
       </div>
       {/* audio: the voice (the cut's own audio, or its speech stem when there is music) and the music bed under it */}
-      <div className="track audio" style={{ height: TRACK_H.audio }} onPointerDown={(e) => { onSelect(null); onSeek(timeAt(e.clientX)); }}>
+      {/* the voice is cut with the picture: one piece under each clip, selected, dragged and moved with it */}
+      <div className="track audio" style={{ height: TRACK_H.audio }} onPointerDown={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).tagName === "CANVAS") { onSelect(null); onSeek(timeAt(e.clientX)); } }}>
         <Wave peaks={peaks} pps={pps} height={TRACK_H.audio} width={Math.ceil(p.dur * pps)} top={top}
-          gain={gain(p.mix?.voice_db, p.base?.voice_db)} />
+          gain={gain(p.mix?.voice_db, p.base?.voice_db)} clips={live.map(clipX)} />
+        {live.map((b) => {
+          const [left, w] = clipX(b);
+          const sel = selected === b.key || selection.includes(b.key);
+          return <div key={b.key} className={`aclip ${b.kind} ${sel ? "sel" : ""}`} style={{ left, width: w }}
+            onPointerDown={(e) => pressClip(e, b)} onDoubleClick={(e) => onSeek(b.kind === "title" ? 0 : timeAt(e.clientX))}
+            onContextMenu={(e) => clipMenu(e, b)} title={b.kind === "span" ? `${b.span!.id} · the clip's audio` : "Title card"} />;
+        })}
+        {move && moveGhost(live.find((x) => x.key === move.key)!)}
       </div>
       <div className="track audio music" style={{ height: TRACK_H.music }} onPointerDown={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).tagName === "CANVAS") { onSelect(null); onSeek(timeAt(e.clientX)); } }}>
         {v.music ? <>
@@ -518,15 +543,16 @@ const Tracks = memo(function Tracks(p: TrackProps) {
 const dbs = (x: number) => `${x > 0 ? "+" : x < 0 ? "−" : "±"}${Math.abs(x)} dB`;
 
 /** A track head with its fader: the value moves the track live; double-click puts it back on the version's own. */
-function Fader({ label, icon, height, unit, range, value, base, none, disabled, title, onChange }: {
+function Fader({ label, icon, height, unit, range, value, base, none, disabled, title, onChange, shown }: {
   label: string; icon: string; height: number; unit: "dB" | "LUFS"; range: [number, number]; value: number; base: number;
   none: boolean; disabled: boolean; title: string; onChange: (x: number) => void; // none: the version has no music
+  shown?: string | null; // the value as it is heard, in place of the fader's own
 }) {
   const moved = value !== base;
   return (
     <div className={`tl-head fader-head ${disabled ? "off" : ""}`} style={{ height }} title={title}>
       <div className="fh-top"><Icon name={icon} size={13} />{label}
-        <span className={`fh-val ${moved ? "moved" : ""}`}>{none ? "" : unit === "dB" ? dbs(value) : `${value}`}</span>
+        <span className={`fh-val ${moved ? "moved" : ""}`}>{none ? "" : shown ?? (unit === "dB" ? dbs(value) : `${value}`)}</span>
       </div>
       <input type="range" className="fader" min={range[0]} max={range[1]} step={0.5} value={value} disabled={disabled}
         aria-label={`${label} level`} onChange={(e) => onChange(Number(e.target.value))} onDoubleClick={() => onChange(base)} />
@@ -534,10 +560,14 @@ function Fader({ label, icon, height, unit, range, value, base, none, disabled, 
   );
 }
 
-function Wave({ peaks, pps, height, width, top: topIn, gain = 1, color = "--wave" }: {
+/** A waveform on the cut's clock. With `clips` (left, width in px) it is drawn in pieces, one rounded block per clip with
+ *  the gaps between them, the way the video track draws the cut; without, one continuous lane (the music bed). */
+function Wave({ peaks, pps, height, width, top: topIn, gain = 1, color = "--wave", clips }: {
   peaks: { rate: number; peaks: number[] } | null; pps: number; height: number; width: number; top?: number; gain?: number; color?: string;
+  clips?: (readonly [number, number])[];
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const cuts = clips?.map(([l, w]) => `${l.toFixed(1)}:${w.toFixed(1)}`).join("|"); // a stable dependency for the pieces
   useEffect(() => {
     const c = ref.current;
     if (!c || !peaks) return;
@@ -550,17 +580,28 @@ function Wave({ peaks, pps, height, width, top: topIn, gain = 1, color = "--wave
     g.scale(dpr, dpr);
     g.clearRect(0, 0, w, height);
     const css = getComputedStyle(c);
+    const pieces = clips?.map(([l, cw]) => [l, l + cw] as const);
+    if (pieces) {
+      g.fillStyle = css.getPropertyValue("--wave-clip").trim() || "#16231c";
+      for (const [a, b] of pieces) { g.beginPath(); g.roundRect(a, 3, b - a, height - 6, 5); g.fill(); }
+    }
     g.fillStyle = css.getPropertyValue(color).trim() || "#4f8a6b";
     const top = topIn ?? Math.max(...peaks.peaks, 0.01);
     const mid = height / 2;
+    let k = 0; // the piece x is in (x only grows)
     for (let x = 0; x < w; x++) {
+      if (pieces) {
+        while (k < pieces.length && x + 1 > pieces[k][1] - 1) k++; // a pixel inside the piece's rounded edge
+        if (k >= pieces.length) break;
+        if (x < pieces[k][0] + 1) continue;
+      }
       const a = Math.floor((x / pps) * peaks.rate), b = Math.max(a + 1, Math.floor(((x + 1) / pps) * peaks.rate));
       let m = 0;
       for (let i = a; i < b && i < peaks.peaks.length; i++) if (peaks.peaks[i] > m) m = peaks.peaks[i];
-      const h = Math.max(0.5, (Math.min(1, Math.sqrt((m * gain) / top)) * (height - 6)) / 2);
+      const h = Math.max(0.5, (Math.min(1, Math.sqrt((m * gain) / top)) * (height - (pieces ? 12 : 6))) / 2);
       g.fillRect(x, mid - h, 1, h * 2);
     }
-  }, [peaks, pps, height, width, topIn, gain, color]);
+  }, [peaks, pps, height, width, topIn, gain, color, cuts]); // eslint-disable-line react-hooks/exhaustive-deps
   return peaks ? <canvas ref={ref} className="wave" /> : <span className="wave-wait mute">waveform…</span>;
 }
 

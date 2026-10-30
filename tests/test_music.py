@@ -31,7 +31,7 @@ def test_the_bundled_tracks_are_there_and_cc0():
 
 def test_music_is_checked_and_filled_in():
     assert M.normalize_music(None) is None and M.normalize_music({}) is None
-    assert M.normalize_music({"track": "apple_cider"}) == {"track": "apple_cider", "level_db": -20.0, "duck_db": -12.0}
+    assert M.normalize_music({"track": "apple_cider"}) == {"track": "apple_cider", "level_db": -18.0, "duck_db": -6.0}
     assert M.normalize_music({"track": "apple_cider", "level_db": -18.04, "duck_db": 0}) == {"track": "apple_cider", "level_db": -18.0, "duck_db": 0.0}
     for bad, msg in (({"track": "jazz"}, "no music track"), ({"track": "apple_cider", "level_db": -5}, "outside"),
                      ({"track": "apple_cider", "duck_db": 3}, "outside"), ({"track": "apple_cider", "level_db": "loud"}, "a number"),
@@ -127,11 +127,11 @@ def test_the_reviewer_is_told_the_music_is_on_purpose():
 def test_music_fixes():
     edl = {"spans": []}
     now, fix = human.music_fix(edl, "apple_cider", None, None)
-    assert now == {"track": "apple_cider", "level_db": -20.0, "duck_db": -12.0} and fix["op"] == "music" and "ducked -12" in fix["note"]
+    assert now == {"track": "apple_cider", "level_db": -18.0, "duck_db": -6.0} and fix["op"] == "music" and "ducked -6" in fix["note"]
     edl["music"] = now
-    now, fix = human.music_fix(edl, "raspberry_jam", -18, None)  # the duck already chosen stays
-    assert now == {"track": "raspberry_jam", "level_db": -18.0, "duck_db": -12.0}
-    assert fix["note"] == "music track 'apple_cider' -> 'raspberry_jam', level_db -20.0 -> -18.0"
+    now, fix = human.music_fix(edl, "raspberry_jam", -16, None)  # the duck already chosen stays
+    assert now == {"track": "raspberry_jam", "level_db": -16.0, "duck_db": -6.0}
+    assert fix["note"] == "music track 'apple_cider' -> 'raspberry_jam', level_db -18.0 -> -16.0"
     for args, msg in ((("apple_cider", None, None), "already"), (("jazz", None, None), "no music track"),
                       (("apple_cider", -50, None), "outside")):
         with pytest.raises(SystemExit, match=msg):
@@ -151,7 +151,7 @@ def test_the_music_edit_makes_the_next_version(tmp_path, monkeypatch):
     monkeypatch.setattr(human, "_finish", lambda run_dir, edl_path, n, *a: done.update(n=n, edl=json.loads(edl_path.read_text())))
     human.music(d, "ukulele", level_db=-24)
     e = done["edl"]
-    assert done["n"] == 4 and e["music"] == {"track": "ukulele", "level_db": -24.0, "duck_db": -12.0}
+    assert done["n"] == 4 and e["music"] == {"track": "ukulele", "level_db": -24.0, "duck_db": -6.0}
     assert e["look"] == {"preset": "box"} and "render" not in e and e["patches"][-1]["action"] == "music"
     human.music(d, None)
     assert "music" not in done["edl"] and done["edl"]["patches"][-1]["fixes"][0]["op"] == "music_off"
@@ -192,7 +192,7 @@ def test_music_routes(tmp_path, monkeypatch):
     c = TestClient(create_app(tmp_path))
     info = c.get("/api/music").json()
     assert [t["id"] for t in info["tracks"]] == IDS and info["tracks"][0]["author"].startswith("omfgdude")
-    assert info["default"] == {"level_db": -20.0, "duck_db": -12.0} and info["tracks"][0]["url"] == "/api/music/chill_lofi"
+    assert info["default"] == {"level_db": -18.0, "duck_db": -6.0} and info["tracks"][0]["url"] == "/api/music/chill_lofi"
     r = c.get("/api/music/apple_cider")
     assert r.status_code == 200 and r.headers["content-type"] == "audio/mp4" and len(r.content) > 10000
     assert c.get("/api/music/jazz").status_code == 404
@@ -204,7 +204,7 @@ def test_music_routes(tmp_path, monkeypatch):
 
 
 def test_the_voice_gain_is_checked_and_kept_only_when_not_zero():
-    assert M.normalize_music({"track": "ukulele", "voice_db": 0}) == {"track": "ukulele", "level_db": -20.0, "duck_db": -12.0}
+    assert M.normalize_music({"track": "ukulele", "voice_db": 0}) == {"track": "ukulele", "level_db": -18.0, "duck_db": -6.0}
     assert M.normalize_music({"track": "ukulele", "voice_db": 2.04})["voice_db"] == 2.0
     for bad in (7, -13, "3", True):
         with pytest.raises(ValueError):

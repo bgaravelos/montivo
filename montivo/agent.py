@@ -76,7 +76,7 @@ OP_SCHEMA = {"type": "object", "additionalProperties": False,
                                                          "second the still starts; else -1"},
                  "track": {"type": "string", "description": "music_on: a track id from the list"},
                  "level_db": {"type": "number", "description": "music_on: bed loudness in LUFS, -30 quiet to -14 loud; "
-                                                               "0 keeps the current or default (-20)"},
+                                                               "0 keeps the current or default (-18)"},
                  "on": {"type": "boolean", "description": "punch: true turns the punch-in zooms on, false off"},
                  "preset": {"type": "string", "description": "style: a preset id, or empty when look_prompt describes it"},
                  "look_prompt": {"type": "string", "description": "style: the caption look in words (colours, font, "
@@ -172,7 +172,7 @@ def context(run_dir: Path, edl: dict) -> str:
     lines.append(f"Caption look: preset {look.get('preset', 'marker')}"
                  + (f", {json.dumps({k: v for k, v in look.items() if k != 'preset'})}" if len(look) > 1 else ""))
     m = edl.get("music")
-    lines.append(f"Music: {m['track']} at {m.get('level_db', -20)} LUFS" if m else "Music: none")
+    lines.append(f"Music: {m['track']} at {m.get('level_db', music_mod.LEVEL_DB)} LUFS" if m else "Music: none")
     lines.append(f"Punch-ins: {'on' if edl.get('punch') else 'off'}")
     rv = _review(run_dir, int(edl.get("version") or 0))
     if rv:

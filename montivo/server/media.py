@@ -107,6 +107,22 @@ def peaks(src: Path, out: Path) -> dict:
         return data
 
 
+def draft_bed_peaks(track_peaks: dict, music: dict, duration: float) -> dict:
+    """A draft's music bed waveform: the track's loop from the cut's start, each 10 ms at the gain the live player gives
+    it (Live.ts bedGain: level over the track's loudness, the duck along the speech with its ramps, the fades)."""
+    rate, tp = track_peaks["rate"], track_peaks["peaks"]
+    att, rel = music["attack_s"], music["release_s"]
+    fin, fout = max(1e-3, music["fade_in_s"]), max(1e-3, music["fade_out_s"])
+    out = []
+    for i in range(int(round(duration * rate))):
+        c = i / rate
+        duck = sum(min(1.0, max(0.0, (c - (a - att)) / att)) * min(1.0, max(0.0, (b + rel - c) / rel)) for a, b in music["ducked"])
+        fade = max(0.0, min(1.0, c / fin, (duration - c) / fout))
+        g = 10 ** ((music["gain_db"] + music["duck_db"] * duck) / 20) * fade
+        out.append(round(tp[i % len(tp)] * g, 3) if tp else 0.0)
+    return {"rate": rate, "peaks": out}
+
+
 def draft_filmstrip(source_strip: Path, segments: list[dict], duration: float, title_s: float, out: Path) -> Path:
     """A draft's filmstrip without a render: the cut's sprite (one tile every THUMB_STEP_S of cut time) put together
     from a filmstrip of the source (`filmstrip` run on the edit proxy, tile k = source time k * THUMB_STEP_S) through

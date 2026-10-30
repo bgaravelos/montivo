@@ -1,10 +1,10 @@
 """Music bed: a bundled loop under the cut's speech, ducked while someone talks.
 
-The EDL's `music` = {"track": id, "level_db": -20, "duck_db": -12, "voice_db": 0} (absent = no music; `voice_db`
+The EDL's `music` = {"track": id, "level_db": -18, "duck_db": -6, "voice_db": 0} (absent = no music; `voice_db`
 only when not 0). The tracks are files in
 montivo/music/ (CC0 tracks from OpenGameArt cut into loops by build.py; tracks.json holds each loop's measured
 loudness, author and source page), so the bed is plain DSP: no model is called. `level_db` is the bed's loudness in LUFS where nobody speaks (the speech sits at the
-render's -14 LUFS); under speech it drops by `duck_db`, so the defaults keep the bed 18 LU under the voice. `voice_db`
+render's -14 LUFS); under speech it drops by `duck_db`, so the defaults keep the bed about 9 dB under the voice. `voice_db`
 moves the speech against the bed before the mix (the editor's Voice fader); the mix is normalised to -14 LUFS after
 it, so +3 dB on the voice ends up as the bed 3 dB lower against it.
 
@@ -24,7 +24,9 @@ import subprocess
 from pathlib import Path
 
 MUSIC_DIR = Path(__file__).resolve().parent.parent / "music"
-LEVEL_DB, DUCK_DB = -20.0, -12.0
+# about 9 dB of speech over the bed on a talking head (run 015: 9.1 dB measured; Billy chose it by ear, 30/10, over
+# -20 / -12 = 17.1 dB, which a phone speaker all but loses, and 12 or 7 dB)
+LEVEL_DB, DUCK_DB = -18.0, -6.0
 LEVEL_RANGE = (-36.0, -10.0)
 DUCK_RANGE = (-30.0, 0.0)
 VOICE_RANGE = (-12.0, 6.0)
@@ -49,7 +51,7 @@ def track(track_id: str) -> dict:
 
 
 def normalize_music(m: dict | None) -> dict | None:
-    """The EDL's `music` checked and filled in: a known track, level and duck in range (defaults -20 / -12), `voice_db`
+    """The EDL's `music` checked and filled in: a known track, level and duck in range (defaults -18 / -6), `voice_db`
     in range and kept only when not 0. None or {} = no music. Raises ValueError for anything else."""
     if not m:
         return None

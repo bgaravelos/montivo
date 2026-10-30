@@ -13,7 +13,7 @@
     python -m montivo.human pin runs/014 --speaker A --head 3 (or --head none to drop the pin)
     python -m montivo.human edges runs/015
     python -m montivo.human style runs/015 [--look '{"preset": "box", "position": "fixed", "top": 1180}'] [--callout s5=120,300] [--callout s5=auto]
-    python -m montivo.human music runs/015 --track chill_lofi [--level -20] [--duck -12] [--voice 0] (or --off)
+    python -m montivo.human music runs/015 --track chill_lofi [--level=-18] [--duck=-6] [--voice 0] (or --off)
     python -m montivo.human insert runs/012 --words 2:11-20 [--before s3 | --end]
     python -m montivo.human pauses runs/012 [--over 0.6] [--keep 0.3] [--dry-run]
     python -m montivo.human overlay runs/015 --at 12.4 --prompt "a flow diagram ..." [--dur 2.5] [--placement full|upper|pip]
@@ -1653,8 +1653,8 @@ def main(argv: list[str] | None = None) -> int:
     mg = mu.add_mutually_exclusive_group(required=True)
     mg.add_argument("--track", default=None, help="a track id of montivo/music/tracks.json")
     mg.add_argument("--off", action="store_true", help="take the music out")
-    mu.add_argument("--level", type=float, default=None, help="the bed's loudness in LUFS where nobody speaks (default -20)")
-    mu.add_argument("--duck", type=float, default=None, help="dB the bed drops while anyone speaks (default -12)")
+    mu.add_argument("--level", type=float, default=None, help="the bed's loudness in LUFS where nobody speaks (default -18)")
+    mu.add_argument("--duck", type=float, default=None, help="dB the bed drops while anyone speaks (default -6)")
     mu.add_argument("--voice", type=float, default=None, help="dB on the speech against the bed, -12..6 (default 0)")
     rs = sub.add_parser("restore", help="an earlier version back as the newest -> edl_vN -> cut_vN ($0)")
     rs.add_argument("run_dir", type=Path)

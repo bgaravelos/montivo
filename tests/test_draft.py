@@ -338,3 +338,26 @@ def test_the_server_serves_the_draft_routes(tmp_path, monkeypatch):
     assert r.status_code == 200 and r.json()["draft"]["base"] == 1
     assert (tmp_path / "runs" / "h1" / "ui" / "draft" / "edl.json").is_file()
     assert c.post("/api/runs/nope/draft", json={"op": "drop", "args": {"span": "s2"}}).status_code == 404
+
+
+def test_a_draft_shows_its_music_bed(tmp_path):
+    """The draft has no render, so its version entry took no music and the lane said "Add music" while the bed played."""
+    from montivo.server.runs import draft_music
+    played = {"ducked": [[0.0, 3.2]], "gain_db": -4.4}
+    edl = {"music": {"track": "chill_lofi", "level_db": -18.0, "duck_db": -10.0}}
+    m = draft_music(edl, played)
+    assert m["track"] == "chill_lofi" and m["level_db"] == -18.0 and m["ducked"] == [[0.0, 3.2]]
+    assert m["margin_db"] is None and m["voice_db"] == 0.0  # nothing measured before the render
+    assert draft_music({}, played) is None and draft_music(edl, None) is None
+
+
+def test_a_drafts_bed_waveform_follows_the_live_gain():
+    from montivo.server.media import draft_bed_peaks
+    music = {"gain_db": 0.0, "duck_db": -20.0, "ducked": [[2.0, 3.0]], "attack_s": 0.15, "release_s": 0.45,
+             "fade_in_s": 0.5, "fade_out_s": 0.5}
+    out = draft_bed_peaks({"rate": 100, "peaks": [0.5] * 150}, music, 4.0)  # a 1.5 s loop under a 4 s cut
+    p = out["peaks"]
+    assert out["rate"] == 100 and len(p) == 400
+    assert p[0] == 0.0 and p[100] == 0.5 and p[170] == 0.5  # faded in from 0, looped past 1.5 s
+    assert p[250] == 0.05  # ducked 20 dB under the speech
+    assert p[399] < 0.02  # faded out at the end
