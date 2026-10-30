@@ -733,6 +733,13 @@ the voice (the render's margin_db moved by both faders): a mix commit at -16 / -
 514 tests. Deployed 30/10 17:33 on Billy's go (no job since 00:25; the 17:11 container stopped); /api/health 200,
 /api/runs 401, /s/nope 404; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP; `--music midnight_cruiser` at the new
 default: 37.9 s, -14.0 / -1.6 dBTP, speech 9.1 dB over the bed (was 17.1).
+Montivo loader (30/10, $0, commit `5ec2449`, design in `docs/notes/montivo-loader_2026-10-30.html`): `MarkLoader`
+(`web/src/icons.tsx`) = the brand mark on a 1.6 s loop (brackets close in, a marker V passes through the V shape, no
+rotation) in every loading spot: top bar, Home card, chat tray and log fold, the running pipeline row, Export, Cover
+maker, Style, the Loading texts; brackets take the text colour, the V turns ink on a marker button, reduced motion keeps
+a fade; `.spin` removed; the Waiting sting, rail dot, Live light and new-version notice unchanged. Deployed 30/10 on
+Billy's go (no container was running before it); /api/health 200, /api/runs 401, /s/nope 404; smoke drop on 015:
+34.3 s, -14.0 LUFS / -1.7 dBTP, render 8.0 s.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
