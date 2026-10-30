@@ -752,7 +752,8 @@ each run `kind` sample / copy / own (Samples / Yours tabs). Checked keyless at 1
 Deployed 30/10 19:20 on Billy's go (no container was running); /api/health 200, /api/runs 401, /s/nope 404; smoke drop on
 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 10.5 s. The new Home not yet seen live with the sign-in; UI shots of the demo
 video that show Home predate it.
-Rail panels A (30/10, $0, branch `claude/rail-panels-b02277`, not merged or deployed; proposals in
+Rail panels A (30/10, $0, branch `claude/rail-panels-b02277`; every group below merged into main 30/10 as a
+fast-forward to 3754414 on Billy's go, 564 tests, panels checked keyless on 015; not pushed or deployed; proposals in
 `docs/notes/rail-panels-research_2026-10-30.md`): A1 a panel edit leaves the panel open (toast "Making Version N" + Open
 chat, the job at the panel's foot). A2 a caption line or callout on the timeline selects it and opens Captions / Text on
 it; double-click retexts a caption in place, Enter opens its box, Delete takes a callout off. A3 one draft for every
