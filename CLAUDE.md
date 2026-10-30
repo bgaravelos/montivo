@@ -900,6 +900,14 @@ box fills those close-ups, needs a face measure). 632 tests. Pushed and deployed
 /api/runs 401, /s/nope 404, the new time hints live (plan_s 13), host spend $3.37 of $15; smoke drop on 015: 34.3 s,
 -14.0 LUFS / -1.7 dBTP, render 10.2 s. The hosted samples are card-style EDLs and render as before; a judge's new
 upload gets the header title, the preflight and the plan check.
+Close-ups (30/10, $0.33, Billy's ask after the deploy): SAM's head box on 013 / d1-usgs takes in the hair to the
+shoulders, so captions went "over the head" and head-in-frame read 51 % outside. `run.face_for_closeups` tracks SAM
+"face" (on the head track's frames, only when the layout has over_head lines, before the preflight; `montivo face RUN`
+for old runs); `build_overlays(face_track=)` places those lines against the face inside the followed head (placement
+below_face / above_face, entry `face_box`), `caption_face_facts` and `head_frame_facts` measure the face. Lines placed
+today are untouched. Found on the way: 013's speaker map gave A to a 25 px passer-by (the crop showed the atrium for
+15 s): `speakers.foreground` drops heads under 0.25 of the widest (014 unchanged). 013 first review 64 -> 83
+(`runs/fx-013`); 635 tests. Not deployed.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

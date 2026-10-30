@@ -369,6 +369,13 @@ def run(opts: RunOptions) -> dict:
         _, kit_fixes = with_kit(edl, opts.kit)
         if kit_fixes:
             log(f"kit: {'; '.join(f['note'] for f in kit_fixes)}")
+    if opts.render and opts.captions and edl["spans"] and "head" in tracks:
+        # 4a. a close-up whose captions have no room under the head box gets a SAM face track before the checks
+        try:
+            face_for_closeups(out, edl, ledger, log=log)
+        except Exception:
+            errors.append(("face track", traceback.format_exc()))
+            log(f"ERROR tracking the face (the captions keep to the head box):\n{errors[-1][1]}")
     if "preflight" not in edl and edl["spans"]:
         # 4b. the gate's checks that need no cut (cut edges in speech, captions forced over the head, the head out of
         # the crop) fixed before the first render, so the first paid review sees none of them ($0, review.preflight)
@@ -440,6 +447,30 @@ def run(opts: RunOptions) -> dict:
     log(f"done: {edl['runtime_s']} s cut from {len(edl['spans'])} spans, verbatim {edl['verbatim_rate']:.0%}, "
         f"${ledger.total_cost():.4f}, {summary['wall_s']} s wall")
     return summary
+
+
+def face_for_closeups(run_dir: Path, edl: dict, ledger: Ledger, log=print) -> dict | None:
+    """A SAM "face" track when the caption layout has lines it can only put over the head box (a close-up: the head box
+    takes in long hair down to the shoulders, run 013: 40 of 41 lines "over the head" though they sat on the neck,
+    and the head-in-frame check read 51 % outside). One more concept on the head track's frames (no new upload, about
+    $0.17 on 166 s); the layout then places those lines against the face and the check measures the face. Returns the
+    track summary, or None when no line needs it, a face track exists or there is no head track."""
+    from .engine.preview import preview_data
+    from .engine.render import load_track
+    if load_track(run_dir, edl, "face") or not (run_dir / "track" / "head" / "tracks.json").is_file():
+        return None
+    laid = preview_data(run_dir, edl, laid=True)["_edl"]
+    n = sum(1 for c in laid.get("captions") or [] if c.get("placement") == "over_head")
+    if not n:
+        return None
+    head = track_mod.load_concept(run_dir / "track" / "head" / "tracks.json")
+    proxy = run_dir / "proxy.mp4"
+    if not proxy.is_file() and (run_dir / "ingest.json").is_file():
+        proxy = Path(json.loads((run_dir / "ingest.json").read_text())["proxy"])
+    log(f"track: face for {n} caption line(s) with no room around the head box (a close-up)")
+    ct = track_mod.track_concept(track_mod.reuse_source(head, proxy), "face", run_dir / "track", ledger, log)
+    edl.setdefault("tracks", {})["face"] = ct.summary()
+    return edl["tracks"]["face"]
 
 
 def title_card(run_dir: Path, edl: dict, ledger: Ledger, log=print) -> Path:

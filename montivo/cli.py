@@ -4,6 +4,7 @@
     montivo render runs/001
     montivo review runs/001
     montivo speakers runs/001
+    montivo face runs/001
     montivo plan runs/001 --planner open
     montivo probe footage.mp4
     montivo serve
@@ -130,6 +131,11 @@ def main(argv: list[str] | None = None) -> int:
                                          "speakers.json; the next render follows whoever talks")
     sp.add_argument("run_dir", type=Path)
 
+    fc = sub.add_parser("face", help="SAM face track for a close-up whose captions have no room under the head box "
+                                     "(about $0.10 a minute; the next render places those lines against the face)")
+    fc.add_argument("run_dir", type=Path)
+    fc.add_argument("--edl", type=Path, default=None, help="the EDL to lay out (default: the newest edl_vN.json)")
+
     p = sub.add_parser("probe", help="ffprobe summary of a file")
     p.add_argument("footage", type=Path)
 
@@ -166,6 +172,19 @@ def main(argv: list[str] | None = None) -> int:
         model = OPEN_MODEL if args.planner == "open" else SPARK_MODEL
         print(json.dumps(replan(args.run_dir, "", target_s=args.target, passes=args.review, budget=args.budget,
                                 model=model, reasoning_effort=args.plan_effort), indent=2))
+        return 0
+
+    if args.cmd == "face":
+        from .ledger import Ledger
+        from .run import RunLog, face_for_closeups
+        if not args.run_dir.is_dir():
+            ap.error(f"{args.run_dir} is not a run folder")
+        edl_path = args.edl or max(args.run_dir.glob("edl_v*.json"), key=lambda p: int(p.stem.split("_v")[1]))
+        edl = json.loads(edl_path.read_text())
+        res = face_for_closeups(args.run_dir, edl, Ledger.resume(args.run_dir / "ledger.json"),
+                                log=RunLog(args.run_dir / "run.log"))
+        print(json.dumps({"edl": edl_path.name, "face": res} if res else
+                         {"edl": edl_path.name, "face": None, "why": "no caption line lacks room, or a face track exists"}, indent=2))
         return 0
 
     if args.cmd == "speakers":

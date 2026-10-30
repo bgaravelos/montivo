@@ -15,7 +15,8 @@ montivo run footage.mp4 --brief "..." --out runs/001
   track    SAM 3.1 "person" and "head" at 5 fps (one upload) over httpx SSE, regex boxes -> track/<concept>/tracks.json | in parallel
   watch    Spark 1.3 (effort low) + proxy + transcript -> shot log, speaker map, concepts, b-roll, movement moments /
   speakers (2+ voices, 2+ heads) mouth-minus-eyes motion of every SAM head vs the Voice word times of every speaker
-           -> speakers.json (head ids per speaker; watch's "left/right/centre" as the fallback), $0, ffmpeg + Pillow
+           -> speakers.json (head ids per speaker; watch's "left/right/centre" as the fallback), $0, ffmpeg + Pillow;
+           a head under a quarter of the widest head's width is background and never a speaker
   plan     Spark 1.3 (effort low, starts as soon as watch is in, beside SAM) + brief + shot log + movement moments +
            measured speech rate + transcript -> paper edit (turn id + verbatim words) and the brief as a checklist
            (`brief_checks`: opening, ending, keep, drop, length, other, with the transcript words each names); the same call
@@ -26,6 +27,9 @@ montivo run footage.mp4 --brief "..." --out runs/001
            (0.1 s before the onset, 0.15 s after the offset, 0.3 s at the very end)
   check    the paper edit against its checklist, the target, repeated takes and unplaced words (`edl.plan_check`, $0);
            on a failure one more plan call with exactly what failed, kept when it fails fewer checks (`plan_check`)
+  face     (a close-up) when the layout has caption lines it can only put over the head box, SAM 3.1 tracks "face" on
+           the head track's frames (no new upload, about $0.10 a minute; `montivo face RUN` for an older run): those
+           lines are placed against the face inside the head box, and the head-in-frame check measures the face
   preflight the gate's checks that need no cut (cut edges in speech, captions forced over the head, the head out of the
            crop) on the EDL as the render lays it out, fixed with the gate's own fixes, up to 3 rounds, $0
            (`review.preflight`, EDL `preflight`) -> edl_v1.json

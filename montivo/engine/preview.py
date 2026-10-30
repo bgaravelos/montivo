@@ -168,7 +168,8 @@ def preview_data(run_dir: Path, edl: dict, overlays: bool = True, laid: bool = F
     cache = run_dir / "ui" / "cache" / "preview"
     head = load_track(run_dir, edl, "head")
     fields, _ = build_overlays(edl, words, segments, paths, head, load_track(run_dir, edl, "person"), cache / "layout",
-                               title_s=title_s, captions=bool(words), reframe_concept=concept, draw_at=-1.0)
+                               title_s=title_s, captions=bool(words), reframe_concept=concept, draw_at=-1.0,
+                               face_track=load_track(run_dir, edl, "face"))
     edl.update(fields)
     names = highlight_words(edl, look)
     data["look"] = _caption_style(look)

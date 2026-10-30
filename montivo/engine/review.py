@@ -135,7 +135,7 @@ def caption_face_facts(edl: dict) -> dict:
     for c in lines:
         x, y, w, h = c["box"]
         rect = [x, y, x + w, y + h]
-        head = c.get("head_box")
+        head = c.get("face_box") or c.get("head_box")  # a close-up's line placed against the face (SAM "face")
         if head is None:
             continue
         if overlaps(rect, head):
@@ -568,8 +568,10 @@ def head_frame_facts(run_dir: Path, edl: dict) -> dict | None:
     sampled frame. Stretches with more than HEAD_OUT_FRAC of the head's width outside, in cut seconds, with the side
     it leaves on and the shift (source px, median over the stretch) that centres it again: a fix that only brought it
     back inside left run 012's planted fault at the frame edge (bias 420 -> 120). None without a head track.
-    Punch-in zooms are not modelled (they stay clear of a head near the top by design, punch.py)."""
-    from .captions import interp_box, largest_at
+    Punch-in zooms are not modelled (they stay clear of a head near the top by design, punch.py). With a SAM face track
+    (a close-up, run.py) the face inside the head box is measured instead: run 013's head box with the hair is wider
+    than the crop, so it read 51 % outside while the face was in frame."""
+    from .captions import boxes_at, interp_box, largest_at
     from .reframe import id_at
     from .render import load_track
     head = load_track(run_dir, edl, "head")
@@ -580,6 +582,13 @@ def head_frame_facts(run_dir: Path, edl: dict) -> dict | None:
     fy = float(edl["source"]["height"]) / float(head["source"]["height"])
     objs = {oid: [{"t": r["t"], "box": [r["box"][0] * fx, r["box"][1] * fy, r["box"][2] * fx, r["box"][3] * fy]}
                   for r in recs] for oid, recs in head["objects"].items()}
+    face = load_track(run_dir, edl, "face")
+    faces = None
+    if face and face.get("objects"):
+        gx = float(edl["source"]["width"]) / float(face["source"]["width"])
+        gy = float(edl["source"]["height"]) / float(face["source"]["height"])
+        faces = {"objects": {oid: [{"t": r["t"], "box": [r["box"][0] * gx, r["box"][1] * gy, r["box"][2] * gx, r["box"][3] * gy]}
+                                   for r in recs] for oid, recs in face["objects"].items()}}
     t0 = title_seconds(edl)
     samples: list[dict] = []
     for seg, path in zip(segs, paths):
@@ -593,6 +602,11 @@ def head_frame_facts(run_dir: Path, edl: dict) -> dict | None:
                 box = (largest_at({"objects": objs}, src) or [None])[0]
             if box is None or box[2] - box[0] <= 1:
                 continue
+            if faces is not None:
+                inside = [b for b in boxes_at(faces, src)
+                          if box[0] <= (b[0] + b[2]) / 2 <= box[2] and box[1] <= (b[1] + b[3]) / 2 <= box[3]]
+                if inside:
+                    box = max(inside, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))
             x0, x1 = path.xs[k], path.xs[k] + path.crop_w
             width = box[2] - box[0]
             left, right = max(0.0, x0 - box[0]), max(0.0, box[2] - x1)

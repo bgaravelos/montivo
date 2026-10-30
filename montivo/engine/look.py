@@ -124,7 +124,8 @@ def preview(run_dir: Path, edl: dict, t: float, cut: Path | None = None) -> tupl
     try:
         fields, overlays = build_overlays(edl, words, segments, paths, load_track(run_dir, edl, "head"),
                                           load_track(run_dir, edl, "person"), tmp, title_s=title_s,
-                                          captions=bool(words), reframe_concept=concept, draw_at=t)
+                                          captions=bool(words), reframe_concept=concept, draw_at=t,
+                                          face_track=load_track(run_dir, edl, "face"))
         start = title_s
         i = len(segments) - 1
         for k, seg in enumerate(segments):
@@ -158,7 +159,7 @@ def layout(run_dir: Path, edl: dict) -> dict:
     title_s = float(((edl.get("render") or {}).get("title") or {}).get("seconds") or 0.0)
     fields, _ = build_overlays(edl, words, segments, paths, load_track(run_dir, edl, "head"), load_track(run_dir, edl, "person"),
                                run_dir / "ui" / "cache" / "layout", title_s=title_s, captions=bool(words),
-                               reframe_concept=concept, draw_at=-1.0)
+                               reframe_concept=concept, draw_at=-1.0, face_track=load_track(run_dir, edl, "face"))
     return fields
 
 

@@ -197,6 +197,14 @@ folders, which stay out of the repository.
   overlapping speakers, an opening line the reviewer finds weak, a cut edge the preflight cannot clear). Notes:
   `docs/notes/review-and-first-cut-research_2026-10-30.md`.
 
+- **Close-ups (30/10).** On run 013's interview SAM's head box takes in the long hair down to the shoulders (y 46-539
+  of 540): 28 of 44 lines were "over the head" though they sat on the neck, and the head-in-frame check read 51 %
+  outside. A SAM "face" track (85-351, $0.17 on 166 s, only when a line has no room) puts those lines under the chin
+  (0 over the face) and clears the false head-out faults. The same clip's speaker map had given the interviewee to a
+  25 px passer-by (mouth-motion noise beside her 430 px head), so 15 s of the cut showed the atrium: heads under a
+  quarter of the widest are now background. 013's first review 64 -> 83 (`runs/fx-013`, $0.33 with the face track);
+  run 014's four astronauts map as before.
+
 ## Design rules fixed on 26/10
 
 - **Blind reviewer.** The review pass gets only the rendered mp4, the brief and the rubric, never the EDL. It also gets

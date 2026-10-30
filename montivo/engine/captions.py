@@ -740,7 +740,8 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                    person_track: dict | None, out_dir: Path, title_s: float = 0.0, captions: bool = True,
                    callouts: bool = True, glossary: dict[str, str] | None = None,
                    style: CaptionStyle | None = None, reframe_concept: str | None = None,
-                   draw_at: float | None = None, draw_captions: bool = True) -> tuple[dict, dict[int, list[Overlay]]]:
+                   draw_at: float | None = None, draw_captions: bool = True,
+                   face_track: dict | None = None) -> tuple[dict, dict[int, list[Overlay]]]:
     """Caption lines and callouts for the rendered segments.
 
     `segments` are render.Segment (frame-aligned), `paths` the reframe SegmentPath of each (crop x per source frame).
@@ -760,6 +761,9 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
     y's, scaled to it; the boxes in the returned entries are in its pixels.
     A span's own `look` (the Style panel's "this clip", span_looks) styles its caption lines and its callout: a line
     never mixes two looks (the words of a segment are grouped per run of one look), and its entry carries the look.
+    `face_track` (SAM "face", tracked only when a line had no room, run.py): a line that would go over the head box is
+    placed against the face inside it instead (the close-up's head box takes in long hair down to the shoulders, run
+    013: y 46-539 of 540, the face 85-351), with the face box in its entry; every other line is placed as before.
     """
     frame = frame_for(edl)
     look = (style.look if style and style.look else None) or normalize_look(edl.get("look"))
@@ -783,7 +787,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
         return {"objects": {oid: [{"t": r["t"], "box": [r["box"][0] * fx, r["box"][1] * fy, r["box"][2] * fx, r["box"][3] * fy]}
                                   for r in recs] for oid, recs in track["objects"].items()}}
 
-    head_src, person_src = scaled(head_track), scaled(person_track)
+    head_src, person_src, face_src = scaled(head_track), scaled(person_track), scaled(face_track)
     seg_cut: list[float] = []
     t = title_s
     for seg in segments:
@@ -814,6 +818,18 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                 return [b] if b is not None else largest_at(track, t)
             return followed
         return largest_at
+
+    def face_of(i: int):
+        """Box picker for the face inside the head segment i keeps clear of: the largest SAM face whose centre lies in
+        that head box at the time (union_out `pick` form)."""
+        heads = subject_head(i)
+
+        def pick(track, t):
+            hb = heads(head_src, t) if head_src else []
+            faces = [b for b in boxes_at(track, t) if any(h[0] <= (b[0] + b[2]) / 2 <= h[2] and h[1] <= (b[1] + b[3]) / 2 <= h[3]
+                                                         for h in hb)]
+            return [max(faces, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]))] if faces else []
+        return pick
 
     def cut_t(i: int, src: float) -> float:
         seg = segments[i]
@@ -864,6 +880,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                 if lb - la <= 0:
                     continue
                 head = union_out(head_src, i, la, lb, subject_head(i))
+                face = None  # the face box a close-up's line was placed against (face_track)
                 texts = [w.w for w in ln.words]
                 lk_id = ln.words[0].span if ln.words[0].span in own else None
                 llook, lst, lnames = looks[lk_id]
@@ -879,6 +896,15 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                     if where == "over_head" and k not in forced and (room := room_for(texts, lstyle, head, frame.y(llook.top), frame)):
                         y, where, lstyle = room  # A3: above the head or smaller; a line placed before stays as it was
                         w_px, h_px = line_width(texts, lstyle), lstyle.height()
+                    if where == "over_head" and k not in forced and face_src and (
+                            fb := union_out(face_src, i, la, lb, face_of(i))):
+                        top_ = min(frame.y(llook.top), frame.band(SAFE_TOP, SAFE_BOTTOM)[1] - h_px)
+                        fy, fwhere = place_caption(w_px, h_px, fb, top=top_, frame=frame)
+                        if fwhere != "over_head":
+                            y, where, face = fy, fwhere.replace("head", "face"), fb
+                        elif (room := room_for(texts, lstyle, fb, frame.y(llook.top), frame)):
+                            y, where, lstyle = room[0], room[1].replace("head", "face"), room[2]
+                            w_px, h_px, face = line_width(texts, lstyle), lstyle.height(), fb
                 if k in forced:
                     y, where = frame.y(forced[k]["top"]), "forced"
                 x = (frame.w - w_px) // 2
@@ -897,7 +923,8 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                               for w, (a, b) in zip(ln.words, ln.word_times)],
                     "box": [x, y, w_px, h_px], "placement": where,
                     "head_box": [round(v) for v in head] if head else None,
-                    "over_face": where == "over_head" or overlaps([x, y, x + w_px, y + h_px], head),
+                    **({"face_box": [round(v) for v in face]} if face else {}),
+                    "over_face": where == "over_head" or overlaps([x, y, x + w_px, y + h_px], face or head),
                     **({"held_s": hold_s} if hold_s else {}),
                     **({"size": lstyle.size} if room and lstyle.size < lst.size else {}),
                     **({"look": llook.to_json()} if lk_id else {}),

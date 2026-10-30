@@ -933,7 +933,7 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
             fields, overlays = build_overlays(edl, words or [], segments, paths, load_track(run_dir, edl, "head"),
                                               load_track(run_dir, edl, "person"), ov_dir, title_s=title_s,
                                               captions=bool(words), callouts=callouts, reframe_concept=concept,
-                                              draw_captions=captions)
+                                              draw_captions=captions, face_track=load_track(run_dir, edl, "face"))
             edl.update(fields)
             log(f"render: {len(fields['captions'])} caption lines{'' if captions else ' laid out, not drawn'} "
                 f"({sum(1 for c in fields['captions'] if c['placement'] in ('below_head', 'above_head'))} moved off the head, "

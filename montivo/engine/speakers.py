@@ -42,6 +42,9 @@ from PIL import Image, ImageChops, ImageStat
 MOUTH = (0.2, 0.6, 0.8, 1.0)  # x0, y0, x1, y1 as fractions of the head box
 EYES = (0.2, 0.1, 0.8, 0.45)
 MIN_HEAD_PX = 16  # boxes narrower than this (track pixels) carry no usable mouth
+BG_HEAD_SHARE = 0.25  # a head whose median width is under this share of the clip's widest is in the background (run 013:
+# a 25 px passer-by beside the 430 px interviewee won speaker A on mouth-motion noise and the crop followed it; NASA's
+# four heads span 54-122 px, 0.44)
 MIN_FRAMES = 8  # frames on each side of a comparison (1.6 s at 5 fps)
 D_MIN = 0.4
 D_MARGIN = 0.2
@@ -309,6 +312,16 @@ def assign(scores: dict[str, dict[str, float]], objects: dict[str, list[dict]], 
     return {"speakers": speakers, "heads": heads}
 
 
+def foreground(objects: dict[str, list[dict]]) -> dict[str, list[dict]]:
+    """The heads that can be a speaker: median box width at least BG_HEAD_SHARE of the widest head's."""
+    def med_w(recs: list[dict]) -> float:
+        ws = sorted(r["box"][2] - r["box"][0] for r in recs)
+        return ws[len(ws) // 2] if ws else 0.0
+    widths = {oid: med_w(recs) for oid, recs in objects.items()}
+    top = max(widths.values(), default=0.0)
+    return {oid: recs for oid, recs in objects.items() if widths[oid] >= BG_HEAD_SHARE * top}
+
+
 def map_speakers(words: list[dict], head_track: dict, video: Path, speaker_map: list[dict] | None = None,
                  resample: bool = False, frames: Iterable[Image.Image] | None = None, mic_track: dict | None = None,
                  person_track: dict | None = None) -> dict:
@@ -316,7 +329,7 @@ def map_speakers(words: list[dict], head_track: dict, video: Path, speaker_map: 
     resampled track source) or, with resample=True, the proxy at its own rate. `mic_track` and `person_track` are
     tracks.json contents on the same frames (or None). `frames` replaces the decode in tests."""
     fps = float(head_track.get("track_fps") or 5.0)
-    objects = head_track.get("objects") or {}
+    objects = foreground(head_track.get("objects") or {})
     same_grid = lambda t: t if t and abs(float(t.get("track_fps") or 0) - fps) < 0.01 else None  # noqa: E731
     mic_track, person_track = same_grid(mic_track), same_grid(person_track)
     inverted = inverted_heads(objects, (person_track or {}).get("objects"))
