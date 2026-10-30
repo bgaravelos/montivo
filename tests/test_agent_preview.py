@@ -71,7 +71,7 @@ def test_try_something_else_routes_once_more_with_the_turned_down_proposal(tmp_p
     d = _run(tmp_path)
     prompts = []
 
-    def fake(run_dir, edl, message, ledger, log, scope=None, note=""):
+    def fake(run_dir, edl, message, ledger, log, scope=None, note="", **kw):
         prompts.append(note)
         return {"reply": "ok", "question": "", "ops": [op("drop", span="s3" if note else "s2")]}, 0.004
     monkeypatch.setattr(agent, "route", fake)
@@ -97,7 +97,7 @@ def test_the_selection_scopes_the_ops_and_the_prompt(tmp_path, monkeypatch):
     assert any("words outside your selection" in x for x in skipped) and any("selected line" in x for x in skipped)
     seen = {}
 
-    def fake(run_dir, edl, message, ledger, log, scope=None, note=""):
+    def fake(run_dir, edl, message, ledger, log, scope=None, note="", **kw):
         seen["text"] = agent.scope_text(scope)
         seen["context"] = agent.context(run_dir, edl)
         return {"reply": "Shorter.", "question": "", "ops": [op("cut", span="s2", word_from=5, word_to=6)]}, 0.004

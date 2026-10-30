@@ -48,9 +48,14 @@ from .ledger import Ledger
 from .run import RunLog
 
 OPS = ["music_on", "music_off", "style", "punch", "caption", "callout", "title_text", "title_on", "title_off", "overlay",
-       "drop", "reorder", "cut", "replan", "review"]
-SPAN_OPS = {"caption", "callout", "drop", "reorder", "cut", "overlay"}  # they name clips or lines of this version: a re-plan makes new ones
-STRUCTURAL = {"replan", "drop", "reorder", "cut"}  # what is said or in which order: previewed before it runs
+       "drop", "reorder", "cut", "trim", "split", "insert", "pauses", "glossary", "speakers", "pin", "restore", "replan",
+       "review", "seek", "select", "open"]
+SPAN_OPS = {"caption", "callout", "drop", "reorder", "cut", "trim", "split", "insert", "overlay", "select"}  # they name clips or lines of this version: a re-plan makes new ones
+STRUCTURAL = {"replan", "drop", "reorder", "cut", "trim", "insert", "pauses", "restore"}  # what is said or in which order: previewed before it runs
+UI_OPS = {"seek", "select", "open"}  # the editor does these (the playhead, a selection, a panel): no version
+PANELS = ["media", "captions", "style", "text", "music", "speakers", "versions", "export", "loop"]
+HISTORY_TURNS = 8  # chat lines the router reads before the message
+UNUSED_WORDS = 900  # words of the recording outside the cut the router reads (about 95 s of speech)
 COST_USD = 0.006  # one router call (015 v5 context: about 4K tokens in, 300 out)
 PREVIEW_USD = 0.02  # ops estimated over this are previewed too (Billy, 28/10)
 # rough prices and times of what an op calls (server/app.py COST: Spark 1.3 plan $0.05 in 35 s, Spark Open $0.012 in
@@ -59,29 +64,44 @@ PREVIEW_USD = 0.02  # ops estimated over this are previewed too (Billy, 28/10)
 EST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "image": 0.01, "image_s": 10, "look": 0.008,
        "look_s": 6, "review": 0.035, "review_s": 34, "render_s_per_s": 0.5}
 
-OP_SCHEMA = {"type": "object", "additionalProperties": False,
-             "required": ["op", "span", "word_from", "word_to", "before", "text", "at_s", "track", "level_db", "on",
-                          "preset", "look_prompt", "instruction"],
-             "properties": {
-                 "op": {"type": "string", "enum": OPS},
-                 "span": {"type": "string", "description": "clip id (s3) for callout, drop, reorder, cut; else empty"},
-                 "word_from": {"type": "integer", "description": "cut: the first word index to delete (the clip's "
-                                                                 "numbered words); else -1"},
-                 "word_to": {"type": "integer", "description": "cut: the last word index to delete; else -1"},
-                 "before": {"type": "string", "description": "reorder: the clip it moves in front of; empty = to the end"},
-                 "text": {"type": "string", "description": "caption: the new words of the line; callout: its text, empty "
-                                                           "removes it; title_text: the title card's words; overlay: what the "
-                                                           "still shows, in English"},
-                 "at_s": {"type": "number", "description": "caption: a cut second inside that line; overlay: the cut "
-                                                         "second the still starts; else -1"},
-                 "track": {"type": "string", "description": "music_on: a track id from the list"},
-                 "level_db": {"type": "number", "description": "music_on: bed loudness in LUFS, -30 quiet to -14 loud; "
-                                                               "0 keeps the current or default (-18)"},
-                 "on": {"type": "boolean", "description": "punch: true turns the punch-in zooms on, false off"},
-                 "preset": {"type": "string", "description": "style: a preset id, or empty when look_prompt describes it"},
-                 "look_prompt": {"type": "string", "description": "style: the caption look in words (colours, font, "
-                                                                  "size, position) when no preset fits; else empty"},
-                 "instruction": {"type": "string", "description": "replan: the editor's note for the planner, in English"}}}
+OP_FIELDS = {
+    "op": {"type": "string", "enum": OPS},
+    "span": {"type": "string", "description": "clip id (s3) for callout, drop, reorder, cut, trim, split, select; "
+                                              "else empty"},
+    "word_from": {"type": "integer", "description": "cut: the first word index to delete (the clip's numbered "
+                                                    "words); insert: the first word of the passage (its turn's "
+                                                    "numbers); select: the first word to select; else -1"},
+    "word_to": {"type": "integer", "description": "cut / insert / select: the last word index; else -1"},
+    "word": {"type": "integer", "description": "split: the word the second piece starts with; trim: the word the "
+                                               "clip now starts with (edge in) or ends with (edge out); else -1"},
+    "edge": {"type": "string", "description": "trim: in (the start) or out (the end); else empty"},
+    "turn": {"type": "integer", "description": "insert: the turn of the passage (from 'Not in the cut'); else -1"},
+    "before": {"type": "string", "description": "reorder: the clip it moves in front of, empty = to the end; insert: "
+                                                "the clip it goes in front of, 'end' = at the end, empty = where it "
+                                                "was said"},
+    "text": {"type": "string", "description": "caption: the new words of the line; callout: its text, empty "
+                                              "removes it; title_text: the title card's words; overlay: what the "
+                                              "still shows, in English"},
+    "at_s": {"type": "number", "description": "caption: a cut second inside that line; overlay: the cut second the "
+                                              "still starts; seek: the cut second to show; else -1"},
+    "track": {"type": "string", "description": "music_on: a track id from the list"},
+    "level_db": {"type": "number", "description": "music_on: bed loudness in LUFS, -30 quiet to -14 loud; 0 keeps "
+                                                  "the current or default (-18)"},
+    "on": {"type": "boolean", "description": "punch: true turns the punch-in zooms on, false off"},
+    "preset": {"type": "string", "description": "style: a preset id, or empty when look_prompt describes it"},
+    "look_prompt": {"type": "string", "description": "style: the caption look in words (colours, font, size, "
+                                                     "position) when no preset fits; else empty"},
+    "instruction": {"type": "string", "description": "replan: the editor's note for the planner, in English"},
+    "version": {"type": "integer", "description": "restore: the version to bring back; else -1"},
+    "speaker": {"type": "string", "description": "speakers / pin: the Voice speaker label (A, B...); else empty"},
+    "name": {"type": "string", "description": "speakers: the person's name; else empty"},
+    "head": {"type": "string", "description": "pin: the head id the crop follows, empty = back to the speaker "
+                                              "map; else empty"},
+    "heard": {"type": "string", "description": "glossary: the word or words as Voice heard them (as the captions "
+                                               "show them); else empty"},
+    "written": {"type": "string", "description": "glossary: how they are written in every caption; else empty"},
+    "panel": {"type": "string", "description": "open: one of " + ", ".join(PANELS) + "; else empty"}}
+OP_SCHEMA = {"type": "object", "additionalProperties": False, "required": list(OP_FIELDS), "properties": OP_FIELDS}
 
 SCHEMA = {"type": "object", "additionalProperties": False, "required": ["reply", "question", "ops"],
           "properties": {
@@ -92,8 +112,8 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["reply",
               "ops": {"type": "array", "items": OP_SCHEMA}}}
 
 PROMPT = """You are Montivo, an agent-first video editor for short vertical clips. The editor talks to you in the chat \
-(English, Greek or both). Turn the message into edit ops on the current version. You can only use the ops below; each \
-is a button in the editor, so if no op does what is asked, say so in the reply and use no op.
+(English, Greek or both). Turn the message into ops on the current version. You can only use the ops below; each \
+is something the editor can do with a button, so if no op does what is asked, say so in the reply and use no op.
 
 Ops (fill the fields the op uses, leave the others empty, -1, 0 or false):
 - music_on: a music bed under the speech, ducked while anyone talks (track, level_db). Also to change the track or level.
@@ -101,6 +121,8 @@ Ops (fill the fields the op uses, leave the others empty, -1, 0 or false):
 - style: the look of the captions and callouts. preset = one of the presets, or look_prompt = the look in words.
 - punch: punch-in zooms on emphasised words and jump cuts (on).
 - caption: change the words of one caption line on screen (at_s inside the line, text = the full new line).
+- glossary: a word Voice mishears everywhere, fixed in every caption (heard = as the captions show it, written = how \
+it is spelled). Use it when the same mishearing is in more than one line, or the editor says "everywhere" / "always".
 - callout: the text pill on a clip (span, text; empty text removes it).
 - title_text: new words for the title card at the start (a new Muse Image card). title_on / title_off: the card on or off.
 - overlay: a B-roll still made by Muse Image over 2.5 s of the cut (at_s = the cut second it starts, text = what the \
@@ -109,17 +131,34 @@ picture, a diagram or B-roll; never on your own.
 - drop: delete one clip (span). reorder: move a clip (span) in front of another (before) or to the end.
 - cut: delete words inside one clip (span, word_from, word_to: indices of that clip's numbered words below). Each \
 piece left keeps at least two words. Use it to shorten a selected clip or remove a phrase, a filler or a retake.
+- trim: move one edge of a clip to a word (span, edge in|out, word = the clip's new first word for in, its new last \
+word for out; the word may lie outside the clip, in the same turn, to lengthen it).
+- split: cut one clip in two in front of a word (span, word); nothing is removed.
+- insert: put back a passage the cut does not use (turn, word_from, word_to from "Not in the cut", at least two \
+words; before = a clip id to place it in front of, "end", or empty for where it was said).
+- pauses: shorten every pause in the cut; no word is removed.
+- speakers: give a Voice speaker a name (speaker, name). pin: the vertical crop follows one head while a speaker \
+talks (speaker, head; empty head = back to automatic).
+- restore: bring an earlier version back as the newest (version). "Undo", "go back", "the one before" mean the \
+version before the last change (the chat history and the versions list say which).
 - replan: plan the paper edit again (which passages, their order, the length, the opening or the ending) with the \
 editor's note in instruction. Use it for a change to what is said or how long the whole cut is; never together with \
-caption, callout, drop, reorder or cut (the plan makes new clips).
+caption, callout, drop, reorder, cut, trim, split or insert (the plan makes new clips).
 - review: one blind review of the new version by the reviewer (about $0.04). Only when asked for a review or a score.
+- seek: move the playhead to a cut second (at_s) to show the editor a moment. select: select a clip (span) or words \
+in it (span, word_from, word_to) so the editor sees them. open: open a panel of the editor (panel).
 
 Rules:
-- Use only the clip ids, track ids and preset ids listed below. Pick a track by its mood when none is named \
-(talking head, upbeat tech demo: something light) and name it in the reply.
+- Use only the clip ids, word numbers, turns, versions, speakers, heads, track ids and preset ids listed below. Pick a \
+track by its mood when none is named (talking head, upbeat tech demo: something light) and name it in the reply.
 - No op for what the version already has (music on that track, punch-ins already on or off, the same preset): \
 say so in the reply instead.
-- A question about the cut (what score, why, how long) gets an answer in reply and no ops.
+- A question about the cut or the footage (what score, why, how long, what was left out, who says what) gets an \
+answer in reply from the facts below and no edit op. "Where do I say X" / "show me X": seek to the clip's cut second \
+and select those words, and say the time in the reply. A passage that is not in the cut has no cut second: say so \
+and offer to insert it.
+- Read the chat so far: "no", "another one", "the same for", "undo that", "more", "less" refer to what was just asked \
+or done there.
 - Prefer doing a sensible default over asking. Ask (question, no ops) only when the message cannot be done safely.
 - When the editor selected something, "this", "these", "it" and "here" mean the selection: change only what is \
 selected (cut, drop, callout or caption on those clips, words or line) and leave every other clip and setting as it is.
@@ -130,7 +169,7 @@ The current version (v{version}):
 
 Music tracks (id: name, mood): {tracks}
 Caption presets (id: name): {presets}
-{scope}{note}
+{history}{scope}{note}
 The editor's message: "{message}"
 """
 
@@ -165,7 +204,8 @@ def context(run_dir: Path, edl: dict) -> str:
         call = f", callout {s['callout']!r}" if (s.get("callout") or "").strip() else ""
         spk = str(merged.get(str(s.get("speaker")), s.get("speaker")))
         who = f" {names.get(spk, spk)}" if s.get("speaker") is not None and (names or merged) else ""
-        lines.append(f"- {s['id']} [{s.get('role', 'body')}{who}]{at}: {s.get('words', '')!r}{call}")
+        why = f" (why: {str(s['why'])[:90]})" if s.get("why") else ""
+        lines.append(f"- {s['id']} [{s.get('role', 'body')}{who}]{at}: {s.get('words', '')!r}{call}{why}")
         if nw := numbered(run_dir, s):
             lines.append(f"  numbered words: {nw}")
     caps = caption_timeline(edl)
@@ -186,7 +226,119 @@ def context(run_dir: Path, edl: dict) -> str:
                           for i in (rv.get("issues") or [])[:5])
         lines.append(f"Last blind review: {rv.get('overall')}{' pass' if rv.get('pass') else ''}"
                      + (f"; notes: {notes}" if notes else ""))
-    return "\n".join(lines)
+    if missing := edl.get("brief_missing"):
+        lines.append("Asked for in the brief but never said in the footage: " + "; ".join(map(str, missing)))
+    return "\n".join(lines + footage(run_dir, edl) + versions(run_dir, int(edl.get("version") or 0)))
+
+
+def footage(run_dir: Path, edl: dict) -> list[str]:
+    """What the recording holds beyond the cut: every passage the cut does not use (numbered by turn, what insert
+    names), what Spark saw when it watched the footage (moments with the cut second when the cut plays them), the
+    speakers and the heads the crop can follow. All from files the run already has: $0."""
+    out: list[str] = []
+    try:
+        words = human._words(run_dir)
+    except (OSError, KeyError, TypeError, ValueError):
+        words = None
+    if words is not None:
+        kept: dict[int, set[int]] = {}
+        for s in edl["spans"]:
+            kept.setdefault(s["turn_id"], set()).update(range(s["word_from"], s["word_to"] + 1))
+        rows, budget = [], UNUSED_WORDS
+        for t, ws in sorted(words.by_turn.items()):
+            run: list[dict] = []
+            for w in [*ws, None]:
+                if w is not None and w["i"] not in kept.get(t, set()):
+                    run.append(w)
+                    continue
+                if len(run) >= 2 and budget > 0:
+                    run = run[:budget]
+                    budget -= len(run)
+                    rows.append(f"- turn {t} (speaker {run[0].get('speaker', '?')}, source "
+                                f"{float(run[0]['t_start']):.1f} s): " + " ".join(f"{x['i']} {x['w']}" for x in run))
+                run = []
+        out.append("Not in the cut (passages of the recording the cut does not use; insert names them by turn and "
+                   "word numbers):" if rows else "Not in the cut: nothing, every passage of the recording is used.")
+        out += rows
+    try:
+        watch = json.loads((run_dir / "watch.json").read_text())
+    except (OSError, ValueError):
+        watch = {}
+    if watch:
+        try:
+            cmap = {c.span: c for c in cut_map(edl)}
+        except (KeyError, TypeError, ValueError):
+            cmap = {}
+
+        def at(t: float) -> str:
+            for s in edl["spans"]:
+                c = cmap.get(s["id"])
+                if c and s["t_in"] <= t <= s["t_out"]:
+                    return f"cut {c.cut_in + t - s['t_in']:.1f} s"
+            return "not in the cut"
+        out.append(f"What Spark saw in the footage: {watch.get('summary', '')}")
+        for m in (watch.get("movement_moments") or [])[:8]:
+            out.append(f"- moment: {m.get('what')} (source {float(m['start_s']):.1f} s, {at(float(m['start_s']))})")
+        for b in (watch.get("b_roll_candidates") or [])[:4]:
+            out.append(f"- b-roll candidate: {b.get('why')} (source {float(b['start_s']):.1f} s)")
+        if objs := watch.get("trackable_concepts"):
+            out.append("Objects in the frame: " + ", ".join(map(str, objs[:10])))
+    try:
+        spk = json.loads((run_dir / "speakers.json").read_text())
+    except (OSError, ValueError):
+        spk = {}
+    if len(spk.get("speakers") or {}) > 1 or len(spk.get("heads") or {}) > 1:
+        out.append("Speakers and their heads (pin): " + "; ".join(
+            f"{k} -> head {', '.join(v.get('ids') or []) or '?'} (watch's guess: {str(v.get('who', ''))[:60]})"
+            for k, v in (spk.get("speakers") or {}).items()) + "; heads: " + ", ".join(sorted(spk.get("heads") or {})))
+    return out
+
+
+def versions(run_dir: Path, current: int) -> list[str]:
+    """Every version in one line each (score, what made it, the name or star a person gave it): what restore names."""
+    try:
+        labels = json.loads((run_dir / "ui" / "labels.json").read_text())
+    except (OSError, ValueError):
+        labels = {}
+    rows = []
+    for p in sorted(run_dir.glob("edl_v*.json"), key=lambda p: int(p.stem[5:]) if p.stem[5:].isdigit() else 0):
+        n = int(p.stem[5:]) if p.stem[5:].isdigit() else None
+        if n is None or not (run_dir / f"cut_v{n}.mp4").is_file():
+            continue
+        try:
+            e = json.loads(p.read_text())
+        except ValueError:
+            continue
+        last = (e.get("patches") or [{}])[-1] if e.get("patches") else {}
+        made = "the first plan" if not e.get("patches") else (last.get("instruction") or last.get("action") or "")[:70]
+        rv = _review(run_dir, n)
+        lab = labels.get(str(n)) if isinstance(labels, dict) else None
+        name = f" named {lab.get('name')!r}" if isinstance(lab, dict) and lab.get("name") else ""
+        star = " starred" if isinstance(lab, dict) and lab.get("star") else ""
+        rows.append(f"v{n}{' (current)' if n == current else ''}: {e.get('runtime_s', 0):.1f} s"
+                    + (f", review {rv.get('overall')}" if rv else "") + f"{name}{star}; made by: {made}")
+    return ["Versions:", *(f"- {r}" for r in rows[-12:])] if rows else []
+
+
+def history(run_dir: Path, message: str | None = None, n: int = HISTORY_TURNS) -> list[dict]:
+    """The chat's last lines (ui/chat.jsonl), oldest first, without the line of the message being routed (the server
+    writes it when the job starts)."""
+    try:
+        lines = [json.loads(x) for x in (run_dir / "ui" / "chat.jsonl").read_text().splitlines() if x.strip()]
+    except (OSError, ValueError):
+        return []
+    if lines and message and lines[-1].get("role") == "user" and (lines[-1].get("text") or "").strip() == message.strip():
+        lines = lines[:-1]
+    return [{"role": x.get("role"), "text": str(x.get("text") or "")[:240], "version": x.get("version")}
+            for x in lines[-n:] if x.get("role") in ("user", "agent") and x.get("text")]
+
+
+def history_text(turns: list[dict] | None) -> str:
+    if not turns:
+        return ""
+    return "The chat so far (oldest first):\n" + "\n".join(
+        f"- {'Editor' if t.get('role') == 'user' else 'Montivo'}: {t.get('text', '')}"
+        + (f" (made v{t['version']})" if t.get("version") and t.get("role") != "user" else "") for t in turns) + "\n"
 
 
 def _review(run_dir: Path, n: int) -> dict | None:
@@ -245,13 +397,14 @@ def scope_spans(scope: dict) -> set[str]:
 
 
 def route(run_dir: Path, edl: dict, message: str, ledger: Ledger, log, scope: dict | None = None,
-          note: str = "", model: str = SPARK_MODEL) -> tuple[dict, float]:
+          note: str = "", model: str = SPARK_MODEL, history: list[dict] | None = None) -> tuple[dict, float]:
     """The router call: Spark 1.3 reads the message and the version and answers {reply, question, ops}."""
     from .engine.spark import Spark
     prompt = PROMPT.format(version=edl.get("version"), context=context(run_dir, edl),
                            tracks="; ".join(f"{t['id']}: {t['name']}, {t.get('mood', '')}" for t in music_mod.tracks()),
                            presets=", ".join(f"{k}: {PRESET_NAMES[k]}" for k in PRESETS),
-                           scope=scope_text(scope or {}), note=note, message=message.replace('"', "'"))
+                           history=history_text(history), scope=scope_text(scope or {}), note=note,
+                           message=message.replace('"', "'"))
     call = Spark(run_dir, ledger, model=model, log=log).call("ask", prompt, SCHEMA, max_output_tokens=6000,
                                                                     reasoning_effort="low", stage="spark.ask",
                                                                     schema_name="ask_montivo")
@@ -334,6 +487,8 @@ def check(edl: dict, ops: list[dict], scope: dict | None = None) -> tuple[list[d
     kept, skipped = [], []
     for o in ops:
         op = o.get("op")
+        if op == "reorder" and o.get("before") == "end":  # Spark Open says "end" where the schema says empty
+            o = {**o, "before": ""}
         why = None
         if op not in OPS:
             why = f"unknown op {op!r}"
@@ -370,12 +525,46 @@ def check(edl: dict, ops: list[dict], scope: dict | None = None) -> tuple[list[d
             why = "title: no words"
         elif op == "overlay" and (float(o.get("at_s", -1)) < 0 or not (o.get("text") or "").strip()):
             why = "overlay: no cut second or nothing to show"
+        elif op in ("trim", "split", "select") and o.get("span") not in ids:
+            why = f"{op}: {o.get('span')!r} is not a clip of this version ({', '.join(sorted(ids))})"
+        elif op in ("trim", "split") and allowed and o["span"] not in allowed:
+            why = f"{op} {o['span']}: outside your selection ({', '.join(sorted(allowed))})"
+        elif op == "trim" and (o.get("edge") not in ("in", "out") or int(o.get("word", -1)) < 0):
+            why = "trim: no edge (in or out) or no word"
+        elif op == "split" and not by_id[o["span"]]["word_from"] < int(o.get("word", -1)) <= by_id[o["span"]]["word_to"]:
+            why = (f"split: word {o.get('word')} is not inside {o['span']} after its first word "
+                   f"({by_id[o['span']]['word_from']}-{by_id[o['span']]['word_to']})")
+        elif op == "insert" and (int(o.get("turn", -1)) < 0 or int(o.get("word_from", -1)) < 0
+                                 or int(o.get("word_to", -1)) <= int(o.get("word_from", -1))):
+            why = "insert: no turn or not two words"
+        elif op == "insert" and (o.get("before") or "") not in ("", "end") and o["before"] not in ids:
+            why = f"insert: {o['before']!r} is not a clip of this version"
+        elif op == "insert" and (allowed or picked or line):
+            why = "insert: it adds to the cut, not to your selection; clear the selection to put a passage back"
+        elif op == "glossary" and not ((o.get("heard") or "").strip() and (o.get("written") or "").strip()):
+            why = "glossary: the words as heard and as written are both needed"
+        elif op == "speakers" and not ((o.get("speaker") or "").strip() and (o.get("name") or "").strip()):
+            why = "speakers: no speaker or no name"
+        elif op == "pin" and not (o.get("speaker") or "").strip():
+            why = "pin: no speaker"
+        elif op == "restore" and (int(o.get("version", -1)) < 1 or int(o["version"]) == int(edl.get("version") or 0)):
+            why = f"restore: v{o.get('version')} is {'this version' if int(o.get('version', -1)) >= 1 else 'not a version'}"
+        elif op == "seek" and not 0 <= float(o.get("at_s", -1)) <= float(edl.get("runtime_s") or 0) + 0.5:
+            why = f"seek: {float(o.get('at_s', -1)):.1f} s is outside the cut"
+        elif op == "open" and o.get("panel") not in PANELS:
+            why = f"open: {o.get('panel')!r} is not a panel ({', '.join(PANELS)})"
         if why:
             skipped.append(why)
         else:
             kept.append(o)
-    rank = {"caption": 0, "overlay": 0, "replan": 1, "callout": 2, "title_text": 2, "title_on": 2, "title_off": 2, "style": 3,
-            "music_on": 4, "music_off": 4, "punch": 5, "cut": 6, "drop": 6, "reorder": 7, "review": 8}
+    if (r := next((o for o in kept if o["op"] == "restore"), None)) and len([o for o in kept if o["op"] not in UI_OPS]) > 1:
+        skipped += [f"{o['op']} skipped: restore brings v{r['version']} back as it was; ask again on it"
+                    for o in kept if o is not r and o["op"] not in UI_OPS | {"review"}]
+        kept = [o for o in kept if o is r or o["op"] in UI_OPS | {"review"}]
+    rank = {"caption": 0, "overlay": 0, "glossary": 0, "restore": 1, "replan": 1, "callout": 2, "title_text": 2,
+            "title_on": 2, "title_off": 2, "style": 3, "music_on": 4, "music_off": 4, "punch": 5, "speakers": 5,
+            "pin": 5, "cut": 6, "drop": 6, "trim": 6, "split": 7, "insert": 7, "reorder": 7, "pauses": 8, "review": 9,
+            "seek": 10, "select": 10, "open": 10}
     return sorted(kept, key=lambda o: rank[o["op"]]), skipped
 
 
@@ -435,6 +624,14 @@ def run_ops(run_dir: Path, from_v: int, ops: list[dict], planner: str | None, lo
             if op == "reorder":
                 steps.append((f"clip {o['span']} moved " + (f"before {o['before']}" if o["before"] else "to the end"),
                               lambda o=o: human.reorder(run_dir, o["span"], o["before"] or None, from_v=at())))
+        for o in ops:  # the editor's pure edits (human.OPS), each as its CLI edit would run it
+            if (what := pure(run_dir, o)) is not None:
+                label, name, args = what
+                def run(name=name, args=args):
+                    if name == "pin":
+                        human.pin_check(run_dir, args["speaker"], args["head"])
+                    return human._run_edit(run_dir, at(), 0, 0.0, human.OPS[name], **args)
+                steps.append((label, run))
         for what, step in steps:
             try:
                 step()
@@ -447,7 +644,33 @@ def run_ops(run_dir: Path, from_v: int, ops: list[dict], planner: str | None, lo
     return written, done, skipped
 
 
-AGENT_KEYS = ("message", "reply", "router", "ops", "done", "skipped", "pending", "scope", "retry_of")
+def pure(run_dir: Path, o: dict) -> tuple[str, str, dict] | None:
+    """A router op that is one of the editor's pure edits: (what it does in words, the human.OPS name, its args)."""
+    op = o["op"]
+    if op == "trim":
+        return (f"{o['span']} {'starts' if o['edge'] == 'in' else 'ends'} at word {o['word']}", "trim",
+                {"span": o["span"], "edge": o["edge"], "word": int(o["word"])})
+    if op == "split":
+        return f"{o['span']} split before word {o['word']}", "split", {"span": o["span"], "word": int(o["word"])}
+    if op == "insert":
+        where = {"": "where it was said", "end": "at the end"}.get(o.get("before") or "", f"before {o.get('before')}")
+        return (f"turn {o['turn']} words {o['word_from']}-{o['word_to']} put back {where}", "insert",
+                {"turn": int(o["turn"]), "a": int(o["word_from"]), "b": int(o["word_to"]), "before": o.get("before") or None})
+    if op == "pauses":
+        return "pauses shortened", "pauses", {}
+    if op == "glossary":
+        return (f"“{o['heard']}” written “{o['written']}” in every caption", "glossary",
+                {"add": {o["heard"].strip(): o["written"].strip()}})
+    if op == "speakers":
+        return f"speaker {o['speaker']} is {o['name']}", "speakers", {"names": {o["speaker"]: o["name"].strip()}}
+    if op == "pin":
+        head = (o.get("head") or "").strip() or None
+        return (f"the crop follows head {head} when {o['speaker']} talks" if head else
+                f"the crop follows {o['speaker']} automatically again"), "pin", {"speaker": o["speaker"], "head": head}
+    return None
+
+
+AGENT_KEYS = ("message", "reply", "router", "ops", "done", "skipped", "pending", "scope", "retry_of", "ui")
 
 
 def fold(run_dir: Path, from_v: int, written: list[int], record: dict) -> int:
@@ -483,7 +706,11 @@ def op_label(o: dict) -> str:
             "callout": f"callout on {o.get('span')}: “{o.get('text', '')}”" if o.get("text") else f"callout off {o.get('span')}",
             "title_text": f"title card: “{o.get('text', '')}”", "title_on": "title card on",
             "title_off": "title card off",
-            "overlay": f"B-roll at {float(o.get('at_s', 0)):.1f} s: “{o.get('text', '')}”"}.get(op, op)
+            "overlay": f"B-roll at {float(o.get('at_s', 0)):.1f} s: “{o.get('text', '')}”",
+            "glossary": f"“{o.get('heard', '')}” written “{o.get('written', '')}” everywhere",
+            "speakers": f"speaker {o.get('speaker')} named {o.get('name')}",
+            "pin": f"crop follows head {o.get('head')} for {o.get('speaker')}" if o.get("head") else f"crop automatic for {o.get('speaker')}",
+            "split": f"{o.get('span')} split before word {o.get('word')}"}.get(op, op)
 
 
 def needs_preview(ops: list[dict], planner: str | None = None) -> bool:
@@ -603,7 +830,15 @@ def execute(run_dir: Path, from_v: int, ops: list[dict], record: dict, passes: i
             budget: float, log) -> dict:
     """Run the checked ops: one folded version, rendered once (with the review loop when asked), or the review loop
     alone when the message only asked for a review."""
-    if ops:
+    if r := next((o for o in ops if o["op"] == "restore"), None):  # check keeps it alone: a version as it was
+        out = human.restore(run_dir, int(r["version"]), passes=passes, budget=budget)
+        record["done"], record["version"] = [f"v{r['version']} back as v{out['version']}"], out["version"]
+        edl_path = run_dir / f"edl_v{out['version']}.json"
+        edl = json.loads(edl_path.read_text())
+        edl["patches"][-1]["agent"] = {k: record[k] for k in AGENT_KEYS if k in record}
+        edl["patches"][-1]["instruction"] = record["message"]
+        dump_json(edl_path, edl)
+    elif ops:
         written, done, more = run_ops(run_dir, from_v, ops, planner, log)
         record["done"], record["skipped"] = done, record["skipped"] + more
         if written:
@@ -647,7 +882,7 @@ def ask(run_dir: Path, message: str | None, from_v: int | None = None, passes: i
     answer = None
     if use_model:
         try:
-            answer, cost = route(run_dir, edl, message, ledger, log, scope, note)
+            answer, cost = route(run_dir, edl, message, ledger, log, scope, note, history=history(run_dir, message))
             router = SPARK_MODEL
         except (SystemExit, Exception) as e:  # a failed or unparsable call: the keyword reader still helps
             log(f"agent: the router call failed ({e}); reading keywords")
@@ -656,6 +891,7 @@ def ask(run_dir: Path, message: str | None, from_v: int | None = None, passes: i
     ops, skipped = check(edl, answer.get("ops") or [], scope)
     passes = max(passes, 1 if any(o["op"] == "review" for o in ops) else 0)
     ops = [o for o in ops if o["op"] != "review"]
+    ui, ops = [o for o in ops if o["op"] in UI_OPS], [o for o in ops if o["op"] not in UI_OPS]
     log(f"agent ({router}): {answer.get('reply', '')!r}; ops: {', '.join(o['op'] for o in ops) or 'none'}"
         + (f"; skipped: {'; '.join(skipped)}" if skipped else ""))
     record = {"message": message, "reply": (answer.get("reply") or "").strip(), "question": (answer.get("question") or "").strip(),
@@ -663,6 +899,8 @@ def ask(run_dir: Path, message: str | None, from_v: int | None = None, passes: i
               "done": [], "skipped": skipped, "version": None}
     if scope:
         record["scope"] = scope
+    if ui:  # the playhead, a selection, a panel: the editor does them when the reply lands
+        record["ui"] = compact(ui)
     if retry_of:
         record["retry_of"] = retry_of
     if preview and ops and needs_preview(ops, planner):

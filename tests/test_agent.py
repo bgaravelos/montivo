@@ -5,13 +5,14 @@ import json
 from montivo import agent, human
 
 BLANK = {"span": "", "before": "", "text": "", "at_s": -1, "track": "", "level_db": 0, "on": False, "preset": "",
-         "look_prompt": "", "instruction": ""}
+         "look_prompt": "", "instruction": "", "word_from": -1, "word_to": -1, "word": -1, "edge": "", "turn": -1,
+         "version": -1, "speaker": "", "name": "", "head": "", "heard": "", "written": "", "panel": ""}
 SPANS = [{"id": "s1", "role": "hook", "t_in": 0.0, "t_out": 1.0, "words": "hi"},
          {"id": "s2", "role": "payoff", "t_in": 2.0, "t_out": 3.0, "words": "bye"}]
 
 
-def op(name, **kw):
-    return BLANK | {"op": name} | kw
+def op(op_name, **kw):
+    return BLANK | {"op": op_name} | kw
 
 
 def _run(tmp_path, edl=None):
@@ -51,7 +52,7 @@ def test_the_keyword_reader_without_a_key():
 
 def test_one_message_makes_one_version_rendered_once(tmp_path, monkeypatch):
     d = _run(tmp_path)
-    monkeypatch.setattr(agent, "route", lambda *a: ({"reply": "Lo-fi under it, bold captions, punch-ins on.",
+    monkeypatch.setattr(agent, "route", lambda *a, **kw: ({"reply": "Lo-fi under it, bold captions, punch-ins on.",
                                                      "question": "", "ops": [op("punch", on=True),
                                                                              op("music_on", track="lofi_hip_hop"),
                                                                              op("style", preset="bold_pop"),
@@ -84,7 +85,7 @@ def test_a_single_edit_keeps_its_own_action(tmp_path, monkeypatch):
 
 def test_a_question_gets_a_reply_and_no_version(tmp_path, monkeypatch):
     d = _run(tmp_path)
-    monkeypatch.setattr(agent, "route", lambda *a: ({"reply": "v3 is 2 s long.", "question": "", "ops": []}, 0.003))
+    monkeypatch.setattr(agent, "route", lambda *a, **kw: ({"reply": "v3 is 2 s long.", "question": "", "ops": []}, 0.003))
     rec = agent.ask(d, "πόσο διαρκεί;")
     assert rec["version"] is None and rec["reply"] == "v3 is 2 s long."
     assert sorted(p.name for p in d.glob("edl_v*.json")) == ["edl_v3.json"]
@@ -92,7 +93,7 @@ def test_a_question_gets_a_reply_and_no_version(tmp_path, monkeypatch):
 
 def test_an_edit_the_version_refuses_is_reported(tmp_path, monkeypatch):
     d = _run(tmp_path, {"version": 3, "spans": [], "runtime_s": 2.0, "punch": True})
-    monkeypatch.setattr(agent, "route", lambda *a: ({"reply": "Punch-ins on.", "question": "", "ops": [op("punch", on=True)]}, 0.0))
+    monkeypatch.setattr(agent, "route", lambda *a, **kw: ({"reply": "Punch-ins on.", "question": "", "ops": [op("punch", on=True)]}, 0.0))
     rec = agent.ask(d, "punch-ins on")
     assert rec["version"] is None and rec["done"] == [] and "already on" in rec["skipped"][0]
 
@@ -116,3 +117,57 @@ def test_the_ask_route_without_the_key_reads_keywords(tmp_path, monkeypatch):
     assert r.status_code == 200 and seen["kind"] == "ask" and "--no-model" in seen["args"]
     assert seen["args"][seen["args"].index("--message") + 1] == "add some music (about s2)"
     assert seen["chat"]["text"] == "add some music" and seen["chat"]["kind"] == "ask"
+
+
+WSPANS = [{"id": "s1", "role": "hook", "t_in": 0.0, "t_out": 1.0, "words": "hi there you", "turn_id": 0, "word_from": 0,
+           "word_to": 2},
+          {"id": "s2", "role": "payoff", "t_in": 2.0, "t_out": 3.0, "words": "bye now", "turn_id": 1, "word_from": 3,
+           "word_to": 4}]
+
+
+def test_the_editors_own_edits_are_checked_too():
+    edl = {"version": 4, "spans": WSPANS, "runtime_s": 2.0}
+    ops, skipped = agent.check(edl, [op("split", span="s1", word=1), op("split", span="s1", word=0),
+                                     op("trim", span="s2", edge="out", word=3), op("trim", span="s2", word=3),
+                                     op("insert", turn=0, word_from=5, word_to=7, before="s2"),
+                                     op("insert", turn=0, word_from=5, word_to=5),
+                                     op("glossary", heard="news", written="Muse"), op("speakers", speaker="A"),
+                                     op("seek", at_s=1.5), op("seek", at_s=9.0), op("open", panel="music"),
+                                     op("open", panel="nope"), op("pauses")])
+    assert [o["op"] for o in ops] == ["glossary", "trim", "split", "insert", "pauses", "seek", "open"]
+    assert len(skipped) == 6
+    # a restore brings a version back as it was: the other edits wait, the playhead still moves
+    ops, skipped = agent.check(edl, [op("restore", version=2), op("drop", span="s2"), op("seek", at_s=0.5)])
+    assert [o["op"] for o in ops] == ["restore", "seek"] and "restore brings v2 back" in skipped[0]
+    assert agent.check(edl, [op("restore", version=4)])[0] == []  # this version already
+    # an insert adds to the cut: not with a selection; reorder takes "end" as the end
+    assert agent.check(edl, [op("insert", turn=0, word_from=5, word_to=7)], {"clips": ["s1"]})[0] == []
+    assert agent.check(edl, [op("reorder", span="s1", before="end")])[0][0]["before"] == ""
+
+
+def test_pure_ops_name_the_editors_edits():
+    assert agent.pure(None, op("insert", turn=2, word_from=5, word_to=9, before="end"))[1:] == (
+        "insert", {"turn": 2, "a": 5, "b": 9, "before": "end"})
+    assert agent.pure(None, op("insert", turn=2, word_from=5, word_to=9))[2]["before"] is None
+    assert agent.pure(None, op("glossary", heard="news ", written="Muse"))[2] == {"add": {"news": "Muse"}}
+    assert agent.pure(None, op("pin", speaker="B", head=""))[2] == {"speaker": "B", "head": None}
+    assert all(agent.pure(None, op(n, span="s1", edge="in", word=1, speaker="A", name="Ann", heard="a", written="b"))[1]
+               in human.OPS for n in ("trim", "split", "pauses", "speakers"))
+
+
+def test_the_router_reads_the_chat_and_the_recording(tmp_path):
+    d = _run(tmp_path, {"version": 3, "spans": WSPANS, "runtime_s": 2.0, "source": {"fps": 30}, "patches": []})
+    words = [{"w": w, "i": i, "turn_id": t, "speaker": "A", "t_start": i * 0.5, "t_end": i * 0.5 + 0.4}
+             for t, ws in ((0, ["hi", "there", "you", "okay", "so"]), (1, ["ah", "um", "er", "bye", "now"]))
+             for i, w in enumerate(ws)]  # s1 keeps turn 0 words 0-2, s2 turn 1 words 3-4
+    (d / "voice" / "voice.json").write_text(json.dumps({"words": words}))
+    (d / "ui").mkdir()
+    (d / "ui" / "chat.jsonl").write_text("\n".join(json.dumps(x) for x in [
+        {"role": "user", "text": "put chill lofi under it"}, {"role": "agent", "text": "Chill Lofi.", "version": 3},
+        {"role": "user", "text": "something livelier"}]))
+    turns = agent.history(d, "something livelier")
+    assert [t["text"] for t in turns] == ["put chill lofi under it", "Chill Lofi."]
+    assert "(made v3)" in agent.history_text(turns) and agent.history_text([]) == ""
+    rows = agent.footage(d, json.loads((d / "edl_v3.json").read_text()))
+    assert any("turn 0" in r and "3 okay 4 so" in r for r in rows)  # what insert can put back, by turn and number
+    assert any("turn 1" in r and "0 ah 1 um 2 er" in r for r in rows)
