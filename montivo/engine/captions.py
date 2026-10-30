@@ -29,7 +29,7 @@ import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from .edl import norm
+from .edl import norm, title_header_on
 from .frame import FRAME_916, Frame, frame_for
 from .graphics import CaptionStyle, Look, callout_size, draw_callout, draw_caption, font_path, line_width, normalize_look
 from .reframe import id_at
@@ -48,6 +48,9 @@ LINE_MIN_S = 0.4  # no caption line shows for less ("Hi." showed 0.15 s on run 0
 CALLOUT_LEAD_S = 0.3
 CALLOUT_MIN_S, CALLOUT_MAX_S = 2.0, 3.0
 CALLOUT_FADE_S = 0.2
+HEADER_S = 2.2  # the title header (edl.title_style "header") stays this long over the opening speech
+HEADER_SIZE, HEADER_MIN_SIZE = 64, 40  # its pill's font size, shrunk until the words fit the frame
+HEADER_SIDE = 54  # px kept clear at each side of the frame
 
 # The name fixes and the highlighted names of Billy's demo footage ("metal models" -> "Meta models", "Montivo" in the
 # marker colour). They belong to those runs, not to every clip: build_edl writes an empty `glossary` and `highlight`
@@ -500,6 +503,28 @@ def place_callout(w: int, h: int, person: list[float] | None, head: list[float] 
     return x, max(safe_top, cands[-1][0]), "overlap"
 
 
+def place_header(w: int, h: int, head: list[float] | None, avoid: list[list[float]],
+                 frame: Frame = FRAME_916) -> tuple[int, int, str]:
+    """The title header, centred: just above the head when that is under the top UI (a seated speaker, 016: the head
+    starts at y 819 of 1920), else at the top of the safe band when the head sits lower, else under the head; never
+    over it or a caption. place_callout keeps 9:16 callouts off the room above the head, which a callout anchored to
+    the person does not need."""
+    safe_top, safe_bottom = frame.band(SAFE_TOP, SAFE_BOTTOM)
+    x = max(0, (frame.w - w) // 2)
+    cands = [(int(head[1] - HEAD_MARGIN - h), "above_head")] if head is not None else []
+    cands.append((safe_top, "top"))
+    if head is not None:
+        cands.append((int(head[3] + HEAD_MARGIN), "below_head"))
+    for y, where in cands:
+        r = [x, y, x + w, y + h]
+        if y < safe_top or y + h > safe_bottom:
+            continue
+        if overlaps(r, head, HEAD_MARGIN / 2) or any(overlaps(r, a, 12) for a in avoid):
+            continue
+        return x, y, where
+    return x, safe_top, "overlap"
+
+
 # --------------------------------------------------------------------------- review patches
 
 def override_for(words: list[CWord], overrides: list[dict]) -> dict | None:
@@ -837,6 +862,28 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                                     and ln.words[0].t_in - 0.01 <= f["src_t"] <= ln.words[-1].t_out + 0.01],
                 })
 
+    header = None
+    header_rect: list[float] | None = None
+    if title_header_on(edl) and segments:
+        # the title words as a pill over the first seconds of speech (place_header: above the head, clear of it and of
+        # the captions), in the look's callout colours; a callout of the first clip keeps clear of it
+        text = " ".join(edl["title_card_text"].split())
+        a, b = 0.0, round(min(segments[0].duration, HEADER_S), 4)
+        size = HEADER_SIZE
+        while size > HEADER_MIN_SIZE and callout_size(text, size, key=look.font)[0] > frame.w - 2 * HEADER_SIDE:
+            size -= 2
+        w_px, h_px = callout_size(text, size, key=look.font)
+        head = union_out(head_src, 0, a, b, subject_head(0))
+        x, y, where = place_header(w_px, h_px, head, [r for (ra, rb, r) in caption_rects[0] if ra < b and rb > a], frame)
+        header_rect = [x, y, x + w_px, y + h_px]
+        png = out_dir / "title_header.png"
+        if on_screen(seg_cut[0] + a, seg_cut[0] + b):
+            draw_callout(text, png, size=size, look=look)
+            overlays[0].append(Overlay(png=png, x=x, y=y, t_in=a, t_out=b, fade_s=CALLOUT_FADE_S))
+        header = {"text": text, "t_in": round(seg_cut[0] + a, 3), "t_out": round(seg_cut[0] + b, 3),
+                  "box": [x, y, w_px, h_px], "size": size, "placement": where,
+                  "over_face": overlaps(header_rect, head), "head_box": [round(v) for v in head] if head else None}
+
     call_entries: list[dict] = []
     if callouts:
         for s in edl["spans"]:
@@ -852,7 +899,16 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                 continue
             person = clamp_frame(union_out(person_src, i, a, b, largest_at), frame)
             head = union_out(head_src, i, a, b, subject_head(i))
+            if header and i == 0 and a < header["t_out"] - seg_cut[0] and not s.get("callout_shift_s"):
+                # two pills at once: the first clip's callout waits for the title to go when the clip has room for it
+                # after (a person's timing stays), else it keeps its time and its place clear of the title
+                a2 = header["t_out"] - seg_cut[0] + CALLOUT_FADE_S
+                b2 = min(seg.duration, a2 + dur)
+                if b2 - a2 >= 0.5:
+                    a, b = a2, b2
             avoid = [r for (ra, rb, r) in caption_rects[i] if ra < b and rb > a]
+            if header_rect and i == 0 and a < header["t_out"] - seg_cut[0]:
+                avoid.append(header_rect)
             clook = own.get(s["id"], look)
             w_px, h_px = callout_size(text, key=clook.font)
             x, y, where = place_callout(w_px, h_px, person, head, avoid, frame)
@@ -874,4 +930,6 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                                 "look": look.to_json(), "font_path": font_path(look.font),
                                 "min_line_s": LINE_MIN_S,
                                 "dedupe_gap_s": DEDUPE_GAP_S, "glossary": glossary, "highlight": sorted(names)}}
+    if "title_style" in edl:  # an EDL from before the header keeps its fields as they were
+        fields["title_header"] = header
     return fields, overlays

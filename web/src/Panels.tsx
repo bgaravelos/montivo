@@ -385,7 +385,9 @@ export function CaptionsPanel({ v, t, next, canEdit, onSeek, onApply, onAsk, foc
 
 /** A text edit for montivo.human text: callouts by span ("" removes one), new title words, the card on or off. */
 // callout_at: seconds into the clip where its callout starts (T1, a callout at the playhead)
-export type TextEdit = { callouts?: Record<string, string>; title?: string; title_card?: boolean; callout_at?: Record<string, number> };
+// title_style: "header" = the title over the opening speech ($0), "card" = a Muse Image card before the first word
+export type TextEdit = { callouts?: Record<string, string>; title?: string; title_card?: boolean; callout_at?: Record<string, number>;
+  title_style?: "header" | "card" };
 type Hook = { text: string; why: string };
 
 export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, rev, live, clipAt, onHooks }: {
@@ -399,12 +401,13 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, 
   const [staged, setStaged] = useState<Record<string, string>>({}); // span id -> callout text ("" = removed)
   const [title, setTitle] = useState<string | null>(null);
   const [card, setCard] = useState<boolean | null>(null);
+  const [style, setStyle] = useState<"header" | "card" | null>(null);
   const [editing, setEditing] = useState<string | null>(null); // a span id or "title"
   const [draft, setDraft] = useState("");
   const [at, setAt] = useState<Record<string, number>>({}); // span id -> seconds into the clip its callout starts
   const [hooks, setHooks] = useState<Hook[] | null>(null);
   const [hooking, setHooking] = useState(false);
-  useEffect(() => { setStaged({}); setTitle(null); setCard(null); setEditing(null); setAt({}); }, [rev]);
+  useEffect(() => { setStaged({}); setTitle(null); setCard(null); setStyle(null); setEditing(null); setAt({}); }, [rev]);
   const body = useRef<HTMLDivElement>(null);
   /** T1: a callout at a moment: the clip there gets one starting at that second (its words box opens), or its
    *  callout moves to start there. */
@@ -430,6 +433,8 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, 
   }, [focus?.nonce]); // eslint-disable-line
   if (!v) return <section className="side-panel"><div className="panel-head"><span className="ph-title">Text</span></div></section>;
   const cardOn = v.title_card !== false;
+  const nowStyle = v.title_style ?? "card", wantStyle = style ?? nowStyle, isCard = wantStyle === "card";
+  const imageCost = isCard && (title != null || (style === "card" && !state.media.title_png)); // a new Muse Image card
   const callout = (sid: string) => (staged[sid] ?? v.spans.find((x) => x.id === sid)?.callout ?? "").trim();
   const open = (key: string, text: string) => { if (canEdit) return; setEditing(key); setDraft(text); };
   const clean = (x: string) => x.split(/\s+/).filter(Boolean).join(" ");
@@ -444,9 +449,10 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, 
     setEditing(null);
   };
   const timed = Object.keys(at).filter((sid) => callout(sid)); // a time for a clip left without words is dropped
-  const n = Object.keys(staged).length + timed.filter((sid) => !(sid in staged)).length + (title != null ? 1 : 0) + (card != null ? 1 : 0);
-  const needsKey = title != null && !state.has_key;
+  const n = Object.keys(staged).length + timed.filter((sid) => !(sid in staged)).length + (title != null ? 1 : 0) + (card != null ? 1 : 0) + (style != null ? 1 : 0);
+  const needsKey = imageCost && !state.has_key;
   const apply = () => onApply({ ...(Object.keys(staged).length ? { callouts: staged } : {}), ...(title != null ? { title } : {}), ...(card != null ? { title_card: card } : {}),
+    ...(style != null ? { title_style: style } : {}),
     ...(timed.length ? { callout_at: Object.fromEntries(timed.map((sid) => [sid, at[sid]])) } : {}) });
   const hereSp = clipAt ? v.spans.find((x) => x.id === clipAt.span) ?? null : null;
   const hereHas = hereSp ? !!callout(hereSp.id) : false;
@@ -456,7 +462,7 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, 
   };
   const hooksBtn = (
     <button className="btn quiet small" disabled={!!canEdit || !state.has_key || hooking}
-      title={canEdit ?? (!state.has_key ? state.key_note ?? "Set MODEL_API_KEY to ask Muse Spark" : `Muse Spark writes three title lines from what the cut says (about ${usd(state.costs?.titles ?? 0.009)}); picking one makes a new card ($0.01)`)}
+      title={canEdit ?? (!state.has_key ? state.key_note ?? "Set MODEL_API_KEY to ask Muse Spark" : `Muse Spark writes three title lines from what the cut says (about ${usd(state.costs?.titles ?? 0.009)})${isCard ? "; picking one makes a new card ($0.01)" : ""}`)}
       onClick={askHooks}>{hooking ? <MarkLoader size={12} /> : <Icon name="spark" size={12} />} Suggest 3 hooks · ~{usd(state.costs?.titles ?? 0.009)}</button>
   );
   const hookList = hooks && (
@@ -478,26 +484,37 @@ export function TextPanel({ state, v, t, next, canEdit, onSeek, onApply, focus, 
     <section className="side-panel">
       <div className="panel-head"><span className="ph-title">Text</span><span className="ph-sub">title and callouts</span></div>
       <div className="panel-body">
-        <div className="pn-k">Title card</div>
+        <div className="pn-k">Title</div>
+        <div className="seg-row" role="radiogroup" aria-label="How the title shows">
+          {(["header", "card"] as const).map((s) => (
+            <button key={s} role="radio" aria-checked={wantStyle === s} className={`chip ${wantStyle === s ? "on" : ""}`} disabled={!!canEdit}
+              title={canEdit ?? (s === "header" ? "The title words over the first seconds of speech: the hook starts at once ($0)"
+                : "A Muse Image card for 1.5 s before the first word" + (state.media.title_png ? "" : " ($0.01 to make it)"))}
+              onClick={() => setStyle(s === nowStyle ? null : s)}>{s === "header" ? "Over the opening" : "Card before"}</button>
+          ))}
+        </div>
         {v.title_card_text ? (
           <div className={`title-card ${(card ?? cardOn) ? "" : "off"} ${title != null || card != null ? "staged" : ""}`}>
-            <button className="tc-thumb" onClick={() => v.title_s > 0 && onSeek(0)} title="Play the title card">
-              {state.media.title_png && <img src={fileUrl(state.id, state.media.title_png)} alt="" />}
-            </button>
+            {nowStyle === "card" && ( // the header is drawn over the cut, nothing to show apart from it
+              <button className="tc-thumb" onClick={() => v.title_s > 0 && onSeek(0)} title="Play the title card">
+                {state.media.title_png && <img src={fileUrl(state.id, state.media.title_png)} alt="" />}
+              </button>
+            )}
             {editing === "title" ? editor("Title card words") : (
               <span className="tc-text" onDoubleClick={() => open("title", title ?? v.title_card_text ?? "")}>{title ?? v.title_card_text}</span>
             )}
-            {title != null && <span className="lr-was">was: {v.title_card_text} · new words make a new Muse Image card ($0.01)</span>}
-            <span className="tc-meta">{v.title_s > 0 ? `0:00 – ${tc(v.title_s)} · Muse Image background` : cardOn ? "on" : "off in this version"}</span>
+            {title != null && <span className="lr-was">was: {v.title_card_text}{isCard ? " · new words make a new Muse Image card ($0.01)" : ""}</span>}
+            <span className="tc-meta">{v.title_s > 0 ? `0:00 – ${tc(v.title_s)} · Muse Image background`
+              : !cardOn ? "off in this version" : nowStyle === "header" ? "over the first 2.2 s of speech, in the look's callout colours" : "on"}</span>
             <span className="tc-actions">
-              <button className="btn quiet small" disabled={!!canEdit} title={canEdit ?? "New words for the card (Muse Image draws them, $0.01)"}
+              <button className="btn quiet small" disabled={!!canEdit} title={canEdit ?? (isCard ? "New words for the card (Muse Image draws them, $0.01)" : "New title words ($0)")}
                 onClick={() => open("title", title ?? v.title_card_text ?? "")}><Icon name="pencil" size={12} /> Words</button>
-              <button className="btn quiet small" disabled={!!canEdit} title={canEdit ?? "The card in front of the cut, on or off ($0)"}
+              <button className="btn quiet small" disabled={!!canEdit} title={canEdit ?? "The title, on or off ($0)"}
                 onClick={() => setCard((c) => { const want = !(c ?? cardOn); return want === cardOn ? null : want; })}>
                 {(card ?? cardOn) ? "Turn off" : "Turn on"}</button>
             </span>
           </div>
-        ) : <p className="mute small">{title ? <>New title card: <b>{title}</b> ($0.01 at the render)</> : "No title card."}</p>}
+        ) : <p className="mute small">{title ? <>New title: <b>{title}</b>{isCard ? " ($0.01 at the render)" : ""}</> : "No title."}</p>}
         <div className="st-row">{hooksBtn}</div>
         {hookList}
         <div className="pn-k">Callouts</div>

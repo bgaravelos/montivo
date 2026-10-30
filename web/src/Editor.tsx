@@ -924,7 +924,7 @@ const DRAFT_OPS: Record<string, { op: string; args: (b: Record<string, unknown>)
   caption: { op: "caption", args: (b) => ({ edits: b.edits }) },
   glossary: { op: "glossary", args: (b) => ({ add: b.add ?? {}, drop: b.drop ?? [] }) },
   linebreak: { op: "caption_break", args: (b) => ({ at: b.at, join: !!b.join }) },
-  text: { op: "text", args: (b) => pick(b, ["callouts", "title", "title_card", "callout_at"]) },
+  text: { op: "text", args: (b) => pick(b, ["callouts", "title", "title_card", "callout_at", "title_style"]) },
   style: { op: "style", args: (b) => pick(b, ["look", "callouts", "prompt", "why", "clips"]) },
   music: { op: "music", args: (b) => ({ track: b.track ?? null, ...pick(b, ["level_db", "duck_db", "voice_db", "start_s", "fade_out_s", "duck_edits"]) }) },
   pin: { op: "pin", args: (b) => ({ speaker: b.speaker, head: b.head ?? null }) },

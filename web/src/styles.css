@@ -287,6 +287,8 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .chip { font-size: 11px; padding: 1px 8px; border-radius: 99px; background: var(--panel-3); color: var(--text-2); border: 1px solid var(--line-2); }
 .chip.sel { opacity: 0.55; }
 button.chip.on { background: var(--accent); color: var(--ink, #141414); border-color: var(--accent); }
+.seg-row { display: flex; gap: 6px; flex-wrap: wrap; margin: 2px 0 8px; }
+.seg-row .chip { font-size: 12px; padding: 3px 10px; cursor: pointer; }
 .mu-details summary { cursor: pointer; font-size: 12px; color: var(--text-2); margin: 6px 0; }
 .chip.sel.on { opacity: 1; border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .sugg { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 12px 8px; }

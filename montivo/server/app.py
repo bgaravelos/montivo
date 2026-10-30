@@ -34,6 +34,7 @@ from ..config import OPEN_MODEL
 from ..engine.api import dump_json as write_json
 from ..engine.frame import ASPECTS
 from ..engine import preview as live_preview_engine
+from ..engine.edl import title_style
 from ..engine.graphics import FONTS, PRESET_NAMES, PRESETS, font_path, normalize_look
 from . import draft, hosted, media, preflight, share
 from .runs import draft_music, fingerprint, heads, list_runs, parse_log, progress, read_json, replay_script, run_state, version_entry
@@ -1705,7 +1706,9 @@ def create_app(root: Path) -> FastAPI:
         frm = int(b.get("from") or latest_version(d))
         passes = review_passes(b)
         callouts = b.get("callouts") or {}
-        title, card = b.get("title"), b.get("title_card")
+        title, card, style = b.get("title"), b.get("title_card"), b.get("title_style")
+        if style is not None and style not in ("header", "card"):
+            raise HTTPException(400, "title_style: header or card")
         if not isinstance(callouts, dict) or not all(re.fullmatch(r"s\d+", k) and isinstance(v, str) and len(v) <= 80
                                                      for k, v in callouts.items()):
             raise HTTPException(400, "callouts: {span id: text up to 80 characters}")
@@ -1714,14 +1717,19 @@ def create_app(root: Path) -> FastAPI:
         if card is not None and not isinstance(card, bool):
             raise HTTPException(400, "title_card: true or false")
         at = draft.clean_panel_op("text", {"callouts": callouts, "callout_at": b.get("callout_at") or {}, "title_card": False}).get("callout_at") or {}
-        if not callouts and title is None and card is None and not at:
+        if not callouts and title is None and card is None and style is None and not at:
             raise HTTPException(400, "nothing to change")
-        if title is not None or passes:
-            need_key("New title card words (Muse Image)" if title is not None else "Reviewing the new cut",
-                     (0.01 if title is not None else 0.0) + COST["review"] * passes)
+        prev = read_json(d / f"edl_v{frm}.json") or {}
+        # a Muse Image card is made for new words in the card style, or for a switch to it without a card yet
+        image = (style or title_style(prev)) == "card" and (title is not None or (
+            style == "card" and not (d / "title" / "title_card.png").is_file()))
+        if image or passes:
+            need_key("New title card words (Muse Image)" if image else "Reviewing the new cut",
+                     (0.01 if image else 0.0) + COST["review"] * passes)
         args = ["-m", "montivo.human", "text", f"runs/{run_id}", *[f"--callout={k}={v}" for k, v in callouts.items()],
                 *([f"--title={title}"] if title is not None else []),
                 *(["--title-on" if card else "--title-off"] if card is not None else []),
+                *([f"--title-style={style}"] if style else []),
                 *[f"--callout-at={k}={v:.2f}" for k, v in at.items()],
                 "--from", str(frm), "--review", str(passes)]
         what = [f"{k}: “{v}”" if v else f"{k}: no callout" for k, v in callouts.items()]
@@ -1730,6 +1738,8 @@ def create_app(root: Path) -> FastAPI:
             what.append(f"title: “{title}”")
         if card is not None:
             what.append("title card on" if card else "title card off")
+        if style is not None:
+            what.append("title over the opening speech" if style == "header" else "title as a card before the speech")
         job = start_job(st, run_id, "text", "Edit text", args,
                         chat={"role": "user", "text": f"Text in v{frm}: {'; '.join(what)}.", "chips": [f"v{frm}"], "kind": "text"})
         return {"job": job.public()}

@@ -221,8 +221,9 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
                heard: list[dict] | None = None, edge_words: dict | None = None, head: dict | None = None,
                diff_heard: list[dict] | None = None, music: dict | None = None,
                not_in_source: list[str] | None = None, broll: list[dict] | None = None,
-               pauses: list[dict] | None = None) -> str:
-    """The facts handed to the reviewer, numbered. `music` (the render's music record) says a bed is mixed in on
+               pauses: list[dict] | None = None, title_header: dict | None = None) -> str:
+    """The facts handed to the reviewer, numbered. `title_header` (the EDL's, a header title) says the pill at the
+    top of the opening seconds is the title, not a callout, and that the speech starts under it. `music` (the render's music record) says a bed is mixed in on
     purpose and that the silences and heard words come from the speech without it. `heard` adds the heard phrases and the caption diff (a reviewer that
     cannot hear); `diff_heard` adds only the caption diff (Spark 1.3: in the benchmark the phrases cost it the weak
     hook, 4/4 -> 2/4, while the diff brought caption text 4/6 -> 6/6)."""
@@ -329,6 +330,11 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
         out.append(f"{len(out) + 1}. Pauses a person shortened (at these cuts the silence between two words was cut down): "
                    + "; ".join(f"{p['t']:.2f} s, {p['was_s']:.2f} s -> {p['kept_s']:.2f} s" for p in pauses)
                    + ". If one was a dramatic pause that mattered, extend_span on the clip before that cut gives it back whole.")
+    if title_header:
+        out.append(f"{len(out) + 1}. The title \"{title_header['text']}\" is shown on purpose as a pill near the top "
+                   f"from {title_header['t_in']:.2f} to {title_header['t_out']:.2f} s while the speech already runs "
+                   "under it (no title card in front of the cut). It is the video's title, not a callout: judge "
+                   "callouts_anchored without it, and the hook by the speech, which starts at once.")
     if not_in_source:
         out.append(f"{len(out) + 1}. The source footage was searched for everything the brief asks for; these are not "
                    "in it, so no cut of this footage can contain them: " + "; ".join(f"\"{x}\"" for x in not_in_source)
@@ -1400,7 +1406,7 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
                            head=head, diff_heard=words_heard, music=(edl.get("render") or {}).get("music"),
                            not_in_source=edl.get("brief_missing"),
                            broll=[b for b in (edl.get("render") or {}).get("overlays") or [] if b.get("shown")],
-                           pauses=shortened_pauses(edl))
+                           pauses=shortened_pauses(edl), title_header=edl.get("title_header"))
         gate = gate_check(caps, edges, edge_words, head)
         gate["checked_captions"] = [[c["t_in"], c["t_out"]] for c in timeline if c.get("checked")]
         copy_path, up = f_copy.result()

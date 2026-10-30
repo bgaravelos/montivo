@@ -65,7 +65,7 @@ from .engine import broll
 from .engine.api import dump_json
 from .engine.captions import CALLOUT_LEAD_S, CALLOUT_MIN_S
 from .engine.edges import Audio, Words, reset_edges, tighten_edges
-from .engine.edl import build_edl, carry_run_words, edl_summary, normalize_roles
+from .engine.edl import build_edl, carry_run_words, edl_summary, normalize_roles, title_card_on, title_style
 from .engine.graphics import Look, normalize_look, restyle
 from .engine.music import DUCK_DB as MUSIC_DUCK_DB, FADE_OUT_S as MUSIC_FADE_OUT_S, LEVEL_DB as MUSIC_LEVEL_DB, normalize_music
 from .engine.music import follow_cut
@@ -553,9 +553,10 @@ def callout_shift(span: dict, at: float) -> float:
 
 
 def text_fixes(edl: dict, callouts: dict[str, str], title: str | None, title_card: bool | None,
-               callout_at: dict[str, float] | None = None) -> list[dict]:
+               callout_at: dict[str, float] | None = None, style: str | None = None) -> list[dict]:
     """The patch entries of a text edit: callout_text per span ("" removes it), callout_time per span of `callout_at`
-    (seconds into the clip where its callout starts, T1), title_text, title_off / title_on. Raises SystemExit for a
+    (seconds into the clip where its callout starts, T1), title_text, title_off / title_on, title_style ("header":
+    the words over the opening speech, "card": the Muse Image card before it, edl.title_style). Raises SystemExit for a
     span that is not in the EDL, a time for a clip that has no callout, or an edit that changes nothing."""
     by_id = {s["id"]: s for s in edl["spans"]}
     out = []
@@ -586,12 +587,22 @@ def text_fixes(edl: dict, callouts: dict[str, str], title: str | None, title_car
         if not title:
             raise SystemExit("the title is empty: use --title-off to drop the card")
         if title != (edl.get("title_card_text") or ""):
+            card = (style or title_style(edl)) == "card"
             out.append({"op": "title_text", "target": "title", "issue": -1, "severity": "human",
                         "args": {"text": title, "was": edl.get("title_card_text")},
-                        "note": f"title card {edl.get('title_card_text')!r} -> {title!r} (new Muse Image card, $0.01)"})
+                        "note": f"title {edl.get('title_card_text')!r} -> {title!r}"
+                                + (" (new Muse Image card, $0.01)" if card else " (header, $0)")})
     if title_card is not None and title_card != (edl.get("title_card", True) is not False):
         out.append({"op": "title_on" if title_card else "title_off", "target": "title", "issue": -1, "severity": "human",
                     "note": "title card back on" if title_card else "title card off"})
+    if style is not None:
+        if style not in ("header", "card"):
+            raise SystemExit(f"title style {style!r}: header or card")
+        if style != title_style(edl):
+            out.append({"op": "title_style", "target": "title", "issue": -1, "severity": "human", "args": {"style": style},
+                        "note": "title over the opening speech" if style == "header"
+                        else "title as a Muse Image card before the speech" + ("" if edl.get("title_card_text") else
+                                                                               " (no title words yet)")})
     if not out:
         raise SystemExit("nothing to change: the texts are already these")
     return out
@@ -600,10 +611,10 @@ def text_fixes(edl: dict, callouts: dict[str, str], title: str | None, title_car
 @follows_cut
 def text_edit(edl: dict, words: Words, audio: Audio | None, callouts: dict[str, str] | None = None,
               title: str | None = None, title_card: bool | None = None,
-              callout_at: dict[str, float] | None = None) -> tuple[dict, Edit]:
-    """Callout and title card text and when a callout starts (text_fixes); new title words make a new Muse Image card
-    at the render ($0.01)."""
-    fixes = text_fixes(edl, callouts or {}, title, title_card, callout_at)
+              callout_at: dict[str, float] | None = None, title_style: str | None = None) -> tuple[dict, Edit]:
+    """Callout and title text and when a callout starts (text_fixes); new title words in the card style make a new
+    Muse Image card at the render ($0.01), in the header style they are drawn ($0)."""
+    fixes = text_fixes(edl, callouts or {}, title, title_card, callout_at, title_style)
     new, _ = apply_fixes(edl, [], words)  # a clean copy: render fields cleared, order and runtime as they were
     by_id = {s["id"]: s for s in new["spans"]}
     for f in fixes:
@@ -616,6 +627,8 @@ def text_edit(edl: dict, words: Words, audio: Audio | None, callouts: dict[str, 
         elif f["op"] == "title_text":
             new["title_card_text"] = f["args"]["text"]
             new["title_card"] = True
+        elif f["op"] == "title_style":
+            new["title_style"] = f["args"]["style"]
         else:
             new["title_card"] = f["op"] == "title_on"
     say = "; ".join(f["note"].split(" (")[0] for f in fixes)
@@ -623,10 +636,11 @@ def text_edit(edl: dict, words: Words, audio: Audio | None, callouts: dict[str, 
 
 
 def text(run_dir: Path, callouts: dict[str, str] | None = None, title: str | None = None, title_card: bool | None = None,
-         from_v: int | None = None, passes: int = 0, budget: float = 0.15, callout_at: dict[str, float] | None = None) -> dict:
-    """Callout and title card text of edl_v{from} -> edl_vN (text_edit), rendered."""
+         from_v: int | None = None, passes: int = 0, budget: float = 0.15, callout_at: dict[str, float] | None = None,
+         title_style: str | None = None) -> dict:
+    """Callout and title text of edl_v{from} -> edl_vN (text_edit), rendered."""
     return _run_edit(run_dir, from_v, passes, budget, text_edit, callouts=callouts, title=title, title_card=title_card,
-                     **({"callout_at": callout_at} if callout_at else {}))
+                     **({"callout_at": callout_at} if callout_at else {}), **({"title_style": title_style} if title_style else {}))
 
 
 def look_note(was: Look, now: Look) -> str:
@@ -1498,7 +1512,7 @@ def overlay_anchor(edl: dict, at: float) -> tuple[str, float]:
     of montivo.agent's chained edits) gets the title card's length the render will give it."""
     if not edl.get("render"):
         fps = float(edl["source"]["fps"])
-        card = edl.get("title_card", True) is not False and bool(edl.get("title_card_text"))
+        card = title_card_on(edl)
         edl = {**edl, "render": {"title": {"seconds": round(TITLE_S * fps) / fps} if card else None}}
     cmap = cut_map(edl)
     c = next((c for c in cmap if c.cut_in <= at < c.cut_out), None)
@@ -1986,6 +2000,8 @@ def main(argv: list[str] | None = None) -> int:
     tg = tx.add_mutually_exclusive_group()
     tg.add_argument("--title-off", dest="title_card", action="store_const", const=False, default=None)
     tg.add_argument("--title-on", dest="title_card", action="store_const", const=True)
+    tx.add_argument("--title-style", choices=["header", "card"], default=None,
+                    help="header = the title over the opening speech ($0), card = a Muse Image card before it")
     ro = sub.add_parser("reorder", help="move one clip -> edl_vN -> cut_vN ($0 without --review)")
     ro.add_argument("run_dir", type=Path)
     ro.add_argument("--span", required=True)
@@ -2096,7 +2112,8 @@ def main(argv: list[str] | None = None) -> int:
             at = {k: float(x) for k, x in ats}
         except ValueError:
             ap.error("--callout-at SPAN=SECONDS")
-        out = text(a.run_dir, dict(pairs), a.title, a.title_card, a.from_v, a.review, a.budget, callout_at=at)
+        out = text(a.run_dir, dict(pairs), a.title, a.title_card, a.from_v, a.review, a.budget, callout_at=at,
+                   title_style=a.title_style)
     elif a.cmd == "reorder":
         out = reorder(a.run_dir, a.span, None if a.end else a.before, a.from_v, a.review, a.budget)
     elif a.cmd == "cut":

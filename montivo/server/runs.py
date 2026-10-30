@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ..config import SPARK_MODEL
 from ..engine.captions import highlight_words, norm, run_glossary
+from ..engine.edl import title_card_on, title_style
 from ..engine.graphics import normalize_look
 from ..engine.review import caption_heard_diff
 
@@ -518,7 +519,7 @@ def version_entry(run_dir: Path, n: int, name: str, edl: dict, cut: str | None, 
     """One version as the editor reads it, from its EDL (the live preview's draft is one too, with no cut)."""
     render = edl.get("render") or {}
     title = render.get("title")
-    card = edl.get("title_card", True) is not False and bool(edl.get("title_card_text"))
+    card = title_card_on(edl)
     title_s = float(title.get("seconds", 1.5)) if title else (0.0 if render else 1.5 if card else 0.0)
     patches = edl.get("patches") or []
     origin = {"source": "plan"}
@@ -540,7 +541,7 @@ def version_entry(run_dir: Path, n: int, name: str, edl: dict, cut: str | None, 
         rv = None  # a review of another file of the same name pattern
     return {"n": n, "edl": name, "cut": cut, "runtime_s": edl.get("runtime_s"),
                 "duration_s": render.get("duration_s"), "title_card": edl.get("title_card", True) is not False,
-                "title_card_text": edl.get("title_card_text"), "title_s": title_s,
+                "title_card_text": edl.get("title_card_text"), "title_s": title_s, "title_style": title_style(edl),
                 "spans": [_span(s) for s in edl.get("spans", [])], "origin": origin,
                 "loudness": render.get("loudness_ebur128"), "captions": render.get("captions"),
                 "callouts": [{"span": c.get("span"), "text": c.get("text"), "t_in": c.get("t_in"), "t_out": c.get("t_out"),

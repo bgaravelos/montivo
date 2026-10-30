@@ -15,7 +15,7 @@ from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, open_api_ke
 from .engine import track as track_mod
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, tighten_edges
-from .engine.edl import build_edl, carry_run_words
+from .engine.edl import build_edl, carry_run_words, title_card_on
 from .engine.image import generate_title_card
 from .engine.ingest import Ingested, Probe, detect_shots, ingest
 from .engine.render import render as render_edl
@@ -337,7 +337,7 @@ def run(opts: RunOptions) -> dict:
     rendered = None
     if opts.render:
         title_png = None
-        if opts.title and edl.get("title_card", True) is not False and edl.get("title_card_text"):  # a kit may turn it off
+        if opts.title and title_card_on(edl):  # a kit may turn it off; a header (new runs) needs no Muse Image card
             try:
                 title_png = title_card(out, edl, ledger, log)
             except Exception:
@@ -432,8 +432,8 @@ def render_run(run_dir: Path, edl_path: Path | None = None, source: Path | None 
     elif captions:
         log(f"render: {vpath} missing, no captions")
     # the review loop can drop the opening card (swap_hook on the title): the EDL then says title_card false
-    title = title and edl.get("title_card", True)
-    title_png = title_card(run_dir, edl, ledger, log) if title and edl.get("title_card_text") else None
+    title = title and title_card_on(edl)  # a header title is drawn with the captions (build_overlays), no card
+    title_png = title_card(run_dir, edl, ledger, log) if title else None
     if punch is not None:
         edl["punch"] = punch
     info = render_edl(run_dir, edl, source, ledger, out_name=out_name, log=log, edl_path=edl_path, words=words,

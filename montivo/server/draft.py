@@ -212,6 +212,10 @@ def clean_panel_op(op: str, a: dict) -> dict:
             if not isinstance(a["title_card"], bool):
                 raise HTTPException(400, "title_card: true or false")
             out["title_card"] = a["title_card"]
+        if a.get("title_style") is not None:
+            if a["title_style"] not in ("header", "card"):
+                raise HTTPException(400, "title_style: header or card")
+            out["title_style"] = a["title_style"]
         if not out["callouts"] and len(out) == 1:  # callout_at alone is a change too (len 2)
             raise HTTPException(400, "nothing to change")
         return out

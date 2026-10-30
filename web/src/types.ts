@@ -75,6 +75,7 @@ export type Version = {
   draft?: boolean; // the live preview's open draft (server/draft.py): no cut yet, the timeline's media come from the source
   n: number; edl: string; cut: string | null; runtime_s: number; duration_s: number | null;
   title_card: boolean; title_card_text: string | null; title_s: number; spans: Span[]; origin: Origin;
+  title_style?: "header" | "card"; // header: the title over the opening speech; card: a Muse Image card before it
   loudness: { integrated_lufs: number; true_peak_dbtp: number; lra_lu: number } | null; captions: number | null;
   callouts: { span: string; text: string; t_in: number; t_out: number; box: number[] | null; placement: string | null;
     head_box: number[] | null; over_face: boolean }[]; review: Review | null;

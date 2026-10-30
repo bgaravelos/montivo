@@ -145,6 +145,7 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
         "role_fixes": role_fixes,
         "verbatim_rate": round(sum(s.verbatim for s in spans) / len(spans), 3) if spans else 0.0,
         "title_card_text": plan.get("title_card_text", ""),
+        "title_style": "header",  # the title over the opening speech, no silent card before the hook (title_style)
         "caption_style_note": plan.get("caption_style_note", ""),
         "reframe_note": plan.get("reframe_note", ""),
         # what the brief asks for and the footage does not have, as the planner found it: said once in the chat and
@@ -163,6 +164,27 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
     if audio is not None and edl["spans"]:
         tighten_edges(edl, Words([asdict(w) for w in voice.words]), audio)
     return edl
+
+
+def title_on(edl: dict) -> bool:
+    """The run's title shows: words exist and nobody turned it off (the Text panel, a kit, the reviewer's swap_hook)."""
+    return edl.get("title_card", True) is not False and bool(edl.get("title_card_text"))
+
+
+def title_style(edl: dict) -> str:
+    """"header": the title words over the opening seconds of speech, nothing in front of the first word (new EDLs from
+    30/10); "card": the Muse Image card for TITLE_S before the speech (every EDL from before, so their versions render
+    as they did). The card failed the hook in every first review (9 of 9 runs: 1.5 s of silence before the hook)."""
+    return "header" if edl.get("title_style") == "header" else "card"
+
+
+def title_card_on(edl: dict) -> bool:
+    """The Muse Image card plays in front of the cut (it moves every cut second by its length)."""
+    return title_on(edl) and title_style(edl) == "card"
+
+
+def title_header_on(edl: dict) -> bool:
+    return title_on(edl) and title_style(edl) == "header"
 
 
 def edl_summary(edl: dict) -> str:

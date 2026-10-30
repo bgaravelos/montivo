@@ -19,6 +19,7 @@ from . import music as bed
 from .api import dump_json
 from .captions import build_overlays, fit_line, highlight_words, norm
 from .edges import Audio
+from .edl import title_card_on
 from .frame import frame_for
 from .graphics import FONTS, CaptionStyle, font, normalize_look
 from .ingest import EDIT_MAX_FPS, EDIT_PROXY_SHORT, ffprobe, make_edit_proxy
@@ -69,7 +70,7 @@ def title_seconds(run_dir: Path, edl: dict) -> tuple[float, str | None]:
     if rec is not None and "title" in rec:
         t = rec["title"] or {}
         return float(t.get("seconds") or 0.0), t.get("png")
-    if not (edl.get("title_card", True) and edl.get("title_card_text")):
+    if not title_card_on(edl):
         return 0.0, None
     png = run_dir / "title" / "title_card.png"
     if not png.is_file():
@@ -187,6 +188,11 @@ def preview_data(run_dir: Path, edl: dict, overlays: bool = True, laid: bool = F
         ca, cd = font(58, lk.font).getmetrics()  # graphics.draw_callout's size
         data["callouts"].append({"span": c["span"], "text": c["text"], "t_in": c["t_in"], "t_out": c["t_out"], "box": c["box"],
                                  "size": 58, "ascent": ca, "descent": cd, **({"look": _caption_style(lk)} if c.get("look") else {})})
+    if fields.get("title_header"):  # the title over the opening speech: the same pill as a callout, at its own size
+        h = fields["title_header"]
+        ca, cd = font(h["size"], look.font).getmetrics()
+        data["callouts"].append({"span": "title", "text": h["text"], "t_in": h["t_in"], "t_out": h["t_out"], "box": h["box"],
+                                 "size": h["size"], "ascent": ca, "descent": cd})
     if edl.get("overlays"):
         stills, records = broll.place(edl, segments, title_s, run_dir, cache / "broll", frame)
         at = {o.png.as_posix(): o for ovs in stills.values() for o in ovs}

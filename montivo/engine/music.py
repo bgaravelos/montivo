@@ -119,7 +119,8 @@ FOLLOW_JOIN_S = 0.06  # pieces of one window closer than this in the new cut are
 
 
 def _card(edl: dict) -> bool:
-    return edl.get("title_card", True) is not False and bool(edl.get("title_card_text"))
+    from .edl import title_card_on
+    return title_card_on(edl)
 
 
 def _lead(edl: dict) -> float:

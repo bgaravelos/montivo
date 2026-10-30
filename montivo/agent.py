@@ -42,6 +42,7 @@ from . import human
 from .config import OPEN_MODEL, SPARK_MODEL
 from .engine import music as music_mod
 from .engine.api import dump_json
+from .engine.edl import title_on, title_style
 from .engine.graphics import PRESET_NAMES, PRESETS
 from .engine.review import caption_timeline, cut_map
 from .ledger import Ledger
@@ -212,8 +213,9 @@ def context(run_dir: Path, edl: dict) -> str:
     if caps:
         lines.append("Caption lines on screen (cut seconds): " + "; ".join(
             f"{c['t_in']:.1f}-{c['t_out']:.1f} {c['text']!r}" for c in caps[:60]))
-    card = edl.get("title_card", True) is not False and edl.get("title_card_text")
-    lines.append(f"Title card: {repr(edl.get('title_card_text')) + ' (on)' if card else 'off'}")
+    on = title_on(edl)
+    style = "header over the opening speech" if title_style(edl) == "header" else "card before the speech"
+    lines.append(f"Title card: {repr(edl.get('title_card_text')) + f' (on, {style})' if on else 'off'}")
     look = edl.get("look") or {}
     lines.append(f"Caption look: preset {look.get('preset', 'marker')}"
                  + (f", {json.dumps({k: v for k, v in look.items() if k != 'preset'})}" if len(look) > 1 else ""))
