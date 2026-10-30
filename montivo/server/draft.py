@@ -379,6 +379,38 @@ def newest_cut(run_dir: Path) -> int:
     return max(vs, default=0) or newest(run_dir)
 
 
+def push(run_dir: Path, fd: Path, ops: list[dict], base: int) -> tuple[dict, list[str], list[str]]:
+    """Ops Ask Montivo routed in Live (agent.py draft_ops) added to the draft, or to a new one from `base`: each
+    checked as its route checks it, resolved and stepped like a click; one the draft refuses is skipped with why.
+    The caller holds no job on the run (the ask's own job has ended). Returns (the summary, what each op did, what
+    was skipped)."""
+    done, skipped = [], []
+    with run_lock(run_dir):
+        state = load(fd)
+        if state and state.get("commit"):
+            return summary(run_dir, state, None), [], ["a version is being made from the draft"]
+        if state is None:
+            state = {"id": uuid.uuid4().hex[:12], "base": base, "ops": [], "redo": [], "created": time.time()}
+            cur = base_edl(run_dir, base)
+        else:
+            cur = current(fd, run_dir, state)
+        words, audio = inputs(run_dir)
+        for raw in ops:
+            try:
+                o = resolve(run_dir, cur, clean_op(raw))
+                cur, rec = human.step(cur, words, audio, o)
+            except (HTTPException, SystemExit) as e:
+                skipped.append(f"{raw.get('op')}: {getattr(e, 'detail', None) or e}")
+                continue
+            state["ops"].append({**o, "say": rec.say})
+            done.append(rec.say)
+        if done:
+            state["redo"] = []
+            state.pop("commit_failed", None)
+            save(fd, state, cur)
+        return summary(run_dir, state if done or state["ops"] else None, cur), done, skipped
+
+
 def summary(run_dir: Path, state: dict | None, edl: dict | None, with_edl: bool = False) -> dict:
     latest = newest(run_dir)
     if state is None:

@@ -361,3 +361,21 @@ def test_a_drafts_bed_waveform_follows_the_live_gain():
     assert p[0] == 0.0 and p[100] == 0.5 and p[170] == 0.5  # faded in from 0, looped past 1.5 s
     assert p[250] == 0.05  # ducked 20 dB under the speech
     assert p[399] < 0.02  # faded out at the end
+
+
+def test_chat_edits_join_the_draft_and_a_refused_one_is_said(tmp_path, monkeypatch):
+    """A5: Ask Montivo's ops in Live (draft.push) go into the draft as clicks would, a new draft from the version asked
+    about or the open one; an op the draft refuses is skipped with why and the others stay."""
+    from montivo.server import draft
+    d = _run(tmp_path, monkeypatch)
+    fd = draft.folder(d, None)
+    out, done, skipped = draft.push(d, fd, [{"op": "drop", "args": {"span": "s2"}},
+                                            {"op": "drop", "args": {"span": "s9"}}], 1)
+    assert len(done) == 1 and len(skipped) == 1 and "s9" in skipped[0]
+    st = draft.load(fd)
+    assert st["base"] == 1 and [o["op"] for o in st["ops"]] == ["drop"]
+    assert [s["id"] for s in json.loads((fd / "edl.json").read_text())["spans"]] == ["s1", "s3"]
+    _, done, _ = draft.push(d, fd, [{"op": "punch", "args": {"on": True}}], 1)  # the open draft grows
+    assert done and [o["op"] for o in draft.load(fd)["ops"]] == ["drop", "punch"]
+    _, done, skipped = draft.push(d, fd, [{"op": "nope", "args": {}}], 1)
+    assert not done and skipped and len(draft.load(fd)["ops"]) == 2

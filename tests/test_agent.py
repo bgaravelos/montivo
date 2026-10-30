@@ -171,3 +171,22 @@ def test_the_router_reads_the_chat_and_the_recording(tmp_path):
     rows = agent.footage(d, json.loads((d / "edl_v3.json").read_text()))
     assert any("turn 0" in r and "3 okay 4 so" in r for r in rows)  # what insert can put back, by turn and number
     assert any("turn 1" in r and "0 ah 1 um 2 er" in r for r in rows)
+
+
+def test_live_asks_become_draft_ops():
+    """A5: in Live the routed edits go into the editor's draft as its own ops; a re-plan, a still, a restore or a look
+    from words still make a version."""
+    ops = [op("caption", at_s=1.2, text="Hi there"), op("callout", span="s1", text="Hey"), op("title_on"),
+           op("music_on", track="ukulele"), op("punch", on=False), op("drop", span="s2"),
+           op("cut", span="s1", word_from=1, word_to=1), op("reorder", span="s1", before=""),
+           op("insert", turn=0, word_from=3, word_to=4, before="end"), op("style", preset="karaoke")]
+    d = agent.draft_ops(ops)
+    assert [o["op"] for o in d] == ["caption", "text", "music", "punch", "drop", "style", "cut", "reorder", "insert"]
+    assert d[0]["args"] == {"edits": [{"at": 1.2, "text": "Hi there"}]}
+    assert d[1]["args"] == {"callouts": {"s1": "Hey"}, "title_card": True}
+    assert d[2]["args"] == {"track": "ukulele", "level_db": None} and d[7]["args"] == {"span": "s1", "before": None}
+    from montivo.server import draft
+    assert all(draft.clean_op(o)["op"] == o["op"] for o in d)  # every one as the draft's own route takes it
+    for no in (op("replan", instruction="x"), op("overlay", at_s=1, text="a"), op("restore", version=2),
+               op("style", look_prompt="big yellow")):
+        assert agent.draft_ops([op("punch", on=True), no]) is None

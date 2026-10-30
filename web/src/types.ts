@@ -39,7 +39,10 @@ export type Origin = {
 
 /** What Ask Montivo did with one message (the version's patch `agent`, montivo/agent.py). */
 export type AgentRecord = { message: string; reply: string; router: string; ops: { op: string }[]; done: string[]; skipped: string[];
-  pending?: string; scope?: AskScope; retry_of?: string }; // pending: the proposal this version applied
+  pending?: string; scope?: AskScope; retry_of?: string; ui?: AgentUi[] | null }; // pending: the proposal this version applied
+/** What the chat does in the editor to show something (agent.py UI_OPS): the playhead, a selection, a panel. */
+export type AgentUi = { op: "seek" | "select" | "open"; at_s?: number; span?: string; word_from?: number; word_to?: number;
+  panel?: string };
 
 /** What the editor selected when they asked: the agent reads it as "this" (montivo/agent.py norm_scope). */
 export type AskScope = { clips?: string[]; words?: { span: string; from: number; to: number; text: string }[];
@@ -53,7 +56,8 @@ export type PendingCard = { id: string; lines: string[]; usd: number; seconds: n
 export type ChatLine = { t: number; role: "user" | "agent"; kind?: string; text?: string; version?: number | null;
   after?: number | null; message?: string | null; router?: string | null;
   pending?: PendingCard | string | null; scope?: AskScope | null; retry_of?: string | null; // a preview line's card; a user line's proposal id
-  job?: string; charged_usd?: number | null }; // an error line: the job that failed and what it spent
+  job?: string; charged_usd?: number | null; // an error line: the job that failed and what it spent
+  ui?: AgentUi[] | null }; // an ask line: what the chat shows in the editor (the playhead, a selection, a panel)
 
 /** The planner A/B of a fresh re-plan against v1 (plan_compare_v1_vN.json): one side per planner. */
 export type PlanSide = { planner: string; spans: number; runtime_s: number; verbatim_rate: number; unplaced: number; hook: string;

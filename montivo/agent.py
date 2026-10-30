@@ -155,7 +155,7 @@ track by its mood when none is named (talking head, upbeat tech demo: something 
 say so in the reply instead.
 - A question about the cut or the footage (what score, why, how long, what was left out, who says what) gets an \
 answer in reply from the facts below and no edit op. "Where do I say X" / "show me X": seek to the clip's cut second \
-and select those words, and say the time in the reply. A passage that is not in the cut has no cut second: say so \
+and select those words, and say the time in the reply as m:ss (0:22). A passage that is not in the cut has no cut second: say so \
 and offer to insert it.
 - Read the chat so far: "no", "another one", "the same for", "undo that", "more", "less" refer to what was just asked \
 or done there.
@@ -670,7 +670,49 @@ def pure(run_dir: Path, o: dict) -> tuple[str, str, dict] | None:
     return None
 
 
-AGENT_KEYS = ("message", "reply", "router", "ops", "done", "skipped", "pending", "scope", "retry_of", "ui")
+NOT_IN_DRAFT = {"replan", "overlay", "restore"}  # a plan, a Muse Image still, an old version: they make a version
+
+
+def draft_ops(ops: list[dict]) -> list[dict] | None:
+    """The checked ops as the editor's draft ops (montivo/server/draft.py: {"op", "args"} as its routes take them), or
+    None when one of them cannot go into a draft (a re-plan, a B-roll still, a restore, a look from words: they make a
+    version as before). Caption lines stay cut seconds: the draft resolves them against itself as laid out."""
+    if any(o["op"] in NOT_IN_DRAFT or (o["op"] == "style" and not o.get("preset")) for o in ops):
+        return None
+    out: list[dict] = []
+    caps = [{"at": float(o["at_s"]), "text": o["text"]} for o in ops if o["op"] == "caption"]
+    if caps:
+        out.append({"op": "caption", "args": {"edits": caps}})
+    callouts = {o["span"]: o["text"] for o in ops if o["op"] == "callout"}
+    title = next((o["text"] for o in ops if o["op"] == "title_text"), None)
+    card = next((o["op"] in ("title_on", "title_text") for o in ops if o["op"] in ("title_on", "title_off", "title_text")), None)
+    if callouts or title is not None or card is not None:
+        out.append({"op": "text", "args": {"callouts": callouts, **({"title": title} if title else {}),
+                                           **({"title_card": card} if card is not None else {})}})
+    for o in ops:
+        op = o["op"]
+        if op == "style":
+            out.append({"op": "style", "args": {"look": {"preset": o["preset"]}, "callouts": {}}})
+        elif op == "music_on":
+            out.append({"op": "music", "args": {"track": o["track"], "level_db": float(o["level_db"]) or None}})
+        elif op == "music_off":
+            out.append({"op": "music", "args": {"track": None}})
+        elif op == "punch":
+            out.append({"op": "punch", "args": {"on": bool(o["on"])}})
+        elif op == "drop":
+            out.append({"op": "drop", "args": {"span": o["span"]}})
+    cuts = [[o["span"], int(o["word_from"]), int(o["word_to"])] for o in ops if o["op"] == "cut"]
+    if cuts:
+        out.append({"op": "cut", "args": {"ranges": cuts}})
+    for o in ops:
+        if o["op"] == "reorder":
+            out.append({"op": "reorder", "args": {"span": o["span"], "before": o.get("before") or None}})
+        elif (what := pure(None, o)) is not None:
+            out.append({"op": what[1], "args": what[2]})
+    return out
+
+
+AGENT_KEYS = ("message", "reply", "router", "ops", "done", "skipped", "pending", "scope", "retry_of", "ui", "draft")
 
 
 def fold(run_dir: Path, from_v: int, written: list[int], record: dict) -> int:
@@ -860,7 +902,7 @@ def compact(ops: list[dict]) -> list[dict]:
 
 def ask(run_dir: Path, message: str | None, from_v: int | None = None, passes: int = 0, planner: str | None = None,
         use_model: bool = True, budget: float = 0.15, scope: dict | None = None, preview: bool = False,
-        retry_of: str | None = None) -> dict:
+        retry_of: str | None = None, draft: bool = False, draft_edl: Path | None = None) -> dict:
     log = RunLog(run_dir / "run.log")
     note = ""
     if retry_of:  # "Try something else": the same message, its proposal in the prompt as turned down; once, no review
@@ -875,6 +917,10 @@ def ask(run_dir: Path, message: str | None, from_v: int | None = None, passes: i
     scope = norm_scope(scope)
     from_v = from_v or human.latest_edl(run_dir)
     edl = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
+    draft_open = draft and draft_edl is not None and draft_edl.is_file()
+    if draft_open:  # the open Live draft: "this" is what the editor plays
+        edl = json.loads(draft_edl.read_text())
+        from_v = int(edl.get("version") or from_v)
     ledger = Ledger.resume(run_dir / "ledger.json")
     log(f"montivo ask: {message!r} on edl_v{from_v}" + (f", selection {scope_text(scope).strip()}" if scope else "")
         + (f" (another try after {retry_of})" if retry_of else ""))
@@ -889,10 +935,13 @@ def ask(run_dir: Path, message: str | None, from_v: int | None = None, passes: i
     if answer is None:
         answer = keywords(edl, message, scope)
     ops, skipped = check(edl, answer.get("ops") or [], scope)
-    passes = max(passes, 1 if any(o["op"] == "review" for o in ops) else 0)
+    asked_review = any(o["op"] == "review" for o in ops)
     ops = [o for o in ops if o["op"] != "review"]
     ui, ops = [o for o in ops if o["op"] in UI_OPS], [o for o in ops if o["op"] not in UI_OPS]
-    log(f"agent ({router}): {answer.get('reply', '')!r}; ops: {', '.join(o['op'] for o in ops) or 'none'}"
+    # the composer's Review toggle reviews what the message changes; a question or a "show me" changes nothing, so
+    # it reviews only when the message asks for a review
+    passes = max(passes if ops else 0, 1 if asked_review else 0)
+    log(f"agent ({router}): {answer.get('reply', '')!r}; ops: {', '.join(o['op'] for o in ops + ui) or 'none'}"
         + (f"; skipped: {'; '.join(skipped)}" if skipped else ""))
     record = {"message": message, "reply": (answer.get("reply") or "").strip(), "question": (answer.get("question") or "").strip(),
               "router": router, "router_cost_usd": round(cost, 5), "from": from_v, "ops": compact(ops),
@@ -903,6 +952,18 @@ def ask(run_dir: Path, message: str | None, from_v: int | None = None, passes: i
         record["ui"] = compact(ui)
     if retry_of:
         record["retry_of"] = retry_of
+    if draft and ops and not asked_review and (dops := draft_ops(ops)) is not None:  # the Review toggle reviews the
+        # version Make Version renders
+        # Live (A5): the editor's own draft is the preview; the server adds these ops to it, nothing renders until
+        # the editor's Make Version (Billy: a version is made by the button only)
+        record["draft"] = dops
+        log(f"agent: {len(dops)} edit(s) for the Live draft: {', '.join(o['op'] for o in dops)}")
+        return record
+    if draft and ops and draft_open:  # a version from the draft's base would leave the draft's edits out
+        record["skipped"] += [f"{', '.join(dict.fromkeys(o['op'] for o in ops))}: this makes a version, and the "
+                              "draft's edits are not one yet. Make Version first, then ask again"]
+        record["ops"] = []
+        return record
     if preview and ops and needs_preview(ops, planner):
         card = preview_card(run_dir, edl, ops, planner, passes)
         pid = time.strftime("%H%M%S-") + secrets.token_hex(3)
@@ -948,6 +1009,8 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--preview", action="store_true", help="structural or costly ops wait in ui/pending/ for --apply")
     p.add_argument("--apply", default=None, metavar="ID", help="run a waiting proposal")
     p.add_argument("--retry", default=None, metavar="ID", help="route the proposal's message again, once, no review")
+    p.add_argument("--draft", action="store_true", help="Live: edits that fit the editor's draft are returned as draft ops")
+    p.add_argument("--draft-edl", type=Path, default=None, help="the open draft's EDL: the version the message is about")
     a = p.parse_args(argv)
     import os
     if a.apply:
@@ -961,7 +1024,7 @@ def main(argv: list[str] | None = None) -> None:
             p.error(f"--scope: {e}")
         out = ask(a.run_dir, a.message, a.from_v, a.review or 0, OPEN_MODEL if a.planner == "open" else None,
                   use_model=not a.no_model and bool(os.environ.get("MODEL_API_KEY")), scope=scope, preview=a.preview,
-                  retry_of=a.retry)
+                  retry_of=a.retry, draft=a.draft, draft_edl=a.draft_edl)
     print(json.dumps(out, ensure_ascii=False))
     sys.stdout.flush()
 

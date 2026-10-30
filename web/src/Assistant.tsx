@@ -3,7 +3,7 @@ import { api, crit, frameUrl, tc, usd, type Seen } from "./api";
 import { selRange, sevRank, speakerName, type FlatWord, type WordSel } from "./edit";
 import { Icon, MarkLoader } from "./icons";
 import { Bar, expTip, measure, useTick } from "./Progress";
-import type { AskScope, ChatLine, Job, LogLine, PendingCard, PlanSide, Planner, Progress, RunState, Stage, Version } from "./types";
+import type { AgentUi, AskScope, ChatLine, Job, LogLine, PendingCard, PlanSide, Planner, Progress, RunState, Stage, Version } from "./types";
 
 // ------------------------------------------------------------------- pipeline checklist
 
@@ -101,7 +101,7 @@ function Pipeline({ state, lines, job, seen, replay }: { state: RunState; lines:
  *  review card or a failure. Consecutive items of the same speaker share one avatar. */
 type Item =
   | { kind: "you"; text: string; chips: string[] }
-  | { kind: "text"; who: "montivo" | "reviewer"; text: string; tone?: string }
+  | { kind: "text"; who: "montivo" | "reviewer"; text: string; tone?: string; seek?: number[] }
   | { kind: "steps"; title: string; lines: string[]; live?: boolean }
   | { kind: "version"; v: Version; by: string }
   | { kind: "review"; v: Version }
@@ -111,6 +111,8 @@ type Item =
 /** The message as typed: the server adds the chips for the router as " (about s3, @00:12.00)". */
 const typed = (m: string | null | undefined) => (m ?? "").replace(/ \(about [^()]*\)$/, "");
 const vName = (n: number | undefined) => (n == null ? "the cut" : `Version ${n}`);
+/** The cut seconds an ask's reply points at (seek ops): a link under the reply plays from there again. */
+const seeks = (ui: AgentUi[] | null | undefined) => (ui ?? []).filter((o) => o.op === "seek" && o.at_s != null).map((o) => o.at_s!);
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : /(s|x|ch|sh)$/.test(w) ? "es" : "s"}`;
 
 /** The selection an ask was about, as chips: "s3", "s3, s5 · 2 clips", "s3 · 4 words", "caption 00:12.0". */
@@ -146,7 +148,7 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
     { kind: "you", text: brief, chips: [state.run.footage?.split("/").pop() ?? "footage", `${state.run.target_s ?? 40} s`] },
   ];
   // the agent's answers that made no version: a reply, or a proposal waiting for Apply
-  const asked = chat.filter((c) => c.role === "agent" && c.after != null && ((c.kind === "ask" && !c.version) || c.kind === "preview" || c.kind === "error"));
+  const asked = chat.filter((c) => c.role === "agent" && c.after != null && ((c.kind === "ask" && !c.version) || c.kind === "draft" || c.kind === "preview" || c.kind === "error"));
   const failed = job && !job.running && job.rc ? job : null; // the last job, when it failed: Try again runs it once more
   const tail = (j: Job) => j.tail.split("\n").slice(-4).join("\n").trim();
   for (const v of versions) {
@@ -156,7 +158,7 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
       const applied = !!o.agent.pending; // its message and reply are on the proposal card above
       out.push({ kind: "you", text: applied ? "Apply" : o.agent.retry_of ? "Try something else" : typed(o.agent.message),
         chips: applied ? [] : [...scopeChips(o.agent.scope), `from v${o.from}`] });
-      if (o.agent.reply && !applied) out.push({ kind: "text", who: "montivo", text: o.agent.reply });
+      if (o.agent.reply && !applied) out.push({ kind: "text", who: "montivo", text: o.agent.reply, seek: seeks(o.agent.ui) });
       const lines = [...(o.agent.done.length ? o.agent.done : fixes), ...o.agent.skipped.map((x) => `not done · ${x}`)];
       if (lines.length) out.push({ kind: "steps", title: `${o.agent.router === "keywords" ? "Read the keywords" : "Picked the tools"} · ${plural(o.agent.done.length || fixes.length, "edit")}`, lines });
     } else if (o.source === "human") {
@@ -205,7 +207,7 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
         continue;
       }
       out.push({ kind: "you", text: c.retry_of ? "Try something else" : typed(c.message), chips: c.retry_of ? [] : [...scopeChips(c.scope), `v${v.n}`] });
-      if (c.text) out.push({ kind: "text", who: "montivo", text: c.text });
+      if (c.text) out.push({ kind: "text", who: "montivo", text: c.text, seek: seeks(c.ui) });
       const card = c.kind === "preview" && typeof c.pending === "object" ? c.pending : null;
       if (card) out.push({ kind: "preview", card, status: proposalStatus(card.id, chat, versions, job) });
     }
@@ -532,7 +534,8 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
               : <span className="av rev" title="The reviewer gets the rendered video, the brief, the rubric and measured facts. Never the plan."><Icon name="eyeOff" size={14} /></span>}
             <div className="bot-body">
               <span className="name">{b.who === "montivo" ? "Montivo" : <>Reviewer <span className="blind">blind</span></>}</span>
-              {b.items.map((it, j) => it.kind === "text" ? <p key={j} className={`say ${it.tone ?? ""}`}>{it.text}</p>
+              {b.items.map((it, j) => it.kind === "text" ? <p key={j} className={`say ${it.tone ?? ""}`}>{it.text}
+                  {it.seek?.map((t) => <button key={t} className="seek-at" onClick={() => onSeek(t)} title="Play from here"><Icon name="play" size={10} /> {tc(t)}</button>)}</p>
                 : it.kind === "steps" ? <Steps key={j} title={it.title} lines={it.lines} live={it.live} />
                 : it.kind === "version" ? <VersionCard key={j} id={state.id} v={it.v} by={it.by} current={it.v.n === v?.n} newest={it.v.n === versions.at(-1)?.n} onPick={onPick} onCompare={onCompare} onRestore={onRestore} />
                 : it.kind === "review" ? <ReviewCard key={j} v={it.v} current={it.v.n === v?.n} onPick={onPick} onSeek={onSeek} />

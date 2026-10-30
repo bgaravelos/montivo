@@ -248,6 +248,10 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .bot.reviewer .blind { color: var(--pass); }
 .say { margin: 0; color: var(--text); white-space: pre-wrap; }
 .say.error { color: var(--blocker); font-family: var(--mono); font-size: 11px; }
+.seek-at { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--line); background: transparent; color: var(--mute); font: 500 11px/1.4 var(--sans);
+  font-variant-numeric: tabular-nums; cursor: pointer; vertical-align: 1px; }
+.seek-at:hover { color: var(--text); border-color: var(--line-2); }
 .fold { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); overflow: hidden; }
 .fold-head { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 9px; color: var(--text-2); font-size: 12px; text-align: left; }
 .fold-head:hover { color: var(--text); }

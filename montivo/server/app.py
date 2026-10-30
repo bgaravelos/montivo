@@ -119,6 +119,7 @@ class Job:
     spent_at: float = 0.0  # the run ledger's total when the job started
     charged: float | None = None  # what the ledger grew by during the job, once it ended
     v0: int = 0  # the newest edl_vN when the job started: a failed job's unrendered versions come after it
+    draft_dir: str | None = None  # Ask Montivo in Live: the draft folder its edits go into when it ends
 
     def public(self) -> dict:
         return {"id": self.id, "run": self.run, "kind": self.kind, "label": self.label, "started": self.started,
@@ -359,15 +360,26 @@ def result_message(st: State, job: Job) -> dict:
         said = " ".join(x for x in (rec.get("reply"), rec.get("question")) if x)
         if rec.get("skipped"):
             said += " Not done: " + "; ".join(rec["skipped"]) + "."
+        if isinstance(rec.get("draft"), list) and job.draft_dir:  # Live: the edits go into the editor's draft (A5)
+            from . import draft as draft_mod
+            _, done, skipped = draft_mod.push(d, Path(job.draft_dir), rec["draft"], int(rec.get("from") or latest_cut(d)))
+            said = (rec.get("reply") or "").strip()
+            if done:
+                said += f" In the draft: {'; '.join(done)}. Make Version renders it."
+            if skipped or rec.get("skipped"):
+                said += " Not done: " + "; ".join([*rec.get("skipped", []), *skipped]) + "."
+            return {"role": "agent", "kind": "draft", "text": said.strip(), "after": rec.get("from"),
+                    "message": rec.get("message"), "router": rec.get("router"), "ui": rec.get("ui"),
+                    "draft_edits": len(done)}
         if isinstance(rec.get("pending"), dict):  # a structural or costly ask waits for the editor's Apply (--preview)
             return {"role": "agent", "kind": "preview", "text": said.strip(), "after": rec.get("from"),
                     "message": rec.get("message"), "router": rec.get("router"), "pending": rec["pending"],
-                    "scope": rec.get("scope"), "retry_of": rec.get("retry_of")}
+                    "scope": rec.get("scope"), "retry_of": rec.get("retry_of"), "ui": rec.get("ui")}
         if not rec.get("version") and rec.get("ops") and not rec.get("done"):
             said += " Nothing changed, so there is no new version."
         return {"role": "agent", "kind": "ask", "text": said.strip() or "Nothing to change.", "version": rec.get("version"),
                 "after": rec.get("from"), "message": rec.get("message"), "router": rec.get("router"),
-                "pending": rec.get("pending")}
+                "pending": rec.get("pending"), "ui": rec.get("ui")}
     if job.kind == "hook":
         rec = job_json(job) or {}
         if rec.get("stop"):
@@ -2220,8 +2232,15 @@ def create_app(root: Path) -> FastAPI:
         args = ["-m", "montivo.agent", f"runs/{run_id}", "--message", msg, "--from", str(frm), "--review", str(passes),
                 "--planner", "open" if model else "spark", *([] if use else ["--no-model"]),
                 *(["--scope", json.dumps(scope)] if scope else []), *(["--preview"] if b.get("preview") else [])]
+        fd = None
+        if b.get("live") is True:  # Live (A5): edits that fit go into the editor's draft, read from the draft as it is
+            from . import draft as draft_mod
+            fd = draft_mod.folder(d, judge_of(request) if budget is not None else None)
+            dstate = draft_mod.load(fd)
+            args += ["--draft", *(["--draft-edl", str(fd / "edl.json")] if dstate and not dstate.get("commit") else [])]
         job = start_job(st, run_id, "ask", "Ask Montivo", args,
                         chat={"role": "user", "text": text, "chips": chips + [f"v{frm}"], "kind": "ask"})
+        job.draft_dir = str(fd) if fd is not None else None
         return {"job": job.public()}
 
     def pending_of(d: Path, pid: str) -> dict:

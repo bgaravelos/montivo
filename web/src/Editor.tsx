@@ -172,6 +172,32 @@ export function Editor({ id, replay, go }: Props) {
     clips: selKeys.length ? selKeys : block?.kind === "span" ? [block.span!.id] : [],
     words: wordScope(flatWords(blocks), wordSel), caption: capSel,
   }), [selKeys, block, blocks, wordSel, capSel]);
+  // what the chat shows (agent.py UI_OPS): a reply that lands while the editor is open moves the playhead, selects the
+  // clip or the words it names (the transcript for words) and opens a panel; lines that were there on open do nothing
+  const lastAgent = state?.chat?.filter((c) => c.role === "agent").at(-1) ?? null;
+  const seenAgent = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (!state || replay) return;
+    const t = lastAgent?.t ?? 0;
+    if (seenAgent.current === undefined || t <= seenAgent.current) { seenAgent.current = Math.max(t, seenAgent.current ?? 0); return; }
+    seenAgent.current = t;
+    if (lastAgent?.kind === "draft" && live0) loadDraft(); // A5: the chat's edits went into the Live draft (its ops and preview)
+    for (const o of lastAgent?.ui ?? []) {
+      if (o.op === "seek" && o.at_s != null) { // again once a version or review that landed with it has reloaded the player
+        const at = o.at_s, go = () => { player.current?.pause(); player.current?.seek(at); };
+        window.setTimeout(go, 120);
+        window.setTimeout(() => { if (Math.abs(tRef.current - at) > 0.3) go(); }, 1500);
+      }
+      else if (o.op === "select" && o.span && o.word_from != null && o.word_from >= 0) {
+        const span = o.span, a = o.word_from, b = o.word_to != null && o.word_to >= a ? o.word_to : a;
+        setTlMode("transcript"); // the word selection lives in the transcript; set it after the mode change clears it
+        window.setTimeout(() => setWordSel({ a: `${span}:${a}`, b: `${span}:${b}` }), 60);
+      } else if (o.op === "select" && o.span) { setSelKey(o.span); setSelKeys([o.span]); }
+      else if (o.op === "open" && o.panel === "export") setDialog({ kind: "export" });
+      else if (o.op === "open" && o.panel === "loop") go(`#/run/${id}/loop`);
+      else if (o.op === "open" && PANELS.some((x) => x.id === o.panel)) setPanel(o.panel as PanelId);
+    }
+  }, [lastAgent?.t, !!state]); // eslint-disable-line
   // what the panels' staged edits belong to: the version, or the draft as it stands (an edit into it clears them)
   const rev = draftV ? `d${draftData?.draft?.id}-${draftSum?.ops.length ?? 0}` : `v${v?.n}`;
   useEffect(() => setStyleDraft(EMPTY_DRAFT), [rev]);
@@ -251,7 +277,7 @@ export function Editor({ id, replay, go }: Props) {
   const edit = useCallback(async (path: string, body: Record<string, unknown>) => {
     const to = live0 ? DRAFT_OPS[path] : undefined;
     if (to) return draftOp(to.op, to.args(body));
-    if (draftV && MAKES_VERSION.includes(path))
+    if (draftV && MAKES_VERSION.includes(path) && !(path === "ask" && live0)) // the chat edits the draft in Live (A5)
       return (flash(`Make Version ${draftData?.draft?.n ?? ""} first: the draft's ${edits(draftSum?.ops.length ?? 0)} are not a version yet.`), false);
     const gen = OP_ROUTE[path]; // a newer panel edit with no route of its own: POST /op runs its pure op as a version
     if (gen) return act("op", { op: gen.op, args: gen.args(body), from: body.from, review: body.review });
@@ -625,7 +651,7 @@ export function Editor({ id, replay, go }: Props) {
         {panel === "assistant" && (
           <Assistant state={state} versions={visible} lines={lines} job={job} seen={seen} progress={progress} replay={replay} v={v}
             selection={selection} getTime={getTime} focusNonce={askNonce}
-            onSend={(text, chips, review, planner, scope, latest) => edit("ask", { message: text, chips, scope, from: latest ? undefined : v?.n, review, planner, preview: true })}
+            onSend={(text, chips, review, planner, scope, latest) => edit("ask", { message: text, chips, scope, from: latest ? undefined : v?.n, review, planner, preview: true, live: live0 && !replay })}
             onApply={(pending, review) => act("ask/apply", { pending, review })} onRetry={(pending) => act("ask/retry", { pending })}
             onRetryJob={() => act("retry", {})}
             onStop={() => act("stop", {})} onPick={pick} onSeek={(x) => { player.current?.pause(); seek(x); }}
