@@ -714,6 +714,13 @@ to Modal 30/10 00:11 on Billy's go at `a9786a1` (no job since 28/10 23:22; the 0
 /api/health 200, /api/runs 401, /s/nope 404; `modal run modal_app.py::smoke --live` (new): edit media for 015 v5 in
 6.2 s (23.7 MB, keyframes every 0.5 s), preview data 183 ms cold, a draft drop 94 ms; smoke drop on 015: 34.3 s,
 -14.0 LUFS / -1.7 dBTP, render 11.5 s. The first Live open of each sample on the Volume makes its edit media (~6 s).
+Timeline flicker (30/10, $0, commit `17b7593`, Billy's screen recording of the hosted demo): at fit-to-width the canvas
+came out a pixel wider than the rounded clientWidth, a horizontal scrollbar pushed a vertical one into `.tl-body`, the
+lanes narrowed, the fit shrank, every frame (a draft edit changed the duration and set it off). Fit leaves a pixel spare,
+`.tl-body` has `scrollbar-gutter: stable`, the filmstrip and waveform keep the last media until the draft's new ones load.
+Reproduced only with scrollbars shown (Playwright headless passes `--hide-scrollbars`: `ignoreDefaultArgs`): old 29 of 30
+frames changed, new 0 over 1225 width x height cases. Deployed 30/10 17:11 on Billy's go (no job since 00:25; the 17:09
+container stopped); /api/health 200, /api/runs 401, /s/nope 404; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
