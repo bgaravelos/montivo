@@ -428,7 +428,7 @@ def list_runs(runs_dir: Path) -> list[dict]:
 
 def _span(s: dict) -> dict:
     keys = ("id", "order", "turn_id", "speaker", "role", "words", "t_in", "t_out", "duration", "word_from", "word_to",
-            "why", "callout", "callout_xy", "contiguous_with_previous", "verbatim")
+            "why", "callout", "callout_xy", "contiguous_with_previous", "verbatim", "look")
     return {k: s.get(k) for k in keys}
 
 

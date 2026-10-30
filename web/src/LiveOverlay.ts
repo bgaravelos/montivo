@@ -1,4 +1,4 @@
-import type { LiveData } from "./Live";
+import type { LiveData, LiveLook } from "./Live";
 
 /** The live preview's graphics in HTML, drawn where the render burns them (engine/preview.py lays them out with the
  *  render's own code): caption lines with the spoken word marked, callout pills, B-roll stills and the title card.
@@ -7,10 +7,9 @@ import type { LiveData } from "./Live";
 export class LiveOverlay {
   readonly root: HTMLDivElement;
   private stills: { el: HTMLImageElement; a: number; b: number; fade: number }[] = [];
-  private lines: { el: HTMLDivElement; words: HTMLSpanElement[]; a: number; b: number; starts: number[]; on: boolean; act: number }[] = [];
+  private lines: { el: HTMLDivElement; words: HTMLSpanElement[]; a: number; b: number; starts: number[]; on: boolean; act: number; mode: string }[] = [];
   private callouts: { el: HTMLDivElement; a: number; b: number; on: boolean }[] = [];
   private title: { el: HTMLDivElement; img: HTMLImageElement; s: number; fade: number } | null = null;
-  private mode = "pill";
 
   constructor(private data: LiveData) {
     this.root = document.createElement("div");
@@ -36,12 +35,14 @@ export class LiveOverlay {
   private build() {
     const d = this.data, look = d.look;
     loadFonts(d);
-    const family = look ? `"montivo-${look.font}", "Inter Tight", system-ui, sans-serif` : "system-ui";
-    this.mode = look?.active ?? "pill";
-    this.root.style.setProperty("--hl", hex(look?.highlight || look?.text || "#FFFFFF"));
-    this.root.style.setProperty("--act-bg", hex(look?.active_bg ?? "#FFC629"));
-    this.root.style.setProperty("--act-fg", hex(look?.active_fg ?? "#000000"));
-    this.root.style.textTransform = look?.upper ? "uppercase" : "none";
+    const familyOf = (lk?: LiveLook) => (lk ? `"montivo-${lk.font}", "Inter Tight", system-ui, sans-serif` : "system-ui");
+    const paint = (el: HTMLElement, lk?: LiveLook) => { // the active word and name colours, per element: a clip may have its own look (S4)
+      el.style.setProperty("--hl", hex(lk?.highlight || lk?.text || "#FFFFFF"));
+      el.style.setProperty("--act-bg", hex(lk?.active_bg ?? "#FFC629"));
+      el.style.setProperty("--act-fg", hex(lk?.active_fg ?? "#000000"));
+      el.style.textTransform = lk?.upper ? "uppercase" : "none";
+    };
+    paint(this.root, look);
     for (const s of d.stills ?? []) {
       const el = document.createElement("img");
       el.className = "lo-still";
@@ -53,6 +54,8 @@ export class LiveOverlay {
     for (const c of d.captions ?? []) {
       const el = document.createElement("div");
       el.className = "lo-line";
+      const look = c.look ?? d.look, family = familyOf(look);
+      if (c.look) paint(el, look);
       const [x, y, w, h] = c.box;
       const lh = c.ascent + c.descent;
       Object.assign(el.style, {
@@ -77,13 +80,14 @@ export class LiveOverlay {
         return sp;
       });
       this.root.append(el);
-      this.lines.push({ el, words, a: c.t_in, b: c.t_out, on: false, act: -2,
+      this.lines.push({ el, words, a: c.t_in, b: c.t_out, on: false, act: -2, mode: look?.active ?? "pill",
         starts: c.words.map((wd, k) => (k === 0 ? c.t_in : wd.t_in)) });
     }
     for (const c of d.callouts ?? []) {
       const el = document.createElement("div");
       el.className = "lo-callout";
       el.textContent = c.text;
+      const look = c.look ?? d.look, family = familyOf(look);
       const [x, y, w, h] = c.box;
       Object.assign(el.style, {
         left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px`, fontFamily: family, fontSize: `${c.size}px`,
@@ -128,8 +132,8 @@ export class LiveOverlay {
       if (k === ln.act) continue;
       ln.act = k;
       ln.words.forEach((sp, i) => {
-        const said = this.mode === "karaoke" ? i <= k : i === k;
-        sp.className = `lo-w ${said && this.mode !== "none" ? `act-${this.mode}` : ""}`;
+        const said = ln.mode === "karaoke" ? i <= k : i === k;
+        sp.className = `lo-w ${said && ln.mode !== "none" ? `act-${ln.mode}` : ""}`;
       });
     }
     for (const c of this.callouts) {

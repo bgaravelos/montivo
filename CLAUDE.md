@@ -771,6 +771,18 @@ fix keeps the capital it replaces); lines to check from the reviewer's captions_
 (`captions.apply_breaks`, `human linebreak`, POST /linebreak, draft op `caption_break` resolved like a caption edit);
 Follow the playhead; a human retext now keeps `until` and `captions.isolate` holds those words as one line under any
 look (old overrides without `until` behave as before). rp-015 v8: a split + "every" -> "each" in one render.
+Rail panels Style S1-S4 (30/10, $0, S1-S2 commit fa19766, S3-S4 on branch `claude/happy-hellman-503cb3` on top of it): S1
+four tabs (Presets, Text, Active word, Position) under Describe it; S2 the coloured-words count per version (version
+entry `highlight`). S3 brand kits (`engine/kit.py`): a saved look may carry `music` ({track, level, duck} or "off") and
+`title_card`; "Apply kit" = the `kit` pure op (one version, patch action "kit", a mix's voice gain kept, a card turned on
+only with title words), `montivo run --kit JSON` sets edl_v1 (a kit's title card off skips the Muse Image call), POST
+/api/runs {"kit": saved id}. The New project sheet's kit picker is NOT built (Home.tsx has another session's
+uncommitted work): the server takes it already. POST /api/runs/{id}/op {op, args, from} = any `human.OPS` op as a
+version in Rendered mode (`python -m montivo.human op`), checked like a draft op. S4 a look per clip: span `look` (full
+look; `captions.span_looks`), build_overlays groups a segment's words in runs of one look (a line never mixes two),
+lines and the callout carry `look`, preview_data / LiveOverlay draw them; the style op's `clips` {span: look | null},
+`human style --clip s3=JSON|cut`, the Style panel's Applies to: Whole cut / This clip. A re-plan does not carry clip
+looks (new span ids). EDLs without clip looks lay out as before. rp-015: s1 in Box, the rest Marker, rendered.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

@@ -169,10 +169,21 @@ def preview_data(run_dir: Path, edl: dict, overlays: bool = True, laid: bool = F
     names = highlight_words(edl, look)
     data["look"] = _caption_style(look)
     data["fonts"] = {look.font: FONTS[look.font][0]}
-    data["captions"] = [_line(c, style, names) for c in fields["captions"]]
-    ca, cd = font(58, look.font).getmetrics()  # graphics.draw_callout's size
-    data["callouts"] = [{"span": c["span"], "text": c["text"], "t_in": c["t_in"], "t_out": c["t_out"], "box": c["box"],
-                         "size": 58, "ascent": ca, "descent": cd} for c in fields["callouts"]]
+    data["captions"] = []
+    for c in fields["captions"]:  # a clip's own look (span_looks) rides on its lines and its callout
+        if c.get("look"):
+            lk = normalize_look(c["look"])
+            data["fonts"][lk.font] = FONTS[lk.font][0]
+            data["captions"].append({**_line(c, CaptionStyle.from_look(lk), highlight_words(edl, lk)), "look": _caption_style(lk)})
+        else:
+            data["captions"].append(_line(c, style, names))
+    data["callouts"] = []
+    for c in fields["callouts"]:
+        lk = normalize_look(c["look"]) if c.get("look") else look
+        data["fonts"][lk.font] = FONTS[lk.font][0]
+        ca, cd = font(58, lk.font).getmetrics()  # graphics.draw_callout's size
+        data["callouts"].append({"span": c["span"], "text": c["text"], "t_in": c["t_in"], "t_out": c["t_out"], "box": c["box"],
+                                 "size": 58, "ascent": ca, "descent": cd, **({"look": _caption_style(lk)} if c.get("look") else {})})
     if edl.get("overlays"):
         stills, records = broll.place(edl, segments, title_s, run_dir, cache / "broll", frame)
         at = {o.png.as_posix(): o for ovs in stills.values() for o in ovs}

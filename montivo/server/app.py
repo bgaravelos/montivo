@@ -70,6 +70,8 @@ PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 # A new run's cost and wall time from the footage length (5 fps SAM, before any review): run 014, 120 s, $0.36 in
 # 169 s; run 015, 69 s, $0.23 in about 130 s, so about $0.045 + $0.0026 per footage second and 60 s + 0.9 s per second;
 # the review loop adds about two reviews and a render (run 015: $0.07, 85 s)
+# the chat's job label of an edit made through POST /op (the panels' newer edits)
+OP_LABEL = {"kit": "Brand kit", "style": "Style", "text": "Edit text", "music": "Music", "pin": "Pin a speaker"}
 COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_fixed": 0.045,
         "run_per_s": 0.0026, "run_wall_fixed_s": 60, "run_wall_per_s": 0.9, "review_loop": 0.07, "review_loop_s": 85,
         "hook_ab": 0.04, "ask": 0.006, "look": 0.008, "cover": 0.025, "cover_design": 0.05, "cover_mask": 0.01,
@@ -662,7 +664,7 @@ def create_app(root: Path) -> FastAPI:
         and callout places ({"look", "callouts"}, as POST /preview): the viewer plays the new look while the panel is
         open (A4), laid out by the render's own code; the paused still (POST /preview) stays the burned-in truth."""
         from ..engine.look import with_style
-        look, places = style_body(b)
+        look, places, clips = style_body(b)
         d = st.run_dir(run_id)
         if b.get("draft"):
             fd = draft.folder(d, judge_of(request) if budget is not None else None)
@@ -680,7 +682,7 @@ def create_app(root: Path) -> FastAPI:
             d, edl = edl_of(run_id, v)
             base = edl
         try:
-            styled = with_style(edl, look, places)
+            styled = with_style(edl, look, places, clips)
         except ValueError as e:
             raise HTTPException(400, f"look: {e}")
         return preview_payload(run_id, d, styled, v, base)
@@ -1290,6 +1292,11 @@ def create_app(root: Path) -> FastAPI:
             args.append("--punch")
         if open_planner:
             args += ["--planner", "open"]
+        if b.get("kit"):  # a saved look or brand kit by id (S3): its look, music and title card on the first cut
+            kit = next((x for x in saved_looks(request) if x["id"] == b["kit"]), None)
+            if kit is None:
+                raise HTTPException(400, f"no saved look {b['kit']!r}")
+            args += ["--kit", json.dumps({k: kit[k] for k in ("look", "music", "title_card") if k in kit})]
         (st.runs / rid / "ui").mkdir(parents=True, exist_ok=True)
         if budget is not None:
             (st.runs / rid / "ui" / "owner").write_text(judge_of(request))
@@ -1653,6 +1660,37 @@ def create_app(root: Path) -> FastAPI:
                         chat={"role": "user", "text": f"Text in v{frm}: {'; '.join(what)}.", "chips": [f"v{frm}"], "kind": "text"})
         return {"job": job.public()}
 
+    @app.post("/api/runs/{run_id}/op")
+    async def op_edit(run_id: str, request: Request):
+        """One pure edit of human.OPS ({"op": "kit", "args": {...}, "from": N}) as the next version, rendered: the
+        Rendered-mode route of the panels' newer edits (brand kit, ...), checked as the draft checks them
+        (draft.clean_op, resolve). $0, ffmpeg only."""
+        run_id = await own(run_id, request, lambda b: COST["review"] * review_passes(b))
+        d = st.run_dir(run_id)
+        b = await request.json()
+        frm = int(b.get("from") or latest_version(d))
+        passes = review_passes(b)
+        from .. import human
+        o = draft.clean_op(b)
+        if draft.cost([o]):
+            raise HTTPException(400, "new title words go through POST /text")
+        edl = read_json(d / f"edl_v{frm}.json")
+        if edl is None:
+            raise HTTPException(404, f"no edl_v{frm}.json")
+        o = await asyncio.to_thread(draft.resolve, d, edl, o)
+        try:  # refuse here what the job would refuse, before it starts
+            _, rec = human.step(edl, *draft.inputs(d), o)
+        except SystemExit as e:
+            raise HTTPException(409, str(e))
+        if passes:
+            need_key("Reviewing the new cut", COST["review"] * passes)
+        args = ["-m", "montivo.human", "op", f"runs/{run_id}", "--op", o["op"], "--args", json.dumps(o["args"]),
+                "--from", str(frm), "--review", str(passes)]
+        job = start_job(st, run_id, o["op"], OP_LABEL.get(o["op"], "Edit"), args,
+                        chat={"role": "user", "text": f"{rec.say[0].upper() + rec.say[1:]} (v{frm}).", "chips": [f"v{frm}"],
+                              "kind": o["op"]})
+        return {"job": job.public()}
+
     @app.get("/api/music")
     def music_tracks():
         """The Music panel's choices: the bundled CC0 tracks (montivo/music/tracks.json, each with its author and source
@@ -1725,14 +1763,18 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/looks/saved")
     def save_look(request: Request, b: dict):
-        """{"name": "My brand", "look": {...}}: kept with the person's looks (same name replaces it, 24 at most)."""
+        """{"name": "My brand", "look": {...}[, "music": {track, level_db, duck_db} | "off", "title_card": bool]}: kept
+        with the person's looks (same name replaces it, 24 at most). With music or the title card it is a brand kit
+        (engine/kit.py, S3): one click puts all of it on a version, and a new project can start with it."""
+        from ..engine.kit import normalize_kit
         name = " ".join(str(b.get("name") or "").split())[:40]
         if not name:
             raise HTTPException(400, "name: 1 to 40 characters")
         try:
             look = normalize_look(b.get("look")).to_json()
+            extra = {k: v for k, v in normalize_kit({k: b.get(k) for k in ("look", "music", "title_card")}).items() if k != "look"}
         except ValueError as e:
-            raise HTTPException(400, f"look: {e}")
+            raise HTTPException(400, f"look: {e}" if "kit" not in str(e) else str(e))
         with looks_lock:
             items = [x for x in saved_looks(request) if x["name"].lower() != name.lower()]
             if len(items) >= 24:
@@ -1740,7 +1782,7 @@ def create_app(root: Path) -> FastAPI:
             sid = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:30] or "look"
             while any(x["id"] == sid for x in items):
                 sid += "-2"
-            items.append({"id": sid, "name": name, "look": look, "saved": time.strftime("%Y-%m-%d %H:%M")})
+            items.append({"id": sid, "name": name, "look": look, **extra, "saved": time.strftime("%Y-%m-%d %H:%M")})
             write_json(saved_path(request), {"looks": items})
         return {"saved": items}
 
@@ -1754,21 +1796,24 @@ def create_app(root: Path) -> FastAPI:
             write_json(saved_path(request), {"looks": items})
         return {"saved": items}
 
-    def style_body(b: dict) -> tuple[dict | None, dict[str, list[float] | None]]:
-        look, places = b.get("look"), b.get("callouts") or {}
-        if look is not None:
-            if not isinstance(look, dict):
-                raise HTTPException(400, "look: an object")
-            try:
-                normalize_look(look)
-            except ValueError as e:
-                raise HTTPException(400, f"look: {e}")
+    def style_body(b: dict) -> tuple[dict | None, dict[str, list[float] | None], dict[str, dict | None]]:
+        look, places, clips = b.get("look"), b.get("callouts") or {}, b.get("clips") or {}
+        for lk in [look, *(clips.values() if isinstance(clips, dict) else [])]:
+            if lk is not None:
+                if not isinstance(lk, dict):
+                    raise HTTPException(400, "look: an object")
+                try:
+                    normalize_look(lk)
+                except ValueError as e:
+                    raise HTTPException(400, f"look: {e}")
+        if not isinstance(clips, dict) or len(clips) > 200 or not all(re.fullmatch(r"s\d+", k) for k in clips):
+            raise HTTPException(400, "clips: {span id: a look, or null for the cut's}")
         if not isinstance(places, dict) or not all(
                 re.fullmatch(r"s\d+", k) and (v is None or (isinstance(v, list) and len(v) == 2
                                                            and all(isinstance(x, (int, float)) for x in v)))
                 for k, v in places.items()):
             raise HTTPException(400, "callouts: {span id: [x, y] or null}")
-        return look, places
+        return look, places, clips
 
     @app.post("/api/runs/{run_id}/preview")
     def preview(run_id: str, request: Request, b: dict):
@@ -1783,7 +1828,7 @@ def create_app(root: Path) -> FastAPI:
             v, t = int(b.get("v") or 0), round(finite(b.get("t")), 2)
         except (TypeError, ValueError):
             raise HTTPException(400, "v: a version, t: a cut second")
-        look, places = style_body(b)
+        look, places, clips = style_body(b)
         aspect = b.get("aspect") or "9:16"
         if aspect not in ASPECTS:
             raise HTTPException(400, f"aspect: one of {', '.join(ASPECTS)}")
@@ -1802,14 +1847,14 @@ def create_app(root: Path) -> FastAPI:
             if not edl_path.is_file():
                 raise HTTPException(404, f"no edl_v{v}.json")
             base, tag = None, []
-        key_in = [v, t, look, places, edl_path.stat().st_mtime_ns if edl_path.is_file() else tag] + tag + \
+        key_in = [v, t, look, places, *([clips] if clips else []), edl_path.stat().st_mtime_ns if edl_path.is_file() else tag] + tag + \
             ([aspect] if aspect != "9:16" else [])
         key = hashlib.sha1(json.dumps(key_in, sort_keys=True).encode()).hexdigest()[:16]
         out = d / "ui" / "cache" / "preview" / f"{key}.jpg"
         meta = out.with_suffix(".json")
         if not (out.is_file() and meta.is_file()):
             try:
-                img, info = still(d, with_aspect(with_style(base if base is not None else read_json(edl_path), look, places), aspect),
+                img, info = still(d, with_aspect(with_style(base if base is not None else read_json(edl_path), look, places, clips), aspect),
                                   t, d / f"cut_v{v}.mp4")
             except (FileNotFoundError, subprocess.CalledProcessError) as e:
                 raise HTTPException(500, f"preview failed: {e}")
@@ -1831,11 +1876,11 @@ def create_app(root: Path) -> FastAPI:
         b = await request.json()
         frm = int(b.get("from") or latest_version(d))
         passes = review_passes(b)
-        look, places = style_body(b)
+        look, places, clips = style_body(b)
         prompt = " ".join(str(b.get("prompt") or "").split())[:300] or None
-        if look is None and not places and not prompt:
+        if look is None and not places and not clips and not prompt:
             raise HTTPException(400, "nothing to change")
-        if prompt and (look is not None or places):
+        if prompt and (look is not None or places or clips):
             raise HTTPException(400, "a prompt or a look, not both")
         if passes or prompt:
             need_key("Styling from a sentence (Muse Spark)" if prompt else "Reviewing the new cut",
@@ -1847,12 +1892,14 @@ def create_app(root: Path) -> FastAPI:
             return {"job": job.public()}
         args = ["-m", "montivo.human", "style", f"runs/{run_id}", *(["--look", json.dumps(look)] if look is not None else []),
                 *[f"--callout={k}={'auto' if v is None else f'{v[0]:.0f},{v[1]:.0f}'}" for k, v in places.items()],
+                *[f"--clip={k}={'cut' if v is None else json.dumps(v)}" for k, v in clips.items()],
                 "--from", str(frm), "--review", str(passes)]
         what = []
         if look is not None:
             what.append(f"caption style {PRESET_NAMES.get(look.get('preset') or 'marker', 'custom')}"
                         + (f", fixed at y {look.get('top')}" if look.get("position") == "fixed" else ""))
         what += [f"callout {k} {'back to auto' if v is None else 'moved'}" for k, v in places.items()]
+        what += [f"clip {k} {'back to the cut look' if v is None else 'its own look'}" for k, v in clips.items()]
         job = start_job(st, run_id, "style", "Style", args,
                         chat={"role": "user", "text": f"Style in v{frm}: {'; '.join(what)}.", "chips": [f"v{frm}"], "kind": "style"})
         return {"job": job.public()}

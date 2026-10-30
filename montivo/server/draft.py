@@ -217,6 +217,11 @@ def clean_panel_op(op: str, a: dict) -> dict:
         if not isinstance(places, dict) or len(places) > 200:
             raise HTTPException(400, "callouts: {span id: [x, y] or null}")
         out = {"look": look, "callouts": {}}
+        clips = a.get("clips") or {}
+        if not isinstance(clips, dict) or len(clips) > 200 or not all(v is None or isinstance(v, dict) for v in clips.values()):
+            raise HTTPException(400, "clips: {span id: a look, or null for the cut's}")
+        if clips:
+            out["clips"] = {_span(k): v for k, v in clips.items()}
         for k, xy in places.items():
             if xy is not None and not (isinstance(xy, (list, tuple)) and len(xy) == 2):
                 raise HTTPException(400, "callouts: {span id: [x, y] or null}")
@@ -246,6 +251,12 @@ def clean_panel_op(op: str, a: dict) -> dict:
         if not isinstance(spk, str) or not SPEAKER.fullmatch(spk) or (head is not None and not HEAD.fullmatch(str(head))):
             raise HTTPException(400, "speaker: a Voice label like A; head: a head id or null")
         return {"speaker": spk, "head": None if head is None else str(head)}
+    if op == "kit":
+        from ..engine.kit import normalize_kit
+        try:
+            return {"kit": normalize_kit(a.get("kit")), "name": _text(a.get("name") or "", "name", 40) or None}
+        except ValueError as e:
+            raise HTTPException(400, str(e))
     if a.get("skip") is not None:  # punch
         if not isinstance(a["skip"], str) or not PUNCH_KEY.fullmatch(a["skip"]):
             raise HTTPException(400, "skip: a punch-in key like emphasis:Montivo@47.120 or jump_cut:s4")

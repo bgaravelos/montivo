@@ -41,13 +41,20 @@ def grab(media: Path, t: float, vf: str) -> Image.Image:
     return Image.open(io.BytesIO(proc.stdout)).convert("RGBA")
 
 
-def with_style(edl: dict, look: dict | None, callouts: dict[str, list[float] | None] | None = None) -> dict:
-    """A copy of the EDL with another look and callout places (the Style panel's staged edits); raises ValueError for
-    a bad look."""
+def with_style(edl: dict, look: dict | None, callouts: dict[str, list[float] | None] | None = None,
+               clips: dict[str, dict | None] | None = None) -> dict:
+    """A copy of the EDL with another look and callout places (the Style panel's staged edits); `clips` gives spans a
+    look of their own (None: back to the cut's look), as human.style_edit stores them. Raises ValueError for a bad
+    look."""
     out = copy.deepcopy(edl)
     if look is not None:
         out["look"] = restyle(edl.get("look"), look).to_json()
     by_id = {s["id"]: s for s in out["spans"]}
+    for sid, lk in (clips or {}).items():
+        if sid in by_id:
+            by_id[sid].pop("look", None)
+            if lk is not None and (own := restyle(out.get("look"), lk).to_json()) != restyle(out.get("look"), out.get("look")).to_json():
+                by_id[sid]["look"] = own
     for sid, xy in (callouts or {}).items():
         if sid in by_id:
             if xy is None:

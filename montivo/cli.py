@@ -19,6 +19,17 @@ from pathlib import Path
 from . import __version__
 
 
+def kit_arg(ap: argparse.ArgumentParser, raw: str | None) -> dict | None:
+    """--kit as a checked kit (engine/kit.py), or an argparse error."""
+    if raw is None:
+        return None
+    from .engine.kit import normalize_kit
+    try:
+        return normalize_kit(json.loads(raw))
+    except (json.JSONDecodeError, ValueError) as e:
+        ap.error(f"--kit: {e}")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="montivo", description="Montivo: agent-first video editing on Meta models.")
     ap.add_argument("--version", action="version", version=f"montivo {__version__}")
@@ -56,6 +67,8 @@ def main(argv: list[str] | None = None) -> int:
                                                         "across jump cuts (kept by the review loop and later edits)")
     r.add_argument("--review", action="store_true",
                    help="after cut_v1: blind Spark review -> fix ops -> edl_v2 -> cut_v2 ..., up to --review-passes reviews")
+    r.add_argument("--kit", default=None, metavar="JSON",
+                   help='a brand kit for the first cut: {"look": {...}, "music": {"track": ...} | "off", "title_card": true}')
     r.add_argument("--hook-ab", action="store_true",
                    help="with --review: after the loop, a hook A/B on its best version (one or two more reviews, $0.10 cap)")
     r.add_argument("--review-passes", type=int, default=3, help="max reviews in the loop (default 3)")
@@ -219,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
                           skip_track=args.no_track, resume=args.resume, replan=args.replan, render=not args.no_render, hflip=args.hflip,
                           title=not args.no_title, captions=not args.no_captions, review=args.review,
                           review_passes=args.review_passes, review_budget=args.review_budget, punch=args.punch,
-                          hook_ab=args.hook_ab,
+                          hook_ab=args.hook_ab, kit=kit_arg(ap, args.kit),
                           model=args.model or RunOptions.__dataclass_fields__["model"].default,
                           planner_model=OPEN_MODEL if args.planner == "open" else None)
         summary = run(opts)

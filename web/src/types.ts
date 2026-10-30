@@ -5,6 +5,7 @@ export type Span = {
   t_in: number; t_out: number; duration: number; word_from: number; word_to: number;
   why: string; callout: string; contiguous_with_previous: boolean; verbatim: boolean;
   callout_xy: [number, number] | null; // a callout a person pinned on the canvas (montivo.human style)
+  look?: Look | null; // a look of the clip's own for its captions and callout (S4, montivo.human style --clip)
 };
 
 export type Issue = {
@@ -123,7 +124,8 @@ export type MusicInfo = {
   tracks: { id: string; name: string; mood: string; loop_s: number; licence: string; author: string; source: string; url: string }[];
   default: { level_db: number; duck_db: number }; level_range: [number, number]; duck_range: [number, number];
 };
-export type SavedLook = { id: string; name: string; look: Look; saved: string };
+// with music or the title card a saved look is a brand kit (S3, engine/kit.py): one click puts all of it on a version
+export type SavedLook = { id: string; name: string; look: Look; saved: string; music?: MusicSetting | "off"; title_card?: boolean };
 export type LooksInfo = { presets: { id: string; name: string; look: Look }[]; fonts: { id: string; name: string }[]; default: Look; saved: SavedLook[] };
 
 export type CaptionStyle = { font?: number; max_words?: number; default_top?: number; font_path?: string; glossary?: Record<string, string> };

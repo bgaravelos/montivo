@@ -23,8 +23,10 @@ export type LiveData = {
   fonts?: Record<string, { name: string; url: string }>;
   captions?: { id: string; t_in: number; t_out: number; box: [number, number, number, number]; placement: string;
     words: { w: string; t_in: number; t_out: number; hl: boolean }[];
-    size: number; stroke: number; space: number; pad_x: number; pad_y: number; ascent: number; descent: number }[];
-  callouts?: { span: string; text: string; t_in: number; t_out: number; box: [number, number, number, number]; size: number; ascent: number; descent: number }[];
+    size: number; stroke: number; space: number; pad_x: number; pad_y: number; ascent: number; descent: number;
+    look?: LiveLook }[]; // a clip's own look (S4), else the cut's `look`
+  callouts?: { span: string; text: string; t_in: number; t_out: number; box: [number, number, number, number]; size: number; ascent: number; descent: number;
+    look?: LiveLook }[];
   stills?: { id: string; placement: string; t_in: number; t_out: number; x: number; y: number; w: number; h: number; fade_s: number; url: string }[];
   draft?: { id: string; base: number; ops: number; n: number };
   music?: { track: string; name: string; url: string; gain_db: number; level_db: number; track_lufs: number; duck_db: number;

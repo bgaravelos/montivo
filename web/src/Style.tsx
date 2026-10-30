@@ -10,8 +10,9 @@ import type { Look, LooksInfo, SavedLook, Version } from "./types";
 // (POST /style -> montivo.human style, $0).
 
 export type Place = [number, number] | null; // a callout's top-left in the 1080 x 1920 frame; null = back to auto
-export type StyleDraft = { look: Look | null; callouts: Record<string, Place> };
-export const EMPTY_DRAFT: StyleDraft = { look: null, callouts: {} };
+// clips: a clip's own look (S4: its caption lines and callout), null = back to the cut's look
+export type StyleDraft = { look: Look | null; callouts: Record<string, Place>; clips: Record<string, Look | null> };
+export const EMPTY_DRAFT: StyleDraft = { look: null, callouts: {}, clips: {} };
 export type Preview = { image: string; captions: PBox[]; callouts: PBox[]; title?: boolean };
 type PBox = { text: string; box: number[]; placement: string; head_box: number[] | null; span?: string; t_in: number; t_out: number };
 
@@ -21,7 +22,7 @@ const pct = (x: number, of: number) => `${(x / of) * 100}%`;
 const sameLook = (a: Look | null, b: Look | null) => JSON.stringify(a) === JSON.stringify(b);
 
 export const draftCount = (d: StyleDraft, v: Version | null) =>
-  (d.look && v && !sameLook(d.look, v.look) ? 1 : 0) + Object.keys(d.callouts).length;
+  (d.look && v && !sameLook(d.look, v.look) ? 1 : 0) + Object.keys(d.callouts).length + Object.keys(d.clips).length;
 
 let looksCache: Promise<LooksInfo> | null = null;
 export const getLooks = () => (looksCache ??= api<LooksInfo>("/api/looks"));
@@ -34,13 +35,13 @@ export function usePreview(id: string, v: Version | null, t: number, draft: Styl
   const tq = Math.round(t * 10) / 10;
   // a draft keeps its number while its edits change: its clips, look and callouts are part of the key
   const dk = v?.draft ? [v.spans.map((s) => `${s.id}:${s.t_in}:${s.t_out}:${s.callout ?? ""}:${s.callout_xy ?? ""}`).join("|"), v.look] : null;
-  const key = on && v ? JSON.stringify([v.n, tq, draft.look, draft.callouts, dk]) : null;
+  const key = on && v ? JSON.stringify([v.n, tq, draft.look, draft.callouts, draft.clips, dk]) : null;
   useEffect(() => {
     if (!key || !v) { setP(null); return; }
     let live = true;
     const h = window.setTimeout(() => {
       setBusy(true);
-      api<Preview>(`/api/runs/${id}/preview`, { ...(v.draft ? { draft: true } : { v: v.n }), t: tq, look: draft.look, callouts: draft.callouts })
+      api<Preview>(`/api/runs/${id}/preview`, { ...(v.draft ? { draft: true } : { v: v.n }), t: tq, look: draft.look, callouts: draft.callouts, clips: draft.clips })
         .then((r) => { if (live) setP(r); }).catch(() => { if (live) setP(null); }).finally(() => { if (live) setBusy(false); });
     }, 160);
     return () => { live = false; window.clearTimeout(h); };
@@ -55,22 +56,27 @@ function sampleT(v: Version, t: number) {
   return c ? Math.round(((c.t_in + c.t_out) / 2) * 10) / 10 : t;
 }
 
-function PresetCard({ id, v, t, look, name, on, onPick, saved, onDelete }: {
+function PresetCard({ id, v, t, look, name, on, onPick, saved, onDelete, kit, onKit }: {
   id: string; v: Version; t: number; look: Look; name: string; on: boolean; onPick: () => void; saved?: boolean; onDelete?: () => void;
+  kit?: string | null; onKit?: () => void; // a brand kit: what it brings besides the look, and its one-click apply
 }) {
   const [src, setSrc] = useState<string | null>(null);
   const send = saved ? look : { preset: look.preset };
   const key = JSON.stringify(send);
   useEffect(() => {
     let live = true;
-    api<Preview>(`/api/runs/${id}/preview`, { v: v.n, t, look: send }).then((r) => live && setSrc(r.image)).catch(() => {});
+    // a draft has no edl_vN yet: its preview comes from the draft itself (asking for v.n answered 404, no thumbnails)
+    api<Preview>(`/api/runs/${id}/preview`, { ...(v.draft ? { draft: true } : { v: v.n }), t, look: send }).then((r) => live && setSrc(r.image)).catch(() => {});
     return () => { live = false; };
-  }, [id, v.n, t, key]); // eslint-disable-line
+  }, [id, v.n, v.draft, t, key]); // eslint-disable-line
   return (
     <div className={`preset-card ${on ? "on" : ""}`} role="button" tabIndex={0} onClick={onPick}
       onKeyDown={(e) => { if (e.key === "Enter") onPick(); }} title={saved ? `Your look “${name}”` : `The ${name} preset`}>
       <span className="pc-img">{src ? <img src={src} alt="" /> : <MarkLoader size={22} label="Loading the preview" />}</span>
       <span className="pc-name">{name}</span>
+      {kit && <span className="pc-kit mute" title={`Brand kit: the look, ${kit}`}>+ {kit}</span>}
+      {onKit && <button className="btn small pc-apply" title="Put the look, the music and the title card on this cut in one edit"
+        onClick={(e) => { e.stopPropagation(); onKit(); }}>Apply kit</button>}
       {onDelete && <button className="pc-del icon-btn" title="Delete this saved look" onClick={(e) => { e.stopPropagation(); onDelete(); }}><Icon name="close" size={11} /></button>}
     </div>
   );
@@ -97,12 +103,21 @@ function Seg<T extends string | number>({ value, options, onChange }: { value: T
   );
 }
 
+/** What a saved look brings besides the look (a brand kit, S3), or null for a look alone. */
+const kitNote = (x: SavedLook) => {
+  const parts = [x.music === "off" ? "no music" : x.music ? x.music.track.replace(/_/g, " ") : null,
+    x.title_card == null ? null : x.title_card ? "title card" : "no title card"].filter(Boolean);
+  return parts.length ? parts.join(", ") : null;
+};
+
 /** S1: the panel's four sections, one at a time ("Describe it" stays above them). */
 type StyleTab = "presets" | "text" | "word" | "position";
 const STYLE_TABS: [StyleTab, string][] = [["presets", "Presets"], ["text", "Text"], ["word", "Active word"], ["position", "Position"]];
 
-export function StylePanel({ id, v, t, next, canEdit, live, draft, setDraft, onSeek, onApply, hasKey, keyNote, cost, onPrompt }: {
+export function StylePanel({ id, v, t, next, canEdit, live, draft, setDraft, onSeek, onApply, hasKey, keyNote, cost, onPrompt, clip, onKit }: {
   id: string; v: Version | null; t: number; next: number; canEdit: string | null; live: boolean;
+  clip: string | null; // the selected clip, else the one under the playhead: "This clip" styles it (S4)
+  onKit: (k: SavedLook) => void; // S3: a brand kit's look, music and title card as one edit
   draft: StyleDraft; setDraft: (d: StyleDraft) => void; onSeek: (a: number) => void; onApply: () => void;
   hasKey: boolean; keyNote: string | null; cost: number; onPrompt: (text: string) => void;
 }) {
@@ -110,23 +125,39 @@ export function StylePanel({ id, v, t, next, canEdit, live, draft, setDraft, onS
   const [words, setWords] = useState("");
   const [ask, setAsk] = useState("");
   const [saveName, setSaveName] = useState("");
+  const [withMusic, setWithMusic] = useState(false);
+  const [withTitle, setWithTitle] = useState(false);
   const [tab, setTabState] = useState<StyleTab>(() => { try { return (localStorage.getItem("montivo.style.tab") as StyleTab) || "presets"; } catch { return "presets"; } });
   const setTab = (x: StyleTab) => { setTabState(x); try { localStorage.setItem("montivo.style.tab", x); } catch { /* this tab */ } };
   const setSaved = (saved: SavedLook[]) => setInfo((i) => (i ? { ...i, saved } : i));
+  const [scope, setScope] = useState<"cut" | "clip">("cut");
   useEffect(() => { getLooks().then(setInfo).catch(() => {}); }, []);
   const base = v?.look ?? info?.default ?? null;
-  const look = draft.look ?? base;
+  const cutLook = draft.look ?? base;
+  const span = clip ? v?.spans.find((x) => x.id === clip) ?? null : null;
+  const onClip = scope === "clip" && !!span;
+  const clipOwn = span ? (span.id in draft.clips ? draft.clips[span.id] : span.look ?? null) : null;
+  const look = onClip ? clipOwn ?? cutLook : cutLook;
   useEffect(() => setWords((look?.highlight_add ?? []).join(", ")), [v?.n, look?.preset]); // eslint-disable-line
   const presetT = useMemo(() => (v ? sampleT(v, t) : 0), [v?.n]); // eslint-disable-line
   if (!v || !look || !info) return <section className="side-panel"><div className="panel-head"><span className="ph-title">Style</span></div></section>;
   const set = (patch: Partial<Look>) => {
     const nl = { ...look, ...patch };
+    if (onClip) { // a look of the clip's own: back to none when it is the cut's again
+      const own = sameLook(nl, cutLook) ? null : nl;
+      const { [span!.id]: _, ...rest } = draft.clips;
+      return setDraft({ ...draft, clips: sameLook(own, span!.look ?? null) ? rest : { ...draft.clips, [span!.id]: own } });
+    }
     setDraft({ ...draft, look: sameLook(nl, v.look) ? null : nl });
   };
+  const ownClips = v.spans.filter((x) => (x.id in draft.clips ? draft.clips[x.id] : x.look));
   const saveLook = () => {
     const name = saveName.trim();
     if (!name) return;
-    api<{ saved: SavedLook[] }>("/api/looks/saved", { name, look }).then((r) => { setSaved(r.saved); setSaveName(""); looksCache = null; }).catch(() => {});
+    const kit = { ...(withMusic ? { music: v?.music ? { track: v.music.track, level_db: v.music.level_db, duck_db: v.music.duck_db } : "off" } : {}),
+      ...(withTitle ? { title_card: !!v?.title_card } : {}) };
+    api<{ saved: SavedLook[] }>("/api/looks/saved", { name, look: draft.look ?? cutLook, ...kit })
+      .then((r) => { setSaved(r.saved); setSaveName(""); setWithMusic(false); setWithTitle(false); looksCache = null; }).catch(() => {});
   };
   const pick = (p: Look) => set({ ...p, position: look.position, top: look.position === "fixed" ? look.top : p.top });
   const n = draftCount(draft, v);
@@ -149,6 +180,17 @@ export function StylePanel({ id, v, t, next, canEdit, live, draft, setDraft, onS
             onClick={() => { onPrompt(ask.trim()); setAsk(""); }}><Icon name="spark" size={12} /> {live ? "Apply" : `Make Version ${next}`} · ~${cost.toFixed(3)}</button>
         </div>
         <p className="mute small">Muse Spark reads the current look and how light the picture is behind the captions, then picks fonts and colours from the options below. Tweak the result here after.</p>
+        <div className="pn-k">Applies to</div>
+        <div className="seg-group" role="group" aria-label="What the style applies to">
+          <button className={`seg ${!onClip ? "on" : ""}`} onClick={() => setScope("cut")}>Whole cut</button>
+          <button className={`seg ${onClip ? "on" : ""}`} disabled={!span} onClick={() => setScope("clip")}
+            title={span ? `Only clip ${span.id}: its caption lines and callout` : "Select a clip on the timeline, or put the playhead in one"}>
+            {span ? `This clip · ${span.id}` : "This clip"}</button>
+        </div>
+        {onClip && <p className="mute small">Clip {span!.id} “{span!.words.slice(0, 42)}{span!.words.length > 42 ? "…" : ""}”
+          {clipOwn ? " has a look of its own. " : " uses the cut's look: a change here gives it its own. "}
+          {clipOwn && <button className="link small" disabled={!!canEdit} onClick={() => setDraft({ ...draft, clips: { ...draft.clips, [span!.id]: null } })}>Back to the cut's look</button>}</p>}
+        {!onClip && ownClips.length > 0 && <p className="mute small">{ownClips.map((x) => x.id).join(", ")} keep{ownClips.length === 1 ? "s" : ""} a look of {ownClips.length === 1 ? "its" : "their"} own.</p>}
         <div className="seg-group st-tabs" role="tablist" aria-label="Style sections">
           {STYLE_TABS.map(([k, label]) => <button key={k} role="tab" aria-selected={tab === k} className={`seg ${tab === k ? "on" : ""}`}
             onClick={() => setTab(k)}>{label}</button>)}
@@ -163,14 +205,20 @@ export function StylePanel({ id, v, t, next, canEdit, live, draft, setDraft, onS
         {info.saved.length > 0 && (
           <div className="preset-grid">
             {info.saved.map((x) => <PresetCard key={x.id} id={id} v={v} t={presetT} look={x.look} name={x.name} saved
-              on={sameLook(x.look, look)} onPick={() => set(x.look)}
+              on={sameLook(x.look, look)} onPick={() => set(x.look)} kit={kitNote(x)}
+              onKit={kitNote(x) && !onClip && !canEdit ? () => onKit(x) : undefined}
               onDelete={() => api<{ saved: SavedLook[] }>(`/api/looks/saved/${x.id}`, undefined, "DELETE").then((r) => setSaved(r.saved)).catch(() => {})} />)}
           </div>
         )}
         <div className="st-row">
           <input className="st-input grow" value={saveName} maxLength={40} placeholder="Name this look, e.g. My brand"
             onChange={(e) => setSaveName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") saveLook(); }} />
-          <button className="btn quiet small" disabled={!saveName.trim()} onClick={saveLook} title="Keep the look as it is now (with your staged changes) for other projects">Save look</button>
+          <button className="btn quiet small" disabled={!saveName.trim()} onClick={saveLook} title="Keep the look as it is now (with your staged changes) for other projects">{withMusic || withTitle ? "Save kit" : "Save look"}</button>
+        </div>
+        <div className="st-row">
+          <label className="st-check" title="A brand kit keeps the music with the look: one click puts both on another cut">
+            <input type="checkbox" checked={withMusic} onChange={(e) => setWithMusic(e.target.checked)} /> with the music ({v.music ? v.music.track.replace(/_/g, " ") : "none"})</label>
+          <label className="st-check"><input type="checkbox" checked={withTitle} onChange={(e) => setWithTitle(e.target.checked)} /> with the title card {v.title_card ? "on" : "off"}</label>
         </div>
         </>}
 

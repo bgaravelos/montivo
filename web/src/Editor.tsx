@@ -40,7 +40,7 @@ type Current = { version: number | null; newest: number | null };
 const currentKey = (id: string) => `montivo.current.${id}`;
 // the requests that make a version from the one on screen: after an undo they branch from an older version
 const MAKES_VERSION = ["drop", "trim", "reorder", "cut", "split", "punch", "caption", "glossary", "linebreak", "text", "style", "music", "pin", "ask", "review", "hook",
-  "insert", "pauses", "overlay"];
+  "insert", "pauses", "overlay", "kit", "op"];
 
 const typing = (el: EventTarget | null) => {
   const e = el as HTMLElement | null;
@@ -186,12 +186,12 @@ export function Editor({ id, replay, go }: Props) {
   // A4: in Live the staged look plays at once (the same cut laid out with it by the server); paused, the still above
   // stays what the render burns
   const [styled, setStyled] = useState<LiveData | null>(null);
-  const styleKey = live0 && styling && staged > 0 && v ? JSON.stringify([rev, styleDraft.look, styleDraft.callouts]) : null;
+  const styleKey = live0 && styling && staged > 0 && v ? JSON.stringify([rev, styleDraft.look, styleDraft.callouts, styleDraft.clips]) : null;
   useEffect(() => {
     if (!styleKey || !v) return setStyled(null);
     let on = true;
     const tm = window.setTimeout(() => {
-      api<LiveData>(`/api/runs/${id}/preview/styled`, { ...(v.draft ? { draft: true } : { v: v.n }), look: styleDraft.look, callouts: styleDraft.callouts })
+      api<LiveData>(`/api/runs/${id}/preview/styled`, { ...(v.draft ? { draft: true } : { v: v.n }), look: styleDraft.look, callouts: styleDraft.callouts, clips: styleDraft.clips })
         .then((d) => { if (on) setStyled(d); }).catch(() => { if (on) setStyled(null); });
     }, 250);
     return () => { on = false; window.clearTimeout(tm); };
@@ -246,6 +246,8 @@ export function Editor({ id, replay, go }: Props) {
     if (to) return draftOp(to.op, to.args(body));
     if (draftV && MAKES_VERSION.includes(path))
       return (flash(`Make Version ${draftData?.draft?.n ?? ""} first: the draft's ${edits(draftSum?.ops.length ?? 0)} are not a version yet.`), false);
+    const gen = OP_ROUTE[path]; // a newer panel edit with no route of its own: POST /op runs its pure op as a version
+    if (gen) return act("op", { op: gen.op, args: gen.args(body), from: body.from, review: body.review });
     return act(path, body);
   }, [live0, draftOp, draftV, draftData, draftSum, flash, act]);
   const commitDraft = async () => {
@@ -617,7 +619,9 @@ export function Editor({ id, replay, go }: Props) {
           <StylePanel id={id} v={v} t={t} next={next} canEdit={canEdit} live={live0} draft={styleDraft} setDraft={setStyleDraft} onSeek={(a) => { player.current?.pause(); seek(a); }}
             hasKey={state.has_key} keyNote={state.key_note ?? null} cost={state.costs?.look ?? 0.004}
             onPrompt={(text) => made(stylePrompt(text))}
-            onApply={() => { const d = styleDraft; made(edit("style", { look: d.look, callouts: d.callouts, from: v?.n })); }} />
+            onKit={(k) => made(edit("kit", { kit: { look: k.look, ...(k.music ? { music: k.music } : {}), ...(k.title_card != null ? { title_card: k.title_card } : {}) }, name: k.name, from: v?.n }))}
+            clip={block?.kind === "span" ? block.span!.id : blocks.find((b) => b.kind === "span" && t >= b.t0 && t < b.t1)?.span?.id ?? null}
+            onApply={() => { const d = styleDraft; made(edit("style", { look: d.look, callouts: d.callouts, clips: d.clips, from: v?.n })); }} />
         )}
         {panel === "text" && (
           <TextPanel state={state} v={v} t={t} next={next} canEdit={canEdit} onSeek={seek} focus={focus} rev={rev} live={live0}
@@ -834,10 +838,16 @@ const DRAFT_OPS: Record<string, { op: string; args: (b: Record<string, unknown>)
   glossary: { op: "glossary", args: (b) => ({ add: b.add ?? {}, drop: b.drop ?? [] }) },
   linebreak: { op: "caption_break", args: (b) => ({ at: b.at, join: !!b.join }) },
   text: { op: "text", args: (b) => pick(b, ["callouts", "title", "title_card"]) },
-  style: { op: "style", args: (b) => pick(b, ["look", "callouts", "prompt", "why"]) },
+  style: { op: "style", args: (b) => pick(b, ["look", "callouts", "prompt", "why", "clips"]) },
   music: { op: "music", args: (b) => ({ track: b.track ?? null, ...pick(b, ["level_db", "duck_db", "voice_db"]) }) },
   pin: { op: "pin", args: (b) => ({ speaker: b.speaker, head: b.head ?? null }) },
   punch: { op: "punch", args: (b) => pick(b, ["on", "skip"]) },
+  kit: { op: "kit", args: (b) => pick(b, ["kit", "name"]) },
+};
+
+/** The edits with no route of their own: in Rendered mode they go through POST /op (the same pure op, one version). */
+const OP_ROUTE: Record<string, { op: string; args: (b: Record<string, unknown>) => Record<string, unknown> }> = {
+  kit: DRAFT_OPS.kit,
 };
 
 /** The keys of `b` that are set (a draft op's arguments leave the rest to the op's defaults). */

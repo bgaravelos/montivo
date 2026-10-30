@@ -586,10 +586,13 @@ def look_note(was: Look, now: Look) -> str:
     return ", ".join(f"{k} {a[k]!r} -> {b[k]!r}" for k in b if a[k] != b[k])
 
 
-def style_fixes(edl: dict, look: dict | None, callouts: dict[str, list[float] | None]) -> tuple[dict | None, list[dict]]:
-    """The patch entries of a style edit: one `look` entry (the look normalized from its preset, every key checked) and
-    a `callout_pin` per span ([x, y] in the 1080x1920 frame, the pill's top-left) or `callout_auto` (None). Raises
-    SystemExit for a bad look, a span without a callout or an edit that changes nothing."""
+def style_fixes(edl: dict, look: dict | None, callouts: dict[str, list[float] | None],
+                clips: dict[str, dict | None] | None = None) -> tuple[dict | None, list[dict]]:
+    """The patch entries of a style edit: one `look` entry (the look normalized from its preset, every key checked), a
+    `callout_pin` per span ([x, y] in the 1080x1920 frame, the pill's top-left) or `callout_auto` (None), and a
+    `clip_look` per span given a look of its own in `clips` (S4: its caption lines and callout; the line breaks stay
+    the cut's) or `clip_look_off` (None, or the cut's own look: back to it). Raises SystemExit for a bad look, a span
+    without a callout or an edit that changes nothing."""
     out: list[dict] = []
     new_look = None
     if look is not None:
@@ -603,6 +606,26 @@ def style_fixes(edl: dict, look: dict | None, callouts: dict[str, list[float] | 
             out.append({"op": "look", "target": "captions", "issue": -1, "severity": "human", "args": {"look": new_look},
                         "note": f"look: {note}"})
     by_id = {s["id"]: s for s in edl["spans"]}
+    cut_look = new_look or normalize_look(edl.get("look")).to_json()
+    for sid, lk in (clips or {}).items():
+        s = by_id.get(sid)
+        if s is None:
+            raise SystemExit(f"{sid} is not a span of {_of(edl)} ({', '.join(by_id)})")
+        try:
+            now = None if lk is None else restyle(cut_look, lk).to_json()
+        except ValueError as e:
+            raise SystemExit(f"look of {sid}: {e}")
+        if now == restyle(cut_look, cut_look).to_json():
+            now = None  # the cut's own look: the clip has none of its own
+        if now == s.get("look") or (now is None and not s.get("look")):
+            continue
+        if now is None:
+            out.append({"op": "clip_look_off", "target": sid, "issue": -1, "severity": "human",
+                        "note": f"clip {sid} back to the cut's look"})
+        else:
+            note = look_note(normalize_look(s.get("look") or cut_look), normalize_look(now))
+            out.append({"op": "clip_look", "target": sid, "issue": -1, "severity": "human", "args": {"look": now},
+                        "note": f"clip {sid} look: {note}"})
     for sid, xy in callouts.items():
         s = by_id.get(sid)
         if s is None or not (s.get("callout") or "").strip():
@@ -628,10 +651,10 @@ def style_fixes(edl: dict, look: dict | None, callouts: dict[str, list[float] | 
 
 def style_edit(edl: dict, words: Words, audio: Audio | None, look: dict | None = None,
                callouts: dict[str, list[float] | None] | None = None, prompt: str | None = None,
-               why: str | None = None) -> tuple[dict, Edit]:
-    """The look of the captions and callouts and the callout places (style_fixes). `prompt` and `why` record a look
-    Spark suggested from words (look.suggest), in the patch's note and instruction."""
-    new_look, fixes = style_fixes(edl, look, callouts or {})
+               why: str | None = None, clips: dict[str, dict | None] | None = None) -> tuple[dict, Edit]:
+    """The look of the captions and callouts, the callout places and the clips with a look of their own (style_fixes).
+    `prompt` and `why` record a look Spark suggested from words (look.suggest), in the patch's note and instruction."""
+    new_look, fixes = style_fixes(edl, look, callouts or {}, clips)
     if why and fixes[0]["op"] == "look":
         fixes[0]["note"] += f" ({why})"
     if prompt and fixes[0]["op"] == "look":
@@ -645,14 +668,20 @@ def style_edit(edl: dict, words: Words, audio: Audio | None, look: dict | None =
             by_id[f["target"]]["callout_xy"] = f["args"]["xy"]
         elif f["op"] == "callout_auto":
             by_id[f["target"]].pop("callout_xy", None)
-    say = "; ".join(("caption style" if f["op"] == "look" else f"callout {f['target']} "
-                     + ("pinned" if f["op"] == "callout_pin" else "back to auto")) for f in fixes)
+        elif f["op"] == "clip_look":
+            by_id[f["target"]]["look"] = f["args"]["look"]
+        elif f["op"] == "clip_look_off":
+            by_id[f["target"]].pop("look", None)
+    say = "; ".join("caption style" if f["op"] == "look" else f"{f['target']} has its own look" if f["op"] == "clip_look"
+                    else f"{f['target']} back to the cut's look" if f["op"] == "clip_look_off"
+                    else f"callout {f['target']} " + ("pinned" if f["op"] == "callout_pin" else "back to auto") for f in fixes)
     return new, Edit("style", fixes, f"style: {prompt}" if prompt else say, instruction=prompt,
                      head=lambda f, n: f"montivo style: {len(fixes)} change(s) in edl_v{f} -> edl_v{n}")
 
 
 def style(run_dir: Path, look: dict | None = None, callouts: dict[str, list[float] | None] | None = None,
-          from_v: int | None = None, passes: int = 0, budget: float = 0.15, prompt: str | None = None) -> dict:
+          from_v: int | None = None, passes: int = 0, budget: float = 0.15, prompt: str | None = None,
+          clips: dict[str, dict | None] | None = None) -> dict:
     """The look of the captions and callouts and the callout places of edl_v{from} -> edl_vN (style_edit), rendered,
     $0 (a prompt: one Spark call for the look first). The EDL's `look` and every span's `callout_xy` travel with later
     versions (review patches deep-copy the EDL, replan carries them), and the review loop keeps a fixed caption
@@ -671,7 +700,7 @@ def style(run_dir: Path, look: dict | None = None, callouts: dict[str, list[floa
         if corrected:
             log(f"style: corrected Spark's answer: {'; '.join(corrected)}")
     return _run_edit(run_dir, from_v, passes, budget, style_edit, look=look, callouts=callouts, prompt=prompt or None,
-                     why=why)
+                     why=why, **({"clips": clips} if clips else {}))
 
 
 def music_fix(edl: dict, track: str | None, level_db: float | None = None, duck_db: float | None = None,
@@ -728,6 +757,30 @@ def music(run_dir: Path, track: str | None, level_db: float | None = None, duck_
     The EDL's `music` travels with later versions like `look` (review patches deep-copy the EDL, replan carries it)."""
     return _run_edit(run_dir, from_v, passes, budget, music_edit, track=track, level_db=level_db, duck_db=duck_db,
                      voice_db=voice_db)
+
+
+def kit_edit(edl: dict, words: Words, audio: Audio | None, kit: dict, name: str | None = None) -> tuple[dict, Edit]:
+    """A brand kit in one edit (engine/kit.py, rail panels S3): the saved look with its callout colours, the music and
+    the title card on or off, whichever of them the version does not have yet; ffmpeg only. Raises SystemExit for a
+    bad kit or a version that already has all of it."""
+    from .engine.kit import with_kit
+    new, _ = apply_fixes(edl, [], words)
+    try:
+        new, fixes = with_kit(new, kit)
+    except ValueError as e:
+        raise SystemExit(str(e))
+    if not fixes:
+        raise SystemExit(f"nothing to change: {_of(edl)} already has the kit's look, music and title card")
+    label = f"brand kit {name!r}" if name else "brand kit"
+    say = f"{label}: " + ", ".join(f["note"] for f in fixes)
+    return new, Edit("kit", fixes, say, instruction=say[0].upper() + say[1:],
+                     head=lambda f, n: f"montivo kit: {label}, {len(fixes)} change(s) in edl_v{f} -> edl_v{n}")
+
+
+def kit(run_dir: Path, kit: dict, name: str | None = None, from_v: int | None = None, passes: int = 0,
+        budget: float = 0.15) -> dict:
+    """A brand kit on edl_v{from} -> edl_vN (kit_edit), rendered, $0."""
+    return _run_edit(run_dir, from_v, passes, budget, kit_edit, kit=kit, name=name)
 
 
 def carry_callout_places(prev: dict, new: dict) -> list[str]:
@@ -1653,7 +1706,7 @@ OPS: dict[str, Callable[..., tuple[dict, Edit]]] = {
     "insert": insert_edit, "pauses": pauses_edit,
     # the panels' edits (A3): one draft holds them next to the structural ones, one render at "Make Version N"
     "caption": caption_edit, "text": text_edit, "style": style_edit, "music": music_edit, "pin": pin_edit,
-    "punch": punch_edit, "glossary": glossary_edit, "caption_break": caption_break_edit}
+    "punch": punch_edit, "glossary": glossary_edit, "caption_break": caption_break_edit, "kit": kit_edit}
 
 
 def apply_op(edl: dict, words: Words, audio: Audio | None, op: str, args: dict) -> tuple[dict, Edit]:
@@ -1786,6 +1839,8 @@ def main(argv: list[str] | None = None) -> int:
     sy.add_argument("--look", default=None, help='the look as JSON: {"preset": "box", "font": "anton", ...}')
     sy.add_argument("--callout", action="append", default=[], metavar="SPAN=X,Y", help="pin a callout (SPAN=auto unpins it)")
     sy.add_argument("--prompt", default=None, help="describe the look in words: one Spark call (about $0.008) picks it")
+    sy.add_argument("--clip", action="append", default=[], metavar="SPAN=JSON",
+                    help="a look of the clip's own for its captions and callout (SPAN=cut: back to the cut's look)")
     mu = sub.add_parser("music", help="a music bed under the speech, ducked while anyone talks -> edl_vN -> cut_vN ($0)")
     mu.add_argument("run_dir", type=Path)
     mg = mu.add_mutually_exclusive_group(required=True)
@@ -1818,11 +1873,19 @@ def main(argv: list[str] | None = None) -> int:
     ov.add_argument("--placement", choices=broll.PLACEMENTS, default=None, help="full frame, upper part or corner card")
     ov.add_argument("--style", choices=("auto", *broll.STYLES), default="auto", help="photo, diagram or icon (default: "
                                                                                      "from the prompt)")
+    kt = sub.add_parser("kit", help="a brand kit (look, music, title card) -> edl_vN -> cut_vN ($0)")
+    kt.add_argument("run_dir", type=Path)
+    kt.add_argument("--kit", required=True, help='the kit as JSON: {"look": {...}, "music": {"track": ...} | "off", "title_card": true}')
+    kt.add_argument("--name", default=None, help="the kit's name, for the patch note")
+    op = sub.add_parser("op", help="one edit of human.OPS by name -> edl_vN -> cut_vN (the editor's panels in Rendered mode)")
+    op.add_argument("run_dir", type=Path)
+    op.add_argument("--op", dest="op_name", required=True, help=f"one of {', '.join(OPS)}")
+    op.add_argument("--args", dest="op_args", default="{}", help="its arguments as JSON")
     dr = sub.add_parser("draft", help="a draft's edits in one version -> edl_vN -> cut_vN ($0 without --review)")
     dr.add_argument("run_dir", type=Path)
     dr.add_argument("--ops", required=True, help='the edits as JSON: [{"op": "split", "args": {"span": "s3", "word": 12}}, ...]')
     dr.add_argument("--id", dest="draft_id", default=None, help="the draft's id, kept in the patch")
-    for p in (d, t, r, pu, c, gs, lb, tx, ro, pn, cu, sp, ed, sy, mu, rs, ins, pa, ov, dr):
+    for p in (d, t, r, pu, c, gs, lb, tx, ro, pn, cu, sp, ed, sy, mu, rs, ins, pa, ov, dr, kt, op):
         p.add_argument("--from", dest="from_v", type=int, default=None, help="EDL version to start from (default: the latest)")
         p.add_argument("--review", type=int, default=0, help="review passes after the render (default 0, none)")
         p.add_argument("--budget", type=float, default=0.15, help="max dollars for the review calls (default 0.15)")
@@ -1886,7 +1949,16 @@ def main(argv: list[str] | None = None) -> int:
             places[m.group(1)] = None if m.group(2) else [float(m.group(3)), float(m.group(4))]
         if a.prompt and look is not None:
             ap.error("give --look or --prompt, not both")
-        out = style(a.run_dir, look, places, a.from_v, a.review, a.budget, prompt=a.prompt)
+        clips: dict[str, dict | None] = {}
+        for x in a.clip:
+            sid, _, js = x.partition("=")
+            try:
+                clips[sid] = None if js == "cut" else json.loads(js)
+            except json.JSONDecodeError as e:
+                ap.error(f"--clip {sid}: not JSON: {e}")
+            if not re.fullmatch(r"s\d+", sid) or not (clips[sid] is None or isinstance(clips[sid], dict)):
+                ap.error("--clip SPAN=JSON or SPAN=cut, like s3={\"preset\": \"box\"}")
+        out = style(a.run_dir, look, places, a.from_v, a.review, a.budget, prompt=a.prompt, clips=clips)
     elif a.cmd == "music":
         out = music(a.run_dir, None if a.off else a.track, a.level, a.duck, a.from_v, a.review, a.budget, a.voice)
     elif a.cmd == "insert":
@@ -1902,6 +1974,21 @@ def main(argv: list[str] | None = None) -> int:
             ap.error("a new overlay needs --at CUT_S")
         out = overlay(a.run_dir, prompt=a.prompt, at=a.at, dur=a.dur, placement=a.placement, style=a.style,
                       set_id=a.set_id, remove=a.remove, from_v=a.from_v, passes=a.review, budget=a.budget)
+    elif a.cmd == "kit":
+        try:
+            k = json.loads(a.kit)
+        except json.JSONDecodeError as e:
+            ap.error(f"--kit is not JSON: {e}")
+        out = kit(a.run_dir, k, a.name, a.from_v, a.review, a.budget)
+    elif a.cmd == "op":
+        try:
+            args = json.loads(a.op_args)
+        except json.JSONDecodeError as e:
+            ap.error(f"--args is not JSON: {e}")
+        if not isinstance(args, dict):
+            ap.error("--args is a JSON object")
+        out = _run_edit(a.run_dir, a.from_v, a.review, a.budget,
+                        lambda edl, words, audio: apply_op(edl, words, audio, a.op_name, args))
     elif a.cmd == "draft":
         try:
             ops = json.loads(a.ops)

@@ -1077,6 +1077,8 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .st-ask textarea { background: var(--panel-3); color: var(--text); border: 1px solid var(--line-2); border-radius: 6px; padding: 7px 9px; font: inherit; resize: vertical; }
 .st-ask .btn { align-self: flex-end; }
 .preset-card { position: relative; cursor: pointer; }
+.pc-kit { font-size: 10.5px; text-align: center; line-height: 1.2; }
+.pc-apply { align-self: center; margin-top: 2px; }
 .pc-del { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; background: #000b; border-radius: 50%; opacity: 0; }
 .preset-card:hover .pc-del { opacity: 1; }
 .ex-pick { display: flex; flex-direction: column; gap: 4px; }

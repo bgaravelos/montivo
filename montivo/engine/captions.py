@@ -666,6 +666,13 @@ class Overlay:
     fade_out: bool = True
 
 
+def span_looks(edl: dict) -> dict[str, Look]:
+    """The spans with a look of their own (the Style panel's "this clip"): {span id: Look}, the line breaks always the
+    EDL look's (graphics.restyle: they belong to the version)."""
+    from .graphics import restyle
+    return {s["id"]: restyle(edl.get("look"), s["look"]) for s in edl["spans"] if s.get("look")}
+
+
 def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, head_track: dict | None,
                    person_track: dict | None, out_dir: Path, title_s: float = 0.0, captions: bool = True,
                    callouts: bool = True, glossary: dict[str, str] | None = None,
@@ -688,11 +695,16 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
     version has them) but draws none: the clean export.
     The frame is the EDL's aspect (frame.frame_for): the look's top, a forced top and a pinned callout are 1920-frame
     y's, scaled to it; the boxes in the returned entries are in its pixels.
+    A span's own `look` (the Style panel's "this clip", span_looks) styles its caption lines and its callout: a line
+    never mixes two looks (the words of a segment are grouped per run of one look), and its entry carries the look.
     """
     frame = frame_for(edl)
     look = (style.look if style and style.look else None) or normalize_look(edl.get("look"))
     style = style or CaptionStyle.from_look(look)
     names = highlight_words(edl, look)
+    own = span_looks(edl)
+    looks = {k: (lk, CaptionStyle.from_look(lk), highlight_words(edl, lk)) for k, lk in own.items()}
+    looks[None] = (look, style, names)
     glossary = run_glossary(edl) if glossary is None else glossary
 
     def on_screen(a: float, b: float) -> bool:
@@ -762,8 +774,16 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
     if captions:
         for i, ws in sorted(seg_words.items()):
             seg = segments[i]
-            grouped, forced = apply_overrides(apply_breaks(group_lines(ws, style, max_words=look.max_words, breaks=look.line_breaks),
-                                                           edl.get("caption_breaks") or []), overrides)
+            key = lambda w: w.span if w.span in own else None  # noqa: E731 (the look a word is shown in)
+            runs: list[list[CWord]] = []  # the segment's words in runs of one look: a line never mixes two
+            for w in ws:
+                if runs and key(runs[-1][0]) == key(w):
+                    runs[-1].append(w)
+                else:
+                    runs.append([w])
+            grouped = [ln for r in runs for ln in group_lines(r, looks[key(r[0])][1], max_words=looks[key(r[0])][0].max_words,
+                                                              breaks=look.line_breaks)]
+            grouped, forced = apply_overrides(apply_breaks(grouped, edl.get("caption_breaks") or []), overrides)
             lines = [Line(words=lw, segment=i) for lw in grouped]
             for ln in lines:
                 ln.word_times = [(cut_t(i, w.t_in), cut_t(i, w.t_out)) for w in ln.words]
@@ -782,13 +802,15 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                     continue
                 head = union_out(head_src, i, la, lb, subject_head(i))
                 texts = [w.w for w in ln.words]
-                hl = [norm(w).replace("'s", "") in names for w in texts]
-                lstyle = fit_line(texts, style)
+                lk_id = ln.words[0].span if ln.words[0].span in own else None
+                llook, lst, lnames = looks[lk_id]
+                hl = [norm(w).replace("'s", "") in lnames for w in texts]
+                lstyle = fit_line(texts, lst)
                 w_px, h_px = line_width(texts, lstyle), lstyle.height()
-                if look.position == "fixed":
-                    y, where = min(frame.y(look.top), frame.h - h_px), "fixed"
+                if llook.position == "fixed":
+                    y, where = min(frame.y(llook.top), frame.h - h_px), "fixed"
                 else:
-                    y, where = place_caption(w_px, h_px, head, top=min(frame.y(look.top), frame.band(SAFE_TOP, SAFE_BOTTOM)[1] - h_px),
+                    y, where = place_caption(w_px, h_px, head, top=min(frame.y(llook.top), frame.band(SAFE_TOP, SAFE_BOTTOM)[1] - h_px),
                                              frame=frame)
                 if k in forced:
                     y, where = frame.y(forced[k]["top"]), "forced"
@@ -810,6 +832,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                     "head_box": [round(v) for v in head] if head else None,
                     "over_face": where == "over_head" or overlaps([x, y, x + w_px, y + h_px], head),
                     **({"held_s": hold_s} if hold_s else {}),
+                    **({"look": llook.to_json()} if lk_id else {}),
                     "corrections": [f for f in fixes if f["span"] in {w.span for w in ln.words}
                                     and ln.words[0].t_in - 0.01 <= f["src_t"] <= ln.words[-1].t_out + 0.01],
                 })
@@ -830,19 +853,21 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
             person = clamp_frame(union_out(person_src, i, a, b, largest_at), frame)
             head = union_out(head_src, i, a, b, subject_head(i))
             avoid = [r for (ra, rb, r) in caption_rects[i] if ra < b and rb > a]
-            w_px, h_px = callout_size(text, key=look.font)
+            clook = own.get(s["id"], look)
+            w_px, h_px = callout_size(text, key=clook.font)
             x, y, where = place_callout(w_px, h_px, person, head, avoid, frame)
             if s.get("callout_xy"):
                 x, y, where = pin_callout(w_px, h_px, s["callout_xy"], frame) + ("pinned",)
             png = out_dir / f"callout_{s['id']}.png"
             if on_screen(seg_cut[i] + a, seg_cut[i] + b):
-                draw_callout(text, png, look=look)
+                draw_callout(text, png, look=clook)
                 overlays[i].append(Overlay(png=png, x=x, y=y, t_in=round(a, 4), t_out=round(b, 4), fade_s=CALLOUT_FADE_S))
             call_entries.append({"span": s["id"], "text": text, "t_in": round(seg_cut[i] + a, 3), "t_out": round(seg_cut[i] + b, 3),
                                  "box": [x, y, w_px, h_px], "placement": where,
                                  "over_face": overlaps([x, y, x + w_px, y + h_px], head),
                                  "person_box": [round(v) for v in person] if person else None,
-                                 "head_box": [round(v) for v in head] if head else None})
+                                 "head_box": [round(v) for v in head] if head else None,
+                                 **({"look": clook.to_json()} if s["id"] in own else {})})
 
     fields = {"captions": cap_entries, "callouts": call_entries, "caption_corrections": fixes,
               "caption_style": {"font": style.size, "max_words": look.max_words, "default_top": look.top,

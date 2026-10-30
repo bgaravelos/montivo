@@ -52,6 +52,7 @@ class RunOptions:
     review_budget: float = 0.30
     punch: bool = False  # punch-in zooms on stressed words and jump cuts (engine/punch.py)
     hook_ab: bool = False  # after the review loop, a hook A/B on its best version (engine/hook.py, one or two reviews)
+    kit: dict | None = None  # a brand kit on edl_v1: look, music, title card (engine/kit.py)
 
 
 class RunLog:
@@ -317,13 +318,18 @@ def run(opts: RunOptions) -> dict:
                 f"(floor {ep['floor_db']} dB, speech over {ep['threshold_db']} dB)")
     if opts.punch:
         edl["punch"] = True
+    if opts.kit:
+        from .engine.kit import with_kit
+        _, kit_fixes = with_kit(edl, opts.kit)
+        if kit_fixes:
+            log(f"kit: {'; '.join(f['note'] for f in kit_fixes)}")
     dump_json(out / "edl_v1.json", edl)
 
     # 5. title card (muse-image-1.0, $0.01) and render cut_v1.mp4 from the source (ffmpeg only)
     rendered = None
     if opts.render:
         title_png = None
-        if opts.title and edl.get("title_card_text"):
+        if opts.title and edl.get("title_card", True) is not False and edl.get("title_card_text"):  # a kit may turn it off
             try:
                 title_png = title_card(out, edl, ledger, log)
             except Exception:
