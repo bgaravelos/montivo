@@ -25,7 +25,8 @@ montivo run footage.mp4 --brief "..." --out runs/001
            largest and most centred id -> smoothed 9:16 crop path (dead zone, EMA, pan clamp)
   title    Muse Image 1.0: the plan's title_card_text -> title/title_card.png (generated once, $0.01)
   captions Voice words of the kept spans -> de-doubled, glossary-corrected, 1 to 4 word lines up at least 0.4 s each, placed
-           clear of the SAM head box;
+           clear of the SAM head box (a line with no room at full size tried again down to 70 % of its size, below or
+           above the head, before it goes over it: captions.room_for);
            the plan's per-span callouts anchored to the SAM person box -> transparent PNGs (Pillow)
   punch    (--punch) zooms on the loudest content words and an alternating scale across jump cuts, about the head
   render   ffmpeg from the SOURCE: 1.5 s title segment with a fade, then frame-aligned segments, sendcmd-driven crop, overlays

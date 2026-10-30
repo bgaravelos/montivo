@@ -464,20 +464,50 @@ def place_caption(w: int, h: int, head: list[float] | None, top: int | None = No
     return max(top, safe_bottom - h), "over_head"
 
 
-def fit_line(texts: list[str], style: CaptionStyle) -> CaptionStyle:
+def at_size(style: CaptionStyle, size: int) -> CaptionStyle:
+    """The style scaled to `size`: stroke, word spacing and padding with it."""
+    k = size / style.size
+    return replace(style, size=size, stroke=max(0, round(style.stroke * k)), space=max(6, round(style.space * k)),
+                   pad_x=max(6, round(style.pad_x * k)), pad_y=max(4, round(style.pad_y * k)))
+
+
+def fit_line(texts: list[str], style: CaptionStyle, size: int | None = None) -> CaptionStyle:
     """The style a line is drawn in: its own, or smaller until the line fits style.max_w (a retexted line can be longer
-    than the grouping allowed, and a big look like bold_pop leaves little room)."""
+    than the grouping allowed, and a big look like bold_pop leaves little room). `size` is a smaller size the layout
+    chose for room around the head (room_for, the caption entry's `size`)."""
+    if size is not None and size < style.size:
+        return at_size(style, size)
     if line_width(texts, style) <= style.max_w:
         return style
     size = style.size
     while size > 36:
         size -= 4
-        k = size / style.size
-        st = replace(style, size=size, stroke=max(0, round(style.stroke * k)), space=max(6, round(style.space * k)),
-                     pad_x=max(6, round(style.pad_x * k)), pad_y=max(4, round(style.pad_y * k)))
+        st = at_size(style, size)
         if line_width(texts, st) <= style.max_w:
             return st
     return st
+
+
+ROOM_MIN_SCALE = 0.7  # room_for shrinks a line to 70 % of its size at most (64 px of the default 92 stays legible)
+
+
+def room_for(texts: list[str], style: CaptionStyle, head: list[float] | None, top: int,
+             frame: Frame = FRAME_916) -> tuple[int, str, CaptionStyle] | None:
+    """A3: a line place_caption could only put over the head (a close-up that leaves no room under or above it at full
+    size) tried again at smaller sizes, 4 px a step down to ROOM_MIN_SCALE: below the head, else above it (the band
+    place_header puts the title in), each clear of the head. (y, placement, style) or None when no size clears it; the
+    caller keeps the over_head place then, as before. A full-size line at the top of the safe band is no extra
+    chance: every candidate shares the line's x range, so the top band clears only where above_head already does."""
+    safe_bottom = frame.band(SAFE_TOP, SAFE_BOTTOM)[1]
+    size = style.size - 4
+    while size >= style.size * ROOM_MIN_SCALE:
+        st = at_size(style, size)
+        w, h = line_width(texts, st), st.height()
+        y, where = place_caption(w, h, head, top=min(top, safe_bottom - h), frame=frame)
+        if where != "over_head":
+            return y, where, st
+        size -= 4
+    return None
 
 
 def pin_callout(w: int, h: int, xy: list, frame: Frame = FRAME_916) -> tuple[int, int]:
@@ -840,11 +870,15 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                 hl = [norm(w).replace("'s", "") in lnames for w in texts]
                 lstyle = fit_line(texts, lst)
                 w_px, h_px = line_width(texts, lstyle), lstyle.height()
+                room = None
                 if llook.position == "fixed":
                     y, where = min(frame.y(llook.top), frame.h - h_px), "fixed"
                 else:
                     y, where = place_caption(w_px, h_px, head, top=min(frame.y(llook.top), frame.band(SAFE_TOP, SAFE_BOTTOM)[1] - h_px),
                                              frame=frame)
+                    if where == "over_head" and k not in forced and (room := room_for(texts, lstyle, head, frame.y(llook.top), frame)):
+                        y, where, lstyle = room  # A3: above the head or smaller; a line placed before stays as it was
+                        w_px, h_px = line_width(texts, lstyle), lstyle.height()
                 if k in forced:
                     y, where = frame.y(forced[k]["top"]), "forced"
                 x = (frame.w - w_px) // 2
@@ -865,6 +899,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
                     "head_box": [round(v) for v in head] if head else None,
                     "over_face": where == "over_head" or overlaps([x, y, x + w_px, y + h_px], head),
                     **({"held_s": hold_s} if hold_s else {}),
+                    **({"size": lstyle.size} if room and lstyle.size < lst.size else {}),
                     **({"look": llook.to_json()} if lk_id else {}),
                     "corrections": [f for f in fixes if f["span"] in {w.span for w in ln.words}
                                     and ln.words[0].t_in - 0.01 <= f["src_t"] <= ln.words[-1].t_out + 0.01],
