@@ -56,6 +56,7 @@ import re
 import shutil
 import signal
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -1754,16 +1755,19 @@ def target_from(instruction: str) -> float | None:
 
 def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s: float | None = None,
            passes: int = 0, budget: float = 0.15, model: str | None = None, reasoning_effort: str | None = None,
-           brief: str | None = None) -> dict:
+           brief: str | None = None, ledger: Ledger | None = None, log=None, source: str = "human",
+           action: str = "replan", review: str | None = None) -> dict:
     """Plan again with the instruction added to the brief and the current paper edit for reference, reusing voice,
     watch and the tracks (no ingest, Voice or SAM spend), -> edl_vN on word boundaries with the edge pass, render.
     With no instruction it is a fresh plan from the run's own brief, blind to the current cut (`montivo plan`, the
     planner A/B); `model` picks the planner (default muse-spark-1.3, config.OPEN_MODEL for Muse Spark Open). `brief`
     (ME2) is a new brief for the project: a fresh plan from it, kept as the EDL's `brief_edited` so later re-plans of
-    this line of versions start from it (run.json keeps the brief the project was made with)."""
+    this line of versions start from it (run.json keeps the brief the project was made with). The review loop's
+    escalation (C4) calls it in its own process: `ledger` and `log` are the loop's (two Ledger objects on one file
+    lose each other's entries), the patch says `source` "review", `action` "escalate" and the `review` it answers."""
     from .config import SPARK_MODEL
     from .engine.spark import Spark
-    log = RunLog(run_dir / "run.log")
+    log = log or RunLog(run_dir / "run.log")
     model = model or SPARK_MODEL
     from_v = from_version(run_dir, from_v)
     prev = json.loads((run_dir / f"edl_v{from_v}.json").read_text())
@@ -1782,7 +1786,7 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
     else:
         brief = plan_brief = run["brief"]
         instruction = f"a new brief: {new_brief}" if new_brief else f"plan again from scratch with {model}"
-    ledger = Ledger.resume(run_dir / "ledger.json")
+    ledger = ledger or Ledger.resume(run_dir / "ledger.json")
     v1_call = next((e for e in ledger.entries if e.stage == "spark.plan"), None)  # read before this call adds its own
     spark = Spark(run_dir, ledger, model=model, log=log)
     sdir = run_dir / "spark"
@@ -1792,7 +1796,8 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
         p, v1 = sdir / f"plan_{part}.json", sdir / f"plan_v1_{part}.json"
         if p.is_file() and not v1.is_file():
             shutil.copy2(p, v1)
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # the UI's stop button: run the finally below
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # the UI's stop button: run the finally below
     try:
         planned = spark.plan(plan_brief, voice.transcript_text(), watch, target, words_per_s=voice.speech_rate(),
                              reasoning_effort=reasoning_effort)
@@ -1848,10 +1853,10 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
             + ", ".join(repr(o["text"]) for o in carried))
     note =f"replanned: {len(new['spans'])} spans, {new['runtime_s']} s (was {len(prev['spans'])} spans, {prev['runtime_s']} s)"
     new["patches"] = list(prev.get("patches") or []) + [
-        {"from": from_v, "review": None, "source": "human", "action": "replan", "instruction": instruction,
+        {"from": from_v, "review": review, "source": source, "action": action, "instruction": instruction,
          "model": model, "fixes": [{"op": "replan", "target": "plan", "issue": -1, "severity": "human", "note": note},
                                    *carried_fixes]}]
-    log(f"patch v{from_v} -> v{n}: replan: {note} (human)")
+    log(f"patch v{from_v} -> v{n}: replan: {note} ({'human' if source == 'human' else action})")
     for s in new["spans"]:
         log(f"  {s['id']} {s['role']:6s} {s['t_in']:7.2f}-{s['t_out']:7.2f}s {s['words'][:80]}")
     edl_path = run_dir / f"edl_v{n}.json"

@@ -56,12 +56,21 @@ span, a cut point, a caption line or a callout and turns blocker and major issue
 `extend_span`, `move_cut`, `swap_hook`, `reorder`, `caption_fix`, `retime_callout`, `reframe_bias`; a title card the
 reviewer flags is dropped with `title_card: false`). Guards: at most 3 reviews, a dollar budget checked before each review
 (`--budget`, default $0.30), at most 4 fixes per pass, the same fix proposed twice stops the loop, a pass that scores
-below the best so far stops it, the hook span is never dropped whole, and a drop over part of a span trims only the words
+below the best so far stops it (unless the pairwise judge prefers it in both orders, see Hook A/B), the hook span is
+never dropped whole, and a drop over part of a span trims only the words
 in the reviewer's window at that end. The fixes of one pass are applied in turn and each is checked against the EDL the
 earlier ones made (a move next to a span another fix dropped, or a drop that would leave one span, is skipped and
 recorded), and a new version always takes the next free number, so reviewing an old version never overwrites a later one. Word-level edits land on a sentence end when one is a word away and then settle on
 the quietest 40 ms of the source audio within 0.3 s (Voice words abut, so only the audio shows the gap) and are then
 tightened to the speech like v1; a clipped word is fixed by moving its edge to that quiet point, never by removing words.
+Escalation (C4, 30/10): when the loop stops without a pass on a stop no fix of the cut gets past (no applicable fix, the
+same fix twice, a regression, a measured fault the fixes cannot clear) and the best version still has a blocker or
+major open, it re-plans once from that version with the reviewer's open notes and the measured faults as the editor's
+note (`human.replan`, Muse Spark Open when `BASETEN_API_KEY` is set, else Spark 1.3 at effort low, the run's target),
+preflights and renders it and reviews it once; it is kept only when its gated rank beats the best. The budget covers
+it (about $0.03 for the plan plus one review); loop.json `escalation` records the notes, the planner, the costs, the
+score and whether it was kept; its patch says `source: review`, `action: escalate`. First real one, a clone of d1-nasa
+(stuck at 62 on "same fix twice"): the Spark Open re-plan scored 56 and was not kept ($0.059).
 
 The editor on top of this is described in the README, under "The editor".
 

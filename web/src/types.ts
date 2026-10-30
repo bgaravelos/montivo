@@ -176,7 +176,8 @@ export type RunState = {
   media: Media;
   summary: Record<string, unknown> | null;
   ledger: { total_cost_usd: number; wall_seconds: number; stages: Record<string, { seconds: number; cost_usd: number; calls: number; tokens_in: number; tokens_out: number }> };
-  loop: { stop: string; passes: { version: number; overall: number; pass: boolean }[]; best: { version: number; overall: number } | null } | null;
+  loop: { stop: string; passes: { version: number; overall: number; pass: boolean }[]; best: { version: number; overall: number } | null;
+    escalation?: { from: number; version?: number; overall?: number; pass?: boolean; kept?: boolean; skipped?: string; error?: string } } | null; // C4
   versions: Version[]; words: Record<string, Word[]>; stages: Stage[]; job: Job | null; has_key: boolean; has_open_key: boolean;
   costs: Costs; key_note?: string | null; budget?: Budget | null; chat?: ChatLine[];
 };

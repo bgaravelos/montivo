@@ -184,6 +184,8 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
         : o.instruction ?? (o.action === "replan" ? "Plan the edit again." : "Edit by hand.");
       out.push({ kind: "you", text: what, chips: [`from v${o.from}`] });
       if (fixes.length) out.push({ kind: "steps", title: o.action === "replan" ? "Re-planned the edit" : `Made the edit · ${plural(fixes.length, "step")}`, lines: fixes });
+    } else if (o.source === "review" && o.action === "escalate") { // C4: the loop's fixes ran out, one re-plan from its notes
+      out.push({ kind: "steps", title: `No fix of the cut could clear the review of v${o.from}: re-planned from its open notes`, lines: fixes.length ? fixes : ["replanned"] });
     } else if (o.source === "review") {
       out.push({ kind: "steps", title: `Applied ${plural(fixes.length || 1, "fix")} from the review of v${o.from}`, lines: fixes.length ? fixes : ["patched"] });
     } else if (o.source === "hook_ab") {
@@ -201,7 +203,8 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
     if (ab) out.push({ kind: "text", who: "montivo", text: `Keeping ${vName(ab.kept)} (${ab.reason}${ab.judge || ab.decisive ? "" : "; within the reviewer's 10-point noise"}).` });
     if (!replay && state.loop?.stop && v.n === state.loop.passes.at(-1)?.version) {
       const stop = state.loop.stop.split(":")[0];
-      out.push({ kind: "text", who: "montivo", text: stop === "pass" ? "The review loop stopped: the cut passes." : `The review loop stopped (${state.loop.stop}).` });
+      const esc = state.loop.escalation;
+      out.push({ kind: "text", who: "montivo", text: stop === "pass" ? `The review loop stopped: the cut passes${esc?.pass ? ", after one re-plan from the reviewer's open notes" : ""}.` : `The review loop stopped (${state.loop.stop}).` });
     }
     for (const c of replay ? [] : asked.filter((x) => x.after === v.n)) { // a message that made no version: its reply or proposal
       if (c.kind === "error") {
