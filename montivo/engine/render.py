@@ -196,12 +196,16 @@ def reframe_inputs(run_dir: Path, edl: dict) -> tuple[str | None, dict | None, d
 def load_speaker_ids(run_dir: Path, concept: str | None, edl: dict | None = None) -> dict[str, list[str]]:
     """speaker -> head ids from run_dir/speakers.json (speakers.py); only meaningful when the crop follows heads.
     A human pin in the EDL, `reframe_speaker_ids` {"A": "3"} (Voice label -> head id), replaces the mapped ids of its
-    speaker: the pinned head is followed while it covers the piece, the plain rule when it leaves the frame."""
+    speaker: the pinned head is followed while it covers the piece, the plain rule when it leaves the frame. A speaker
+    merged into another (`speaker_merge` {"B": "A"}) follows that one's heads."""
     if concept != "head":
         return {}
     p = run_dir / "speakers.json"
     ids = follow_ids(json.loads(p.read_text())) if p.is_file() else {}
     ids.update({str(spk): [str(oid)] for spk, oid in ((edl or {}).get("reframe_speaker_ids") or {}).items()})
+    for spk, into in ((edl or {}).get("speaker_merge") or {}).items():  # SP2: one person Voice split in two
+        if str(into) in ids:
+            ids[str(spk)] = list(ids[str(into)])
     return ids
 
 

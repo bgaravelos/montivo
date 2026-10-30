@@ -154,12 +154,18 @@ def context(run_dir: Path, edl: dict) -> str:
         times = {c.span: (c.cut_in, c.cut_out) for c in cut_map(edl)}
     except (KeyError, TypeError, ValueError):
         times = {}
+    names, merged = edl.get("speaker_names") or {}, edl.get("speaker_merge") or {}
+    if names or merged:  # SP1, SP2: who the speakers are, as the person named them
+        lines.append("Speakers: " + "; ".join([f"{k} is {v}" for k, v in names.items()]
+                                              + [f"{k} is the same person as {v}" for k, v in merged.items()]))
     lines.append("Clips in order:")
     for s in edl["spans"]:
         t = times.get(s["id"])
         at = f" cut {t[0]:.1f}-{t[1]:.1f} s" if t else ""
         call = f", callout {s['callout']!r}" if (s.get("callout") or "").strip() else ""
-        lines.append(f"- {s['id']} [{s.get('role', 'body')}]{at}: {s.get('words', '')!r}{call}")
+        spk = str(merged.get(str(s.get("speaker")), s.get("speaker")))
+        who = f" {names.get(spk, spk)}" if s.get("speaker") is not None and (names or merged) else ""
+        lines.append(f"- {s['id']} [{s.get('role', 'body')}{who}]{at}: {s.get('words', '')!r}{call}")
         if nw := numbered(run_dir, s):
             lines.append(f"  numbered words: {nw}")
     caps = caption_timeline(edl)

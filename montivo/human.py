@@ -1569,6 +1569,59 @@ def pin_edit(edl: dict, words: Words, audio: Audio | None, speaker: str, head: s
                                        f"in edl_v{f} -> edl_v{n}")
 
 
+SPEAKER_LABEL = re.compile(r"[A-Za-z0-9]{1,8}")
+
+
+def speakers_edit(edl: dict, words: Words, audio: Audio | None, names: dict[str, str] | None = None,
+                  merge: dict[str, str | None] | None = None) -> tuple[dict, Edit]:
+    """A speaker's name (SP1, EDL `speaker_names` {"A": "Billy"}, "" takes it off) and one Voice speaker merged into
+    another (SP2, EDL `speaker_merge` {"B": "A"}, None splits them again): Voice split one person in two, so B's words
+    are A's and the crop follows A's head while B talks (render.load_speaker_ids). No chains: a speaker another one is
+    merged into is not merged itself. ffmpeg only; refuses a bad label, a merge into itself or nothing to change."""
+    names, merge = names or {}, merge or {}
+    was_n, was_m = dict(edl.get("speaker_names") or {}), dict(edl.get("speaker_merge") or {})
+    now_n, now_m, fixes = dict(was_n), dict(was_m), []
+    for spk, name in names.items():
+        if not SPEAKER_LABEL.fullmatch(str(spk)):
+            raise SystemExit(f"{spk!r} is not a Voice speaker label like A")
+        name = " ".join(str(name).split())[:40]
+        if name == was_n.get(spk, ""):
+            continue
+        if name:
+            now_n[spk] = name
+        else:
+            now_n.pop(spk, None)
+        fixes.append({"op": "speaker_name", "target": spk, "issue": -1, "severity": "human", "args": {"name": name},
+                      "note": f"speaker {spk} named {name!r}" if name else f"speaker {spk}'s name taken off"})
+    for spk, into in merge.items():
+        if not SPEAKER_LABEL.fullmatch(str(spk)) or (into is not None and not SPEAKER_LABEL.fullmatch(str(into))):
+            raise SystemExit("merge: Voice speaker labels like {\"B\": \"A\"}")
+        if into == spk:
+            raise SystemExit(f"{spk} cannot be merged into itself")
+        if into == was_m.get(spk):
+            continue
+        if into is None:
+            now_m.pop(spk, None)
+        else:
+            now_m[spk] = into
+        fixes.append({"op": "speaker_merge" if into else "speaker_unmerge", "target": spk, "issue": -1, "severity": "human",
+                      **({"args": {"into": into}} if into else {}),
+                      "note": f"speaker {spk} is {into} (one person)" if into else f"speaker {spk} on their own again"})
+    if bad := sorted(k for k, v in now_m.items() if v in now_m):
+        raise SystemExit(f"{', '.join(bad)} would merge into a speaker that is merged itself: merge into "
+                         f"{now_m[now_m[bad[0]]]} instead")
+    if not fixes:
+        raise SystemExit("nothing to change: the speakers already have these names")
+    new, _ = apply_fixes(edl, [], words)
+    for key, val in (("speaker_names", now_n), ("speaker_merge", now_m)):
+        if val:
+            new[key] = val
+        else:
+            new.pop(key, None)
+    say = "; ".join(f["note"] for f in fixes)
+    return new, Edit("speakers", fixes, say, head=lambda f, n: f"montivo speakers: {say} in edl_v{f} -> edl_v{n}")
+
+
 def pin(run_dir: Path, speaker: str, head: str | None, from_v: int | None = None, passes: int = 0,
         budget: float = 0.15) -> dict:
     """pin_edit on edl_v{from} -> edl_vN, rendered, $0."""
@@ -1700,6 +1753,9 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
         new["punch_skip"] = list(prev["punch_skip"])
     if prev.get("reframe_speaker_ids"):
         new["reframe_speaker_ids"] = dict(prev["reframe_speaker_ids"])
+    for key in ("speaker_names", "speaker_merge"):  # SP1, SP2: who the voices are stays through a re-plan
+        if prev.get(key):
+            new[key] = dict(prev[key])
     if prev.get("look"):
         new["look"] = dict(prev["look"])
     else:  # an EDL from before the look keeps its greedy caption lines, as a style edit does (graphics.restyle)
@@ -1757,7 +1813,8 @@ OPS: dict[str, Callable[..., tuple[dict, Edit]]] = {
     "insert": insert_edit, "pauses": pauses_edit,
     # the panels' edits (A3): one draft holds them next to the structural ones, one render at "Make Version N"
     "caption": caption_edit, "text": text_edit, "style": style_edit, "music": music_edit, "pin": pin_edit,
-    "punch": punch_edit, "glossary": glossary_edit, "caption_break": caption_break_edit, "kit": kit_edit}
+    "punch": punch_edit, "glossary": glossary_edit, "caption_break": caption_break_edit, "kit": kit_edit,
+    "speakers": speakers_edit}
 
 
 def apply_op(edl: dict, words: Words, audio: Audio | None, op: str, args: dict) -> tuple[dict, Edit]:

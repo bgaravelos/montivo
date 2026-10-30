@@ -212,3 +212,35 @@ def preview_data(run_dir: Path, edl: dict, overlays: bool = True, laid: bool = F
                                   "title": {"seconds": title_s, "png": title_png} if title_s else None})
         data["_edl"] = edl
     return data
+
+
+def heads_at(run_dir: Path, edl: dict, t: float) -> dict:
+    """Every tracked head on screen at cut second t of `edl` (SP4: click a face in the viewer to pin it): the source
+    second there, the speaker of the clip there, and each head box of the SAM head track through the crop into frame
+    pixels [x0, y0, x1, y1] (a punch-in's zoom is left out: the box is the face before it). Empty on the title card or
+    without a head track."""
+    from .captions import interp_box, to_output
+    data = preview_data(run_dir, edl, overlays=False)
+    track = load_track(run_dir, edl, "head")
+    seg = next((s for s in data["segments"] if s["cut_t0"] <= t < s["cut_t0"] + s["frames"] / data["fps"]), None)
+    if seg is None or not track:
+        return {"t": t, "src_t": None, "speaker": None, "heads": []}
+    src_t = seg["t_in"] + (t - seg["cut_t0"])
+    k = min(len(seg["crop"]["xs"]) - 1, max(0, int((t - seg["cut_t0"]) * data["fps"])))
+    span = next((s for s in edl["spans"] if s["id"] in seg["span_ids"] and s["t_in"] <= src_t + 1e-3 and src_t < s["t_out"]),
+                next((s for s in edl["spans"] if s["id"] in seg["span_ids"]), None))
+    fx = float(edl["source"]["width"]) / float(track["source"]["width"])
+    fy = float(edl["source"]["height"]) / float(track["source"]["height"])
+    frame, crop = frame_for(edl), seg["crop"]
+    heads = []
+    for oid, recs in (track.get("objects") or {}).items():
+        b = interp_box([r for r in recs if r.get("box")], src_t)
+        if b is None:
+            continue
+        x0, y0, x1, y1 = to_output([b[0] * fx, b[1] * fy, b[2] * fx, b[3] * fy], crop["xs"][k], crop["w"], crop["h"],
+                                   crop.get("y") or 0, frame)
+        if x1 <= 0 or x0 >= frame.w or y1 <= 0 or y0 >= frame.h:
+            continue  # outside the 9:16 window
+        heads.append({"id": str(oid), "box": [round(x0), round(y0), round(x1), round(y1)]})
+    return {"t": t, "src_t": round(src_t, 3), "speaker": str(span["speaker"]) if span and span.get("speaker") is not None else None,
+            "span": span["id"] if span else None, "heads": heads}

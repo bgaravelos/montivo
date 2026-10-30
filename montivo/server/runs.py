@@ -560,6 +560,7 @@ def version_entry(run_dir: Path, n: int, name: str, edl: dict, cut: str | None, 
                 "brief_missing": list(edl.get("brief_missing") or []),
                 "punch": bool(edl.get("punch")), "punch_skip": list(edl.get("punch_skip") or []),
                 "speaker_pins": {str(k): str(v) for k, v in (edl.get("reframe_speaker_ids") or {}).items()},
+                "speaker_names": dict(edl.get("speaker_names") or {}), "speaker_merge": dict(edl.get("speaker_merge") or {}),
                 "punch_ins": [{k: e.get(k) for k in ("key", "kind", "word", "span", "excess_db", "t_in", "t_out", "zoom")}
                               for e in edl.get("punch_ins") or [] if e.get("key")],
                 "overlays": _overlays(edl, render),

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { PanelFocus } from "./Editor";
 import { api, fileUrl, tc, usd } from "./api";
-import { originKind, originLabel, parentOf } from "./edit";
+import { originKind, originLabel, parentOf, speakerColor } from "./edit";
 import { Icon, MarkLoader } from "./icons";
 import type { CaptionLine, Costs, HeadsInfo, Planner, RunState, Version } from "./types";
 
@@ -510,40 +510,78 @@ export function VersionsPanel({ id, state, versions, sel, onPick, go, replay, op
   );
 }
 
-/** Who the crop follows: every Voice speaker with the head the speaker map gave it (or a human pin), and every SAM
- *  head to pin instead. One pin makes the next version (montivo.human pin), $0. */
-export function SpeakersPanel({ id, v, next, canEdit, onApply, rev, live }: {
+/** Speakers & framing: who the crop follows (every Voice speaker with the head the speaker map gave it, or a human
+ *  pin, and every SAM head to pick from; SP4 a click on a face in the viewer stages the same pin), what each speaker
+ *  is called (SP1) and which two are one person (SP2). With one voice it shows the tracked head and the crop (SP5). */
+export type PinStage = { speaker: string; head: string | null } | null;
+export type SpeakerEdit = { names?: Record<string, string>; merge?: Record<string, string | null> };
+
+export function SpeakersPanel({ id, v, next, canEdit, onApply, onSpeakers, rev, live, staged, setStaged }: {
   id: string; v: Version | null; next: number; canEdit: string | null; onApply: (speaker: string, head: string | null) => void;
-  rev: string; live: boolean;
+  onSpeakers: (e: SpeakerEdit) => void; rev: string; live: boolean;
+  staged: PinStage; setStaged: (p: PinStage) => void; // the editor holds the pin: a click on a face stages it too (SP4)
 }) {
   const [info, setInfo] = useState<HeadsInfo | null>(null);
-  const [staged, setStaged] = useState<{ speaker: string; head: string | null } | null>(null);
+  const [names, setNames] = useState<Record<string, string>>({});
+  const [merge, setMerge] = useState<Record<string, string | null>>({});
   useEffect(() => { api<HeadsInfo>(`/api/runs/${id}/heads`).then(setInfo).catch(() => setInfo({ speakers: [], heads: [], video: null })); }, [id]);
-  useEffect(() => { setStaged(null); }, [rev]);
+  useEffect(() => { setStaged(null); setNames({}); setMerge({}); }, [rev]); // eslint-disable-line
   const pins = v?.speaker_pins ?? {};
   const thumb = (h: string) => `/api/runs/${id}/head/${h}.jpg`;
   const follows = (spk: string) => (pins[spk] ? [pins[spk]] : info?.speakers.find((s) => s.id === spk)?.ids ?? []);
+  const nameOf = (spk: string) => names[spk] ?? v?.speaker_names?.[spk] ?? "";
+  const intoOf = (spk: string) => (spk in merge ? merge[spk] : v?.speaker_merge?.[spk] ?? null);
+  const nEdits = Object.keys(names).length + Object.keys(merge).length;
+  const stageName = (spk: string, x: string) => { // a name the version already has is no change
+    const was = v?.speaker_names?.[spk] ?? "";
+    setStaged(null);
+    setNames((n) => { const { [spk]: _, ...rest } = n; return x.trim() === was ? rest : { ...rest, [spk]: x }; });
+  };
+  const stageMerge = (spk: string, into: string | null) => {
+    const was = v?.speaker_merge?.[spk] ?? null;
+    setStaged(null);
+    setMerge((m) => { const { [spk]: _, ...rest } = m; return into === was ? rest : { ...rest, [spk]: into }; });
+  };
+  const pinStage = (p: PinStage) => { setNames({}); setMerge({}); setStaged(p); };
+  const single = info && info.speakers.length < 2;
   return (
     <section className="side-panel">
-      <div className="panel-head"><span className="ph-title">Speakers</span><span className="ph-sub">{info ? `${info.speakers.length} voices · ${info.heads.length} heads` : ""}</span></div>
+      <div className="panel-head"><span className="ph-title">Speakers &amp; framing</span><span className="ph-sub">{info ? `${info.speakers.length} voice${info.speakers.length === 1 ? "" : "s"} · ${info.heads.length} head${info.heads.length === 1 ? "" : "s"}` : ""}</span></div>
       <div className="panel-body">
         {!info && <p className="mute small"><MarkLoader /> Loading…</p>}
-        {info && (info.speakers.length < 2 || !info.heads.length) && (
-          <p className="mute small">{!info.heads.length ? "No head track in this run: the crop follows the person." : "One voice: the crop follows the head SAM tracked, nothing to pin."}</p>
+        {info && !info.heads.length && <p className="mute small">No head track in this run: the crop follows the person.</p>}
+        {single && info.heads.length > 0 && <>
+          <p className="mute small">One voice: the 9:16 crop follows the head SAM tracked, smoothed so it pans without jumps. Pause on the video to see the head on the frame.</p>
+          <div className="spk-heads">
+            {info.heads.map((h) => <span key={h.id} className="head on solo" title={`Head ${h.id}: tracked on ${h.frames} frames`}>
+              <img src={thumb(h.id)} alt="" loading="lazy" /><span>head {h.id} · {h.frames} frames</span></span>)}
+          </div>
+        </>}
+        {info && info.speakers.length >= 1 && (
+          <p className="mute small">{single ? "Name the voice: the transcript, the chat and the clip inspector use it." : "When a speaker talks, the 9:16 crop follows their head. The speaker map picked one per voice; pin another head where it got it wrong, or click a face on the paused video."}</p>
         )}
-        {info && info.speakers.length >= 2 && info.heads.length > 0 && <>
-          <p className="mute small">When a speaker talks, the 9:16 crop follows their head. The speaker map picked one per voice; pin another head where it got it wrong.</p>
-          {info.speakers.map((s) => {
-            const cur = follows(s.id);
-            const st = staged?.speaker === s.id ? staged : null;
-            return (
-              <div key={s.id} className={`spk-card ${st ? "staged" : ""}`}>
-                <div className="spk-top">
-                  <span className="spk-id">{s.id}</span>
-                  <span className="spk-who" title="Watch's description of who speaks; it can name the wrong person (run 014): trust the faces">
-                    {s.who ? <>watch's guess: {s.who}</> : "unnamed"}</span>
-                  <span className="mute small">{s.words} words</span>
-                </div>
+        {info?.speakers.map((s) => {
+          const cur = follows(intoOf(s.id) ?? s.id);
+          const st = staged?.speaker === s.id ? staged : null;
+          const into = intoOf(s.id);
+          return (
+            <div key={s.id} className={`spk-card ${st || s.id in names || s.id in merge ? "staged" : ""}`}>
+              <div className="spk-top">
+                <span className="spk-id" style={{ borderColor: speakerColor(into ?? s.id) }}>{s.id}</span>
+                <input className="st-input spk-name" value={nameOf(s.id)} maxLength={40} placeholder="Name, e.g. Billy" disabled={!!canEdit || !!into}
+                  aria-label={`Name of speaker ${s.id}`} onChange={(e) => stageName(s.id, e.target.value)} />
+                <span className="mute small">{s.words} words</span>
+              </div>
+              {s.who && <div className="spk-who mute small" title="Watch's description of who speaks; it can name the wrong person (run 014): trust the faces">watch's guess: {s.who}</div>}
+              {info.speakers.length >= 2 && (
+                <label className="field spk-merge">Same person as
+                  <select value={into ?? ""} disabled={!!canEdit} onChange={(e) => stageMerge(s.id, e.target.value || null)}>
+                    <option value="">no one: a voice of their own</option>
+                    {info.speakers.filter((x) => x.id !== s.id && !intoOf(x.id)).map((x) => <option key={x.id} value={x.id}>{x.id}{nameOf(x.id) ? ` · ${nameOf(x.id)}` : ""}</option>)}
+                  </select>
+                </label>
+              )}
+              {info.speakers.length >= 2 && info.heads.length > 0 && !into && <>
                 <div className="spk-now mute small">
                   {pins[s.id] ? <>pinned to head {pins[s.id]} by you</> : cur.length ? <>speaker map: head {cur.join(", ")} ({s.method ?? "map"})</> : "no head mapped"}
                 </div>
@@ -553,7 +591,7 @@ export function SpeakersPanel({ id, v, next, canEdit, onApply, rev, live }: {
                     return (
                       <button key={h.id} className={`head ${on ? "on" : ""}`} disabled={!!canEdit}
                         title={canEdit ?? `Head ${h.id}${h.speaker ? ` (mapped to ${h.speaker})` : ""}: follow it when ${s.id} talks`}
-                        onClick={() => setStaged(cur.includes(h.id) && !pins[s.id] ? null : pins[s.id] === h.id ? null : { speaker: s.id, head: h.id })}>
+                        onClick={() => pinStage(cur.includes(h.id) && !pins[s.id] ? null : pins[s.id] === h.id ? null : { speaker: s.id, head: h.id })}>
                         <img src={thumb(h.id)} alt="" loading="lazy" />
                         <span>{h.id}</span>
                       </button>
@@ -561,20 +599,23 @@ export function SpeakersPanel({ id, v, next, canEdit, onApply, rev, live }: {
                   })}
                 </div>
                 {pins[s.id] && !st && (
-                  <button className="link small" disabled={!!canEdit} onClick={() => setStaged({ speaker: s.id, head: null })}>Back to the speaker map</button>
+                  <button className="link small" disabled={!!canEdit} onClick={() => pinStage({ speaker: s.id, head: null })}>Back to the speaker map</button>
                 )}
-              </div>
-            );
-          })}
-        </>}
+              </>}
+              {into && <div className="mute small">The crop follows {into}'s head while {s.id} talks; the transcript shows {nameOf(into) || into}.</div>}
+            </div>
+          );
+        })}
       </div>
-      {staged && (
+      {(staged || nEdits > 0) && (
         <div className="cap-apply">
-          <span>{staged.head ? `${staged.speaker} → head ${staged.head}` : `${staged.speaker} → speaker map`}</span>
+          <span>{staged ? (staged.head ? `${staged.speaker} → head ${staged.head}` : `${staged.speaker} → speaker map`) : `${nEdits} change${nEdits > 1 ? "s" : ""}`}</span>
           <span className="grow" />
-          <button className="btn quiet" onClick={() => setStaged(null)}>Discard</button>
-          <button className="btn" disabled={!!canEdit} title={canEdit ?? (live ? LIVE_TIP : `Makes Version ${next} with the crop on that head ($0, a re-render)`)}
-            onClick={() => onApply(staged.speaker, staged.head)}>{live ? "Apply" : `Make Version ${next}`}</button>
+          <button className="btn quiet" onClick={() => { setStaged(null); setNames({}); setMerge({}); }}>Discard</button>
+          <button className="btn" disabled={!!canEdit} title={canEdit ?? (live ? LIVE_TIP : `Makes Version ${next} ($0, a re-render)`)}
+            onClick={() => staged ? onApply(staged.speaker, staged.head)
+              : onSpeakers({ ...(Object.keys(names).length ? { names: Object.fromEntries(Object.entries(names).map(([k, x]) => [k, x.trim()])) } : {}),
+                ...(Object.keys(merge).length ? { merge } : {}) })}>{live ? "Apply" : `Make Version ${next}`}</button>
         </div>
       )}
     </section>

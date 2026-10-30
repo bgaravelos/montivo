@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, crit, fileUrl, tc } from "./api";
-import { blockAt, edgeSnaps, flatWords, ghostRestore, punchLabel, selRange, sevRank, spanText, unusedRuns, type Block, type Snap, type WordSel } from "./edit";
+import { blockAt, edgeSnaps, flatWords, ghostRestore, punchLabel, selRange, sevRank, speakerColor, speakerName, speakerOf, spanText, unusedRuns, type Block, type Snap, type WordSel } from "./edit";
 import { Icon } from "./icons";
 import { LEVEL_RANGE, VOICE_RANGE, type Mix } from "./Mix";
 import type { CaptionLine, DuckEdit, Issue, Overlay, PausePlan, Version, Word } from "./types";
@@ -286,6 +286,8 @@ type Drag = { key: string; edge: "in" | "out"; snaps: Snap[]; snap: Snap | null;
 type Move = { key: string; slot: number; t: number; target: number | null }; // a clip being dragged: its insertion slot among the others
 const MOVE_PX = 6; // a press that travels further than this is a drag, not a click
 const round2 = (x: number) => Math.round(x * 100) / 100;
+/** The voices of a version's clips, a merged speaker counted as the one it is (SP2). */
+const voicesOf = (v: Version) => [...new Set(v.spans.map((s) => speakerOf(v, String(s.speaker))))].sort();
 
 type TrackProps = Pick<Props, "id" | "blocks" | "words" | "selected" | "selection" | "canTrim" | "onSelect" | "onSeek" | "onMenu" | "onTrim" | "onMove"
   | "mix" | "base" | "onMusicPanel" | "snap" | "onPick" | "onCaptionText" | "onNewCallout" | "onDuckEdits"> & BarProps & {
@@ -294,6 +296,7 @@ type TrackProps = Pick<Props, "id" | "blocks" | "words" | "selected" | "selectio
 
 const Tracks = memo(function Tracks(p: TrackProps) {
   const { id, v, blocks, words, pps, selected, selection, canTrim, onSelect, onSeek, onMenu, onTrim, onMove, timeAt, getT } = p;
+  const voices = voicesOf(v);
   const duckFrom = useRef<{ x: number; t: number } | null>(null);
   const [duckAsk, setDuckAsk] = useState<{ a: number; b: number; open: boolean } | null>(null);
   const q = v.bytes ? `&b=${v.bytes}` : "";
@@ -483,6 +486,10 @@ const Tracks = memo(function Tracks(p: TrackProps) {
                     backgroundSize: `${strip.frames * tileW}px 100%`, backgroundPosition: `-${idx * tileW}px 0` }} />;
                 })}
               </div>
+              {b.kind === "span" && voices.length > 1 && ( // SP3: who speaks, so a wrong framing shows without playing
+                <span className="spk-strip" style={{ background: speakerColor(speakerOf(v, String(b.span!.speaker))) }}
+                  title={`Speaker: ${speakerName(v, String(b.span!.speaker))}`} />
+              )}
               <span className="clip-label">
                 <b>{b.kind === "title" ? "Title" : b.span!.id}</b>
                 {b.kind === "span" && w > 70 && <span className="cl-words">{spanText(v, b.span!)}</span>}
@@ -675,6 +682,7 @@ function Wave({ peaks, pps, height, width, top: topIn, gain = 1, color = "--wave
 // ------------------------------------------------------------------- transcript (the paper edit)
 
 function Transcript({ v, blocks, t, selected, onSelect, onSeek, onMenu, wordSel, onWordSel, onCutWords, words, canTrim, onEdit }: Props & { v: Version }) {
+  const voices = voicesOf(v);
   const scroller = useRef<HTMLDivElement>(null);
   const issues = v.review?.issues ?? [];
   const playing = useMemo(() => blockAt(blocks, t), [blocks, t]);
@@ -784,6 +792,8 @@ function Transcript({ v, blocks, t, selected, onSelect, onSeek, onMenu, wordSel,
               <div className="b-top">
                 <span className="b-id">{b.kind === "title" ? "Title" : b.label}</span>
                 {b.span && b.kind === "span" && <span className="b-role">{b.span.role}</span>}
+                {b.span && b.kind !== "title" && (v.speaker_names || voices.length > 1) && <span className="b-spk"
+                  style={voices.length > 1 ? { borderColor: speakerColor(speakerOf(v, String(b.span.speaker))) } : undefined}>{speakerName(v, String(b.span.speaker))}</span>}
                 {b.kind === "ghost" && <span className="b-role">deleted</span>}
                 <span className="b-t">{b.kind === "ghost" ? "" : tc(b.t0)}</span>
               </div>

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, crit, frameUrl, tc, usd, type Seen } from "./api";
-import { selRange, sevRank, type FlatWord, type WordSel } from "./edit";
+import { selRange, sevRank, speakerName, type FlatWord, type WordSel } from "./edit";
 import { Icon, MarkLoader } from "./icons";
 import { Bar, expTip, measure, useTick } from "./Progress";
 import type { AskScope, ChatLine, Job, LogLine, PendingCard, PlanSide, Planner, Progress, RunState, Stage, Version } from "./types";
@@ -172,7 +172,8 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
           const m = (f?.args as { music?: { track: string; level_db: number; voice_db?: number } } | null)?.music;
           const voice = m?.voice_db ? `, voice ${m.voice_db > 0 ? "+" : ""}${m.voice_db} dB` : "";
           return m ? `Music: ${m.track.replace(/_/g, " ")} at ${m.level_db} LUFS${voice}.` : "Put music under the speech."; })())
-        : o.action === "pin" ? `Follow ${(f?.args as { head?: string | null } | null)?.head != null ? `head ${(f!.args as { head: string }).head}` : "the speaker map"} when speaker ${f?.target ?? ""} talks.`
+        : o.action === "pin" ? `Follow ${(f?.args as { head?: string | null } | null)?.head != null ? `head ${(f!.args as { head: string }).head}` : "the speaker map"} when ${speakerName(v, f?.target ?? "")} talks.`
+        : o.action === "speakers" ? `Speakers: ${fixes.join("; ")}.`
         : o.action === "restore" ? `Restore Version ${o.from}.`
         : o.action === "edges" ? "Tighten the cut edges again."
         : o.action === "style" ? "Change the caption style."

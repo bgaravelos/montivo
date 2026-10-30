@@ -801,6 +801,15 @@ M5 `music.duck_edits` [{a, b, duck}] in cut seconds: drag across the Music lane 
 lifted window is at least 0.8 s; they stay on the cut's clock, so a later structural edit leaves them where they were.
 The music op keeps all three through a level or track change (`human music --start --fade-out --duck-edits`). Existing
 beds render as before. rp-015 v8: Midnight Cruiser from 20 s, 4 s fade, 9.5-13.3 s lifted (bed -20.1 vs -25.3 dB), -14.0 LUFS.
+Rail panels Speakers SP1-SP5 (30/10, $0, same branch): the `speakers` pure op (`human op --op speakers`, draft op,
+POST /op): SP1 EDL `speaker_names` {"A": "Billy"}, shown in the transcript (a chip per clip), the clip inspector, the
+chat's pin line and Ask Montivo's context (agent.context: "A is Billy", each clip's speaker); SP2 `speaker_merge`
+{"B": "A"} (no chains): `render.load_speaker_ids` gives B A's heads (A's pin too), so the crop follows A while B
+talks; both carried by a re-plan. SP3 a 3 px strip per speaker on the video clips (2+ voices; colour by label,
+`edit.speakerColor`). SP4 GET /heads/at?t=&v= (`preview.heads_at`: every head box through the crop at that cut
+second, punch-in zoom left out) -> `HeadPicker` on the paused viewer with Speakers open; a click stages the pin for the
+clip's speaker. SP5 the panel is "Speakers & framing"; one voice shows the tracked head and the name field. Checked on
+rp-015 (Billy, one voice) and a clone of 014 (four astronauts: strips, 4 face boxes, "A -> head 1").
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

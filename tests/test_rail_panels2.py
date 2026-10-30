@@ -323,3 +323,68 @@ def test_draft_and_route_take_the_bed_choices(tmp_path, monkeypatch):
                          "duck_edits": [{"a": 1.0, "b": 2.0, "duck": True}]}
     with pytest.raises(Exception):
         draft.clean_op({"op": "music", "args": {"track": "ukulele", "duck_edits": "x"}})
+
+
+# --------------------------------------------------------------------------- SP1, SP2, SP4: names, merges, heads on the frame
+
+
+def test_speakers_op_names_and_merges(tmp_path, monkeypatch):
+    import montivo.human as H
+    d = _panel_run(tmp_path, monkeypatch)
+    edl, words = json.loads((d / "edl_v1.json").read_text()), H._words(d)
+    new, rec = H.apply_op(edl, words, None, "speakers", {"names": {"A": " Billy  G "}, "merge": {"B": "A"}})
+    assert new["speaker_names"] == {"A": "Billy G"} and new["speaker_merge"] == {"B": "A"}
+    assert [f["op"] for f in rec.fixes] == ["speaker_name", "speaker_merge"] and rec.action == "speakers"
+    back, _ = H.apply_op(new, words, None, "speakers", {"names": {"A": ""}, "merge": {"B": None}})
+    assert "speaker_names" not in back and "speaker_merge" not in back
+    for args, msg in [({"names": {"A": "Billy G"}}, "nothing to change"), ({"merge": {"A": "A"}}, "into itself"),
+                      ({"merge": {"C": "B"}}, "merged itself"), ({"names": {"A b": "x"}}, "not a Voice speaker")]:
+        with pytest.raises(SystemExit, match=msg):
+            H.apply_op(new, words, None, "speakers", args)
+    # the CLI writes the same EDL byte for byte (the generic op command)
+    H.stamp(new, rec, 1, 2)
+    dump_json(tmp_path / "pure.json", new)
+    H.main(["op", str(d), "--op", "speakers", "--args", json.dumps({"names": {"A": " Billy  G "}, "merge": {"B": "A"}})])
+    assert (tmp_path / "pure.json").read_bytes() == (d / "edl_v2.json").read_bytes()
+
+
+def test_a_merged_speaker_follows_the_other_ones_head(tmp_path):
+    from montivo.engine.render import load_speaker_ids
+    (tmp_path / "speakers.json").write_text(json.dumps({"speakers": {"A": {"ids": ["3"]}, "B": {"ids": ["0"]}}}))
+    assert load_speaker_ids(tmp_path, "head", {}) == {"A": ["3"], "B": ["0"]}
+    assert load_speaker_ids(tmp_path, "head", {"speaker_merge": {"B": "A"}}) == {"A": ["3"], "B": ["3"]}
+    pinned = {"speaker_merge": {"B": "A"}, "reframe_speaker_ids": {"A": "7"}}
+    assert load_speaker_ids(tmp_path, "head", pinned) == {"A": ["7"], "B": ["7"]}  # A's pin carries to B
+
+
+def test_replan_keeps_speaker_names(tmp_path, monkeypatch):
+    import inspect
+    import montivo.human as H
+    src = inspect.getsource(H.replan)
+    assert '"speaker_names", "speaker_merge"' in src  # carried like the pins, the look and the music
+
+
+def test_agent_context_names_the_speakers(tmp_path):
+    from montivo import agent
+    (tmp_path / "run.json").write_text(json.dumps({"brief": "b"}))
+    edl = {"spans": [{"id": "s1", "speaker": "B", "words": "hi", "role": "hook"}], "speaker_names": {"A": "Billy"},
+           "speaker_merge": {"B": "A"}}
+    text = agent.context(tmp_path, edl)
+    assert "A is Billy" in text and "B is the same person as A" in text and "[hook Billy]" in text
+
+
+def test_heads_on_the_frame_at_a_cut_second(tmp_path, monkeypatch):
+    from montivo.engine import preview as P
+    seg = {"t_in": 10.0, "cut_t0": 1.5, "frames": 300, "span_ids": ["s1"], "crop": {"w": 608, "h": 1080, "y": 0, "xs": [656.0] * 300}}
+    monkeypatch.setattr(P, "preview_data", lambda run_dir, edl, overlays=True: {"fps": 30.0, "segments": [seg]})
+    every = lambda box: [{"t": 9.0 + k * 0.2, "box": box} for k in range(100)]  # noqa: E731 (SAM at 5 fps)
+    track = {"source": {"width": 960, "height": 540}, "objects": {
+        "0": every([400, 50, 500, 200]), "5": every([0, 50, 40, 100])}}  # head 5 is outside the crop
+    monkeypatch.setattr(P, "load_track", lambda run_dir, edl, concept: track)
+    edl = {"source": {"width": 1920, "height": 1080, "fps": 30.0}, "spans": [{"id": "s1", "speaker": "A", "t_in": 10.0, "t_out": 20.0}]}
+    at = P.heads_at(tmp_path, edl, 3.0)
+    assert at["speaker"] == "A" and at["span"] == "s1" and at["src_t"] == 11.5
+    assert [h["id"] for h in at["heads"]] == ["0"]
+    x0, y0, x1, y1 = at["heads"][0]["box"]
+    assert (x0, x1) == (round((800 - 656) * 1080 / 608), round((1000 - 656) * 1080 / 608)) and y0 == round(100 * 1920 / 1080)
+    assert P.heads_at(tmp_path, edl, 0.5)["heads"] == []  # the title card

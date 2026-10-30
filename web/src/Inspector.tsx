@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { crit, fileUrl, frameUrl, tc, usd } from "./api";
-import { chain, fixText, originLabel, parentOf, punchLabel, sevRank, type Block } from "./edit";
+import { chain, fixText, originLabel, parentOf, punchLabel, sevRank, speakerName, type Block } from "./edit";
 import { CRIT_ICON, Icon } from "./icons";
 import { Color } from "./Style";
 import type { CaptionLine, Issue, Look, PunchIn, Review, RunState, Version, Word } from "./types";
@@ -77,7 +77,7 @@ function ClipInspector({ id, state, v, b, words, busy, canEdit, onSeek, onDelete
             <dt>Out</dt><dd className="mono">{tc(b.t1, 2)}</dd>
             <dt>Duration</dt><dd className="mono">{(b.t1 - b.t0).toFixed(2)} s</dd>
             <dt>Source</dt><dd className="mono" title="Where the clip sits in the source footage">{tc(sp.t_in, 2)} – {tc(sp.t_out, 2)}</dd>
-            <dt>Speaker</dt><dd>{sp.speaker}</dd>
+            <dt>Speaker</dt><dd>{speakerName(v, String(sp.speaker))}{speakerName(v, String(sp.speaker)) !== String(sp.speaker) && <span className="mute"> ({sp.speaker})</span>}</dd>
           </dl>
         </div>
         <div className="insp-sec">

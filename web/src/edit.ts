@@ -149,6 +149,7 @@ export function originLabel(v: Version): string {
   if (o.action === "restore") return `your edit · restored v${o.from}`;
   if (o.action === "music") return `your edit · ${o.fixes?.[0]?.op === "music_off" ? "music off" : "music"}`;
   if (o.action === "pin") return `your edit · pinned speaker ${o.fixes?.[0]?.target ?? ""}`;
+  if (o.action === "speakers") return `your edit · speakers`;
   if (o.action === "punch") {
     const op = o.fixes?.[0]?.op;
     return op === "punch_skip" ? "your edit · removed a punch-in" : `your edit · punch-ins ${op === "punch_off" ? "off" : "on"}`;
@@ -348,3 +349,16 @@ export function ghostRestore(v: Version, g: Block, blocks: Block[], words: Recor
   const tw = words[String(sp.turn_id)] ?? [];
   return { from: best[0], to: best[1], before, text: tw.slice(best[0], best[1] + 1).map((w) => w.w).join(" "), error: null };
 }
+
+/** SP1, SP2: what a Voice speaker is called on version v: merged into another speaker (one person Voice split in two),
+ *  that one; then the name a person gave it, else the label. */
+export const speakerOf = (v: { speaker_names?: Record<string, string>; speaker_merge?: Record<string, string> } | null, spk: string) =>
+  v?.speaker_merge?.[spk] ?? spk;
+export const speakerName = (v: { speaker_names?: Record<string, string>; speaker_merge?: Record<string, string> } | null, spk: string) => {
+  const s = speakerOf(v, spk);
+  return v?.speaker_names?.[s] ?? s;
+};
+/** SP3: one colour per speaker, the same on the timeline strip and the Speakers panel. */
+export const SPEAKER_COLORS = ["#4FA3FF", "#FF8A3D", "#B57BFF", "#5FD08E", "#FF5A8A", "#E8D44D"];
+export const speakerColor = (spk: string) =>
+  SPEAKER_COLORS[[...spk].reduce((n, c) => n + c.charCodeAt(0), 0) % SPEAKER_COLORS.length]; // A, B, C ... in order

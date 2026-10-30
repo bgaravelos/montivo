@@ -81,6 +81,8 @@ export type Version = {
   caption_lines: CaptionLine[]; caption_style: CaptionStyle | null; caption_style_note: string | null; brief_missing?: string[]; bytes: number | null;
   punch: boolean; punch_skip: string[]; punch_ins: PunchIn[];
   speaker_pins: Record<string, string>; // reframe_speaker_ids: Voice speaker -> the head the crop follows (a human pin)
+  speaker_names?: Record<string, string>; // SP1: "A" -> "Billy"
+  speaker_merge?: Record<string, string>; // SP2: "B" -> "A", one person Voice split in two
   planner: { model: string; name: string } | null; // the paper edit's planner: v1 and every re-plan
   overlays: Overlay[]; // the B-roll stills (engine/broll.py): cut seconds from the render, null when not shown
   plan_compare: PlanCompare | null;
@@ -194,6 +196,9 @@ export type ProjectCard = {
 export type CardScore = { v: number; overall: number; pass: boolean };
 
 /** The Speakers panel (runs.heads): Voice speakers with the heads the speaker map gave them, and every SAM head. */
+/** SP4: the tracked heads on screen at a cut second (GET /heads/at), frame pixels [x0, y0, x1, y1]. */
+export type HeadsAt = { t: number; src_t: number | null; speaker: string | null; span: string | null; heads: { id: string; box: number[] }[] };
+
 export type HeadsInfo = {
   speakers: { id: string; who: string | null; ids: string[]; method: string | null; words: number }[];
   heads: { id: string; t: number; box: number[]; frames: number; speaker: string | null }[];

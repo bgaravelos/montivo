@@ -71,7 +71,7 @@ PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 # 169 s; run 015, 69 s, $0.23 in about 130 s, so about $0.045 + $0.0026 per footage second and 60 s + 0.9 s per second;
 # the review loop adds about two reviews and a render (run 015: $0.07, 85 s)
 # the chat's job label of an edit made through POST /op (the panels' newer edits)
-OP_LABEL = {"kit": "Brand kit", "style": "Style", "text": "Edit text", "music": "Music", "pin": "Pin a speaker"}
+OP_LABEL = {"kit": "Brand kit", "speakers": "Speakers", "style": "Style", "text": "Edit text", "music": "Music", "pin": "Pin a speaker"}
 COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 35, "plan_open_s": 7, "review": 0.035, "run_fixed": 0.045,
         "run_per_s": 0.0026, "run_wall_fixed_s": 60, "run_wall_per_s": 0.9, "review_loop": 0.07, "review_loop_s": 85,
         "hook_ab": 0.04, "ask": 0.006, "look": 0.008, "titles": 0.009, "cover": 0.025, "cover_design": 0.05, "cover_mask": 0.01,
@@ -2039,6 +2039,24 @@ def create_app(root: Path) -> FastAPI:
     @app.get("/api/runs/{run_id}/heads")
     def run_heads(run_id: str):
         return heads(st.run_dir(run_id))
+
+    @app.get("/api/runs/{run_id}/heads/at")
+    def run_heads_at(run_id: str, request: Request, t: float, v: int = 0, draft_: int = Query(0, alias="draft")):
+        """SP4: the tracked heads on screen at cut second t of version v (or the open draft) in frame pixels, and the
+        speaker of the clip there: the viewer draws them and a click pins that head for that speaker. $0."""
+        d = st.run_dir(run_id)
+        if draft_:
+            fd = draft.folder(d, judge_of(request) if budget is not None else None)
+            with draft.run_lock(d):
+                state = draft.load(fd)
+                if state is None:
+                    raise HTTPException(404, "no draft")
+                edl = draft.current(fd, d, state)
+        else:
+            d, edl = edl_of(run_id, v or latest_version(d))
+        if not math.isfinite(t):
+            raise HTTPException(400, "t: a cut second")
+        return live_preview_engine.heads_at(d, edl, t)
 
     @app.get("/api/runs/{run_id}/head/{hid}.jpg")
     def head_jpg(run_id: str, hid: str):

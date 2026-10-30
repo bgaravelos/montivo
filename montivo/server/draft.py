@@ -263,6 +263,14 @@ def clean_panel_op(op: str, a: dict) -> dict:
         if not isinstance(spk, str) or not SPEAKER.fullmatch(spk) or (head is not None and not HEAD.fullmatch(str(head))):
             raise HTTPException(400, "speaker: a Voice label like A; head: a head id or null")
         return {"speaker": spk, "head": None if head is None else str(head)}
+    if op == "speakers":
+        names, merge = a.get("names") or {}, a.get("merge") or {}
+        if not isinstance(names, dict) or not isinstance(merge, dict) or not 0 < len(names) + len(merge) <= 20:
+            raise HTTPException(400, 'names: {"A": "Billy"}, merge: {"B": "A" or null}')
+        if not all(SPEAKER.fullmatch(str(k)) for k in [*names, *merge]) or \
+                not all(v is None or (isinstance(v, str) and SPEAKER.fullmatch(v)) for v in merge.values()):
+            raise HTTPException(400, "speakers: Voice labels like A")
+        return {"names": {k: _text(v, "name", 40) for k, v in names.items()}, "merge": dict(merge)}
     if op == "kit":
         from ..engine.kit import normalize_kit
         try:

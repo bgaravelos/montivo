@@ -11,7 +11,8 @@ import { mixOf, sameMix, useLiveMix, type Mix } from "./Mix";
 import { MusicPanel, type MusicDraft } from "./Music";
 import { askToNotify, ProgressInline, useJobSignals } from "./Progress";
 import { GUIDE_NAME, GUIDES, SafeArea, type Guide } from "./SafeArea";
-import { CaptionsPanel, MediaPanel, SpeakersPanel, TextPanel, VersionsPanel } from "./Panels";
+import { CaptionsPanel, MediaPanel, SpeakersPanel, TextPanel, VersionsPanel, type PinStage } from "./Panels";
+import { HeadPicker } from "./HeadPicker";
 import { FPS, Player, type PlayerHandle } from "./Player";
 import { draftCount, EMPTY_DRAFT, StyleCanvas, StylePanel, usePreview, type StyleDraft } from "./Style";
 import { Timeline, ZOOM_MAX, ZOOM_MIN, type ClipMenu, type MoveAsk, type TrimAsk } from "./Timeline";
@@ -40,7 +41,7 @@ type Current = { version: number | null; newest: number | null };
 const currentKey = (id: string) => `montivo.current.${id}`;
 // the requests that make a version from the one on screen: after an undo they branch from an older version
 const MAKES_VERSION = ["drop", "trim", "reorder", "cut", "split", "punch", "caption", "glossary", "linebreak", "text", "style", "music", "pin", "ask", "review", "hook",
-  "insert", "pauses", "overlay", "kit", "op"];
+  "insert", "pauses", "overlay", "kit", "op", "speakers"];
 
 const typing = (el: EventTarget | null) => {
   const e = el as HTMLElement | null;
@@ -95,6 +96,7 @@ export function Editor({ id, replay, go }: Props) {
   const [draftSum, setDraftSum] = useState<DraftSum | null>(null);
   const [styleDraft, setStyleDraft] = useState<StyleDraft>(EMPTY_DRAFT);
   const [musicDraft, setMusicDraft] = useState<MusicDraft>(undefined); // M1: a track staged in the Music panel
+  const [pinStage, setPinStage] = useState<PinStage>(null); // a head staged for a speaker (Speakers panel, SP4 a face click)
   // A2: a caption line or callout picked on the timeline: its panel opens on it (nonce: the same one picked again)
   const [focus, setFocus] = useState<PanelFocus | null>(null);
 
@@ -658,7 +660,8 @@ export function Editor({ id, replay, go }: Props) {
             onApply={(e) => made(edit("music", { ...e, from: v?.n }))} />
         )}
         {panel === "speakers" && (
-          <SpeakersPanel id={id} v={v} next={next} canEdit={canEdit} rev={rev} live={live0}
+          <SpeakersPanel id={id} v={v} next={next} canEdit={canEdit} rev={rev} live={live0} staged={pinStage} setStaged={setPinStage}
+            onSpeakers={(e) => made(edit("speakers", { ...e, from: v?.n }))}
             onApply={(speaker, head) => made(edit("pin", { speaker, head, from: v?.n }))} />
         )}
         {panel === "versions" && <VersionsPanel id={id} state={state} versions={visible} sel={sel} onPick={pick} go={go} replay={replay} opening={opening}
@@ -700,6 +703,8 @@ export function Editor({ id, replay, go }: Props) {
             safe={{ label: GUIDE_NAME[guide], on: guide !== "off", next: nextGuide }} overlay={<>
               {v && <StyleCanvas v={v} t={t} draft={styleDraft} setDraft={setStyleDraft} preview={stylePreview} busy={previewBusy}
                 show={styling && !playing} />}
+              {v && <HeadPicker id={id} v={v} t={t} show={panel === "speakers" && !playing && !replay && !canEdit} staged={pinStage}
+                onPick={(speaker, head) => setPinStage(v.speaker_pins[speaker] === head && pinStage?.speaker !== speaker ? null : { speaker, head })} />}
               <SafeArea kind={guide} />
             </>} />
         ) : (
@@ -884,11 +889,12 @@ const DRAFT_OPS: Record<string, { op: string; args: (b: Record<string, unknown>)
   pin: { op: "pin", args: (b) => ({ speaker: b.speaker, head: b.head ?? null }) },
   punch: { op: "punch", args: (b) => pick(b, ["on", "skip"]) },
   kit: { op: "kit", args: (b) => pick(b, ["kit", "name"]) },
+  speakers: { op: "speakers", args: (b) => pick(b, ["names", "merge"]) },
 };
 
 /** The edits with no route of their own: in Rendered mode they go through POST /op (the same pure op, one version). */
 const OP_ROUTE: Record<string, { op: string; args: (b: Record<string, unknown>) => Record<string, unknown> }> = {
-  kit: DRAFT_OPS.kit,
+  kit: DRAFT_OPS.kit, speakers: DRAFT_OPS.speakers,
 };
 
 /** The keys of `b` that are set (a draft op's arguments leave the rest to the op's defaults). */
