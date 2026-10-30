@@ -219,6 +219,8 @@ def progress(lines: list[dict], label: str | None = None, ledger: dict | None = 
                 analyse["voice"] = True
             if msg.startswith("voice:") and cur and cur["stage"] == "ingest" and "t1" not in cur:
                 continue  # Voice starts on the wav while ingest still uploads: the ingest step stays the one shown
+            if cur and cur["stage"] == "plan" and "t1" not in cur:
+                continue  # the plan starts once watch is in, while SAM may still track: the plan step stays shown
             if msg.startswith("spark: watch"):
                 analyse["watch"] = "completed" in msg or "->" not in msg
             m = re.match(r"track: ([^:]+): \d+ ids", msg)

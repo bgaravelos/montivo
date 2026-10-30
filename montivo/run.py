@@ -8,7 +8,7 @@ import sys
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, open_api_key, sam_cost
@@ -236,12 +236,39 @@ def run(opts: RunOptions) -> dict:
                 tracks[ct.concept] = ct
         return tracks
 
+    # 3. plan, with the speech rate Voice measured on this clip (2.5 words/s made a 40 s target come out at 50.7 s)
+    # On --resume plan.json is reused when nothing it read has changed; a new plan never replaces edl_v1 silently.
+    # The plan reads Voice and watch only, so it starts the moment they are in, while SAM may still track (on the 016
+    # clip with effort low, SAM finished 11 s after watch and the plan used to wait for it)
+    def plan_stage(voice: VoiceResult, watch: SparkCall) -> tuple[SparkCall, bool, float]:
+        wps = voice.speech_rate()
+        reuse, why = plan_reuse(opts, made, (out / "plan.json").is_file(), not fresh)
+        if reuse:
+            planned = SparkCall(name="plan", parsed=json.loads((out / "plan.json").read_text()), status="resumed", usage={},
+                                cost_usd=0.0, seconds=0.0, response_id="")
+            log(f"resume: {why}")
+            return planned, reuse, wps
+        if opts.resume:
+            log(f"plan: {why}")
+        supersede_v1(out, log)
+        log(f"plan: speech rate {wps:.2f} words/s ({len(voice.words)} words over the spoken seconds of {len(voice.turns)} turns), "
+            f"target {opts.target_s:.0f} s = about {opts.target_s * wps:.0f} to {opts.target_s * 1.2 * wps:.0f} words")
+        planner = Spark(out, ledger, model=opts.planner_model, log=log) if opts.planner_model else spark
+        planned = planner.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
+                               file_id=ing.file_id if opts.plan_with_video else None, reasoning_effort=opts.plan_effort,
+                               words_per_s=wps)
+        dump_json(out / "plan.json", planned.parsed)
+        dump_json(out / "run.json", {**run_json, "plan_inputs": plan_inputs(opts)})
+        return planned, reuse, wps
+
+    f_plan = None
     with ThreadPoolExecutor(max_workers=2) as pool:
         f_voice = pool.submit(voice_then_watch)
         f_track = pool.submit(track_stage)
         errors = []
         try:
             voice, watch = f_voice.result()
+            f_plan = pool.submit(plan_stage, voice, watch)  # beside SAM: the voice worker is free now
         except Exception:
             errors.append(("voice/watch", traceback.format_exc()))
             voice = watch = None
@@ -250,11 +277,11 @@ def run(opts: RunOptions) -> dict:
         except Exception:
             errors.append(("track", traceback.format_exc()))
             tracks = {}
-    early_pool.shutdown()
-    for stage, tb in errors:
-        log(f"ERROR in {stage}:\n{tb}")
-    if voice is None or watch is None:
-        raise SystemExit("run aborted: voice/watch failed (see run.log)")
+        early_pool.shutdown()
+        for stage, tb in errors:
+            log(f"ERROR in {stage}:\n{tb}")
+        if voice is None or watch is None:
+            raise SystemExit("run aborted: voice/watch failed (see run.log)")
 
     # 2b. which head is which speaker (speakers.py): only with two or more voices and two or more heads. A microphone
     # watch saw is tracked first on the head track's frames (one SAM request), the strongest signal of who talks
@@ -278,27 +305,8 @@ def run(opts: RunOptions) -> dict:
             except Exception:
                 errors.append(("speakers", traceback.format_exc()))
                 log(f"ERROR in speaker mapping (the crop keeps the largest head):\n{errors[-1][1]}")
+    planned, reuse, wps = f_plan.result()
 
-    # 3. plan, with the speech rate Voice measured on this clip (2.5 words/s made a 40 s target come out at 50.7 s)
-    # On --resume plan.json is reused when nothing it read has changed; a new plan never replaces edl_v1 silently
-    wps = voice.speech_rate()
-    reuse, why = plan_reuse(opts, made, (out / "plan.json").is_file(), not fresh)
-    if reuse:
-        planned = SparkCall(name="plan", parsed=json.loads((out / "plan.json").read_text()), status="resumed", usage={},
-                            cost_usd=0.0, seconds=0.0, response_id="")
-        log(f"resume: {why}")
-    else:
-        if opts.resume:
-            log(f"plan: {why}")
-        supersede_v1(out, log)
-        log(f"plan: speech rate {wps:.2f} words/s ({len(voice.words)} words over the spoken seconds of {len(voice.turns)} turns), "
-            f"target {opts.target_s:.0f} s = about {opts.target_s * wps:.0f} to {opts.target_s * 1.2 * wps:.0f} words")
-        planner = Spark(out, ledger, model=opts.planner_model, log=log) if opts.planner_model else spark
-        planned = planner.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
-                             file_id=ing.file_id if opts.plan_with_video else None, reasoning_effort=opts.plan_effort,
-                             words_per_s=wps)
-        dump_json(out / "plan.json", planned.parsed)
-        dump_json(out / "run.json", {**run_json, "plan_inputs": plan_inputs(opts)})
 
     # 4. EDL v1 on word boundaries; the source is the file ingest produced (the mirrored copy under --hflip)
     source = {"path": str(ing.source), "original_path": str(opts.footage), "hflip": ing.source != opts.footage,
@@ -331,6 +339,15 @@ def run(opts: RunOptions) -> dict:
         _, kit_fixes = with_kit(edl, opts.kit)
         if kit_fixes:
             log(f"kit: {'; '.join(f['note'] for f in kit_fixes)}")
+    if "preflight" not in edl and edl["spans"]:
+        # 4b. the gate's checks that need no cut (cut edges in speech, captions forced over the head, the head out of
+        # the crop) fixed before the first render, so the first paid review sees none of them ($0, review.preflight)
+        from .engine.review import preflight
+        try:
+            edl, edl["preflight"] = preflight(out, edl, Words([asdict(w) for w in voice.words]), Audio.load(out), log=log)
+        except Exception:
+            errors.append(("preflight", traceback.format_exc()))
+            log(f"ERROR in preflight (v1 goes on without it):\n{errors[-1][1]}")
     dump_json(out / "edl_v1.json", edl)
 
     # 5. title card (muse-image-1.0, $0.01) and render cut_v1.mp4 from the source (ffmpeg only)

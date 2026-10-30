@@ -51,3 +51,14 @@ def test_plan_and_watch_ask_spark_13_for_low_effort(tmp_path, monkeypatch):
     sp.plan("a brief", "A: hi", {}, 40.0)
     sp.plan("a brief", "A: hi", {}, 40.0, reasoning_effort="high")
     assert [b["reasoning"]["effort"] for b in sent] == ["low", "low", "high"]  # --plan-effort still overrides
+
+
+def test_progress_keeps_the_plan_step_while_sam_finishes():
+    from montivo.server.runs import parse_log, progress
+    lines = [(0.0, "montivo run: a.mp4 -> runs/x"), (15.0, "ingest: uploaded proxy as f in 9s"),
+             (35.5, "spark: watch: completed, 19023 in / 1440 out, $0.0299, 14.35s"),
+             (35.6, "plan: speech rate 1.88 words/s (114 words over the spoken seconds of 1 turns), target 40 s"),
+             (46.2, "track: head: 2 ids, 317/343 frames, $0.069, 15.81s, completed")]
+    log = "\n".join(f"[{t:7.1f}s] {m}" for t, m in lines)
+    p = progress(parse_log(log))
+    assert p["title"] == "Plan" and [s["title"] for s in p["steps"]] == ["Ingest", "Voice · SAM · Watch"]

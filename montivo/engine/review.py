@@ -674,6 +674,62 @@ def close_gate(review: dict, gate: dict) -> dict:
     return {**gate, "blocked": bool(reasons), "reasons": reasons, "checks": checks, "open_majors": majors}
 
 
+# --------------------------------------------------------------------------- before a render (A2, B5)
+
+PREFLIGHT_ROUNDS = 3
+
+
+def measured_checks(run_dir: Path, edl: dict, audio: Audio | None) -> dict:
+    """The gate's checks that need no cut, on an EDL laid out by the render's own planning (preview_data, ~50 ms):
+    cut edges in the source audio, captions forced over the head, the head out of the crop. The kept-word check
+    needs Voice on a cut and waits for the review."""
+    from .preview import preview_data  # preview imports the render, which this module imports
+    laid = preview_data(run_dir, edl, laid=True)["_edl"]
+    return gate_check(caption_face_facts(laid), cut_edge_levels(laid, audio) if audio else None, None,
+                      head_frame_facts(run_dir, laid))
+
+
+def preflight(run_dir: Path, edl: dict, words: Words, audio: Audio | None, log=print,
+              rounds: int = PREFLIGHT_ROUNDS) -> tuple[dict, dict]:
+    """Fix what the measured checks find before anything is rendered and reviewed: the gate's own fixes (plan_fixes,
+    apply_fixes) in up to `rounds` rounds, re-checked after each, until the checks clear, a fix repeats or none
+    applies. The fixes stay in the same version (v1 is the planner's cut after its preflight). Every first cut of
+    nasa, tedx, heli-01 and 012-ktb had a cut inside speech that the first review flagged and a second review paid
+    to confirm fixed. Returns (edl, record): rounds, the fixes, `clear`, what is `left`, why it stopped."""
+    version = edl.get("version", 1)
+    seen: set[str] = set()
+    done: list[dict] = []
+    stop = "clear"
+    gate = measured_checks(run_dir, edl, audio)
+    k = 0
+    while gate["blocked"] and k < rounds:
+        k += 1
+        fixes, _ = plan_fixes({"issues": []}, edl, words, audio, gate)
+        if not fixes:
+            stop = "no applicable fix"
+            break
+        if all(f.fingerprint in seen for f in fixes):
+            stop = "a fix would repeat"
+            break
+        new, patch_log = apply_fixes(edl, [f for f in fixes if f.fingerprint not in seen], words, audio)
+        applied = [p for p in patch_log if not p.get("skipped")]
+        if not applied:
+            stop = "no applicable fix"
+            break
+        seen |= {p["fingerprint"] for p in applied}
+        new["version"] = version
+        done += applied
+        edl = new
+        gate = measured_checks(run_dir, edl, audio)
+    else:
+        stop = "clear" if not gate["blocked"] else f"{rounds} rounds"
+    for p in done:
+        log(f"preflight: {p['op']} {p['target']}: {p['note']}")
+    log(f"preflight: {'clear' if not gate['blocked'] else 'left: ' + '; '.join(gate['reasons'])}"
+        f" ({len(done)} fix{'es' if len(done) != 1 else ''}, $0)")
+    return edl, {"rounds": k + 1, "fixes": done, "clear": not gate["blocked"], "left": gate["reasons"], "stop": stop}
+
+
 # --------------------------------------------------------------------------- the copy Spark watches
 
 def draw_clock(t: float, out: Path, size: int = 40) -> None:
@@ -1531,6 +1587,17 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
             for p in patch_log:
                 if not p.get("skipped"):
                     seen[p["fingerprint"]] = n
+            # B5: the patched EDL's measured faults are fixed before it is rendered and reviewed again ($0); when the
+            # pass applied only measured fixes and they could not clear them (d1-nasa: two astronauts talk over the
+            # cut, the valley move cannot get under the line), the loop stops instead of paying for the same review
+            new, pf = preflight(run_dir, new, words, audio, log=log)
+            entry["preflight"] = pf
+            for p in pf["fixes"]:
+                seen[p["fingerprint"]] = n
+            patch_log += [{**p, "preflight": True} for p in pf["fixes"]]
+            if not pf["clear"] and all(p.get("check") for p in patch_log if not p.get("skipped")):
+                stop = f"measured fault the fixes cannot clear: {'; '.join(pf['left'])}"
+                break
             patch_log += follow_cut(edl, new, severity="loop")  # duck edits stay on their words
             new.setdefault("patches", []).append({"from": n, "review": rv["name"], "fixes": patch_log})
             nxt = next_version(run_dir)  # past every version in the folder: reviewing v1 of v1-v5 makes v6, never a new v2
