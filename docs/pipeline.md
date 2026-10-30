@@ -18,7 +18,10 @@ montivo run footage.mp4 --brief "..." --out runs/001
            -> speakers.json (head ids per speaker; watch's "left/right/centre" as the fallback), $0, ffmpeg + Pillow
   plan     Spark 1.3 (effort low, starts as soon as watch is in, beside SAM) + brief + shot log + movement moments +
            measured speech rate + transcript -> paper edit (turn id + verbatim words) and the brief as a checklist
-           (`brief_checks`: opening, ending, keep, drop, length, other, with the transcript words each names)
+           (`brief_checks`: opening, ending, keep, drop, length, other, with the transcript words each names); the same call
+           names the words Voice probably misheard (likely_mishearings: from the brief, on-screen text or context) -> EDL
+           glossary_suggestions, offered in the chat and the Captions panel ("Did you say ...?", Accept = the glossary
+           edit), never applied unasked
   edl      spans mapped to Voice word boundaries, then every cut edge tightened to the speech in the source audio
            (0.1 s before the onset, 0.15 s after the offset, 0.3 s at the very end)
   check    the paper edit against its checklist, the target, repeated takes and unplaced words (`edl.plan_check`, $0);
@@ -32,7 +35,8 @@ montivo run footage.mp4 --brief "..." --out runs/001
            the head, no card in front of the first word ($0); `--title-style card` (human text) or an EDL from before
            30/10: Muse Image 1.0 -> title/title_card.png (generated once, $0.01), 1.5 s in front of the cut
   captions Voice words of the kept spans -> de-doubled, glossary-corrected, 1 to 4 word lines up at least 0.4 s each, placed
-           clear of the SAM head box;
+           clear of the SAM head box (a line with no room at full size tried again down to 70 % of its size, below or
+           above the head, before it goes over it: captions.room_for);
            the plan's per-span callouts anchored to the SAM person box -> transparent PNGs (Pillow)
   punch    (--punch) zooms on the loudest content words and an alternating scale across jump cuts, about the head
   render   ffmpeg from the SOURCE: 1.5 s title segment with a fade, then frame-aligned segments, sendcmd-driven crop, overlays
@@ -64,12 +68,21 @@ span, a cut point, a caption line or a callout and turns blocker and major issue
 `extend_span`, `move_cut`, `swap_hook`, `reorder`, `caption_fix`, `retime_callout`, `reframe_bias`; a title card the
 reviewer flags is dropped with `title_card: false`). Guards: at most 3 reviews, a dollar budget checked before each review
 (`--budget`, default $0.30), at most 4 fixes per pass, the same fix proposed twice stops the loop, a pass that scores
-below the best so far stops it, the hook span is never dropped whole, and a drop over part of a span trims only the words
+below the best so far stops it (unless the pairwise judge prefers it in both orders, see Hook A/B), the hook span is
+never dropped whole, and a drop over part of a span trims only the words
 in the reviewer's window at that end. The fixes of one pass are applied in turn and each is checked against the EDL the
 earlier ones made (a move next to a span another fix dropped, or a drop that would leave one span, is skipped and
 recorded), and a new version always takes the next free number, so reviewing an old version never overwrites a later one. Word-level edits land on a sentence end when one is a word away and then settle on
 the quietest 40 ms of the source audio within 0.3 s (Voice words abut, so only the audio shows the gap) and are then
 tightened to the speech like v1; a clipped word is fixed by moving its edge to that quiet point, never by removing words.
+Escalation (C4, 30/10): when the loop stops without a pass on a stop no fix of the cut gets past (no applicable fix, the
+same fix twice, a regression, a measured fault the fixes cannot clear) and the best version still has a blocker or
+major open, it re-plans once from that version with the reviewer's open notes and the measured faults as the editor's
+note (`human.replan`, Muse Spark Open when `BASETEN_API_KEY` is set, else Spark 1.3 at effort low, the run's target),
+preflights and renders it and reviews it once; it is kept only when its gated rank beats the best. The budget covers
+it (about $0.03 for the plan plus one review); loop.json `escalation` records the notes, the planner, the costs, the
+score and whether it was kept; its patch says `source: review`, `action: escalate`. First real one, a clone of d1-nasa
+(stuck at 62 on "same fix twice"): the Spark Open re-plan scored 56 and was not kept ($0.059).
 
 The editor on top of this is described in the README, under "The editor".
 
@@ -114,17 +127,23 @@ so the hook A/B took a middle line as the punchline; the plan prompt now defines
 position for any planner (one `hook` first, the `payoff` last, `cta` only after it, `body` between; a changed label
 keeps the planner's in `planner_role` and `role_fixes`).
 
-Hook A/B (`engine/hook.py`, `montivo hook runs/001 [--edl edl_vN.json] [--budget 0.10]`, or `montivo review runs/001
---hook-ab [--hook-budget 0.10]` after the loop): version A is the EDL as it is, version B the next free version with one
+Hook A/B (`engine/hook.py`, `montivo hook runs/001 [--edl edl_vN.json] [--budget 0.20]`, or `montivo review runs/001
+--hook-ab [--hook-budget 0.20]` after the loop): version A is the EDL as it is, version B the next free version with one
 `swap_hook` patch through the reviewer's own patch path (the challenger moved to the front, every other span in A's order,
-the old opener kept as a body span), rendered and reviewed blind; the higher (pass, overall) is kept and a tie keeps A.
+the old opener kept as a body span), rendered and reviewed blind; then the pairwise judge decides (`review.pairwise`,
+30/10): one Spark 1.3 call sees both review copies (two `input_file` parts, Cut A then Cut B, each with its measured
+facts), twice with the two swapped, both at once; B is kept only when both calls pick it, a split or a tie keeps A
+(`review/compare_vA_vB.json`, about $0.07 and 17 s on two 38 s cuts). The two scores stay on record (`by_score`); with
+no budget left for the judge, or an open-model reviewer, the higher (pass, overall) decides as before. The review
+loop's regression guard asks the same judge when a version ranks below the best before it only by its score: the loop
+goes on from it (`preferred_over`) only when it wins both orders.
 The challenger is chosen deterministically: the line the reviewer asked to open with (a `swap_hook` target in this run's
 reviews, newest first), else another span the planner marked `hook`, else the planner's `payoff`, the ending (a cold open),
 else the first span after the opener that starts a new passage. A's review is reused when `cut_vA` was already
 reviewed (then the A/B is one review, about $0.03; two reviews about $0.06 on a 45 s cut), the budget is checked for
 every review still needed before the first one, a challenger already compared against the same A is not tried again,
-and nothing is overwritten. The reviewer varies by about 10 points on an identical cut, so the record says whether the
-margin reaches that (`decisive`). Both versions, the challenger and why, both scores with the hook criterion, the
+and nothing is overwritten. `decisive` = the judge's two calls agreed (on an A/B without the judge: the margin reaches
+the reviewer's 10-point noise). Both versions, the challenger and why, both scores with the hook criterion, the
 winner and the reason go into `review/hook_ab_vA_vB.json` and into B's patch entry (`source: hook_ab`, `result`); the
 editor labels B "hook A/B" and the Assistant says which version was kept. Real runs so far: on run 012-open the
 challenger (the payoff as a cold open) scored 81 against A's 88 (hook 3 against 10), on run 015 69 against 82; both

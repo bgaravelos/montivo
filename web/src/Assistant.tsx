@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, crit, frameUrl, tc, usd, type Seen } from "./api";
 import { selRange, sevRank, speakerName, type FlatWord, type WordSel } from "./edit";
 import { Icon, MarkLoader } from "./icons";
+import { MishearList, openSuggestions, useHiddenSuggestions } from "./Panels";
 import { Bar, expTip, measure, useTick } from "./Progress";
 import type { AgentUi, AskScope, ChatLine, Job, LogLine, PendingCard, PlanSide, Planner, Progress, RunState, Stage, Version } from "./types";
 
@@ -105,6 +106,7 @@ type Item =
   | { kind: "steps"; title: string; lines: string[]; live?: boolean }
   | { kind: "version"; v: Version; by: string }
   | { kind: "review"; v: Version }
+  | { kind: "mishear"; v: Version } // C3: "Did you say ...?" under a planned version
   | { kind: "preview"; card: PendingCard; status: "open" | "applying" | "applied" | "retried" }
   | { kind: "error"; text: string; charged?: number | null; retry?: boolean };
 
@@ -182,6 +184,8 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
         : o.instruction ?? (o.action === "replan" ? "Plan the edit again." : "Edit by hand.");
       out.push({ kind: "you", text: what, chips: [`from v${o.from}`] });
       if (fixes.length) out.push({ kind: "steps", title: o.action === "replan" ? "Re-planned the edit" : `Made the edit · ${plural(fixes.length, "step")}`, lines: fixes });
+    } else if (o.source === "review" && o.action === "escalate") { // C4: the loop's fixes ran out, one re-plan from its notes
+      out.push({ kind: "steps", title: `No fix of the cut could clear the review of v${o.from}: re-planned from its open notes`, lines: fixes.length ? fixes : ["replanned"] });
     } else if (o.source === "review") {
       out.push({ kind: "steps", title: `Applied ${plural(fixes.length || 1, "fix")} from the review of v${o.from}`, lines: fixes.length ? fixes : ["patched"] });
     } else if (o.source === "hook_ab") {
@@ -192,13 +196,15 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
       ? `Planned by ${v.planner.name}${side?.plan_cost_usd != null ? ` in ${side.plan_seconds?.toFixed(1)} s for ${usd(side.plan_cost_usd, 3)}` : ""}` : "";
     out.push({ kind: "version", v, by });
     const missing = o.source === "plan" || o.action === "replan" ? v.brief_missing ?? [] : [];
+    if ((o.source === "plan" || o.action === "replan") && v.glossary_suggestions?.length) out.push({ kind: "mishear", v });
     if (missing.length) out.push({ kind: "text", who: "montivo", text: `Your brief asks for ${missing.map((x) => `“${x}”`).join(", ")}, but ${missing.length === 1 ? "it is" : "they are"} not in the footage, so the cut goes without ${missing.length === 1 ? "it" : "them"}. The reviewer is told the same.` });
     if (v.review) out.push({ kind: "review", v });
     const ab = o.source === "hook_ab" ? o.result : null;
-    if (ab) out.push({ kind: "text", who: "montivo", text: `Keeping ${vName(ab.kept)} (${ab.reason}${ab.decisive ? "" : "; within the reviewer's 10-point noise"}).` });
+    if (ab) out.push({ kind: "text", who: "montivo", text: `Keeping ${vName(ab.kept)} (${ab.reason}${ab.judge || ab.decisive ? "" : "; within the reviewer's 10-point noise"}).` });
     if (!replay && state.loop?.stop && v.n === state.loop.passes.at(-1)?.version) {
       const stop = state.loop.stop.split(":")[0];
-      out.push({ kind: "text", who: "montivo", text: stop === "pass" ? "The review loop stopped: the cut passes." : `The review loop stopped (${state.loop.stop}).` });
+      const esc = state.loop.escalation;
+      out.push({ kind: "text", who: "montivo", text: stop === "pass" ? `The review loop stopped: the cut passes${esc?.pass ? ", after one re-plan from the reviewer's open notes" : ""}.` : `The review loop stopped (${state.loop.stop}).` });
     }
     for (const c of replay ? [] : asked.filter((x) => x.after === v.n)) { // a message that made no version: its reply or proposal
       if (c.kind === "error") {
@@ -450,14 +456,16 @@ export function wordScope(flat: FlatWord[], sel: WordSel | null): Selection["wor
 type Queued = { text: string; review: number; planner: Planner; scope: AskScope; chips: string[]; failed?: boolean };
 const queueKey = (id: string) => `montivo.queue.${id}`;
 
-export function Assistant({ state, versions, lines, job, seen, progress, replay, v, selection, getTime, focusNonce, onSend, onStop, onPick, onSeek, onCompare, onRestore, onApply, onRetry, onRetryJob }: {
+export function Assistant({ state, versions, lines, job, seen, progress, replay, v, selection, getTime, focusNonce, onSend, onStop, onPick, onSeek, onCompare, onRestore, onApply, onRetry, onRetryJob, onGlossary }: {
   state: RunState; versions: Version[]; lines: LogLine[]; job: Job | null; seen: Seen; progress: Progress | null; replay: number; v: Version | null;
   selection: Selection; getTime: () => number; focusNonce: number;
   onSend: (text: string, chips: string[], review: number, planner: Planner, scope: AskScope, latest: boolean) => Promise<boolean>; onStop: () => void;
   onPick: (n: number) => void; onSeek: (t: number) => void; onCompare: (a: number, b: number) => void;
   onRestore: ((n: number) => void) | null; // null while an edit runs or in replay
   onApply: (pending: string, review: number) => void; onRetry: (pending: string) => void; onRetryJob: () => void;
+  onGlossary: ((add: Record<string, string>) => void) | null; // C3: accept a suggested name fix (null while an edit runs)
 }) {
+  const [hiddenSugg, hideSugg] = useHiddenSuggestions(state.id);
   const [text, setText] = useState("");
   const [use, setUse] = useState({ clips: true, words: true, caption: true });
   const [time, setTime] = useState<number | null>(null);
@@ -539,6 +547,15 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
                 : it.kind === "steps" ? <Steps key={j} title={it.title} lines={it.lines} live={it.live} />
                 : it.kind === "version" ? <VersionCard key={j} id={state.id} v={it.v} by={it.by} current={it.v.n === v?.n} newest={it.v.n === versions.at(-1)?.n} onPick={onPick} onCompare={onCompare} onRestore={onRestore} />
                 : it.kind === "review" ? <ReviewCard key={j} v={it.v} current={it.v.n === v?.n} onPick={onPick} onSeek={onSeek} />
+                : it.kind === "mishear" ? (() => {
+                    const items = openSuggestions(it.v, versions.at(-1), hiddenSugg);
+                    return items.length ? (
+                      <div key={j} className="say">
+                        <p>Voice may have misheard {items.length === 1 ? "a name" : `${items.length} names`}. The captions say what it heard until you confirm:</p>
+                        <MishearList items={items} disabled={replay ? "Not in a replay" : onGlossary ? null : "An edit is running"}
+                          onHide={(s) => hideSugg(s.heard)} onAccept={(s) => onGlossary?.({ [s.heard]: s.written })} />
+                      </div>) : null;
+                  })()
                 : it.kind === "preview" ? <PreviewCard key={j} card={it.card} status={it.status} busy={busyNote}
                     onApply={(pid) => onApply(pid, review && state.has_key ? 1 : 0)} onRetry={onRetry} />
                 : it.kind === "error" ? (

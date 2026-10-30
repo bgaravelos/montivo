@@ -111,8 +111,8 @@ pages, not a test.) In detail:
   patcher maps the time to a span, a cut, a caption line or a callout and writes the next `edl_vN.json` with a
   `patches` record of what changed and why. Then it renders and reviews again.
 - **A hook A/B the reviewer decides.** `montivo hook` makes a version that opens on another line (the one the reviewer
-  itself asked for, else the planner's), renders it, reviews it blind next to the current one and keeps the better
-  opener, with both scores and the reason on record.
+  itself asked for, else the planner's), renders it, reviews it blind, then a pairwise judge watches both cuts side by
+  side, twice in swapped order: the new opener is kept only when it wins both, with both scores and the reason on record.
 - **Guards, so the loop cannot wreck the cut:** at most 3 reviews, a dollar budget checked before each one, the same
   fix twice stops the loop, a version that scores below the best stops it and the best is kept, the hook is never
   dropped whole, and a clipped word is fixed by moving its edge to the quiet point, never by deleting the word.

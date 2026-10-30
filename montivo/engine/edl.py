@@ -43,6 +43,36 @@ def brief_missing(items: list[str], spans: list["Span"]) -> list[str]:
     return out
 
 
+MAX_MISHEARINGS = 6
+
+
+def mishearings(items: list[dict], spans: list["Span"]) -> list[dict]:
+    """The planner's likely_mishearings (C3) as glossary suggestions: kept only when `heard` is a run of a kept span's
+    words (a caption shows it, and the glossary matches it the same way: normalised tokens), `written` says something
+    else, no repeats, at most MAX_MISHEARINGS. `heard` becomes the span's own words, end punctuation off (what the
+    glossary edit stores). Never applied here: the captions stay verbatim until a person accepts one."""
+    out: list[dict] = []
+    seen: set[tuple[str, ...]] = set()
+    for it in items or []:
+        h = norm_tokens(str(it.get("heard") or ""))
+        written = " ".join(str(it.get("written") or "").split()).strip()
+        if not h or not written or norm_tokens(written) == h or tuple(h) in seen:
+            continue
+        for s in spans:
+            toks = [(w, norm(w)) for w in s.words.split()]
+            toks = [t for t in toks if t[1]]
+            at = next((i for i in range(len(toks) - len(h) + 1) if [n for _, n in toks[i:i + len(h)]] == h), None)
+            if at is not None:
+                heard = " ".join(w for w, _ in toks[at:at + len(h)]).rstrip(".,!?;:")
+                out.append({"heard": heard, "written": written.rstrip(".,!?;:"), "why": str(it.get("why") or "").strip(),
+                            "span": s.id})
+                seen.add(tuple(h))
+                break
+        if len(out) >= MAX_MISHEARINGS:
+            break
+    return out
+
+
 @dataclass
 class Span:
     id: str
@@ -154,6 +184,9 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
         # the brief as a checklist (C1): measured against the kept words at every review (check_brief)
         "brief_checks": [{k: c.get(k) for k in ("item", "kind", "quote", "min_s", "max_s")}
                          for c in plan.get("brief_checks") or []],
+        # names and terms Voice probably misheard, as the planner found them (C3): offered in the chat and the
+        # Captions panel ("Did you say ...?"), applied only when a person accepts one (the glossary edit)
+        "glossary_suggestions": mishearings(plan.get("likely_mishearings") or [], spans),
         "speaker_map": watch.get("speaker_map", []),
         "tracks": tracks,
         "reframe_concept": reframe_concept,  # the SAM concept the 9:16 crop follows (falls back to person)

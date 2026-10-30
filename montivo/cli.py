@@ -98,13 +98,15 @@ def main(argv: list[str] | None = None) -> int:
     rv.add_argument("--no-clock", action="store_true", help="do not burn the cut-time clock into the copy Spark watches")
     rv.add_argument("--no-apply", action="store_true", help="review once and write the proposed fixes, no patch, no render")
     rv.add_argument("--hook-ab", action="store_true", help="after the loop, a hook A/B on its best version (one more review)")
-    rv.add_argument("--hook-budget", type=float, default=0.10, help="max dollars for the hook A/B reviews (default 0.10)")
+    rv.add_argument("--hook-budget", type=float, default=0.20,
+                    help="max dollars for the hook A/B reviews and its pairwise judge (default 0.20)")
 
     hk = sub.add_parser("hook", help="hook A/B: the next version opens on another line, the blind reviewer judges both, the "
                                      "better one is kept (two reviews, one when the version was reviewed already)")
     hk.add_argument("run_dir", type=Path)
     hk.add_argument("--edl", type=Path, default=None, help="version A (default: the newest edl_vN.json)")
-    hk.add_argument("--budget", type=float, default=0.10, help="max dollars for the review calls (default 0.10)")
+    hk.add_argument("--budget", type=float, default=0.20,
+                    help="max dollars for the review calls and the pairwise judge (default 0.20)")
     hk.add_argument("--no-clock", action="store_true", help="do not burn the cut-time clock into the copy Spark watches")
 
     ed = sub.add_parser("edges", help="tighten a run folder's EDL to the speech onset and offset in the source audio "

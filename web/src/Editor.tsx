@@ -656,7 +656,8 @@ export function Editor({ id, replay, go }: Props) {
             onRetryJob={() => act("retry", {})}
             onStop={() => act("stop", {})} onPick={pick} onSeek={(x) => { player.current?.pause(); seek(x); }}
             onCompare={(a, b) => go(`${base}/compare?a=${a}&b=${b}${replay ? `&replay=${replay}` : ""}`)}
-            onRestore={canEdit ? null : (n) => edit("restore", { from: n })} />
+            onRestore={canEdit ? null : (n) => edit("restore", { from: n })}
+            onGlossary={canEdit ? null : (add) => made(edit("glossary", { add, drop: [], from: newest ?? v?.n }))} />
         )}
         {panel === "media" && <MediaPanel state={state} v={v} blocks={blocks} canEdit={canEdit} hasKey={state.has_key}
           planCost={state.costs?.plan ?? 0.05} onSeek={(x) => { player.current?.pause(); seek(x); }}
@@ -675,7 +676,7 @@ export function Editor({ id, replay, go }: Props) {
           }}
           onReplan={(brief) => made(edit("replan", { brief, instruction: "", from: v?.n }))} />}
         {panel === "captions" && (
-          <CaptionsPanel v={v} t={t} next={next} canEdit={canEdit} onSeek={seek} focus={focus} rev={rev} live={live0}
+          <CaptionsPanel v={v} latest={visible.at(-1) ?? null} run={id} t={t} next={next} canEdit={canEdit} onSeek={seek} focus={focus} rev={rev} live={live0}
             onAsk={(c) => { setCapSel({ t_in: c.t_in, t_out: c.t_out, text: c.text }); setPanel("assistant"); setAskNonce((n) => n + 1); }}
             onApply={(edits) => made(edit("caption", { edits, from: v?.n }))}
             onStyle={() => setPanel("style")}

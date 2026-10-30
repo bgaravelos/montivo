@@ -1510,6 +1510,71 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
     return out
 
 
+# --------------------------------------------------------------------------- the pairwise judge (C2)
+
+def estimate_compare_cost(duration_a: float, duration_b: float) -> float:
+    """Both calls of one pairwise judgement: two videos in (about 280 tokens a second each, 23.5K on 016's two 39 s
+    cuts), about 1.5K out (30/10: $0.035-0.037 a call)."""
+    p = PRICE[SPARK_MODEL]
+    return 2 * ((280 * (duration_a + duration_b) + 3500) * p["in"] + 2500 * p["out"]) / 1_000_000
+
+
+def judge_file(rv: dict, log=print) -> str:
+    """The uploaded review copy of a review: its own upload, else its copy (made again from the cut if gone) uploaded."""
+    if rv.get("file_id"):
+        return rv["file_id"]
+    cp = Path(rv.get("review_copy") or "")
+    if not cp.is_file():
+        cp = review_copy(Path(rv["cut"]), cp.parent if cp.name else Path(rv["cut"]).parent / "review" / rv["name"],
+                         clock=rv.get("clock", True))
+    up = upload_file(cp, "video/mp4")
+    log(f"compare: uploaded {cp.name} ({cp.stat().st_size / 1e6:.1f} MB) as {up.get('id')}")
+    rv["file_id"] = up["id"]
+    return up["id"]
+
+
+def pairwise(run_dir: Path, rv_a: dict, rv_b: dict, spark, brief: str, log=print) -> dict:
+    """Which of two reviewed versions goes out, asked of one Spark 1.3 call that sees both cuts (two uploaded review
+    copies with the clock, Cut A then Cut B, each with its measured facts), twice with the two swapped. The
+    reviewer's absolute score varies by 3-4 points (SD) on the same cut and both real hook A/Bs were decided 7 points
+    apart; a judge that sees both side by side, in both orders, cancels the position bias. B wins only when both
+    calls pick it; anything else (A twice, a split, a tie) keeps A, the version that was there first. Writes
+    review/compare_vA_vB.json and returns it: winner "a" | "b", agree, both calls with their per-criterion picks."""
+    va, vb = rv_a["version"], rv_b["version"]
+    fa, fb = judge_file(rv_a, log), judge_file(rv_b, log)
+
+    def ask(order: str) -> dict:
+        first, second = (rv_a, rv_b) if order == "AB" else (rv_b, rv_a)
+        ids = (fa, fb) if order == "AB" else (fb, fa)
+        call = spark.compare(*ids, brief, first.get("facts_text", ""), second.get("facts_text", ""),
+                             first["duration_s"], second["duration_s"], name=f"compare_v{va}_v{vb}_{order.lower()}")
+        flip = {"A": "a", "B": "b", "tie": "tie"} if order == "AB" else {"A": "b", "B": "a", "tie": "tie"}
+        r = call.parsed
+        return {"order": order, "winner": flip[r["winner"]], "why": r["why"],
+                "criteria": {c: flip[v] for c, v in r["criteria"].items()}, "cost_usd": call.cost_usd,
+                "seconds": call.seconds}
+
+    with ThreadPoolExecutor(max_workers=2) as pool:  # the two orders at once: about 17 s instead of 31 s (015-demo)
+        calls = list(pool.map(ask, ("AB", "BA")))
+    picks = [c["winner"] for c in calls]
+    agree = picks[0] == picks[1]
+    winner = "b" if picks == ["b", "b"] else "a"
+    label = {"a": f"v{va}", "b": f"v{vb}", "tie": "tie"}
+    if agree and picks[0] != "tie":
+        verdict = f"{label[picks[0]]} in both orders"
+    elif agree:
+        verdict = f"a tie in both orders: v{va} stays"
+    else:
+        verdict = f"split ({label[picks[0]]} / {label[picks[1]]}): v{va} stays"
+    out = {"a": va, "b": vb, "winner": winner, "kept": vb if winner == "b" else va, "agree": agree, "verdict": verdict,
+           "mode": "two_files", "calls": calls, "cost_usd": round(sum(c["cost_usd"] for c in calls), 4),
+           "seconds": round(max(c["seconds"] for c in calls), 2), "model": spark.model}
+    (run_dir / "review").mkdir(exist_ok=True)
+    dump_json(run_dir / "review" / f"compare_v{va}_v{vb}.json", out)
+    log(f"compare: v{va} vs v{vb}: {verdict} (AB {picks[0]}, BA {picks[1]}), ${out['cost_usd']:.4f}")
+    return out
+
+
 # --------------------------------------------------------------------------- the loop
 
 def rank(h: dict) -> tuple[bool, bool, float]:
@@ -1519,6 +1584,136 @@ def rank(h: dict) -> tuple[bool, bool, float]:
     return (bool(h.get("pass")), not h.get("checks", h.get("gate")), h["overall"])
 
 
+def best_of(history: list[dict]) -> dict:
+    """The loop's best version: the highest rank, unless the pairwise judge preferred a later version over it in both
+    orders (`preferred_over`, C2), followed as far as such wins go."""
+    best = max(history, key=rank)
+    seen = {best["version"]}
+    while (up := next((h for h in history if h.get("preferred_over") == best["version"] and h["version"] not in seen),
+                      None)):
+        best = up
+        seen.add(best["version"])
+    return best
+
+
+def loop_entry(n: int, edl_path: Path, cut: Path, rv: dict, fixes: list[Fix], skipped: list) -> dict:
+    """One review in loop.json `passes`."""
+    gate = rv.get("pass_gate") or {}
+    return {"version": n, "edl": edl_path.name, "cut": cut.name, "overall": rv["review"]["overall"],
+            "pass": rv["review"]["pass"], "reviewer_pass": rv["review"].get("reviewer_pass", rv["review"]["pass"]),
+            "gate": gate.get("reasons") or [], "checks": gate.get("checks", gate.get("reasons")) or [],
+            "scores": rv["review"]["scores"], "issues": len(rv["review"]["issues"]),
+            "cost_usd": rv["cost_usd"], "fixes": [{**asdict(f), "fingerprint": f.fingerprint} for f in fixes],
+            "skipped": skipped}
+
+
+# --------------------------------------------------------------------------- escalation (C4)
+
+ESCALATE_ON = ("no applicable fix", "same fix twice", "regression", "measured fault the fixes cannot clear")
+ESCALATE_PLAN_USD = 0.03  # one re-plan: Spark 1.3 at effort low $0.012-0.017, Muse Spark Open about $0.01
+ESCALATE_NOTES = 8
+
+
+def escalation_notes(rv: dict) -> list[str]:
+    """What is still wrong with a reviewed version, as lines for the planner: the reviewer's open blocker and major
+    notes (PASS_IGNORES aside), worst first, then the measured faults of the gate."""
+    notes = [f"{i['t_s']:.1f} s, {i['severity']} {i['criterion']}: {i['what']}"
+             + (f" (the reviewer's fix: {i['fix_args']})" if i.get("fix_args") else "")
+             for i in sorted(rv["review"]["issues"], key=lambda i: (SEVERITY_RANK.get(i["severity"], 3), i["t_s"]))
+             if i["severity"] in APPLY_SEVERITY and i["criterion"] not in PASS_IGNORES]
+    notes += [f"measured: {r}" for r in (rv.get("pass_gate") or {}).get("checks") or []]
+    return notes[:ESCALATE_NOTES]
+
+
+def escalation_instruction(n: int, rv: dict, notes: list[str]) -> str:
+    return (f"The blind reviewer watched the current cut (v{n}, {rv['review']['overall']}/100, no pass), and these "
+            "problems are still open after the fixes a review can make by moving cuts:\n"
+            + "\n".join(f"- {x}" for x in notes)
+            + "\nPlan the paper edit again so that none of them is left: choose other passages, other start and end "
+              "words or another order where moving a cut could not help (two people talking over each other at a "
+              "cut, a repeated take, a line that runs long). Keep everything the brief asks for.")
+
+
+def replan_escalation(run_dir: Path, ledger: Ledger, log=print):
+    """The loop's escalation step: one re-plan (human.replan) from version `from_v` with the reviewer's open notes as
+    the editor's note, on Muse Spark Open when BASETEN_API_KEY is set, else Spark 1.3 (effort low, its default), at
+    the run's own target, written unrendered (human.DEFER) so the loop preflights it first. Returns (edl path, what
+    the plan cost, the planner)."""
+    def go(from_v: int, instruction: str) -> tuple[Path, float, str]:
+        import os
+        from .. import human  # human.py imports the engine
+        from ..config import OPEN_MODEL
+        model = OPEN_MODEL if os.environ.get("BASETEN_API_KEY") else SPARK_MODEL
+        target = json.loads((run_dir / "run.json").read_text()).get("target_s")
+        before = ledger.total_cost()
+        saved, human.DEFER = human.DEFER, []
+        try:
+            out = human.replan(run_dir, instruction, from_v=from_v, target_s=float(target) if target else None,
+                               model=model, ledger=ledger, log=log, source="review", action="escalate",
+                               review=f"review_v{from_v}")
+        finally:
+            human.DEFER = saved
+        return run_dir / out["edl"], round(ledger.total_cost() - before, 4), model
+    return go
+
+
+def _escalate(run_dir: Path, history: list[dict], reviews: dict[int, dict], stop: str, spent: float, budget_usd: float,
+              words: Words, audio: Audio | None, escalate_fn, render_fn, review_fn, log) -> tuple[dict, float, Path]:
+    """The escalation step of review_loop (C4): returns its record, the money spent so far and the loop's last EDL.
+    The new version joins `history` (with `escalation` set) and `reviews`; a failure is recorded, never raised."""
+    best = best_of(history)
+    last = run_dir / history[-1]["edl"]
+    rv_best = reviews.get(best["version"])
+    notes = escalation_notes(rv_best) if rv_best else []
+    rec: dict = {"from": best["version"], "stop_before": stop, "notes": notes}
+    if not notes:
+        log(f"review: no escalation: v{best['version']} has no blocker or major open")
+        return {**rec, "skipped": "no blocker or major open"}, spent, last
+    est = ESCALATE_PLAN_USD + estimate_cost(rv_best.get("duration_s") or 45.0)
+    if spent + est > budget_usd:
+        why = f"budget: ${spent:.3f} spent + ${est:.3f} for a re-plan and its review > ${budget_usd:.2f}"
+        log(f"review: no escalation ({why})")
+        return {**rec, "skipped": why}, spent, last
+    instruction = escalation_instruction(best["version"], rv_best, notes)
+    log(f"review: escalating ({stop.split(':')[0]}): a re-plan of v{best['version']} with {len(notes)} open notes")
+    path = None
+    try:
+        path, plan_cost, model = escalate_fn(best["version"], instruction)
+        spent += plan_cost
+        rec.update(model=model, plan_cost_usd=plan_cost, instruction=instruction)
+        new = json.loads(path.read_text())
+        n = edl_version(path, new)
+        new, pf = preflight(run_dir, new, words, audio, log=log)
+        new["version"] = n
+        if pf["fixes"] and new.get("patches"):
+            new["patches"][-1]["fixes"] += [{**p, "preflight": True} for p in pf["fixes"]]
+        dump_json(path, new)
+        cut = run_dir / f"cut_v{n}.mp4"
+        log(f"review: rendering {path.name} -> {cut.name}")
+        render_fn(path, cut.name)
+        new = json.loads(path.read_text())
+        rv = review_fn(new, cut, n)
+        spent += rv["cost_usd"]
+        fixes, skipped = plan_fixes(rv["review"], new, words, audio, rv.get("pass_gate"))
+        entry = {**loop_entry(n, path, cut, rv, fixes, skipped), "escalation": True, "preflight": pf}
+        rv["fixes"], rv["skipped"] = entry["fixes"], skipped
+        dump_json(run_dir / f"{rv['name']}.json", rv)
+        kept = rank(entry) > rank(best)
+        history.append(entry)
+        reviews[n] = rv
+        rec.update({"version": n, "overall": entry["overall"], "pass": entry["pass"], "kept": kept,
+                    "review_cost_usd": rv["cost_usd"], "preflight": {k: pf[k] for k in ("clear", "left", "stop")}})
+        log(f"review: escalation v{n} {entry['overall']}{' pass' if entry['pass'] else ''} vs the best v{best['version']} "
+            f"{best['overall']}: {'kept' if kept else 'not kept, the best stays v' + str(best['version'])}")
+        return rec, spent, path
+    except Exception as exc:  # the loop's history stands whatever the escalation does
+        rec["error"] = f"{type(exc).__name__}: {str(exc)[:500]}"
+        log(f"review: escalation failed: {rec['error']}")
+        if path is not None and not (run_dir / f"cut_{path.stem.split('_', 1)[1]}.mp4").is_file():
+            path.unlink(missing_ok=True)  # no edl_vN without its cut
+        return rec, spent, last
+
+
 def edl_version(path: Path, edl: dict) -> int:
     m = re.search(r"_v(\d+)\.json$", path.name)
     return int(m.group(1)) if m else int(edl.get("version", 1))
@@ -1526,9 +1721,19 @@ def edl_version(path: Path, edl: dict) -> int:
 
 def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_PASSES, budget_usd: float = BUDGET_USD,
                 ledger: Ledger | None = None, log=print, clock: bool = True, apply: bool = True, spark=None,
-                render_fn=None, review_fn=None) -> dict:
+                render_fn=None, review_fn=None, compare_fn=None, escalate_fn=None) -> dict:
     """review cut_vN -> patch -> edl_vN+1 -> render cut_vN+1 -> review ..., until the cut passes, `passes` reviews are
-    done, the budget would be exceeded, no fix applies, or a fix repeats. Writes review/loop.json, also when a pass
+    done, the budget would be exceeded, no fix applies, or a fix repeats. A version that ranks below the best before
+    it only by its score (same gated pass, same measured checks) is put to the pairwise judge against that best
+    (`pairwise`, C2: both cuts in one call, twice swapped): the loop goes on from it only when it wins both orders,
+    else it stops on the regression. compare_fn(rv_best, rv_new) replaces the judge in tests (none when review_fn is
+    given without it: the score decides, as before). When the loop stops without a pass on a stop that a fix of the
+    cut cannot get past (ESCALATE_ON: no applicable fix, the same fix twice, a regression, a measured fault the fixes
+    cannot clear) and the best version still has a blocker or major open, it escalates once (C4): a re-plan from the
+    best version with its open notes (escalate_fn(from_v, instruction) -> (edl path, cost, planner), default
+    replan_escalation; none when review_fn is given without it), preflighted, rendered and reviewed once, kept only
+    when its gated rank beats the best; loop.json `escalation` records it, the budget covers it. Writes
+    review/loop.json, also when a pass
     fails (a Spark or render error): the reviews before it are kept, `stop` and `error` say what failed, and only a
     loop with no review at all raises (after writing it)."""
     from ..human import next_version  # human.py imports the engine; this one only reads file names
@@ -1538,7 +1743,10 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
     ledger = ledger or Ledger.resume(run_dir / "ledger.json")
     if review_fn is None:
         spark = spark or Spark(run_dir, ledger, log=log)
+        escalate_fn = escalate_fn or replan_escalation(run_dir, ledger, log=log)
         review_fn = lambda edl_, cut_, n_: review_render(run_dir, edl_, cut_, n_, ledger, spark, clock=clock, log=log)
+        if compare_fn is None and not is_open_model(spark.model):  # the judge needs two uploaded videos (Spark 1.3)
+            compare_fn = lambda a, b: pairwise(run_dir, a, b, spark, edl["brief"], log=log)  # noqa: E731
     render_fn = render_fn or (lambda ep, out: render_run(run_dir, edl_path=ep, out_name=out, ledger=ledger, log=log))
     words = Words(json.loads((run_dir / "voice" / "voice.json").read_text())["words"])
     audio = Audio.load(run_dir)
@@ -1546,6 +1754,7 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
     n = edl_version(edl_path, edl)
     seen: dict[str, int] = {}
     history: list[dict] = []
+    reviews: dict[int, dict] = {}  # version -> its review, for the pairwise judge
     spent = 0.0
     stop = "max passes"
     error = None
@@ -1565,23 +1774,35 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
             spent += rv["cost_usd"]
             gate = rv.get("pass_gate")
             fixes, skipped = plan_fixes(rv["review"], edl, words, audio, gate)
-            entry = {"version": n, "edl": edl_path.name, "cut": cut.name, "overall": rv["review"]["overall"],
-                     "pass": rv["review"]["pass"], "reviewer_pass": rv["review"].get("reviewer_pass", rv["review"]["pass"]),
-                     "gate": (gate or {}).get("reasons") or [], "checks": (gate or {}).get("checks", (gate or {}).get("reasons")) or [],
-                     "scores": rv["review"]["scores"], "issues": len(rv["review"]["issues"]),
-                     "cost_usd": rv["cost_usd"], "fixes": [{**asdict(f), "fingerprint": f.fingerprint} for f in fixes],
-                     "skipped": skipped}
+            entry = loop_entry(n, edl_path, cut, rv, fixes, skipped)
             history.append(entry)
+            reviews[n] = rv
             rv["fixes"], rv["skipped"] = entry["fixes"], skipped
             dump_json(run_dir / f"{rv['name']}.json", rv)
             if rv["review"]["pass"]:
                 stop = "pass"
                 break
-            best_before = max(history[:-1], key=rank) if len(history) > 1 else None
+            best_before = best_of(history[:-1]) if len(history) > 1 else None
             if best_before and rank(entry) < rank(best_before):
-                stop = (f"regression: v{n} scored {entry['overall']}{' (gated)' if entry['gate'] else ''} < "
-                        f"v{best_before['version']} {best_before['overall']}, the best stays v{best_before['version']}")
-                break
+                judged, why_not = None, ""
+                if compare_fn and rank(entry)[:2] == rank(best_before)[:2] and best_before["version"] in reviews:
+                    # only the score is lower, by a margin the reviewer's noise covers: the judge sees both
+                    est = estimate_compare_cost(reviews[best_before["version"]].get("duration_s") or edl["runtime_s"],
+                                                rv.get("duration_s") or edl["runtime_s"])
+                    if spent + est > budget_usd:
+                        why_not = f"; no budget for the pairwise judge (${spent:.3f} + ${est:.3f} > ${budget_usd:.2f})"
+                    else:
+                        judged = compare_fn(reviews[best_before["version"]], rv)
+                        spent += judged["cost_usd"]
+                        entry["pairwise"] = {k: judged[k] for k in ("a", "b", "winner", "agree", "verdict", "cost_usd")}
+                if not judged or judged["winner"] != "b":
+                    stop = (f"regression: v{n} scored {entry['overall']}{' (gated)' if entry['gate'] else ''} < "
+                            f"v{best_before['version']} {best_before['overall']}, the best stays v{best_before['version']}"
+                            + (f"; the pairwise judge: {judged['verdict']}" if judged else why_not))
+                    break
+                entry["preferred_over"] = best_before["version"]
+                log(f"review: v{n} scored {entry['overall']} < v{best_before['version']} {best_before['overall']}, but the "
+                    f"pairwise judge prefers it in both orders: the loop goes on from v{n}")
             if k == passes - 1:
                 stop = f"max passes ({passes})"
                 break
@@ -1632,10 +1853,19 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
                 edl_path = run_dir / history[-1]["edl"]
                 log(f"review loop: edl_v{n}.json removed (no cut), the last version stays {edl_path.name}")
             break
-    best = max(history, key=rank) if history else None
+    escalation = None
+    if escalate_fn and history and not error and stop.startswith(ESCALATE_ON):
+        escalation, spent, edl_path = _escalate(run_dir, history, reviews, stop, spent, budget_usd, words, audio,
+                                                escalate_fn, render_fn, review_fn, log)
+        if escalation.get("pass"):
+            stop = "pass"  # escalation.stop_before keeps the stop it got past
+        elif escalation.get("version"):
+            stop += f"; escalation v{escalation['version']} {escalation['overall']}, {'kept' if escalation['kept'] else 'not kept'}"
+    best = best_of(history) if history else None
     summary = {"stop": stop, "passes": history, "reviews": len(history), "review_cost_usd": round(spent, 4),
                "best": {"version": best["version"], "cut": best["cut"], "overall": best["overall"]} if best else None,
-               "last_edl": edl_path.name, "budget_usd": budget_usd, **({"error": error} if error else {})}
+               "last_edl": edl_path.name, "budget_usd": budget_usd, **({"error": error} if error else {}),
+               **({"escalation": escalation} if escalation else {})}
     prior = run_dir / "review" / "loop.json"
     if prior.is_file():  # a later review (the editor's "Review this version") keeps the agent loop's history
         shutil.copy2(prior, prior.with_name(f"loop_{time.strftime('%Y%m%d-%H%M%S', time.localtime(prior.stat().st_mtime))}.json"))

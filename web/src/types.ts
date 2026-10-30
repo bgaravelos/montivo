@@ -64,9 +64,11 @@ export type PlanSide = { planner: string; spans: number; runtime_s: number; verb
   plan_cost_usd: number | null; plan_seconds: number | null };
 export type PlanCompare = { target_s: number; v1: PlanSide } & Record<string, PlanSide | number>;
 
-/** The hook A/B's verdict on the version it made (engine/hook.py): which opener the blind reviewer preferred. */
+/** The hook A/B's verdict on the version it made (engine/hook.py): which opener the pairwise judge preferred, both
+ *  cuts side by side in two swapped calls (`judge`, null on an older A/B or without budget: the two scores decided). */
 export type HookResult = {
   winner: "a" | "b"; kept: number; reason: string; margin: number; decisive: boolean;
+  judge?: { winner: "a" | "b"; agree: boolean; verdict: string } | null;
   a: { version: number; opener: string; overall: number; pass: boolean; hook: number | null };
   b: { version: number; opener: string; overall: number; pass: boolean; hook: number | null };
 };
@@ -82,6 +84,7 @@ export type Version = {
   look: Look | null; // the caption look this version was rendered with (graphics.normalize_look)
   music: (MusicSetting & { voice_db: number; margin_db: number | null; ducked_s: number | null; ducked: [number, number][] }) | null; // the bed under the speech (engine/music.py)
   glossary?: Record<string, string>; // the run's caption corrections {"heard words": "written words"} (C2)
+  glossary_suggestions?: GlossarySuggestion[]; // names Voice probably misheard, from the plan, not applied yet (C3)
   highlight?: { words: string[]; shown: number; sentences: number }; // the coloured names: which, how many on screen, in how many sentences (S2)
   caption_lines: CaptionLine[]; caption_style: CaptionStyle | null; caption_style_note: string | null; brief_missing?: string[]; bytes: number | null;
   punch: boolean; punch_skip: string[]; punch_ins: PunchIn[];
@@ -173,15 +176,19 @@ export type RunState = {
   media: Media;
   summary: Record<string, unknown> | null;
   ledger: { total_cost_usd: number; wall_seconds: number; stages: Record<string, { seconds: number; cost_usd: number; calls: number; tokens_in: number; tokens_out: number }> };
-  loop: { stop: string; passes: { version: number; overall: number; pass: boolean }[]; best: { version: number; overall: number } | null } | null;
+  loop: { stop: string; passes: { version: number; overall: number; pass: boolean }[]; best: { version: number; overall: number } | null;
+    escalation?: { from: number; version?: number; overall?: number; pass?: boolean; kept?: boolean; skipped?: string; error?: string } } | null; // C4
   versions: Version[]; words: Record<string, Word[]>; stages: Stage[]; job: Job | null; has_key: boolean; has_open_key: boolean;
   costs: Costs; key_note?: string | null; budget?: Budget | null; chat?: ChatLine[];
 };
 
 /** Rough prices and times for the button hints (server COST). */
+/** A name or term the planner thinks Voice misheard (engine/edl.mishearings): offered, never applied unasked. */
+export type GlossarySuggestion = { heard: string; written: string; why: string; span: string };
+
 export type Costs = { ask?: number; titles?: number; plan: number; plan_open: number; plan_s: number; plan_open_s: number; review: number; run_per_s: number;
   review_s?: number; review_prep_s?: number; image_s?: number; render_s_per_frame?: number;
-  run_fixed?: number; run_wall_fixed_s?: number; run_wall_per_s?: number; review_loop?: number; review_loop_s?: number; hook_ab?: number; look?: number; cover?: number;
+  run_fixed?: number; run_wall_fixed_s?: number; run_wall_per_s?: number; review_loop?: number; review_loop_s?: number; hook_ab?: number; compare?: number; look?: number; cover?: number;
   cover_design?: number; cover_mask?: number };
 
 export type Planner = "spark" | "open";

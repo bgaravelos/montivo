@@ -108,7 +108,7 @@ def _line(c: dict, style: CaptionStyle, names: set[str]) -> dict:
     """One laid-out caption line with what draw_caption would draw it with: the size after fit_line, the pad and
     the stroke in frame pixels, the font's ascent and descent, which words are names."""
     texts = [w["w"] for w in c["words"]]
-    st = fit_line(texts, style)
+    st = fit_line(texts, style, c.get("size"))  # a line the layout shrank for room around the head (room_for)
     asc, desc = font(st.size, st.font).getmetrics()
     return {"id": c["id"], "t_in": c["t_in"], "t_out": c["t_out"], "box": c["box"], "placement": c["placement"],
             "words": [{"w": st.shown(w["w"]), "t_in": w["t_in"], "t_out": w["t_out"],

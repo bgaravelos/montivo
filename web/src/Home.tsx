@@ -37,7 +37,7 @@ function estimate(c: Costs, clipS: number, o: { review: boolean; hookAb: boolean
   let s = (c.run_wall_fixed_s ?? 60) + (c.run_wall_per_s ?? 0.9) * clipS;
   if (o.open) { usd_ -= c.plan - c.plan_open; s -= c.plan_s - c.plan_open_s; }
   if (o.review) { usd_ += c.review_loop ?? 0.07; s += c.review_loop_s ?? 85; }
-  if (o.review && o.hookAb) { usd_ += c.hook_ab ?? 0.04; s += (c.review_s ?? 26) + 25; }
+  if (o.review && o.hookAb) { usd_ += (c.hook_ab ?? 0.04) + (c.compare ?? 0.075); s += (c.review_s ?? 26) + 45; }
   return { usd: usd_, s };
 }
 const POLL_MS = 2000; // while a project has a job running, its card follows the job

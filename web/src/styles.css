@@ -181,6 +181,10 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .cap-style-line { display: flex; align-items: center; gap: 8px; justify-content: space-between; font-size: 12.5px; color: var(--text-2); padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 .cap-style-line > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-transform: capitalize; }
 .cap-find { display: flex; flex-direction: column; gap: 6px; }
+/* C3: names Voice probably misheard, offered for the run's glossary */
+.mishear { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-family: var(--sans); }
+.mishear li { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.mishear .mh-acts { display: flex; gap: 6px; margin-top: 3px; }
 .cap-find input { background: var(--panel-3); color: var(--text); border: 1px solid var(--line-2); border-radius: 5px; padding: 5px 8px; font: inherit; }
 .chk-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--major, #FF8A3D); margin-right: 5px; vertical-align: middle; }
 .lr-was.chk { color: var(--major, #FF8A3D); }

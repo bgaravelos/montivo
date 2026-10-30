@@ -140,7 +140,7 @@ export function whatChanged(state: RunState, v: Version): { who: string; lines: 
     who = "Hook A/B";
     const r = o.result;
     lines = [`opens on ${o.challenger ?? "another clip"}${o.why ? ` (${o.why})` : ""}`,
-      r ? `${r.b.overall} vs ${r.a.overall}: kept v${r.kept}${r.decisive ? "" : ", within the noise"}` : "reviewing…"];
+      r ? `${r.b.overall} vs ${r.a.overall}: kept v${r.kept}${r.judge ? ` (judge: ${r.judge.verdict})` : r.decisive ? "" : ", within the noise"}` : "reviewing…"];
   } else if (o.action === "replan") {
     const fresh = !o.instruction || o.instruction.startsWith("plan again from scratch");
     const one = v.plan_compare?.v1;

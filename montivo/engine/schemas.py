@@ -66,9 +66,17 @@ PLAN = {
                              "min_s": {"type": "number", "description": "length: the shortest runtime allowed, else -1"},
                              "max_s": {"type": "number", "description": "length: the longest runtime allowed, else -1"}},
                              "required": ["item", "kind", "quote", "min_s", "max_s"]}},
+        "likely_mishearings": {"type": "array",
+                               "description": "names and terms the transcript probably misheard (C3): suggestions for the "
+                                              "captions, never applied without a person's yes; empty when none",
+                               "items": {"type": "object", "additionalProperties": False, "properties": {
+                                   "heard": {"type": "string", "description": "the words exactly as the transcript has them"},
+                                   "written": {"type": "string", "description": "what the speaker most likely said"},
+                                   "why": {"type": "string", "description": "the evidence: the brief, on-screen text, or context"}},
+                                   "required": ["heard", "written", "why"]}},
     },
     "required": ["paper_edit", "estimated_runtime_s", "title_card_text", "caption_style_note", "reframe_note",
-                 "brief_not_in_footage", "brief_checks"],
+                 "brief_not_in_footage", "brief_checks", "likely_mishearings"],
 }
 
 CRITERIA = ["hook_in_1_5s", "brief_covered", "no_cut_mid_word", "captions_legible", "captions_match_speech",
@@ -114,4 +122,19 @@ REVIEW = {
         "summary": {"type": "string"},
     },
     "required": ["pass", "overall", "scores", "issues", "summary"],
+}
+
+# The pairwise judge (C2): one call sees two cuts, Cut A first and Cut B second, and names the better one per criterion
+# and overall. review.pairwise asks twice with the two swapped.
+SIDES = ["A", "B", "tie"]
+
+COMPARE = {
+    "type": "object", "additionalProperties": False,
+    "properties": {
+        "winner": {"type": "string", "enum": SIDES, "description": "the cut you would publish"},
+        "why": {"type": "string", "description": "the differences that decided it, with cut times"},
+        "criteria": {"type": "object", "additionalProperties": False,
+                     "properties": {c: {"type": "string", "enum": SIDES} for c in CRITERIA}, "required": CRITERIA},
+    },
+    "required": ["winner", "why", "criteria"],
 }
