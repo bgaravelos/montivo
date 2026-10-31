@@ -1010,7 +1010,12 @@ and Live); segments past the picture hold the last frame (render `tpad`, Live cl
 spans; kit keeps start / fade / duck edits; breaks and jump-cut skips follow split and re-plan; hosted: $3 per judge
 (`MONTIVO_JUDGE_BUDGET_USD`), uploads 3 a judge / 60 all, samples never written by a judge's cover or suggest, jobs end
 in a finally with a 15 min watchdog, 409 instead of queueing exports and Monti; UI: an undone draft closes, Create waits
-for the upload, stale guards. Not deployed; after the deploy check Modal's X-Forwarded-For and the draft filmstrip live.
+for the upload, stale guards. Merged into main (fast-forward to f352503), pushed and deployed 31/10 on Billy's go from a
+clean worktree (no container was running); /api/health 200 (judge cap $3 in the state), /api/runs 401, /s/nope 404,
+/api/monti 401, a POST from another origin 403, host spend $3.43 of $15; smoke drop on 015: 34.2 s (was 34.3: s3's
+out edge no longer widens 0.21 s into the dropped s4's "so"), -14.0 LUFS / -1.7 dBTP, render 8.4 s; --live, --reorder
+(audio 37.333 s = video), --cover pass. Modal appends the client's address as the last X-Forwarded-For hop: 11 wrong
+passwords with forged first hops, the 11th 429. The draft filmstrip not yet checked live with the sign-in.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
