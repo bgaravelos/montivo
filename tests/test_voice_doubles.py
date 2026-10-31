@@ -42,3 +42,16 @@ def test_the_planner_reads_no_doubles_and_its_quote_still_lands():
     # a turn whose text is not its words joined keeps Voice's text
     v.turns[0].transcript = "something else"
     assert v.transcript_text().endswith("something else")
+
+
+def test_ask_montivo_reads_no_doubles_either(tmp_path):
+    import json
+
+    from montivo import agent
+    (tmp_path / "voice").mkdir()
+    words = [{"w": w.w, "t_start": w.t_start, "t_end": w.t_end, "turn_id": 0, "speaker": "A", "i": w.i} for w in WORDS]
+    (tmp_path / "voice" / "voice.json").write_text(json.dumps({"words": words}))
+    span = {"id": "s1", "turn_id": 0, "word_from": 0, "word_to": 3}
+    assert agent.numbered(tmp_path, span) == "0 about 1 200 3 tons"  # the cut op still names Voice's indices
+    out = "\n".join(agent.footage(tmp_path, {"spans": [span]}))
+    assert "they they" not in out and "4 and 5 and 6 then 7 they 9 left." in out

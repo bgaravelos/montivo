@@ -1229,10 +1229,11 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
      captions came out heavier than Pillow's (fill +9-25 %); antialiased puts fill and stroke within 3 % at viewer size */
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 .lo-still { position: absolute; object-fit: fill; }
-.lo-line { position: absolute; box-sizing: border-box; display: flex; align-items: flex-start; justify-content: center; white-space: nowrap; font-weight: normal; font-synthesis: none; }
+.lo-line { position: absolute; box-sizing: border-box; isolation: isolate; display: flex; align-items: flex-start; justify-content: center; white-space: nowrap; font-weight: normal; font-synthesis: none; }
 .lo-w { position: relative; display: inline-block; }
 .lo-w[data-hl] { color: var(--hl); }
-.lo-w.act-pill { background: var(--act-bg); color: var(--act-fg); -webkit-text-stroke: 0 !important; padding: var(--pad); margin: calc(-1 * var(--pad)); margin-top: 0; padding-top: 0; border-radius: var(--r); }
+.lo-w.act-pill { color: var(--act-fg); -webkit-text-stroke: 0 !important; }
+.lo-w.act-pill::before { content: ""; position: absolute; z-index: -1; left: calc(-1 * var(--px)); right: calc(-1 * var(--px)); top: var(--pt); height: var(--ph); background: var(--act-bg); border-radius: var(--r); }
 .lo-w.act-color, .lo-w.act-karaoke { color: var(--act-bg); }
 .lo-callout { position: absolute; box-sizing: border-box; display: flex; align-items: center; justify-content: center; white-space: nowrap; font-weight: normal; font-synthesis: none; }
 .lo-title { position: absolute; inset: 0; background: #000; }

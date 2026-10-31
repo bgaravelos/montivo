@@ -39,6 +39,7 @@ import time
 from pathlib import Path
 
 from . import human
+from .engine.voice import shown_words
 from .config import OPEN_MODEL, SPARK_MODEL
 from .engine import captions as captions_mod
 from .engine import music as music_mod
@@ -182,7 +183,7 @@ The editor's message: "{message}"
 def numbered(run_dir: Path, span: dict) -> str:
     """A clip's words with their turn indices ("12 Hi 13 I'm ..."), what a cut op names; "" without Voice's words."""
     try:
-        tw = human._words(run_dir).turn(span["turn_id"])
+        tw = shown_words(list(human._words(run_dir).turn(span["turn_id"])))  # no Voice duplicate copies ("200 200")
         return " ".join(f"{w['i']} {w['w']}" for w in tw if span["word_from"] <= w["i"] <= span["word_to"])
     except (OSError, KeyError, TypeError, ValueError):
         return ""
@@ -256,7 +257,7 @@ def footage(run_dir: Path, edl: dict) -> list[str]:
         rows, budget = [], UNUSED_WORDS
         for t, ws in sorted(words.by_turn.items()):
             run: list[dict] = []
-            for w in [*ws, None]:
+            for w in [*shown_words(list(ws)), None]:
                 if w is not None and w["i"] not in kept.get(t, set()):
                     run.append(w)
                     continue

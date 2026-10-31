@@ -24,6 +24,8 @@ export type LiveData = {
   captions?: { id: string; t_in: number; t_out: number; box: [number, number, number, number]; placement: string;
     words: { w: string; t_in: number; t_out: number; hl: boolean }[];
     size: number; stroke: number; space: number; pad_x: number; pad_y: number; ascent: number; descent: number;
+    /** The active-word pill's top and bottom row inside the line box, as graphics.pill_rows draws it in the render. */
+    pill?: [number, number];
     look?: LiveLook }[]; // a clip's own look (S4), else the cut's `look`
   callouts?: { span: string; text: string; t_in: number; t_out: number; box: [number, number, number, number]; size: number; ascent: number; descent: number;
     look?: LiveLook }[];

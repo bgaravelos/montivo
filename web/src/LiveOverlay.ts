@@ -75,7 +75,11 @@ export class LiveOverlay {
           sp.style.setProperty("paint-order", "stroke fill");
         }
         if (wd.hl && look?.highlight) sp.dataset.hl = "1";
-        sp.style.setProperty("--pad", `${c.pad_y}px ${c.pad_x}px`);
+        // the pill where the render draws it (graphics.pill_rows: centred on the line's glyphs), from the span's top
+        const top = c.pad_y + c.stroke, [pt, pb] = c.pill ?? [top, top + lh + c.pad_y];
+        sp.style.setProperty("--px", `${c.pad_x}px`);
+        sp.style.setProperty("--pt", `${pt - top}px`);
+        sp.style.setProperty("--ph", `${pb - pt}px`);
         sp.style.setProperty("--r", `${Math.max(8, Math.round((18 * c.size) / 84))}px`);
         el.append(sp);
         return sp;
