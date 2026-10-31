@@ -984,8 +984,8 @@ draft open failed everywhere (the editor sends the draft's own number as "from",
 v1-v2 run: FileNotFoundError); the server now passes the draft's base. The Speakers panel no longer asks for head
 thumbnails when the run has no tracked video (hosted samples ship without it). Deployed on Billy's go (the check's own
 container stopped after); /api/health 200, /api/runs 401, /s/nope 404; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP,
-render 7.3 s; the live ask then put Chill Lofi into the open draft beside the judge's delete. Not checked: sound on
-iPhone Safari and Safari on the Mac (Billy). 015's pre-flight: 23 of 26 caption lines under the apps' buttons.
+render 7.3 s; the live ask then put Chill Lofi into the open draft beside the judge's delete. Billy checked sound on
+iPhone Safari and Safari on the Mac: ok (sync, pitch at 1.5x). 015's pre-flight: 23 of 26 caption lines under the apps' buttons.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
