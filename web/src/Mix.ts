@@ -44,8 +44,9 @@ export const audioCtx = () => {
 
 type Stems = { n: number; voice: AudioBuffer; music: AudioBuffer };
 
-/** Loads the version's stems (once it has music) and, while `live`, plays them in place of the video's own audio. */
-export function useLiveMix(id: string, v: Version | null, video: () => HTMLVideoElement | null, mix: Mix | null, live: boolean) {
+/** Loads the version's stems (once it has music) and, while `live`, plays them in place of the video's own audio.
+ *  `player` names the player on screen: a new one (V between Live and Rendered remounts it) has a new <video>. */
+export function useLiveMix(id: string, v: Version | null, video: () => HTMLVideoElement | null, mix: Mix | null, live: boolean, player = "") {
   const [stems, setStems] = useState<Stems | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const gains = useRef<{ voice: GainNode; music: GainNode; master: GainNode } | null>(null);
@@ -124,7 +125,7 @@ export function useLiveMix(id: string, v: Version | null, video: () => HTMLVideo
       gains.current = null;
       el.volume = prevVol || 1;
     };
-  }, [active, stems, v?.n]); // eslint-disable-line
+  }, [active, stems, v?.n, player]); // eslint-disable-line -- the player: after V to Rendered the stems follow its new <video> (audit, 31/10)
 
   return { ready, active, failed };
 }

@@ -30,9 +30,15 @@ export function useRun(id: string, replay: number) {
   const [seen, setSeen] = useState<Seen>(() => fresh());
   const [progress, setProgress] = useState<Progress | null>(null);
   const timer = useRef<number | null>(null);
+  const seq = useRef(0);
 
   const reload = useCallback(() => {
-    api<RunState>(`/api/runs/${id}`).then((s) => { setState(s); setJob(s.job); setError(null); }).catch((e) => setError(String(e.message ?? e)));
+    // reloads overlap (a burst of SSE events, an edit's own reload): only the newest request may set the state,
+    // so a slow older answer never puts back a version list the newer one already moved past
+    const n = ++seq.current;
+    api<RunState>(`/api/runs/${id}`)
+      .then((s) => { if (n !== seq.current) return; setState(s); setJob(s.job); setError(null); })
+      .catch((e) => { if (n === seq.current) setError(String(e.message ?? e)); });
   }, [id]);
 
   useEffect(() => {

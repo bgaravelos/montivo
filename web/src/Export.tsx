@@ -148,9 +148,13 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
     return () => { on = false; };
   }, [id, n]);
   useEffect(() => { try { localStorage.setItem("montivo.export", JSON.stringify(saved)); } catch { /* this tab only */ } }, [saved]);
-  useEffect(() => { setName((x) => x.replace(/-v\d+$/, `-v${n}`)); setChecks(null); setDone(null); setErr(null);
-    api<{ checks: Check[] }>(`/api/runs/${id}/export/check?v=${n}&aspect=${encodeURIComponent(saved.aspect ?? "9:16")}`).then((r) => setChecks(r.checks))
-      .catch((e) => setChecks([{ id: "err", label: "Pre-flight", status: "info", detail: `could not be read (${(e as Error).message})` }])); }, [id, n, saved.aspect]);
+  useEffect(() => { // the pre-flight of version n in this aspect: an older answer that lands late is dropped too
+    let on = true;
+    setName((x) => x.replace(/-v\d+$/, `-v${n}`)); setChecks(null); setDone(null); setErr(null);
+    api<{ checks: Check[] }>(`/api/runs/${id}/export/check?v=${n}&aspect=${encodeURIComponent(saved.aspect ?? "9:16")}`).then((r) => { if (on) setChecks(r.checks); })
+      .catch((e) => { if (on) setChecks([{ id: "err", label: "Pre-flight", status: "info", detail: `could not be read (${(e as Error).message})` }]); });
+    return () => { on = false; };
+  }, [id, n, saved.aspect]);
   useEffect(() => setDone(null), [saved, cover, name, post]);
   const aspect: Aspect = saved.aspect ?? "9:16";
   const feed = aspect !== "9:16";

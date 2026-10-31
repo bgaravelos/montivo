@@ -91,6 +91,8 @@ export function Timeline(p: Props) {
           const many = p.selection.filter((k) => v.spans.some((s) => s.id === k));
           const pick = many.length > 1 ? `${many.length} clips` : b ? `clip ${b.span!.id}` : "Select a clip first";
           const locked = !p.canTrim ? "Not while an edit runs or in replay" : null;
+          // pauses are found in a rendered version's audio (GET /pauses): a draft has none to look in
+          const pausesLocked = locked ?? (v.draft ? `Make Version ${p.next} first: pauses are found in a rendered version` : null);
           const del = !b && many.length < 2 ? pick : locked ?? (many.length >= v.spans.length || v.spans.length < 2 ? "That is every clip" : null);
           return (
             <span className="tl-tools" data-monti="tl.tools">
@@ -98,7 +100,7 @@ export function Timeline(p: Props) {
               <button className="icon-btn" disabled={!b} onClick={() => b && p.onSeek(b.t0, b.t1)} title={b ? `Play ${pick} on a loop` : pick}><Icon name="repeat" /></button>
               <button className="icon-btn" disabled={!b} onClick={() => b && p.onAsk(b.span!.id)} title={b ? `Ask Montivo about ${pick}` : pick}><Icon name="spark" /></button>
               <button className="icon-btn" disabled={!!del} onClick={() => (many.length > 1 ? p.onDeleteClips(many) : b && p.onDelete(b.span!.id))} title={del ?? `Delete ${pick} (⌫)`}><Icon name="trash" /></button>
-              <PausesButton plan={plan} locked={locked} onEdit={p.onEdit} />
+              <PausesButton plan={plan} locked={pausesLocked} onEdit={p.onEdit} />
             </span>
           );
         })()}
@@ -588,7 +590,11 @@ const Tracks = memo(function Tracks(p: TrackProps) {
         onPointerDown={(e) => {
           if (!(e.target === e.currentTarget || (e.target as HTMLElement).tagName === "CANVAS")) return;
           onSelect(v.music ? "music" : null); onSeek(timeAt(e.clientX)); setDuckAsk(null);
-          if (v.music && canTrim) duckFrom.current = { x: e.clientX, t: timeAt(e.clientX) };
+          if (v.music && canTrim) {
+            duckFrom.current = { x: e.clientX, t: timeAt(e.clientX) };
+            // captured: a drag released outside the lane still ends here (it used to stay open for good, audit 31/10)
+            try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* the pointer is gone already */ }
+          }
         }}
         onPointerMove={(e) => { // M5: a drag across the bed marks a window to hold down or lift
           const f = duckFrom.current;
@@ -596,7 +602,8 @@ const Tracks = memo(function Tracks(p: TrackProps) {
           const t = timeAt(e.clientX);
           setDuckAsk({ a: Math.max(0, Math.min(f.t, t)), b: Math.min(p.dur, Math.max(f.t, t)), open: false });
         }}
-        onPointerUp={() => { if (duckFrom.current) { duckFrom.current = null; setDuckAsk((d) => (d ? { ...d, open: true } : d)); } }}>
+        onPointerUp={() => { if (duckFrom.current) { duckFrom.current = null; setDuckAsk((d) => (d ? { ...d, open: true } : d)); } }}
+        onPointerCancel={() => { if (duckFrom.current) { duckFrom.current = null; setDuckAsk(null); } }}>
         {v.music ? <>
           <Wave peaks={bedPeaks} pps={pps} height={TRACK_H.music} width={Math.ceil(p.dur * pps)} top={top} color="--wave-music"
             gain={gain(p.mix?.level_db, p.base?.level_db)} />

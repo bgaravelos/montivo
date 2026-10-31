@@ -467,6 +467,10 @@ type Queued = { text: string; review: number; planner: Planner; scope: AskScope;
 type Refused = { text: string; why: string };
 const BUSY = /is (still )?running|try again|rendering|being made/i;
 const queueKey = (id: string) => `montivo.queue.${id}`;
+const refusedKey = (id: string) => `montivo.refused.${id}`;
+const CHAT_STORED = "montivo:chat-stored";
+const stored = <T,>(key: string): T[] => { try { return JSON.parse(localStorage.getItem(key) ?? "[]") as T[]; } catch { return []; } };
+const store = (key: string, x: unknown[]) => { try { localStorage.setItem(key, JSON.stringify(x)); } catch { /* this tab only */ } };
 
 export function Assistant({ state, versions, lines, job, seen, progress, replay, v, selection, getTime, focusNonce, prefill, onSend, onStop, onPick, onSeek, onCompare, onRestore, onApply, onRetry, onRetryJob, onGlossary }: {
   state: RunState; versions: Version[]; lines: LogLine[]; job: Job | null; seen: Seen; progress: Progress | null; replay: number; v: Version | null;
@@ -487,7 +491,16 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
   const [queue, setQueue] = useState<Queued[]>(() => {
     try { return (JSON.parse(localStorage.getItem(queueKey(state.id)) ?? "[]") as (Queued & { failed?: boolean })[]).map(({ failed: _, ...q }) => q); } catch { return []; }
   });
-  const [refused, setRefused] = useState<Refused[]>([]);
+  const [refused, setRefused] = useState<Refused[]>(() => stored<Refused>(refusedKey(state.id)));
+  // the chat can close (another panel) while a send is on its way: its answer then goes to this browser's storage,
+  // which the chat reads when it opens again; a refused message used to vanish there (audit, 31/10)
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => { // a chat opened again before that answer came: it reads what the closed one stored
+    const reread = () => { setQueue(stored<Queued>(queueKey(state.id))); setRefused(stored<Refused>(refusedKey(state.id))); };
+    window.addEventListener(CHAT_STORED, reread);
+    return () => window.removeEventListener(CHAT_STORED, reread);
+  }, [state.id]);
   const items = story(state, versions, lines, job, replay);
   const end = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -499,7 +512,8 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
   useEffect(() => setUse({ clips: true, words: true, caption: true }), [selKey]); // a new selection is in until clicked off
   useEffect(() => { if (focusNonce) { setUse({ clips: true, words: true, caption: true }); box.current?.focus(); } }, [focusNonce]);
   useEffect(() => { if (prefill?.text) { setText(prefill.text); window.setTimeout(() => box.current?.focus(), 30); } }, [prefill?.nonce]); // eslint-disable-line
-  useEffect(() => { try { localStorage.setItem(queueKey(state.id), JSON.stringify(queue)); } catch { /* this tab only */ } }, [queue, state.id]);
+  useEffect(() => store(queueKey(state.id), queue), [queue, state.id]);
+  useEffect(() => store(refusedKey(state.id), refused), [refused, state.id]);
   useLayoutEffect(() => { // the box grows with the text, up to about six lines
     const el = box.current;
     if (!el) return;
@@ -524,10 +538,16 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
   const post = (q: Queued, queued: boolean) => {
     waiting.current = Date.now();
     // a queued message edits the newest version (the job it waited for made one), not the one on screen when it was typed
+    const run = state.id;
     onSend(q.text, q.chips, q.review, q.planner, q.scope, queued).then((r) => {
       if (r === true) return;
       waiting.current = 0;
-      if (BUSY.test(r) && !q.retried) setQueue((x) => [{ ...q, retried: true }, ...x]);
+      const again = BUSY.test(r) && !q.retried;
+      if (!mounted.current) { // the chat closed meanwhile: keep it where the next chat finds it
+        if (again) store(queueKey(run), [{ ...q, retried: true }, ...stored<Queued>(queueKey(run))]);
+        else store(refusedKey(run), [...stored<Refused>(refusedKey(run)), { text: q.text, why: r }]);
+        window.dispatchEvent(new Event(CHAT_STORED));
+      } else if (again) setQueue((x) => [{ ...q, retried: true }, ...x]);
       else setRefused((x) => [...x, { text: q.text, why: r }]);
     });
   };

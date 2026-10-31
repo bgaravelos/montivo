@@ -43,6 +43,8 @@ const currentKey = (id: string) => `montivo.current.${id}`;
 // the requests that make a version from the one on screen: after an undo they branch from an older version
 const MAKES_VERSION = ["drop", "trim", "reorder", "cut", "split", "punch", "caption", "glossary", "linebreak", "text", "style", "music", "pin", "ask", "review", "hook",
   "insert", "pauses", "overlay", "kit", "op", "speakers", "replan"];
+// a version made while a Live draft is open would leave the draft on an older base: these wait for Make Version too
+const DRAFT_HOLDS = [...MAKES_VERSION, "restore", "ask/apply"];
 
 const typing = (el: EventTarget | null) => {
   const e = el as HTMLElement | null;
@@ -217,7 +219,9 @@ export function Editor({ id, replay, go }: Props) {
   const mix = mixDraft ?? mixBase;
   const mixStaged = !!mixDraft && !sameMix(mixDraft, mixBase);
   const getVideo = useCallback(() => player.current?.el() ?? null, []);
-  const live = useLiveMix(id, v, getVideo, mix, mixStaged);
+  // the Player's key: a draft keeps its base version's key, so the first edit swaps in place, no remount (audit, 31/10)
+  const playerKey = v ? (draftV ? `${draftSum?.base ?? draftData!.draft!.n}-live` : `${v.n}${live0 ? "-live" : ""}`) : "";
+  const live = useLiveMix(id, v, getVideo, mix, mixStaged, playerKey);
   const styling = panel === "style" && !!(v?.cut || v?.draft) && !replay;
   const staged = draftCount(styleDraft, v);
   const { p: stylePreview, busy: previewBusy } = usePreview(id, v, t, styleDraft, styling && staged > 0 && !playing);
@@ -248,8 +252,13 @@ export function Editor({ id, replay, go }: Props) {
   useJobSignals(state ? projectName(v, state.run.brief) : id, replay ? null : job, progress);
   const canEdit = replay ? "Replay is on" : busy ? `${job!.label} is running` : null;
 
+  const toastTimer = useRef(0);
   const flash = useCallback((text: string, tone?: string, action?: Toast["action"]) => {
-    setToast({ text, tone, action }); window.setTimeout(() => setToast(null), action ? 6000 : 4500);
+    // one timer for the toast on screen: an older toast's timer used to close a newer one early (audit, 31/10); a long
+    // refusal stays long enough to read
+    setToast({ text, tone, action });
+    window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setToast(null), Math.max(action ? 6000 : 4500, Math.min(12000, text.length * 60)));
   }, []);
   const forkFrom = v && newest != null && v.n < newest && !replay ? v.n : null;
   const refusal = useRef(""); // why the server refused the last action: the chat queue shows it on the message
@@ -271,6 +280,10 @@ export function Editor({ id, replay, go }: Props) {
       if (settle) {
         const sum = await api<{ draft: DraftSum | null }>(`/api/runs/${id}/draft`);
         if (seq !== draftSeq.current) return;
+        if (sum.draft && !sum.draft.ops.length && !sum.draft.committing) { // one left with no edits (an undo elsewhere): none
+          api(`/api/runs/${id}/draft`, undefined, "DELETE").catch(() => { /* the next edit starts it over */ });
+          sum.draft = null;
+        }
         setDraftSum(sum.draft);
         if (!sum.draft) return setDraftData(null);
       }
@@ -283,9 +296,10 @@ export function Editor({ id, replay, go }: Props) {
   const opSeq = useRef(0);
   const draftOp = useCallback(async (op: string, args: Record<string, unknown>) => {
     try {
-      madeDraft.current = true;
       const seq = ++opSeq.current;
       const r = await api<{ draft: DraftSum | null }>(`/api/runs/${id}/draft`, { op, args, ...(draftSum ? {} : { from: v?.n }) });
+      // set after the await: made() resets it when it is handed the promise, which runs this far synchronously
+      madeDraft.current = true;
       if (seq !== opSeq.current) return true; // a later edit's answer has the newer draft (audit, 31/10)
       setDraftSum(r.draft);
       await loadDraft(false);
@@ -297,8 +311,8 @@ export function Editor({ id, replay, go }: Props) {
   const edit = useCallback(async (path: string, body: Record<string, unknown>) => {
     const to = live0 ? DRAFT_OPS[path] : undefined;
     if (to) return draftOp(to.op, to.args(body));
-    if (draftV && MAKES_VERSION.includes(path) && !(path === "ask" && live0)) // the chat edits the draft in Live (A5)
-      return (refusal.current = `Make Version ${draftData?.draft?.n ?? ""} first: the draft's ${edits(draftSum?.ops.length ?? 0)} are not a version yet.`, flash(refusal.current), false);
+    if (draftV && DRAFT_HOLDS.includes(path) && !(path === "ask" && live0)) // the chat edits the draft in Live (A5)
+      return (refusal.current = `Make Version ${draftData?.draft?.n ?? ""} first: the draft's ${edits(draftSum?.ops.length ?? 0)} ${draftSum?.ops.length === 1 ? "is" : "are"} not a version yet.`, flash(refusal.current), false);
     const gen = OP_ROUTE[path]; // a newer panel edit with no route of its own: POST /op runs its pure op as a version
     if (gen) return act("op", { op: gen.op, args: gen.args(body), from: body.from, review: body.review });
     return act(path, body);
@@ -312,7 +326,11 @@ export function Editor({ id, replay, go }: Props) {
       flash(`Making Version ${draftData?.draft?.n ?? ""}: one render of the draft's ${edits(draftSum?.ops.length ?? 0)} ($0).`);
       const to = r.job?.run ?? r.run;
       if (to && to !== id) go(`#/run/${to}`); // the first commit on a sample makes the judge's own copy: follow it
-    } catch (e) { flash(String((e as Error).message), "error"); }
+    } catch (e) { // a version made after the draft's base can refuse it (its clips are not the draft's): offer the way out
+      const msg = String((e as Error).message);
+      flash(`Version ${draftData?.draft?.n ?? ""} was not made: ${msg}`, "error",
+        (e as { status?: number }).status === 409 && draftSum?.stale ? { label: "Discard draft", run: () => { setToast(null); void discardDraft(); } } : undefined);
+    }
     finally { setCommitting(false); }
   };
   /** A look from words: in Live, Muse Spark suggests it (one call, no version) and it goes into the draft (A3). */
@@ -484,7 +502,9 @@ export function Editor({ id, replay, go }: Props) {
   const draftStep = async (dir: -1 | 1) => { // the draft's own undo / redo; undoing its last edit closes it
     try {
       const r = await api<{ draft: DraftSum | null }>(`/api/runs/${id}/draft/${dir < 0 ? "undo" : "redo"}`, {});
-      if (r.draft && !r.draft.ops.length && !r.draft.can_redo) return void discardDraft();
+      // nothing left in it (the undone edit waits on its redo stack, so can_redo is true): a 0-edit draft would hold
+      // Make Version, Review and the versions picker, so it closes (audit, 31/10)
+      if (r.draft && !r.draft.ops.length) return void discardDraft();
       setDraftSum(r.draft);
       await loadDraft(false);
     } catch (e) { flash(String((e as Error).message), "error"); }
@@ -498,7 +518,7 @@ export function Editor({ id, replay, go }: Props) {
         r = await api<{ draft: DraftSum | null }>(`/api/runs/${id}/draft/undo`, {});
         if (!r.draft?.can_undo) break;
       }
-      if (r?.draft && !r.draft.ops.length && !r.draft.can_redo) return void discardDraft();
+      if (r?.draft && !r.draft.ops.length) return void discardDraft();
       setDraftSum(r?.draft ?? null);
       await loadDraft(false);
     } catch (e) { flash(String((e as Error).message), "error"); }
@@ -628,7 +648,7 @@ export function Editor({ id, replay, go }: Props) {
         <div className="title-block">
           <span className="proj" title={state.run.brief}>{name}</span>
           <span className="saved">{progress?.active && (busy || replay) ? <ProgressInline p={progress} />
-            : busy ? <><MarkLoader /> {job!.label}…</> : draftV ? <>{edits(draftSum?.ops.length ?? 0)} on Version {draftSum?.base} · not a version yet</>
+            : busy ? <><MarkLoader /> {job!.label}…</> : draftV ? <>{edits(draftSum?.ops.length ?? 0)} on Version {draftSum?.base} · {draftSum?.stale ? `Version ${draftSum.latest} came after it` : "not a version yet"}</>
             : v ? <>Saved · Version {v.n} of {newest}</> : "No version yet"}</span>
         </div>
         {draftV && !busy && (
@@ -701,7 +721,7 @@ export function Editor({ id, replay, go }: Props) {
               const ok = await edit("ask", { message: text, chips, scope, from: latest ? undefined : v?.n, review, planner, preview: true, live: live0 && !replay });
               return ok ? true : refusal.current || "the server refused it";
             }}
-            onApply={(pending, review) => act("ask/apply", { pending, review })} onRetry={(pending) => act("ask/retry", { pending })}
+            onApply={(pending, review) => edit("ask/apply", { pending, review })} onRetry={(pending) => act("ask/retry", { pending })}
             onRetryJob={() => act("retry", {})}
             onStop={() => act("stop", {})} onPick={pick} onSeek={(x) => { player.current?.pause(); seek(x); }}
             onCompare={(a, b) => go(`${base}/compare?a=${a}&b=${b}${replay ? `&replay=${replay}` : ""}`)}
@@ -784,8 +804,8 @@ export function Editor({ id, replay, go }: Props) {
             Safe area: {GUIDE_NAME[guide]}
           </button>
         )}
-        {v && (v.cut || live0) ? ( // a draft keeps its base version's key: the first edit swaps in place, no remount (audit, 31/10)
-          <Player ref={player} key={draftV ? `${draftSum?.base ?? draftData!.draft!.n}-live` : `${v.n}${live0 ? "-live" : ""}`}
+        {v && (v.cut || live0) ? (
+          <Player ref={player} key={playerKey}
             src={v.cut ? fileUrl(id, v.cut) : ""} onTime={onTime} onPlaying={setPlaying}
             live={draftV ? draftData! : live0 ? `/api/runs/${id}/preview?v=${v.n}` : undefined}
             liveMix={live0 && mixStaged ? mix : null} liveSwap={live0 && styleKey ? styled : null}
