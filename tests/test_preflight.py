@@ -17,7 +17,7 @@ class FakeFix:
 
 def test_preflight_fixes_until_the_checks_clear(monkeypatch):
     gates = iter([_gate(["cut at 3.00 s inside speech"]), _gate([])])
-    monkeypatch.setattr(R, "measured_checks", lambda run_dir, edl, audio: next(gates))
+    monkeypatch.setattr(R, "measured_laid", lambda run_dir, edl, audio: (next(gates), edl))
     monkeypatch.setattr(R, "plan_fixes", lambda review, edl, words, audio, gate: ([FakeFix(2)], []))
 
     def apply(edl, fixes, words, audio):
@@ -32,7 +32,7 @@ def test_preflight_fixes_until_the_checks_clear(monkeypatch):
 
 
 def test_preflight_stops_when_a_fix_repeats_or_nothing_applies(monkeypatch):
-    monkeypatch.setattr(R, "measured_checks", lambda run_dir, edl, audio: _gate(["cut at 3.00 s inside speech"]))
+    monkeypatch.setattr(R, "measured_laid", lambda run_dir, edl, audio: (_gate(["cut at 3.00 s inside speech"]), edl))
     monkeypatch.setattr(R, "plan_fixes", lambda review, edl, words, audio, gate: ([FakeFix(2)], []))
     monkeypatch.setattr(R, "apply_fixes", lambda edl, fixes, words, audio: (
         dict(edl), [{"op": "move_cut", "target": "s2", "fingerprint": fixes[0].fingerprint, "note": "valley"}]))

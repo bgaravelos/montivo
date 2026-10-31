@@ -478,13 +478,14 @@ def test_human_trim_holds_the_edge_out_of_the_words_it_removed(tmp_path, monkeyp
     s1 = v2["spans"][0]
     assert s1["word_to"] == 1 and 10.55 < s1["t_out"] < 10.66
     assert "held out of the removed words" in v2["patches"][-1]["fixes"][0]["note"]
-    # the other edge keeps the place an earlier edit gave it (trim_at puts it back on the Voice boundary, 10.0)
+    # the other edge keeps the place an earlier edit gave it (here its Voice boundary, 10.0)
     assert s1["t_in"] == 10.0 and "stays where it was" not in v2["patches"][-1]["fixes"][0]["note"]
     v2["spans"][2]["t_in"] = 30.65  # s3 = turn 1 words 2-6, its start tuned off the Voice boundary (30.6)
     (d / "edl_v2.json").write_text(json.dumps(v2))
     H.trim(d, "s3", "out", 4, from_v=2)
     v3 = json.loads((d / "edl_v3.json").read_text())
-    assert v3["spans"][2]["t_in"] == 30.65 and "the in edge stays where it was" in v3["patches"][-1]["fixes"][0]["note"]
+    # trim_at no longer moves the other edge (audit, 31/10), so hold_trimmed_edges has nothing to put back
+    assert v3["spans"][2]["t_in"] == 30.65 and "stays where it was" not in v3["patches"][-1]["fixes"][0]["note"]
 
 
 def test_human_cut_drops_and_trims_in_one_version(tmp_path, monkeypatch):

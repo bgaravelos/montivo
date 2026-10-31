@@ -87,6 +87,7 @@ VALLEY_RANGE_S = 0.3  # move_cut on an edge already on a Voice boundary: search 
 VALLEY_STEP_S = 0.02  # for the quietest 40 ms (Voice word edges carry up to 0.3 s of slop and words always abut)
 VALLEY_OWN_WORD_S = 0.03  # a valley move goes at most this far into the span's own last / first kept word
 PAUSE_PAST_MAX_S = 1.5  # no pause at the edge: words added outward, this far at most, to reach the next one
+PAUSE_WORD_REACH_S = 0.35  # rejoin_pause: the words at a shortened pause end / start this close to it (human.PAUSE_REACH_S)
 WORD_SHIFT_MIN_S = 0.3
 BIAS_PX = 60  # reframe_bias step in source px (10 % of a 608 px crop at 1920)
 CLOCK_FPS = 10
@@ -400,19 +401,43 @@ def speech_audio(edl: dict, cut: Path) -> Path:
     return Path(stem) if stem and Path(stem).is_file() else cut
 
 
+def heard_key(cut: Path) -> dict:
+    """What the heard-words cache is keyed on: the file Voice listened to, its size and mtime."""
+    st = cut.stat()
+    return {"file": cut.name, "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+
+
+def heard_fresh(cut: Path, out_dir: Path) -> bool:
+    """out_dir/voice.json was made from this cut as it is now: its key (heard.json) matches, or, for a cache from
+    before the key, it is newer than the cut. A re-rendered cut_vN (modal_app.py::rereview, a render after a failed
+    loop) used to be gated on the old cut's audio (audit, 31/10)."""
+    cached = out_dir / "voice.json"
+    if not cached.is_file():
+        return False
+    try:
+        return json.loads((out_dir / "heard.json").read_text()) == heard_key(cut)
+    except FileNotFoundError:
+        return cached.stat().st_mtime_ns >= cut.stat().st_mtime_ns
+    except (OSError, ValueError):
+        return False
+
+
 def heard_words(cut: Path, out_dir: Path, ledger: Ledger, log=print) -> list[dict]:
     """What a viewer hears: Muse Voice on the cut's own audio, the words with cut times (about $0.002 for 40 s).
-    Cached in out_dir/voice.json. On run 015 it heard "news voice", "soundtracks", "Newspark" again: the same
-    mishearings the captions were corrected for by hand, hence the caution in the fact."""
+    Cached in out_dir/voice.json while the cut is the same file (heard_fresh). On run 015 it heard "news voice",
+    "soundtracks", "Newspark" again: the same mishearings the captions were corrected for by hand, hence the caution
+    in the fact."""
     from .voice import VoiceResult, transcribe  # voice imports nothing from review; kept local like the cost helpers
 
     out_dir.mkdir(parents=True, exist_ok=True)
     cached = out_dir / "voice.json"
-    if cached.is_file():
+    if heard_fresh(cut, out_dir):
         res = VoiceResult.from_json(json.loads(cached.read_text()))
     else:
+        key = heard_key(cut)
         wav = make_wav(cut, out_dir / "cut.wav")
         res = transcribe(wav, out_dir, ledger, log=log)
+        dump_json(out_dir / "heard.json", key)
     return dedupe_heard([{"w": w.w, "t_start": w.t_start, "t_end": w.t_end} for w in res.words])
 
 
@@ -721,10 +746,19 @@ def measured_checks(run_dir: Path, edl: dict, audio: Audio | None) -> dict:
     """The gate's checks that need no cut, on an EDL laid out by the render's own planning (preview_data, ~50 ms):
     cut edges in the source audio, captions forced over the head, the head out of the crop. The kept-word check
     needs Voice on a cut and waits for the review."""
+    return measured_laid(run_dir, edl, audio)[0]
+
+
+def measured_laid(run_dir: Path, edl: dict, audio: Audio | None) -> tuple[dict, dict]:
+    """measured_checks and the laid-out EDL its fault times are on (cut seconds with the title card in front, the
+    caption lines laid out): plan_fixes resolves the gate's issues on that EDL, apply_fixes patches the unlaid one.
+    On the unlaid EDL every fault landed a card's length off (audit, 31/10: 014 v1, two of four cuts in speech "no cut
+    within 1.5 s", one moved the wrong edge of s6)."""
     from .preview import preview_data  # preview imports the render, which this module imports
     laid = preview_data(run_dir, edl, laid=True)["_edl"]
-    return gate_check(caption_face_facts(laid), cut_edge_levels(laid, audio) if audio else None, None,
+    gate = gate_check(caption_face_facts(laid), cut_edge_levels(laid, audio) if audio else None, None,
                       head_frame_facts(run_dir, laid))
+    return gate, laid
 
 
 def preflight(run_dir: Path, edl: dict, words: Words, audio: Audio | None, log=print,
@@ -738,11 +772,11 @@ def preflight(run_dir: Path, edl: dict, words: Words, audio: Audio | None, log=p
     seen: set[str] = set()
     done: list[dict] = []
     stop = "clear"
-    gate = measured_checks(run_dir, edl, audio)
+    gate, laid = measured_laid(run_dir, edl, audio)
     k = 0
     while gate["blocked"] and k < rounds:
         k += 1
-        fixes, _ = plan_fixes({"issues": []}, edl, words, audio, gate)
+        fixes, _ = plan_fixes({"issues": []}, laid, words, audio, gate)  # the fault times are the laid EDL's
         if not fixes:
             stop = "no applicable fix"
             break
@@ -758,7 +792,7 @@ def preflight(run_dir: Path, edl: dict, words: Words, audio: Audio | None, log=p
         new["version"] = version
         done += applied
         edl = new
-        gate = measured_checks(run_dir, edl, audio)
+        gate, laid = measured_laid(run_dir, edl, audio)
     else:
         stop = "clear" if not gate["blocked"] else f"{rounds} rounds"
     for p in done:
@@ -979,9 +1013,8 @@ def shift_words(span: dict, words: Words, edge: str, seconds: float, blocked: se
             span["word_from"] = a + 1
             done += tw[a]["t_end"] - tw[a]["t_start"]
         moved += 1
-    if moved:
-        span["t_in"] = tw[span["word_from"]]["t_start"]
-        span["t_out"] = tw[span["word_to"]]["t_end"]
+    if moved:  # only the moved edge goes on its Voice boundary: the other keeps a valley or edge-pass fix (audit, 31/10)
+        resnap(span, words, edge)
     return moved
 
 
@@ -1006,8 +1039,7 @@ def trim_at(span: dict, words: Words, edge: str, src_t: float, min_words: int = 
         span["word_from"] = max(a, b - keep + 1)
         reach = min([i for i in range(a, b + 1) if tw[i]["t_end"] > src_t + REACH_S], default=span["word_from"])
         sentence_edge(span, words, "in", lo=min(span["word_from"], reach))
-    span["t_in"] = tw[span["word_from"]]["t_start"]
-    span["t_out"] = tw[span["word_to"]]["t_end"]
+    resnap(span, words, edge)  # the trimmed edge only (sentence_edge did too): the other one stays where it was
     return (b - a) - (span["word_to"] - span["word_from"])
 
 
@@ -1030,8 +1062,7 @@ def sentence_edge(span: dict, words: Words, edge: str, lo: int | None = None, hi
             if lo_ <= j <= hi_ and _SENTENCE_END.search(tw[j - 1]["w"]):
                 span["word_from"] = j
                 break
-    span["t_in"] = tw[span["word_from"]]["t_start"]
-    span["t_out"] = tw[span["word_to"]]["t_end"]
+    resnap(span, words, edge)
 
 
 def refresh_span(span: dict, words: Words) -> None:
@@ -1373,7 +1404,7 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
             note = (f"{n} words trimmed at the {f.args['edge']} end, keeps: "
                     f"{' '.join(w['w'] for w in words.turn(s['turn_id'])[s['word_from']:s['word_to'] + 1])[:60]}"
                     + settle(s, words, f.args["edge"], audio, kept_elsewhere(new, s), fence(new, s)))
-        elif f.op == "extend_span" and (note := rejoin_pause(new, s, f.args["edge"])):
+        elif f.op == "extend_span" and (note := rejoin_pause(new, s, f.args["edge"], words)):
             rejoined = True
         elif f.op == "extend_span":
             orig = (s["word_from"], s["word_to"])
@@ -1434,10 +1465,10 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
                     x["reframe_bias_px"] = int(x.get("reframe_bias_px") or 0) + step
             note = f"crop bias {s['reframe_bias_px']:+d} px" + (f" ({len(seg)} spans of the segment)" if len(seg) > 1 else "")
         if (f.op in ("trim_span", "extend_span") and not rejoined) or (f.op == "move_cut" and f.args["mode"] in ("snap", "words")):
-            # trim_at / shift_words / resnap put BOTH edges back on Voice boundaries (012-ktb: a trim at the start
-            # re-opened the end tightened out of the next word), so both are tightened again
-            for e in ("in", "out"):
-                touched.setdefault((f.target, e), len(log))
+            # trim_at / shift_words / resnap put the edge they move back on its Voice boundary, so it is tightened
+            # again; the other edge stays as it was (they used to reset both: 012-ktb's trim at the start re-opened the
+            # end, and a valley fix on the other edge came undone, "same fix twice", audit 31/10)
+            touched.setdefault((f.target, f.args["edge"]), len(log))
         log.append({**asdict(f), "fingerprint": f.fingerprint, "note": note})
     finalize(new, words)
     if audio is not None and touched:
@@ -1461,11 +1492,14 @@ def shortened_pauses(edl: dict) -> list[dict]:
     return out
 
 
-def rejoin_pause(edl: dict, s: dict, edge: str) -> str:
+def rejoin_pause(edl: dict, s: dict, edge: str, words: Words | None = None) -> str:
     """A pause a person shortened (montivo.human pauses: `pause_out` on the clip before it, `pause_in` on the one after)
     given back whole when the review extends either side of it: the two clips meet again where they met before, so the
-    render plays them as one segment (a dramatic pause the reviewer wants kept). Returns a note, "" when that edge holds
-    no shortened pause."""
+    render plays them as one segment (a dramatic pause the reviewer wants kept). Only while the two clips still end and
+    start on the pause's own words (one turn, word after word, the boundary at the pause): a record left on a clip a
+    trim or a split moved away from the pause gave the deleted words back with it (012 v2: pauses, trim s3's out to
+    word 40, extend +1 -> both deleted words played; audit, 31/10). Returns a note, "" when that edge holds no
+    shortened pause."""
     k = next((i for i, x in enumerate(edl["spans"]) if x["id"] == s["id"]), None)
     j = None if k is None else k + 1 if edge == "out" else k - 1
     if j is None or not 0 <= j < len(edl["spans"]):
@@ -1473,6 +1507,11 @@ def rejoin_pause(edl: dict, s: dict, edge: str) -> str:
     left, right = (s, edl["spans"][j]) if edge == "out" else (edl["spans"][j], s)
     a, b = left.get("pause_out"), right.get("pause_in")
     if not a or not b or (a["from"], a["to"]) != (b["from"], b["to"]):
+        return ""
+    if left["turn_id"] != right["turn_id"] or right["word_from"] != left["word_to"] + 1:
+        return ""
+    end = words.turn(left["turn_id"])[left["word_to"]]["t_end"] if words is not None else float(a["join"])
+    if not a["from"] - PAUSE_WORD_REACH_S <= end <= a["to"] + PAUSE_WORD_REACH_S:
         return ""
     t = float(a["join"])
     was = (left["t_out"] - a["from"]) + (a["to"] - right["t_in"])  # the silence the two edges kept
@@ -1653,14 +1692,14 @@ def rank(h: dict) -> tuple[bool, bool, float]:
 
 
 def best_of(history: list[dict]) -> dict:
-    """The loop's best version: the highest rank, unless the pairwise judge preferred a later version over it in both
-    orders (`preferred_over`, C2), followed as far as such wins go."""
-    best = max(history, key=rank)
-    seen = {best["version"]}
-    while (up := next((h for h in history if h.get("preferred_over") == best["version"] and h["version"] not in seen),
-                      None)):
-        best = up
-        seen.add(best["version"])
+    """The loop's best version, walking the history in order: a version takes over when it outranks the best so far,
+    or when the pairwise judge preferred it over that best in both orders (`preferred_over`, C2). The old max-then-
+    follow-the-chain kept the chain's end even when a later version outranked it (v1 70, v2 65 preferred over v1,
+    v3 68 -> v2; audit, 31/10)."""
+    best = history[0]
+    for h in history[1:]:
+        if rank(h) > rank(best) or h.get("preferred_over") == best["version"]:
+            best = h
     return best
 
 
@@ -1905,6 +1944,7 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
             patch_log += follow_cut(edl, new, severity="loop")  # duck edits stay on their words
             new.setdefault("patches", []).append({"from": n, "review": rv["name"], "fixes": patch_log})
             nxt = next_version(run_dir)  # past every version in the folder: reviewing v1 of v1-v5 makes v6, never a new v2
+            new["version"] = nxt  # finalize counted from the reviewed version (review v3 of v1-v5 wrote 4 into edl_v6)
             for p in patch_log:
                 log(f"patch v{n} -> v{nxt}: {p['op']} {p['target']}: {p['note']}")
             entry["applied"] = patch_log
