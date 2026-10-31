@@ -221,7 +221,10 @@ export function Editor({ id, replay, go }: Props) {
   // stays what the render burns. M1: so does a track staged in the Music panel (the cut with that bed under it)
   const [styled, setStyled] = useState<LiveData | null>(null);
   const musicStaged = live0 && panel === "music" && musicDraft !== undefined;
-  const styleKey = live0 && v && ((styling && staged > 0) || musicStaged)
+  // a B-roll still on screen at the paused playhead: the server's preview still leaves stills out, so the Style canvas
+  // lays them and the graphics over it from the same styled layout (in Rendered too, for that frame only)
+  const stillAt = !!v?.overlays.some((o) => o.shown && o.t_in != null && o.t_out != null && t >= o.t_in && t < o.t_out);
+  const styleKey = v && ((live0 && ((styling && staged > 0) || musicStaged)) || (!live0 && styling && staged > 0 && stillAt))
     ? JSON.stringify([rev, styling ? [styleDraft.look, styleDraft.callouts, styleDraft.clips] : null, musicStaged ? musicDraft : "-"]) : null;
   useEffect(() => {
     if (!styleKey || !v) return setStyled(null);
@@ -763,11 +766,11 @@ export function Editor({ id, replay, go }: Props) {
           <Player ref={player} key={draftV ? `draft-${draftData!.draft!.id}` : `${v.n}${live0 ? "-live" : ""}`}
             src={v.cut ? fileUrl(id, v.cut) : ""} onTime={onTime} onPlaying={setPlaying}
             live={draftV ? draftData! : live0 ? `/api/runs/${id}/preview?v=${v.n}` : undefined}
-            liveMix={live0 && mixStaged ? mix : null} liveSwap={styleKey ? styled : null}
+            liveMix={live0 && mixStaged ? mix : null} liveSwap={live0 && styleKey ? styled : null}
             marks={blocks.filter((b) => b.kind !== "ghost").map((b) => b.t0)}
             label={draftV ? `Draft · ${edits(draftSum?.ops.length ?? 0)}` : `v${v.n}${live0 ? " · live" : ""}`} labelTone={draftV ? "draft" : undefined}
             safe={{ label: GUIDE_NAME[guide], on: guide !== "off", next: nextGuide }} overlay={<>
-              {v && <StyleCanvas v={v} t={t} draft={styleDraft} setDraft={setStyleDraft} preview={stylePreview} busy={previewBusy}
+              {v && <StyleCanvas v={v} t={t} draft={styleDraft} setDraft={setStyleDraft} preview={stylePreview} busy={previewBusy} stills={stillAt ? styled : null}
                 show={styling && !playing} />}
               {v && <HeadPicker id={id} v={v} t={t} show={panel === "speakers" && !playing && !replay && !canEdit} staged={pinStage}
                 onPick={(speaker, head) => setPinStage(v.speaker_pins[speaker] === head && pinStage?.speaker !== speaker ? null : { speaker, head })} />}

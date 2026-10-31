@@ -541,6 +541,8 @@ button.chip.on { background: var(--accent); color: var(--ink, #141414); border-c
 .item span { overflow: hidden; text-overflow: ellipsis; }
 .item.text { background: var(--textclip); }
 .item.text.callout { background: #8a6a2c; font-weight: 600; }
+.item.text.callout.hidden { background: repeating-linear-gradient(135deg, #8a6a2c33 0 5px, transparent 5px 10px); outline: 1px dashed #8a6a2c; outline-offset: -1px; color: var(--mute); }
+span.item.text.callout.hidden { pointer-events: none; }
 .item.text.sel { box-shadow: inset 0 0 0 2px var(--accent); }
 .item.caption { background: var(--caption); padding: 0 4px; }
 .track.music.sel { box-shadow: inset 0 0 0 1px var(--accent); }
@@ -1041,6 +1043,7 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .st-warn-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .style-canvas { position: absolute; inset: 0; cursor: default; }
 .style-still { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.style-stills { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .style-tag { position: absolute; top: 10px; left: 10px; font-size: 11px; font-weight: 600; background: var(--accent); color: var(--accent-ink); padding: 2px 8px; border-radius: 4px; }
 .sc-handle { position: absolute; border: 1.5px dashed #ffffffb0; border-radius: 6px; cursor: grab; touch-action: none; }
 .sc-handle:hover { border-color: var(--accent); background: #ffc62914; }

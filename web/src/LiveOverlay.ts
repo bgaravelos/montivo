@@ -1,3 +1,4 @@
+import { clearCallout, fullStills } from "./edit";
 import type { LiveData, LiveLook } from "./Live";
 
 /** The live preview's graphics in HTML, drawn where the render burns them (engine/preview.py lays them out with the
@@ -83,7 +84,10 @@ export class LiveOverlay {
       this.lines.push({ el, words, a: c.t_in, b: c.t_out, on: false, act: -2, mode: look?.active ?? "pill",
         starts: c.words.map((wd, k) => (k === 0 ? c.t_in : wd.t_in)) });
     }
-    for (const c of d.callouts ?? []) {
+    const cutaways = fullStills(d.stills);
+    for (const c0 of d.callouts ?? []) {
+      const c = c0.span === "title" ? c0 : clearCallout(c0, cutaways); // no pill over a full-frame still, as the render
+      if (!c) continue;
       const el = document.createElement("div");
       el.className = "lo-callout";
       el.textContent = c.text;
