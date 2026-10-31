@@ -986,6 +986,16 @@ thumbnails when the run has no tracked video (hosted samples ship without it). D
 container stopped after); /api/health 200, /api/runs 401, /s/nope 404; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP,
 render 7.3 s; the live ask then put Chill Lofi into the open draft beside the judge's delete. Billy checked sound on
 iPhone Safari and Safari on the Mac: ok (sync, pitch at 1.5x). 015's pre-flight: 23 of 26 caption lines under the apps' buttons.
+UI audit (31/10, $0, commit `9734f32`, `docs/notes/ui-audit_2026-10-31.md`): Billy saw the narrow player's transport break
+in Safari; a Playwright pass at nine widths (138 shots, overflow / clipping / covered-control checks) plus a code read for
+Safari and iOS found 5 Must and 9 Should, all fixed: the editor fits 901-1180 px (was min-width 1100 under body's hidden
+overflow: Share, Export, inspector unreachable on iPad landscape), the transport follows the viewer's width (container
+`viewer`), Compare and the Loop film have phone layouts, 16 px fields on touch, full screen falls back or hides on
+iPhone, AudioContext asks for a "playback" audio session, Monti keeps off the video and chat on phones, waits behind
+modals and greets once, timeline drags end on pointercancel, Share copies inside the click, `.lo-title` is a size
+container, Versions cards no longer take the chat's `.you` rule. Second pass: 0 page overflow (was 30), 0 text spill
+(was 54). Real Safari and an iPhone not tried. Deployed 31/10 on Billy's go from a clean worktree (no container was
+running); /api/health 200, /api/runs 401, /s/nope 404; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 7.8 s.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
