@@ -1016,6 +1016,19 @@ clean worktree (no container was running); /api/health 200 (judge cap $3 in the 
 out edge no longer widens 0.21 s into the dropped s4's "so"), -14.0 LUFS / -1.7 dBTP, render 8.4 s; --live, --reorder
 (audio 37.333 s = video), --cover pass. Modal appends the client's address as the last X-Forwarded-For hop: 11 wrong
 passwords with forged first hops, the 11th 429. The draft filmstrip not yet checked live with the sign-in.
+Shoot of 31/10 night (1/11, $2.21, `docs/notes/shoot-results_2026-11-01.md`): Billy's iPhone clips in ~/Downloads
+(4K / 1080p SDR, selfie portrait, a second phone in HLG) trimmed to 1080p30 in `footage/*_0111.mp4`. Clip 1 showcase
+(IMG_4784, 132 s, seated, no phone held up) -> `runs/017` v13 92 pass, 43 s (CTA without the doubled "the link",
+glossary Muse Spark / Muse Voice / SAM 3.1 / "lean over here", the 87 callout on the word); clip 3 raw (IMG_4785,
+123.5 s) -> `runs/018` v7 98 pass, 34.7 s (the "it scores the cut" line put back by hand: Voice heard "it's course the
+cat"); stress 4 walk (no pass, 82), 5 selfie (100 pass; 4:5 / 1:1 keep the head), 6 two cameras (IMG_4793 + IMG_4028
+synced at +9.067 s, E11 found all 5 cuts, 93 no pass on length), 9 long (IMG_4783 147.5 s, $0.509, 84 no pass).
+Clips 7 and 8 not shot. Found: a review caption override keyed by src_t eats a word after a re-break (018 v4-v6).
+017 seeded on the hosted demo (1/11, Billy's go, $0): `dist/montivo-sample-017.zip` (399 MB, 13 versions + footage)
+in /seed, `modal run modal_app.py::seed` with the 012 / 015 zips taken out of /seed for the run (so their runs were not
+re-extracted) and put back after; adopted, host spend $3.43 of $15; no container was running. Opens on v13 92 pass
+(checked on a clean root); `smoke --run 017 --span s4` on a copy: 37.9 s, -13.9 LUFS / -0.9 dBTP (v13 itself -1.4);
+`--live`: edit media 7.2 s, draft drop 143 ms. Not yet seen live with the sign-in.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
