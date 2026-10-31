@@ -1445,6 +1445,11 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
   .monti-tag { display: none; }
   .monti-badge.on { display: none; } /* the sheet has its own close; the badge sat on the send button */
   .monti-grip, .monti-menu { display: none; }
+  /* the greeting beside him, not above: it stays as low as he is and off the player's controls */
+  .monti.narrow { flex-direction: row; align-items: flex-end; transition: bottom .18s ease-out; }
+  .monti.narrow .monti-hi { max-width: min(230px, calc(100vw - 130px)); border-radius: 12px 12px 3px 12px; }
+  .monti.no-room { opacity: 0; pointer-events: none; }
+  .monti.no-room > * { pointer-events: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .monti-badge, .monti-pose, .monti-panel, .sm-point, .sm-hole, .sm-hole i, .sm-say, .monti-hi { animation: none !important; }
