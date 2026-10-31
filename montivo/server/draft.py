@@ -407,6 +407,36 @@ def current(fd: Path, run_dir: Path, state: dict) -> dict:
         return replay(run_dir, state["base"], state["ops"])
 
 
+SPAN_ID = re.compile(r"s\d+")
+
+
+def span_ids(x) -> set[str]:
+    """Every clip id an op's args name, as a value or a key, at any depth (span, before, ranges, clips, callouts...)."""
+    if isinstance(x, str):
+        return {x} if SPAN_ID.fullmatch(x) else set()
+    if isinstance(x, dict):
+        return set().union(*(span_ids(k) | span_ids(v) for k, v in x.items()), set())
+    if isinstance(x, (list, tuple)):
+        return set().union(*(span_ids(v) for v in x), set())
+    return set()
+
+
+def rebase_conflict(base: dict, latest: dict, ops: list[dict]) -> str | None:
+    """Why the draft's ops would mean other clips on a newer version, None when they mean the same: every clip id they
+    name is the same clip there (turn and words), and the ids the draft's own splits and inserts made come out the same
+    (audit, 31/10: a draft "split s3, delete its tail s9" replayed on a v6 that had split s7 into s7 | s9 deleted s7's
+    words instead)."""
+    def clips(edl: dict) -> dict[str, tuple]:
+        return {s["id"]: (s["turn_id"], s["word_from"], s["word_to"]) for s in edl["spans"]}
+    b, n = clips(base), clips(latest)
+    for sid in sorted(set().union(*(span_ids(o.get("args")) for o in ops), set()), key=lambda x: int(x[1:])):
+        if sid in b and sid in n and b[sid] != n[sid]:
+            return f"{sid} is not the same clip there"
+        if sid not in b and human.next_span_id(base) != human.next_span_id(latest):
+            return f"the clip ids this draft made ({sid}) name other clips there"
+    return None
+
+
 def newest(run_dir: Path) -> int:
     ns = [int(m.group(1)) for p in run_dir.glob("edl_v*.json") if (m := re.fullmatch(r"edl_v(\d+)\.json", p.name))]
     return max(ns, default=0)
@@ -642,6 +672,10 @@ def router(st, own, judge_of, need_key, hosted: bool = False) -> APIRouter:
                     raise HTTPException(409, f"v{latest} was made after this draft started from v{frm}: discard the "
                                              f"draft, or make it on v{latest}")
                 if latest > frm:
+                    why = rebase_conflict(base_edl(td, frm), base_edl(td, latest), ops)
+                    if why:
+                        raise HTTPException(409, f"v{latest} was made after this draft started from v{frm} and {why}: "
+                                                 f"discard the draft, or make it on v{latest}")
                     frm = latest
                 words, audio = inputs(td)
                 cur = base_edl(td, frm)

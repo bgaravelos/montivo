@@ -99,7 +99,8 @@ def test_pauses_split_the_clip_at_the_pause_and_keep_every_word(tmp_path, monkey
     assert [(s["id"], s["word_from"], s["word_to"]) for s in sp][2:] == [("s3", 2, 3), ("s4", 4, 6)]
     assert sp[2]["t_out"] == pytest.approx(31.14) and sp[3]["t_in"] == pytest.approx(31.47)  # 0.3 s of the 0.63 s kept
     assert [seg.span_ids for seg in merge_segments(sp)][-2:] == [["s3"], ["s4"]]  # a cut: the pause is gone
-    assert sp[2]["pause_out"] == sp[3]["pause_in"] == {"from": 30.96, "to": 31.59, "join": 31.2}
+    assert sp[2]["pause_out"] == sp[3]["pause_in"] == {"from": 30.96, "to": 31.59, "join": 31.2, "after": [1, 3],
+                                                   "before": [1, 4]}
     assert v2["runtime_s"] == pytest.approx(sum(s["duration"] for s in v1["spans"]) - 0.33, abs=0.01)
     fix = v2["patches"][-1]["fixes"][0]
     assert fix["op"] == "tighten_gaps" and "0.63 s pause after 'w13'" in fix["note"]

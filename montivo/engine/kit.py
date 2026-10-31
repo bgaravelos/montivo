@@ -9,7 +9,7 @@ version's (music voice_db), and the title card keeps its words: a kit turns the 
 from __future__ import annotations
 
 from .graphics import normalize_look, restyle
-from .music import normalize_music
+from .music import normalize_music, track as music_track
 
 
 def normalize_kit(d: dict | None) -> dict:
@@ -66,6 +66,18 @@ def with_kit(edl: dict, kit: dict) -> tuple[dict, list[dict]]:
                             "note": f"music {was['track']} off"})
         else:
             now = {**k["music"], **({"voice_db": was["voice_db"]} if was and was.get("voice_db") else {})}
+            # the bed's own choices stay, as a level or track change of the music op keeps them (human.MUSIC_KEEP);
+            # a start past the new track's loop goes (audit, 31/10: a kit with the same track dropped all three)
+            for key in ("start_s", "fade_out_s", "duck_edits"):
+                if was and was.get(key) is not None:
+                    now[key] = was[key]
+            if now.get("start_s") and was and was.get("track") != now["track"]:
+                try:
+                    if now["start_s"] > float(music_track(now["track"])["loop_s"]):
+                        del now["start_s"]
+                except ValueError:
+                    pass
+            now = normalize_music(now)
             if now != was:
                 edl["music"] = now
                 out.append({"op": "music", "target": "audio", "issue": -1, "severity": "human", "args": {"music": now},

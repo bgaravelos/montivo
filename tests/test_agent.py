@@ -230,6 +230,7 @@ def test_undo_that_in_live_is_the_drafts_undo(tmp_path, monkeypatch):
     out = agent.ask(d, "undo", draft=True, draft_edl=fd / "edl.json", use_model=False)
     assert out["ui"] == [{"op": "undo", "steps": 1}]
     # "go back to v2" names a version: the restore stays, and a version needs Make Version first
+    (d / "edl_v2.json").write_text(json.dumps({"version": 2, "spans": SPANS, "runtime_s": 2.0}))
     out = agent.ask(d, "go back to v2", draft=True, draft_edl=fd / "edl.json")
     assert "ui" not in out and any("Make Version first" in x for x in out["skipped"])
 

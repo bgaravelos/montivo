@@ -482,7 +482,8 @@ def keywords(edl: dict, message: str, scope: dict | None = None) -> dict:
     return {"reply": "Done: " + ", ".join(said) + ".", "question": "", "ops": ops}
 
 
-def check(edl: dict, ops: list[dict], scope: dict | None = None) -> tuple[list[dict], list[str]]:
+def check(edl: dict, ops: list[dict], scope: dict | None = None,
+          run_dir: Path | None = None) -> tuple[list[dict], list[str]]:
     """The ops in the order they can run, each id checked against the version; the rest skipped with a reason.
     Order: caption lines first (they need this version's rendered captions), then a re-plan, then the edits that
     survive one (text, look, music, punch-ins), then the clip edits. With a selection, an op that names a clip, words
@@ -552,6 +553,8 @@ def check(edl: dict, ops: list[dict], scope: dict | None = None) -> tuple[list[d
             why = f"insert: {o['before']!r} is not a clip of this version"
         elif op == "insert" and (allowed or picked or line):
             why = "insert: it adds to the cut, not to your selection; clear the selection to put a passage back"
+        elif op == "pauses" and (allowed or picked or line):  # it shortens every pause of the cut (audit, 31/10)
+            why = "pauses: it shortens the pauses of the whole cut, not your selection; clear the selection first"
         elif op == "glossary" and not ((o.get("heard") or "").strip() and (o.get("written") or "").strip()):
             why = "glossary: the words as heard and as written are both needed"
         elif op == "speakers" and not ((o.get("speaker") or "").strip() and (o.get("name") or "").strip()):
@@ -560,6 +563,8 @@ def check(edl: dict, ops: list[dict], scope: dict | None = None) -> tuple[list[d
             why = "pin: no speaker"
         elif op == "restore" and (int(o.get("version", -1)) < 1 or int(o["version"]) == int(edl.get("version") or 0)):
             why = f"restore: v{o.get('version')} is {'this version' if int(o.get('version', -1)) >= 1 else 'not a version'}"
+        elif op == "restore" and run_dir is not None and not (run_dir / f"edl_v{int(o['version'])}.json").is_file():
+            why = f"restore: there is no v{int(o['version'])} in this project"  # human.restore exits on it
         elif op == "seek" and not 0 <= float(o.get("at_s", -1)) <= float(edl.get("runtime_s") or 0) + 0.5:
             why = f"seek: {float(o.get('at_s', -1)):.1f} s is outside the cut"
         elif op == "open" and o.get("panel") not in PANELS:
@@ -600,8 +605,14 @@ def run_ops(run_dir: Path, from_v: int, ops: list[dict], planner: str | None, lo
                 prompt = None if look else o["look_prompt"]
                 steps.append((f"captions: {PRESET_NAMES[o['preset']] if look else o['look_prompt']}",
                               lambda look=look, prompt=prompt: human.style(run_dir, look, from_v=at(), prompt=prompt)))
-        if caps:
-            steps.append((f"{len(caps)} caption line(s) retexted", lambda: human.caption(run_dir, caps, from_v=at())))
+        if caps:  # the lines are found on this rendered version: a style step before it leaves an unrendered EDL with no
+            # caption rows, and the retext was refused (audit, 31/10); {span, src_t} survives the look change
+            def retext() -> dict:
+                if at() == from_v:
+                    return human.caption(run_dir, caps, from_v=at())
+                lines = human.caption_lines(json.loads((run_dir / f"edl_v{from_v}.json").read_text()), caps)
+                return human.caption(run_dir, caps, from_v=at(), lines=lines)
+            steps.append((f"{len(caps)} caption line(s) retexted", retext))
         for o in ops:  # cut seconds of this version: before anything moves the clips
             if o["op"] == "overlay":
                 steps.append((f"B-roll at {float(o['at_s']):.1f} s: {o['text']}", lambda o=o: human.overlay(
@@ -1014,6 +1025,11 @@ def ask(run_dir: Path, message: str | None, from_v: int | None = None, passes: i
     if draft_open:  # the open Live draft: "this" is what the editor plays
         edl = json.loads(draft_edl.read_text())
         from_v = int(edl.get("version") or from_v)
+        try:  # as the Live preview lays it out: its caption lines and the title card's seconds (a draft has no render
+            from .engine.preview import preview_data  # record, so the router saw no lines and seeks ran early; audit, 31/10)
+            edl = preview_data(run_dir, edl, overlays=True, laid=True)["_edl"]
+        except Exception as e:  # noqa: BLE001 - the unlaid draft still routes
+            log(f"montivo ask: the draft could not be laid out ({type(e).__name__}: {e}); reading it as it is")
     ledger = Ledger.resume(run_dir / "ledger.json")
     log(f"montivo ask: {message!r} on edl_v{from_v}" + (f", selection {scope_text(scope).strip()}" if scope else "")
         + (f" (another try after {retry_of})" if retry_of else ""))
@@ -1033,7 +1049,7 @@ def ask(run_dir: Path, message: str | None, from_v: int | None = None, passes: i
     if undo:  # Live: the draft's own undo, no version (only what shows something stays)
         answer = {"reply": undo_reply(message, undo), "question": "",
                   "ops": [o for o in answer.get("ops") or [] if o.get("op") in UI_OPS]}
-    ops, skipped = check(edl, answer.get("ops") or [], scope)
+    ops, skipped = check(edl, answer.get("ops") or [], scope, run_dir)
     asked_review = any(o["op"] == "review" for o in ops)
     ops = [o for o in ops if o["op"] != "review"]
     ui, ops = [o for o in ops if o["op"] in UI_OPS], [o for o in ops if o["op"] not in UI_OPS]
@@ -1090,8 +1106,12 @@ def apply(run_dir: Path, pid: str, passes: int | None = None, budget: float = 0.
     record |= {"router_cost_usd": 0.0, "done": [], "version": None, "pending": pid, "applied": True}
     if p.get("scope"):
         record["scope"] = p["scope"]
-    out = execute(run_dir, p["from"], p["full_ops"], record, p["passes"] if passes is None else passes,
-                  p.get("planner"), budget, log)
+    try:
+        out = execute(run_dir, p["from"], p["full_ops"], record, p["passes"] if passes is None else passes,
+                      p.get("planner"), budget, log)
+    except BaseException:  # a version made before a failed review is applied; with none, Try again may run it again
+        set_status(run_dir, p, "applied" if human.latest_edl(run_dir) > p["from"] else "open")  # (audit, 31/10)
+        raise
     set_status(run_dir, p, "applied")
     return out
 

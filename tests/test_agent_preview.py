@@ -237,10 +237,13 @@ def test_a_look_from_a_sentence_is_styled_on_the_rendered_version_first(tmp_path
         return edit
     for name in ("caption", "text", "style"):
         monkeypatch.setattr(human, name, fake(name))
+    resolved = []  # the caption lines are found on the rendered v3, not on the style step's unrendered v4 (audit, 31/10)
+    monkeypatch.setattr(human, "caption_lines", lambda edl, edits: resolved.append(edl["version"]) or [{}])
     ops = [op("caption", at_s=1.0, text="Hi I'm Billy"), op("callout", span="s2", text="Raw in"),
            op("style", look_prompt="big captions near the top")]
     written, done, skipped = agent.run_ops(d, 3, agent.check({"spans": SPANS}, ops)[0], None, print)
     assert [c[0] for c in calls] == ["style", "caption", "text"] and calls[0][1] == 3 and written == [4, 5, 6]
+    assert resolved == [3]
 
 
 def test_a_selection_never_turns_into_a_whole_cut_replan():

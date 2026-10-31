@@ -200,12 +200,45 @@ class RunWords(Words):
         return self._words.by_turn
 
 
+def prune_pauses(edl: dict) -> list[str]:
+    """Keep a shortened pause's record (`pause_out` on the clip before it, `pause_in` on the one after, apply_pauses)
+    only while those two clips still meet across that pause: next to each other, the same pause on both, both edges
+    inside its silence, the same two words on either side (`after` / `before`, records from 31/10 on). A split copies
+    the record to both pieces and a trim or drop leaves it on a clip that no longer ends there; a later extend then gave
+    the whole pause back, deleted words with it (audit, 31/10: 012 pauses, trim s3 to word 40, trim out one word -> "the
+    work" played again). Drops the stale ones in place; returns "<span id> <key>" per record dropped."""
+    spans, gone = edl["spans"], []
+    for k, s in enumerate(spans):
+        for key, j in (("pause_out", k + 1), ("pause_in", k - 1)):
+            rec = s.get(key)
+            if rec is None:
+                continue
+            o = spans[j] if 0 <= j < len(spans) else None
+            other = o.get("pause_in" if key == "pause_out" else "pause_out") if o else None
+            left, right = (s, o) if key == "pause_out" else (o, s)
+            ok = other is not None and (other["from"], other["to"]) == (rec["from"], rec["to"]) and all(
+                rec["from"] - 0.005 <= t <= rec["to"] + 0.005 for t in (left["t_out"], right["t_in"])) and (
+                "after" not in rec or (rec["after"] == [left["turn_id"], left["word_to"]]
+                                       and rec["before"] == [right["turn_id"], right["word_from"]]))
+            if not ok:
+                gone.append(f"{s['id']} {key}")
+    for s in spans:
+        for key in ("pause_out", "pause_in"):
+            if f"{s['id']} {key}" in gone:
+                s.pop(key)
+    return gone
+
+
 def follows_cut(op):
     """A pure op that moves the cut (a structural edit, the title card on or off): the bed's duck edits go with the
-    words they cover (music.follow_cut), each window that moved or went said in the op's patch."""
+    words they cover (music.follow_cut), each window that moved or went said in the op's patch; a shortened pause's
+    record stays only where its two clips still meet (prune_pauses)."""
     @functools.wraps(op)
     def run(edl: dict, words: Words, audio: Audio | None, *args, **kwargs) -> tuple[dict, Edit]:
+        if prune_pauses(clean := copy.deepcopy(edl)):  # a version made before the pruning may carry stale ones
+            edl = clean
         new, rec = op(edl, words, audio, *args, **kwargs)
+        prune_pauses(new)
         if moved := follow_cut(edl, new):
             rec.fixes = [*rec.fixes, *moved]
             rec.say += f"; {len(moved)} music duck edit(s) followed"
@@ -220,6 +253,31 @@ def _run_edit(run_dir: Path, from_v: int | None, passes: int, budget: float, op,
     new, rec = op(edl, RunWords(run_dir), Audio.load(run_dir), **args)
     edl_path = _write_edit(run_dir, from_v, n, new, rec, log)
     return _finish(run_dir, edl_path, n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
+
+
+def unused_words(edl: dict, words: Words) -> dict[int, set[int]]:
+    """{turn id: the word indices no clip keeps}, for every turn a clip uses: what an edge the edit re-tightens may not
+    widen back into (audit, 31/10: a split then a delete of either piece brought a deleted word back in 71 of 392
+    cases on 015 / 016 / 012; a reorder after a transcript cut widened s5 back over the deleted "word.")."""
+    kept: dict[int, set[int]] = {}
+    for s in edl["spans"]:
+        kept.setdefault(s["turn_id"], set()).update(range(s["word_from"], s["word_to"] + 1))
+    return {t: set(range(len(words.turn(t)))) - k for t, k in kept.items()}
+
+
+def retighten(new: dict, words: Words, audio: Audio, edges: set[tuple[str, str]]) -> str:
+    """The edge pass on the cuts an edit made meet, never into a word no clip keeps; an edge held at such a word while
+    it is still in speech settles on the dip between the words, as a split edge does. Returns the notes."""
+    out = unused_words(new, words)
+    note = "".join(f"; {m['span']} {m['edge']} edge tightened to the speech {m['from']:.3f} -> {m['to']:.3f}"
+                   for m in tighten_edges(new, words, audio, only=edges, keep_out=out)["moves"])
+    by_id = {s["id"]: s for s in new["spans"]}
+    for sid, edge in sorted(edges):
+        s = by_id.get(sid)
+        nb = None if s is None else s["word_from"] - 1 if edge == "in" else s["word_to"] + 1
+        if s is not None and nb in out.get(s["turn_id"], set()):
+            note += settle_split(new, words, audio, sid, edge)
+    return note
 
 
 @follows_cut
@@ -241,8 +299,7 @@ def drop_edit(edl: dict, words: Words, audio: Audio | None, span: str) -> tuple[
     if plog[0].get("skipped"):  # e.g. the hook: a version that changes nothing would only look like an edit
         raise SystemExit(f"{span_id} was not dropped: {plog[0]['note'].removeprefix('not applied: ')}")
     if audio is not None and neighbours:
-        for m in tighten_edges(new, words, audio, only=neighbours)["moves"]:
-            plog[0]["note"] += f"; {m['span']} {m['edge']} edge tightened to the speech {m['from']:.3f} -> {m['to']:.3f}"
+        plog[0]["note"] += retighten(new, words, audio, neighbours)
         for s in new["spans"]:
             refresh_span(s, words)
     return new, Edit("drop", plog, f"delete clip {span_id}",
@@ -476,11 +533,13 @@ def caption_break_edit(edl: dict, words: Words, audio: Audio | None, span: str, 
 
 
 def caption(run_dir: Path, edits: list[tuple[float, str]], from_v: int | None = None, passes: int = 0,
-            budget: float = 0.15) -> dict:
+            budget: float = 0.15, lines: list[dict] | None = None) -> dict:
     """Retext caption lines of edl_v{from} -> edl_vN, rendered: for the words Voice misheard (run 015: "meta meta
-    models" for "Four Meta models"). $0 without --review."""
+    models" for "Four Meta models"). $0 without --review. `lines`: the lines already resolved (caption_lines) on a
+    rendered version, for an edit that lands on an unrendered one (Ask Montivo's chain)."""
     from_v = from_version(run_dir, from_v)
-    lines = caption_lines(json.loads((run_dir / f"edl_v{from_v}.json").read_text()), edits)
+    if lines is None:
+        lines = caption_lines(json.loads((run_dir / f"edl_v{from_v}.json").read_text()), edits)
     return _run_edit(run_dir, from_v, passes, budget, caption_edit, lines=lines)
 
 
@@ -905,6 +964,34 @@ def carry_clip_looks(prev: dict, new: dict) -> list[dict]:
     return out
 
 
+def carry_by_source(prev: dict, new: dict) -> tuple[list[str], list[dict]]:
+    """A re-plan renumbers every clip from s1, so what named a clip by id goes to the new clip over the same source
+    time or goes (audit, 31/10): a removed jump-cut punch-in (`punch_skip` jump_cut:sN) to the new span it shares the
+    most source time with (over half of the shorter), a person's line break (`caption_breaks`) to the span holding its
+    source second. Word-keyed skips (emphasis:<word>@<onset>) stay as they are. Returns (punch_skip, caption_breaks)."""
+    old = {s["id"]: s for s in prev["spans"]}
+    skips = []
+    for k in prev.get("punch_skip") or []:
+        kind, _, sid = k.partition(":")
+        if kind != "jump_cut":
+            skips.append(k)
+            continue
+        o = old.get(sid)
+        best = None if o is None else max(((min(x["t_out"], o["t_out"]) - max(x["t_in"], o["t_in"]), x)
+                                           for x in new["spans"]), key=lambda y: y[0], default=None)
+        if best and best[0] > 0.5 * min(best[1]["t_out"] - best[1]["t_in"], o["t_out"] - o["t_in"]):
+            skips.append(f"jump_cut:{best[1]['id']}")
+    breaks = []
+    for b in prev.get("caption_breaks") or []:
+        o = old.get(b.get("span"))
+        t = float(b["src_t"])
+        home = next((x for x in new["spans"] if x["t_in"] <= t < x["t_out"]
+                     and (o is None or x["turn_id"] == o["turn_id"])), None)
+        if home is not None:
+            breaks.append({**b, "span": home["id"]})
+    return list(dict.fromkeys(skips)), breaks
+
+
 def roles_by_position(spans: list[dict]) -> list[str]:
     """edl.normalize_roles on EDL span dicts: after a move, the first clip is the hook and the last the payoff."""
     ns = [SimpleNamespace(id=s["id"], role=s["role"], planner_role=s.get("planner_role")) for s in spans]
@@ -943,8 +1030,7 @@ def reorder_edit(edl: dict, words: Words, audio: Audio | None, span: str, before
         if 0 <= i < len(order):
             meet.add((order[i], e))
     if audio is not None:
-        for m in tighten_edges(new, words, audio, only=meet)["moves"]:
-            plog[0]["note"] += f"; {m['span']} {m['edge']} edge tightened to the speech {m['from']:.3f} -> {m['to']:.3f}"
+        plog[0]["note"] += retighten(new, words, audio, meet)
         for s in new["spans"]:
             refresh_span(s, words)
     roles = roles_by_position(new["spans"])
@@ -1057,7 +1143,9 @@ def split_pieces(new: dict, words: Words, sid: str, runs: list[tuple[int, int]],
     new["spans"][k:k + 1] = pieces
     ovs = new.get("caption_overrides") or []  # an override goes with the piece that keeps its word, or goes
     tw = words.turn(pieces[0]["turn_id"])
-    for o in [o for o in ovs if o.get("span") == sid]:
+    # and so does a person's line break (caption_breaks): it named the old span and stopped applying (audit, 31/10)
+    brs = new.get("caption_breaks") or []
+    for o in [o for o in [*ovs, *brs] if o.get("span") == sid]:
         t = float(o["src_t"])
         # by the Voice word under its source second: a shortened pause moves the clip's edge past its first word's
         # start (combination matrix, 016: pauses, then a split, lost "Four Meta models do all"); else by time
@@ -1065,9 +1153,11 @@ def split_pieces(new: dict, words: Words, sid: str, runs: list[tuple[int, int]],
         home = next((p for p in pieces if i is not None and p["word_from"] <= i <= p["word_to"]), None) or \
             next((p for p in pieces if p["t_in"] - 0.05 <= t < p["t_out"]), None)
         if home is None:
-            ovs.remove(o)
+            (ovs if o in ovs else brs).remove(o)
         else:
             o["span"] = home["id"]
+    if "caption_breaks" in new and not brs:
+        new.pop("caption_breaks")
     return pieces, next_id
 
 
@@ -1096,7 +1186,7 @@ def settle_split(edl: dict, words: Words, audio: Audio, span_id: str, edge: str)
 def hold_trimmed_edges(edl: dict, new: dict, fixes: list[Fix], plog: list[dict], words: Words, audio: Audio | None,
                        keep_out: dict[int, set[int]] | None = None) -> None:
     """After apply_fixes, a trimmed edge that settled or widened back over speech more than SPLIT_SETTLE_S into the
-    words the trim removed (they abut the kept ones in continuous speech: run 015's "checks its | own work" came back
+    words the trim removed (or, for an outward trim, into the next word no clip keeps) (they abut the kept ones in continuous speech: run 015's "checks its | own work" came back
     whole) goes to
     the Voice boundary again, through the edge pass with the removed words (and `keep_out`) blocked, then onto the dip
     between the words. The clip's other edge keeps the place it had (trim_at puts both edges back on Voice boundaries
@@ -1105,12 +1195,13 @@ def hold_trimmed_edges(edl: dict, new: dict, fixes: list[Fix], plog: list[dict],
     old = {s["id"]: s for s in edl["spans"]}
     cur = {s["id"]: s for s in new["spans"]}
     held = False
+    unused = unused_words(new, words)
     for f in fixes:
-        if f.op != "trim_span" or f.target not in cur:
+        if f.op not in ("trim_span", "extend_span") or f.target not in cur:
             continue
         s, was, edge = cur[f.target], old[f.target], f.args["edge"]
         tw = words.turn(s["turn_id"])
-        entry = next(e for e in plog if e["op"] == "trim_span" and e["target"] == f.target and e["args"]["edge"] == edge)
+        entry = next(e for e in plog if e["op"] == f.op and e["target"] == f.target and e["args"]["edge"] == edge)
         other, okey = ("in", "t_in") if edge == "out" else ("out", "t_out")
         wkey = "word_from" if other == "in" else "word_to"
         if s[wkey] == was[wkey] and abs(s[okey] - was[okey]) >= 0.005:
@@ -1131,6 +1222,9 @@ def hold_trimmed_edges(edl: dict, new: dict, fixes: list[Fix], plog: list[dict],
         else:
             gone, line = set(range(was["word_from"], s["word_from"])), tw[s["word_from"]]["t_start"]
             past = line - s["t_in"]
+        if f.op == "extend_span":  # an outward drag settles on a dip past the words it adds: never in a word no clip
+            nb = s["word_to"] + 1 if edge == "out" else s["word_from"] - 1  # keeps (audit, 31/10: 012 "plans the")
+            gone = {nb} & unused.get(s["turn_id"], set())
         spoken = (audio.speech_runs(line + SPLIT_SETTLE_S, s["t_out"]) if edge == "out"
                   else audio.speech_runs(s["t_in"], line - SPLIT_SETTLE_S))
         if not gone or past <= SPLIT_SETTLE_S or not spoken:  # only a pause past the boundary: the edge may stay there
@@ -1195,7 +1289,10 @@ def cut_edit(edl: dict, words: Words, audio: Audio | None, ranges: list[tuple[st
         finalize(new, words)
     meet |= split_edges
     if audio is not None and meet:
-        for m in tighten_edges(new, words, audio, only=meet, keep_out=deleted)["moves"]:
+        out = unused_words(new, words)  # and the words an earlier edit deleted (audit, 31/10)
+        for t, v in deleted.items():
+            out.setdefault(t, set()).update(v)
+        for m in tighten_edges(new, words, audio, only=meet, keep_out=out)["moves"]:
             plog[-1]["note"] += f"; {m['span']} {m['edge']} edge tightened to the speech {m['from']:.3f} -> {m['to']:.3f}"
         for sid, edge in sorted(split_edges):
             plog[-1]["note"] += settle_split(new, words, audio, sid, edge)
@@ -1353,10 +1450,10 @@ def insert_edit(edl: dict, words: Words, audio: Audio | None, turn: int, a: int,
         unselected = {turn: {i for i in range(len(words.turn(turn))) if not a <= i <= b}}
         own = {m for m in meet if m[0] == span["id"]}
         moves = tighten_edges(new, words, audio, only=own, keep_out=unselected)["moves"] if own else []
-        if meet - own:
-            moves += tighten_edges(new, words, audio, only=meet - own)["moves"]
         for m in moves:
             note += f"; {m['span']} {m['edge']} edge tightened to the speech {m['from']:.3f} -> {m['to']:.3f}"
+        if meet - own:  # the neighbours never widen into a word no clip keeps either (audit, 31/10)
+            note += retighten(new, words, audio, meet - own)
         for s in new["spans"]:
             refresh_span(s, words)
         new["runtime_s"] = round(sum(s["duration"] for s in new["spans"]), 2)
@@ -1450,7 +1547,9 @@ def apply_pauses(new: dict, words: Words, plan: dict, turns: dict[str, int]) -> 
         keep = float(p["keep_s"])
         left["t_out"] = round(min(p["to"], p["from"] + keep * PAUSE_TAIL_SHARE), 3)
         right["t_in"] = round(max(p["from"], p["to"] - keep * (1 - PAUSE_TAIL_SHARE)), 3)
-        rec = {"from": p["from"], "to": p["to"], "join": join}
+        # the two words the pause sits between, so prune_pauses knows when a trim moved the clip off it (audit, 31/10)
+        rec = {"from": p["from"], "to": p["to"], "join": join, "after": [left["turn_id"], left["word_to"]],
+               "before": [right["turn_id"], right["word_from"]]}
         for s, edge in ((left, "out"), (right, "in")):
             s.setdefault("edge_tuned", {})[edge] = s["t_out" if edge == "out" else "t_in"]
             (s.get("edges") or {}).pop(edge, None)
@@ -1825,8 +1924,11 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
         new["title_card"] = False
     if prev.get("punch"):
         new["punch"] = True
-    if prev.get("punch_skip"):
-        new["punch_skip"] = list(prev["punch_skip"])
+    skips, breaks = carry_by_source(prev, new)
+    if skips:
+        new["punch_skip"] = skips
+    if breaks:
+        new["caption_breaks"] = breaks
     if prev.get("reframe_speaker_ids"):
         new["reframe_speaker_ids"] = dict(prev["reframe_speaker_ids"])
     for key in ("speaker_names", "speaker_merge"):  # SP1, SP2: who the voices are stays through a re-plan
