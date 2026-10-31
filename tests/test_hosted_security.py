@@ -129,7 +129,8 @@ def test_wrong_passwords_are_rate_limited(tmp_path, hosted_env, monkeypatch):
     codes = [c.post("/api/login", data={"password": "no"}, follow_redirects=False).status_code
              for _ in range(H.LOGIN_FAILS_PER_MIN + 2)]
     assert codes[:H.LOGIN_FAILS_PER_MIN] == [303] * H.LOGIN_FAILS_PER_MIN and codes[-1] == 429
-    assert c.post("/api/login", data={"password": "pw"}, follow_redirects=False).status_code == 429  # wait a minute
+    # the right password is never refused, not even from the address that tripped the limit (audit, 31/10)
+    assert c.post("/api/login", data={"password": "pw"}, follow_redirects=False).status_code == 303
     other = TestClient(A.create_app(tmp_path))  # another address is not held back by this one
     r = other.post("/api/login", data={"password": "pw"}, headers={"x-forwarded-for": "10.0.0.9"}, follow_redirects=False)
     assert r.status_code == 303

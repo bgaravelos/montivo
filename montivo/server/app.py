@@ -31,7 +31,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..config import OPEN_MODEL
-from ..engine.api import dump_json as write_json
+from ..engine.api import dump_json as write_json, write_atomic
 from ..engine.frame import ASPECTS
 from ..engine import preview as live_preview_engine
 from ..engine.edl import title_style
@@ -82,7 +82,10 @@ COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 13, "plan_open_s": 7, "revie
         "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175, "monti": 0.014}
 MONTI_PER_HOUR = 40  # Monti answers from the model per judge and hour on the hosted demo; past it, from the guide ($0)
 MONTI_PER_HOUR_ALL = 120  # and for all judges together (a new sign-in is a new judge): about $1.70 an hour at most
-MAX_UPLOADS_ALL = 30  # uploads all judges together may make on the hosted demo (MONTIVO_MAX_UPLOADS_ALL)
+MAX_UPLOADS = 3  # uploads one judge may make on the hosted demo (MONTIVO_MAX_UPLOADS; Billy's call, 31/10)
+MAX_UPLOADS_ALL = 60  # uploads all judges together may make on the hosted demo (MONTIVO_MAX_UPLOADS_ALL)
+JOB_MAX_S = 900  # hosted: a job still running after this long is stopped (MONTIVO_JOB_MAX_S); a 95 s run with its
+# review loop takes about 4 minutes, and with one job at a time a stuck one held every judge until a restart
 
 
 class WebFiles(StaticFiles):
@@ -127,6 +130,7 @@ class Job:
     charged: float | None = None  # what the ledger grew by during the job, once it ended
     v0: int = 0  # the newest edl_vN when the job started: a failed job's unrendered versions come after it
     draft_dir: str | None = None  # Ask Montivo in Live: the draft folder its edits go into when it ends
+    timed_out: bool = False  # stopped by the wall-clock limit (State.job_max_s), not by the person
 
     def public(self) -> dict:
         return {"id": self.id, "run": self.run, "kind": self.kind, "label": self.label, "started": self.started,
@@ -156,6 +160,7 @@ class State:
         self.exporting: dict[str, int] = {}  # run id -> exports rendering in it (they share the run's render/ folder)
         self.paid: str | None = None  # the run a paid call inside a request (cover, post text, mask) is spending on
         self.on_stopped = None  # hosted: job -> None, holds the budget for a call a stopped job may have had in flight
+        self.job_max_s: float | None = None  # hosted: a job's wall-clock limit (JOB_MAX_S), None = none
 
     def run_dir(self, run_id: str) -> Path:
         if not SAFE_NAME.match(run_id):
@@ -385,8 +390,9 @@ def result_message(st: State, job: Job) -> dict:
     if job.rc != 0:
         free = " Nothing was charged." if not job.charged else f" It spent ${job.charged:.3f} before it stopped."
         why = refusal(job) if job.rc > 0 else None
-        what = " was stopped" if job.rc < 0 else f": {why.rstrip('.')}" if why \
-            else f" failed (exit {job.rc}). The log has the details"
+        what = (f" was stopped after {(job.ended or time.time()) - job.started:.0f} s, past the demo server's limit "
+                "for one job" if job.timed_out else " was stopped") if job.rc < 0 \
+            else f": {why.rstrip('.')}" if why else f" failed (exit {job.rc}). The log has the details"
         return {"role": "agent", "text": f"{job.label}{what}.{free}", "kind": "error", "job": job.id,
                 "charged_usd": job.charged, "after": latest_cut(d) or None}
     vs = sorted(int(m.group(1)) for p in d.glob("cut_v*.mp4") if (m := re.fullmatch(r"cut_v(\d+)\.mp4", p.name)))
@@ -471,16 +477,37 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
         chat_append(d, chat)
 
     def wait():
-        rc = job.proc.wait()
-        end_group(job.proc.pid)  # the job's slot frees only once its encodes are gone too
-        fh.close()
-        job.charged = round(max(0.0, ledger_total(d) - job.spent_at), 5)
-        if rc != 0:
-            set_aside_unrendered(d, job.v0, job.id)
-        if rc < 0 and st.on_stopped:
-            st.on_stopped(job)
-        job.rc, job.ended = rc, time.time()
-        chat_append(d, result_message(st, job))
+        rc = None
+        try:
+            try:
+                rc = job.proc.wait(timeout=st.job_max_s)
+            except subprocess.TimeoutExpired:  # stuck: the whole group goes, as Stop does it
+                job.timed_out = True
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(job.proc.pid, signal.SIGTERM)
+                try:
+                    rc = job.proc.wait(timeout=STOP_GRACE_S)
+                except subprocess.TimeoutExpired:
+                    with contextlib.suppress(ProcessLookupError, PermissionError):
+                        os.killpg(job.proc.pid, signal.SIGKILL)
+                    rc = job.proc.wait()
+            end_group(job.proc.pid)  # the job's slot frees only once its encodes are gone too
+            fh.close()
+            job.charged = round(max(0.0, ledger_total(d) - job.spent_at), 5)
+            if rc != 0:
+                set_aside_unrendered(d, job.v0, job.id)
+            if rc < 0 and st.on_stopped:
+                st.on_stopped(job)
+        except Exception as e:  # noqa: BLE001 - a clean-up that raises must not leave the job "running" for good
+            print(f"montivo-ui: job {job.id} on {job.run}: clean-up failed: {e!r}", file=sys.stderr)
+        finally:
+            # set last and always (audit, 31/10: an exception here used to keep the job running forever, and with one
+            # job at a time every judge's edits answered 409 until a restart)
+            job.rc, job.ended = (rc if rc is not None else -1), time.time()
+        try:
+            chat_append(d, result_message(st, job))
+        except Exception as e:  # noqa: BLE001 - the run folder may have been archived meanwhile
+            print(f"montivo-ui: job {job.id} on {job.run}: no chat line: {e!r}", file=sys.stderr)
 
     threading.Thread(target=wait, daemon=True).start()
     return job
@@ -490,18 +517,25 @@ def create_app(root: Path) -> FastAPI:
     st = State(root.resolve())
     app = FastAPI(title="Montivo", docs_url="/api/docs", openapi_url="/api/openapi.json")
     cap = hosted.env_float("MONTIVO_BUDGET_USD")
-    budget = hosted.Budget(st.root, cap) if cap is not None else None
+    judge_cap = hosted.env_float("MONTIVO_JUDGE_BUDGET_USD")
+    budget = hosted.Budget(st.root, cap, hosted.JUDGE_CAP_USD if judge_cap is None else judge_cap) \
+        if cap is not None else None
     max_footage_s = hosted.env_float("MONTIVO_MAX_FOOTAGE_S")
     max_upload_mb = hosted.env_float("MONTIVO_MAX_UPLOAD_MB")
     max_uploads = hosted.env_float("MONTIVO_MAX_UPLOADS")
+    max_uploads = MAX_UPLOADS if max_uploads is None else max_uploads  # 0 = no cap per judge (only with the budget on)
     max_uploads_all = hosted.env_float("MONTIVO_MAX_UPLOADS_ALL")
     max_uploads_all = MAX_UPLOADS_ALL if max_uploads_all is None else max_uploads_all  # 0 = no uploads at all
+    job_max_s = hosted.env_float("MONTIVO_JOB_MAX_S")
+    st.job_max_s = (job_max_s or None) if job_max_s is not None else (JOB_MAX_S if budget is not None else None)
 
     @app.middleware("http")
     async def only_their_runs(request: Request, call_next):
         """On the hosted demo every /api/runs/<id>/... route, read or write, serves a judge the samples and their own
         projects only; another judge's run answers exactly like a run that does not exist. Added before the sign-in
         gate, so the gate runs first."""
+        if budget is not None:  # whose share need_key and the budget shown check (hosted.CURRENT_JUDGE)
+            hosted.CURRENT_JUDGE.set(judge_of(request))
         m = RUN_PATH.match(request.url.path)
         if budget is not None and m:
             d = st.runs / m.group(1)
@@ -514,15 +548,18 @@ def create_app(root: Path) -> FastAPI:
     @app.exception_handler(ValueError)
     @app.exception_handler(TypeError)
     @app.exception_handler(AttributeError)
+    @app.exception_handler(OverflowError)
     async def bad_input(request: Request, e: Exception):
         """A route reading the request ("from": "x", t=nan, a body that is not JSON or not an object) answered 500;
         that is the client's mistake: 400. Only for errors raised in a route's own frame (int(), float(), b.get on a
-        list): one raised deeper, in the engine, is still the server's and still a 500."""
+        list, .strip() on a number, int(1e400)): one raised deeper, in the engine, is still the server's and still a
+        500."""
         tb = e.__traceback__
         while tb is not None and tb.tb_next is not None:
             tb = tb.tb_next
         here = tb is not None and Path(tb.tb_frame.f_code.co_filename).parent == Path(__file__).parent
-        if isinstance(e, json.JSONDecodeError) or (here and (not isinstance(e, AttributeError) or "has no attribute 'get'" in str(e))):
+        reading = not isinstance(e, AttributeError) or any(f"has no attribute '{a}'" in str(e) for a in ("get", "strip", "split"))
+        if isinstance(e, json.JSONDecodeError) or (here and reading):
             return JSONResponse({"detail": f"bad request: {str(e)[:200]}"}, status_code=400)
         raise e
     if budget is not None:
@@ -536,7 +573,7 @@ def create_app(root: Path) -> FastAPI:
 
     def key_ok() -> bool:
         """The key is set and, on the hosted demo, the budget still covers the cheapest paid action."""
-        return has_key() and (budget is None or budget.note() is None)
+        return has_key() and (budget is None or budget.note(hosted.CURRENT_JUDGE.get()) is None)
 
     copying = threading.Lock()
 
@@ -581,6 +618,21 @@ def create_app(root: Path) -> FastAPI:
                              f"sample {run_id}: your edits go here and the sample stays as it was for the next judge."})
         return mine
 
+    def sample_body(d: Path, b: dict) -> None:
+        """The fields most edits share, checked before a sample is copied for them: "from" a version the sample has,
+        "span" a span id, the review passes (each route checks the rest, and its own fields, after)."""
+        if "from" in b and b["from"] not in (None, 0, ""):
+            try:
+                frm = int(b["from"])
+            except (TypeError, ValueError, OverflowError):
+                raise HTTPException(400, "from: a version number")
+            # (Ask Montivo in Live sends its draft's number, one past the newest version)
+            if not (d / f"edl_v{frm}.json").is_file() and frm != latest_version(d) + 1:
+                raise HTTPException(404, f"no edl_v{frm}.json in this run")
+        if "span" in b and b["span"] is not None and not re.fullmatch(r"s\d+", str(b["span"])):
+            raise HTTPException(400, "span: a span id like s3")
+        review_passes(b)
+
     async def own(run_id: str, request: Request, est=None, what: str = "This edit") -> str:
         """The run an edit goes to: the run itself, or on the hosted demo the judge's own copy of a sample (made on
         their first edit, runs/<id>-<judge>), so one judge's edits never become the next judge's opening version.
@@ -596,21 +648,20 @@ def create_app(root: Path) -> FastAPI:
         st.refuse_second_job()  # each route here starts a job: no copy for an edit the one-job rule refuses (28/10)
         # nor for one the key or the budget refuses (cloud review, 29/10: every refused paid edit copied first, ~13 s
         # each on the Modal Volume): `est(body)` is what the route will ask need_key for, the review passes included
-        try:
-            b = json.loads(raw or b"{}")
-        except ValueError:
-            b = {}
-        b = b if isinstance(b, dict) else {}
+        b = await body(request)  # nor for a body the route would refuse as a 400 (audit, 31/10)
+        sample_body(d, b)
         cost = est(b) if est else COST["review"] * review_passes(b)
         if cost > 0:
             need_key(what, cost)
         return await asyncio.to_thread(copy_sample, run_id, d, judge_of(request))
 
     def key_info() -> dict:
-        return {"has_key": key_ok(), "key_note": budget.note() if budget else None,
-                "budget": budget.public() if budget else None,
+        judge = hosted.CURRENT_JUDGE.get()
+        return {"has_key": key_ok(), "key_note": budget.note(judge) if budget else None,
+                "budget": budget.public(judge) if budget else None,
                 # the hosted limits, so the browser refuses a clip before minutes of upload (None: no limit)
-                "limits": {"footage_s": max_footage_s, "upload_mb": max_upload_mb, "uploads": max_uploads}}
+                "limits": {"footage_s": max_footage_s, "upload_mb": max_upload_mb,
+                           "uploads": (max_uploads or None) if budget is not None else None}}
 
     monti_seen: dict[str, list[float]] = {}  # judge -> times of their model answers (the hosted hourly cap)
     monti_gate = threading.Lock()
@@ -640,6 +691,9 @@ def create_app(root: Path) -> FastAPI:
             recent = [x for x in monti_seen.get(who, []) if now - x < 3600]
             everyone = sum(1 for xs in monti_seen.values() for x in xs if now - x < 3600)
             why = ("no MODEL_API_KEY on this server" if not has_key()
+                   # one call at a time (monti.LOCK): a second answers from the guide at once instead of holding a
+                   # worker thread in the queue (audit, 31/10: queued calls took a GET from 13 ms to 6 s)
+                   else "another question is being answered" if monti_flying[0]
                    else "the demo's model budget is spent"
                    if budget is not None and budget.left() - monti_flying[0] * monti.COST_USD < monti.COST_USD
                    else f"more than {MONTI_PER_HOUR} questions this hour" if budget is not None and len(recent) >= MONTI_PER_HOUR
@@ -664,7 +718,7 @@ def create_app(root: Path) -> FastAPI:
             out = monti.fallback(message, page) | {"source": "guide", "model": None, "cost_usd": 0.0, "seconds": 0.0,
                                                     "why": why}
         monti.log_question(st.root, who, message, out)
-        return {**out, "budget": budget.public() if budget else None}
+        return {**out, "budget": budget.public(hosted.CURRENT_JUDGE.get()) if budget else None}
 
     @app.get("/api/health")
     def health():
@@ -860,8 +914,9 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(404, "no cut for this version")
         return d, src
 
-    def draft_media(run_id: str, request: Request) -> tuple[Path, dict, dict]:
-        """The open draft's run folder, segments (engine/preview.py, no graphics) and the edit media of its source."""
+    def draft_media(run_id: str, request: Request) -> tuple[Path, dict, dict, Path]:
+        """The open draft's run folder, segments (engine/preview.py, no graphics), the edit media of its source and
+        the draft's own folder."""
         d = st.run_dir(run_id)
         fd = draft.folder(d, judge_of(request) if budget is not None else None)
         with draft.run_lock(d):
@@ -873,18 +928,19 @@ def create_app(root: Path) -> FastAPI:
             em = live_preview_engine.edit_media(d, edl)
         except FileNotFoundError as e:
             raise HTTPException(404, str(e))
-        return d, live_preview_engine.preview_data(d, edl, overlays=False), em
+        return d, live_preview_engine.preview_data(d, edl, overlays=False), em, fd
 
     @app.get("/api/runs/{run_id}/filmstrip")
     def filmstrip(run_id: str, request: Request, v: int | None = None, draft_: int = Query(0, alias="draft")):
         """The timeline's thumbnails: one JPEG row of 54x96 frames, one every 0.5 s of cut_vN.mp4 (cached in ui/cache/).
         draft=1: the open draft's, put together from the source's filmstrip (no render)."""
         if draft_:
-            d, data, em = draft_media(run_id, request)
+            d, data, em, fd = draft_media(run_id, request)
             strip = media.filmstrip(d / em["video"], d / "ui" / "cache" / "edit" / "filmstrip_source.jpg")
             title_s = (data["title"] or {}).get("seconds", 0.0)
-            out = media.draft_filmstrip(strip, data["segments"], data["duration_s"], title_s,
-                                        d / "ui" / "cache" / "edit" / "filmstrip_draft.jpg")
+            # in the draft's own folder (one per judge on the hosted demo): ui/cache/edit/filmstrip_draft.jpg was one
+            # file per run, hard-linked into every judge's copy of a sample, so judges drew over each other (audit, 31/10)
+            out = media.draft_filmstrip(strip, data["segments"], data["duration_s"], title_s, fd / "filmstrip.jpg")
             return FileResponse(out, headers={"Cache-Control": "no-store", "X-Thumb": f"{media.THUMB_W}x{media.THUMB_H}@{media.THUMB_STEP_S}"})
         if v is None:
             raise HTTPException(400, "v or draft=1")
@@ -937,7 +993,7 @@ def create_app(root: Path) -> FastAPI:
         (cached in ui/cache/). draft=1: the open draft's, from the source audio's peaks (no render); with track=music
         its bed, from the track's peaks shaped the way the live player plays it."""
         if draft_:
-            d, data, em = draft_media(run_id, request)
+            d, data, em, _ = draft_media(run_id, request)
             if track == "music":
                 from ..engine import music as bed
                 if not data.get("music"):
@@ -985,6 +1041,7 @@ def create_app(root: Path) -> FastAPI:
         return {"checks": preflight.checks(d, v, aspect)}
 
     export_lock = threading.Lock()
+    exporting_run: list[str | None] = [None]  # the run the export holding export_lock is made from (archive waits)
     @contextlib.contextmanager
     def one_paid_call(run_id: str):
         """One paid call in a request at a time, and none beside a job on its run (on the hosted demo, beside any
@@ -1116,8 +1173,15 @@ def create_app(root: Path) -> FastAPI:
             return {"ok": True, "run": run_id}
         return await asyncio.to_thread(go)
 
+    def cover_dir(d: Path, request: Request) -> Path:
+        """Where the covers made on the Export page go: ui/cache/cover/, or on a hosted sample the judge's own folder
+        under it (the sample's was listed by /assets to every judge: one judge's headline was the next one's, audit
+        31/10). A $0 render, so no copy of the sample for it."""
+        base = d / "ui" / "cache" / "cover"
+        return base / "judges" / judge_of(request) if is_sample(d) else base
+
     @app.post("/api/runs/{run_id}/cover/render")
-    def cover_render(run_id: str, b: dict):
+    def cover_render(run_id: str, request: Request, b: dict):
         """{"v", "t", "template", "text", "highlight", "aspect"}: the designed cover as the export would write it, its
         grid tile and the measured checks ($0, about 0.1 s after the first call of a version). A cutout without its
         mask answers {"need_mask": true}."""
@@ -1128,7 +1192,7 @@ def create_app(root: Path) -> FastAPI:
         if not edl_path.is_file():
             raise HTTPException(404, f"no edl_v{v}.json")
         key = hashlib.sha1(json.dumps([v, aspect, design, edl_path.stat().st_mtime_ns], sort_keys=True).encode()).hexdigest()[:16]
-        out = d / "ui" / "cache" / "cover" / f"{key}.jpg"
+        out = cover_dir(d, request) / f"{key}.jpg"
         meta = out.with_suffix(".json")
         if not (out.is_file() and meta.is_file()):
             try:
@@ -1145,7 +1209,7 @@ def create_app(root: Path) -> FastAPI:
             img.save(out, quality=88)
             tile(img).save(out.with_name(f"{key}-tile.jpg"), quality=92)
             write_json(meta, info)
-        base = f"/api/runs/{run_id}/file/ui/cache/cover/"
+        base = f"/api/runs/{run_id}/file/{out.parent.relative_to(d).as_posix()}/"
         return {"image": base + out.name, "tile": base + f"{key}-tile.jpg", **read_json(meta)}
 
     @app.post("/api/runs/{run_id}/export/bundle")
@@ -1195,21 +1259,31 @@ def create_app(root: Path) -> FastAPI:
         key = hashlib.sha1(json.dumps(key_in).encode()).hexdigest()[:12]
         out = d / "ui" / "cache" / "exports" / key
         rec_p = out / "export.json"
-        with export_lock:  # one export at a time: a render ("clean", a feed aspect) uses the run's render/ scratch folder
-            if not rec_p.is_file():
-                shutil.rmtree(out, ignore_errors=True)
-                old = sorted((x for x in out.parent.glob("*") if x.is_dir()), key=lambda x: x.stat().st_mtime) if out.parent.is_dir() else []
-                for x in old[:-3]:  # keep the last three bundles: each holds a copy of the cut
-                    shutil.rmtree(x, ignore_errors=True)
-                args = [sys.executable, "-m", "montivo.export", str(d.relative_to(st.root)) if d.is_relative_to(st.root) else str(d),
-                        "--version", str(v), "--out", str(out), "--name", name, "--include", ",".join(inc), "--preset", preset,
-                        *(["--cover-t", f"{float(cover):.2f}"] if cover is not None else []),
-                        *(["--aspect", aspect] if aspect != "9:16" else []),
-                        *(["--cover-design", json.dumps(design)] if design else [])]
-                proc = subprocess.run(args, cwd=st.root, capture_output=True, text=True)
-                if proc.returncode != 0:
-                    raise HTTPException(500, f"export failed: {(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")
-                rec_p.write_text(proc.stdout)
+        # one export at a time: a render ("clean", a feed aspect) uses the run's render/ scratch folder. A second one
+        # is a 409 now, not a wait: each waiting request held a worker thread, and 40 of them took a GET from 13 ms to
+        # 6 s (audit, 31/10). One made before is served without the lock
+        if not rec_p.is_file():
+            if not export_lock.acquire(blocking=False):
+                raise HTTPException(409, "another export is being made on this server: try again in a moment")
+            exporting_run[0] = run_id
+            try:
+                if not rec_p.is_file():
+                    shutil.rmtree(out, ignore_errors=True)
+                    old = sorted((x for x in out.parent.glob("*") if x.is_dir()), key=lambda x: x.stat().st_mtime) if out.parent.is_dir() else []
+                    for x in old[:-3]:  # keep the last three bundles: each holds a copy of the cut
+                        shutil.rmtree(x, ignore_errors=True)
+                    args = [sys.executable, "-m", "montivo.export", str(d.relative_to(st.root)) if d.is_relative_to(st.root) else str(d),
+                            "--version", str(v), "--out", str(out), "--name", name, "--include", ",".join(inc), "--preset", preset,
+                            *(["--cover-t", f"{float(cover):.2f}"] if cover is not None else []),
+                            *(["--aspect", aspect] if aspect != "9:16" else []),
+                            *(["--cover-design", json.dumps(design)] if design else [])]
+                    proc = subprocess.run(args, cwd=st.root, capture_output=True, text=True)
+                    if proc.returncode != 0:
+                        raise HTTPException(500, f"export failed: {(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")
+                    write_atomic(rec_p, proc.stdout)  # read without the lock above: never half written
+            finally:
+                exporting_run[0] = None
+                export_lock.release()
         rec = json.loads(rec_p.read_text())
         url = lambda f: f"/api/runs/{run_id}/file/ui/cache/exports/{key}/{f}"  # noqa: E731
         return {"files": [{**f, "url": url(f["name"])} for f in rec["files"]],
@@ -1312,10 +1386,10 @@ def create_app(root: Path) -> FastAPI:
                     p.update(active=not p["finished"], replay=True, cap=round(nxt["t"] - ln["t"], 2) if same else 0.0,
                              rate=round((nxt["t"] - ln["t"]) / wait, 3) if same and wait > 0 else 0.0)
                     yield sse("progress", p)
-            yield sse("replay_end", {})
-            while not await request.is_disconnected():
-                await asyncio.sleep(15)
-                yield ": keep-alive\n\n"
+            # the stream ends here, as a live one does (STREAM_MAX_S): its keep-alive loop never ended and held the
+            # server open after a SIGTERM (audit, 31/10). A reconnect would play the story again from the start, so the
+            # browser is told to wait a day first (its EventSource reconnects on its own; a reload starts a new one)
+            yield sse("replay_end", {}) + "retry: 86400000\n\n"
 
         gen = replay_gen(max(replay, 0.25)) if replay else live()
         return StreamingResponse(gen, media_type="text/event-stream",
@@ -1327,8 +1401,8 @@ def create_app(root: Path) -> FastAPI:
         """409 without the key, or on the hosted demo when the budget left does not cover `est` dollars."""
         if not has_key():
             raise HTTPException(409, f"{what} calls Meta models: set MODEL_API_KEY and restart montivo serve")
-        if budget is not None:
-            budget.require(what, est)
+        if budget is not None:  # the whole budget, and the share of the judge whose request this is
+            budget.require(what, est, hosted.CURRENT_JUDGE.get())
 
     def planner_of(b: dict) -> str | None:
         """{"planner": "spark" | "open"} -> None (Spark 1.3, the default) or the Muse Spark Open model id."""
@@ -1440,16 +1514,18 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/runs")
     async def new_run(request: Request):
         b = await body(request)
-        src = (st.root / b.get("footage", "")).resolve()
+        src = (st.root / str(b.get("footage") or "")).resolve()
         if st.footage.resolve() not in src.parents or not src.is_file() or not visible(src, request):
             raise HTTPException(400, "pick a file in footage/")
-        dur = footage_duration(src) or 0.0
+        # ffprobe in a worker thread: on the event loop a slow probe held every other request (audit, 31/10)
+        dur = await asyncio.to_thread(footage_duration, src) or 0.0
         if max_footage_s and dur > max_footage_s:
             raise HTTPException(400, f"this clip is {dur:.0f} s: the demo server takes clips up to {max_footage_s:.0f} s")
         need_key("A new run", COST["run_fixed"] + COST["run_per_s"] * dur
                  + (COST["review_loop"] if b.get("review", True) else 0.0)
                  + (0.07 + COST["compare"] if b.get("review", True) and b.get("hook_ab") else 0.0))
-        brief = (b.get("brief") or "").strip()
+        # one line of at most 2000 characters, as a re-plan's new brief: it goes into every prompt of the run
+        brief = " ".join(str(b.get("brief") or "").split())[:2000]
         if not brief:
             raise HTTPException(400, "the brief is empty")
         rid = b.get("id") if budget is None else None  # on the host the server names it: an id from the client
@@ -1921,8 +1997,8 @@ def create_app(root: Path) -> FastAPI:
         if edl is None:
             raise HTTPException(404, f"no edl_v{frm}.json")
         o = await asyncio.to_thread(draft.resolve, d, edl, o)
-        try:  # refuse here what the job would refuse, before it starts
-            made, rec = human.step(edl, *draft.inputs(d), o)
+        try:  # refuse here what the job would refuse, before it starts (off the loop: inputs reads the run's audio)
+            made, rec = await asyncio.to_thread(lambda: human.step(edl, *draft.inputs(d), o))
         except SystemExit as e:
             raise HTTPException(409, str(e))
         card = draft.cost([o], d, made, edl)  # a kit or a text op that turns a card on with no image yet: Muse Image
@@ -2153,67 +2229,81 @@ def create_app(root: Path) -> FastAPI:
                         chat={"role": "user", "text": f"Style in v{frm}: {'; '.join(what)}.", "chips": [f"v{frm}"], "kind": "style"})
         return {"job": job.public()}
 
+    def suggest_edl(run_id: str, request: Request, b: dict) -> dict:
+        """The EDL a suggestion reads: the open draft's ("draft": true) or version v's, of the run the editor shows."""
+        d = st.run_dir(run_id)
+        if b.get("draft"):
+            fd = draft.folder(d, judge_of(request) if budget is not None else None)
+            with draft.run_lock(d):
+                state = draft.load(fd)
+                if state is None:
+                    raise HTTPException(404, "no draft")
+                return draft.current(fd, d, state)
+        try:
+            v = int(b.get("v") or latest_version(d))
+        except (TypeError, ValueError, OverflowError):
+            raise HTTPException(400, "v: a version")
+        return edl_of(run_id, v)[1]
+
     @app.post("/api/runs/{run_id}/style/suggest")
-    def style_suggest(run_id: str, request: Request, b: dict):
+    async def style_suggest(run_id: str, request: Request):
         """{"prompt": "...", "v": N} or {"prompt", "draft": true}: the look Muse Spark suggests for those words on that
         version or the open draft (look.suggest, one call, about $0.008, in the run's ledger), without making a
-        version: the editor puts it in the draft as a style edit (A3), so a look from words is one more draft edit."""
+        version: the editor puts it in the draft as a style edit (A3), so a look from words is one more draft edit.
+        On a hosted sample the call is spent and logged in the judge's copy ("run"; the draft stays where it is until
+        Make Version takes it there): it used to write the sample's ledger, run.log and spark/ (audit, 31/10)."""
         from ..engine.look import suggest
         from ..ledger import Ledger
         from ..run import RunLog
+        b = await body(request)
         prompt = " ".join(str(b.get("prompt") or "").split())[:300]
         if not prompt:
             raise HTTPException(400, "prompt: the look in a few words")
-        d = st.run_dir(run_id)
-        if b.get("draft"):
-            fd = draft.folder(d, judge_of(request) if budget is not None else None)
-            with draft.run_lock(d):
-                state = draft.load(fd)
-                if state is None:
-                    raise HTTPException(404, "no draft")
-                edl = draft.current(fd, d, state)
-        else:
-            d, edl = edl_of(run_id, int(b.get("v") or latest_version(d)))
-        with one_paid_call(run_id):
-            need_key("Styling from a sentence (Muse Spark)", COST["look"])
-            log = RunLog(d / "run.log")
-            log(f"style: the look for {prompt!r} (one Spark call, for the draft)")
-            try:
-                look, why, corrected = suggest(d, edl, prompt, Ledger.resume(d / "ledger.json"), log)
-            except ValueError as e:
-                raise HTTPException(502, f"Spark's look did not check out: {e}")
-            if corrected:
-                log(f"style: corrected Spark's answer: {'; '.join(corrected)}")
-        return {"look": look, "why": why, "prompt": prompt}
+        asked = run_id
+        edl = await asyncio.to_thread(suggest_edl, run_id, request, b)
+        run_id, _ = await own_paid(run_id, request, COST["look"], "Styling from a sentence (Muse Spark)")
+
+        def go() -> dict:
+            d = st.run_dir(run_id)
+            with one_paid_call(run_id):
+                need_key("Styling from a sentence (Muse Spark)", COST["look"])
+                log = RunLog(d / "run.log")
+                log(f"style: the look for {prompt!r} (one Spark call, for the draft)")
+                try:
+                    look, why, corrected = suggest(d, edl, prompt, Ledger.resume(d / "ledger.json"), log)
+                except ValueError as e:
+                    raise HTTPException(502, f"Spark's look did not check out: {e}")
+                if corrected:
+                    log(f"style: corrected Spark's answer: {'; '.join(corrected)}")
+            return {"look": look, "why": why, "prompt": prompt, **({"run": run_id} if run_id != asked else {})}
+        return await asyncio.to_thread(go)
 
     @app.post("/api/runs/{run_id}/title/suggest")
-    def title_suggest(run_id: str, request: Request, b: dict):
+    async def title_suggest(run_id: str, request: Request):
         """{"v": N} or {"draft": true}: three title card lines Muse Spark writes from what the cut says (T3,
         engine/titles.py, one call in the run's ledger: $0.0088, 9.4 s, 1960 output tokens on 015, 30/10), no
-        version: picking one is a text edit."""
+        version: picking one is a text edit. On a hosted sample it is spent in the judge's copy, as style/suggest."""
         from ..engine.titles import suggest
         from ..ledger import Ledger
         from ..run import RunLog
-        d = st.run_dir(run_id)
-        if b.get("draft"):
-            fd = draft.folder(d, judge_of(request) if budget is not None else None)
-            with draft.run_lock(d):
-                state = draft.load(fd)
-                if state is None:
-                    raise HTTPException(404, "no draft")
-                edl = draft.current(fd, d, state)
-        else:
-            d, edl = edl_of(run_id, int(b.get("v") or latest_version(d)))
-        brief = (read_json(d / "run.json") or {}).get("brief") or ""
-        with one_paid_call(run_id):
-            need_key("Title hooks (Muse Spark)", COST["titles"])
-            log = RunLog(d / "run.log")
-            log("titles: three title card lines (one Spark call)")
-            try:
-                titles = suggest(d, edl, brief, Ledger.resume(d / "ledger.json"), log)
-            except ValueError as e:
-                raise HTTPException(502, str(e))
-        return {"titles": titles}
+        b = await body(request)
+        asked = run_id
+        edl = await asyncio.to_thread(suggest_edl, run_id, request, b)
+        run_id, _ = await own_paid(run_id, request, COST["titles"], "Title hooks (Muse Spark)")
+
+        def go() -> dict:
+            d = st.run_dir(run_id)
+            brief = (read_json(d / "run.json") or {}).get("brief") or ""
+            with one_paid_call(run_id):
+                need_key("Title hooks (Muse Spark)", COST["titles"])
+                log = RunLog(d / "run.log")
+                log("titles: three title card lines (one Spark call)")
+                try:
+                    titles = suggest(d, edl, brief, Ledger.resume(d / "ledger.json"), log)
+                except ValueError as e:
+                    raise HTTPException(502, str(e))
+            return {"titles": titles, **({"run": run_id} if run_id != asked else {})}
+        return await asyncio.to_thread(go)
 
     @app.post("/api/runs/{run_id}/reorder")
     async def reorder(run_id: str, request: Request):
@@ -2272,7 +2362,7 @@ def create_app(root: Path) -> FastAPI:
         return heads(st.run_dir(run_id))
 
     @app.get("/api/runs/{run_id}/assets")
-    def run_assets(run_id: str, v: int = 0):
+    def run_assets(run_id: str, request: Request, v: int = 0):
         """ME3: the project's assets in one list for version v: its B-roll stills (Muse Image), the title card image,
         the covers made on the Export page (ui/cache/cover/, newest first) and the music bed. $0."""
         d = st.run_dir(run_id)
@@ -2283,7 +2373,7 @@ def create_app(root: Path) -> FastAPI:
                   for o in edl.get("overlays") or []]
         title_png = d / "title" / "title_card.png"
         covers = []
-        for j in sorted((d / "ui" / "cache" / "cover").glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:12]:
+        for j in sorted(cover_dir(d, request).glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:12]:
             img = j.with_suffix(".jpg")
             meta = read_json(j) or {}
             if img.is_file() and "template" in meta:
@@ -2358,7 +2448,7 @@ def create_app(root: Path) -> FastAPI:
         d = st.run_dir(run_id)
         b = await request.json()
         model = planner_of(b)
-        text = (b.get("instruction") or "").strip()
+        text = str(b.get("instruction") or "").strip()[:2000]
         brief = " ".join(str(b.get("brief") or "").split())[:2000]  # ME2: a new brief, a fresh plan from it
         if not text and not brief:
             raise HTTPException(400, "the instruction is empty")
@@ -2388,7 +2478,7 @@ def create_app(root: Path) -> FastAPI:
             # behind, so the router read the sample's version and the copy showed only the chat's edits (audit, 31/10)
             await asyncio.to_thread(draft.move, st.run_dir(asked), d, judge_of(request))
         model = planner_of(b)
-        text = (b.get("message") or b.get("instruction") or "").strip()
+        text = str(b.get("message") or b.get("instruction") or "").strip()[:2000]
         if not text:
             raise HTTPException(400, "the message is empty")
         frm = int(b.get("from") or latest_cut(d))
@@ -2396,7 +2486,7 @@ def create_app(root: Path) -> FastAPI:
         router = COST["ask"] + COST["plan_open" if model else "plan"]
 
         def fits(usd: float) -> bool:
-            return budget is None or budget.left() >= round(usd, 4)
+            return budget is None or budget.left_for(hosted.CURRENT_JUDGE.get()) >= round(usd, 4)
         if key_ok() and passes and not fits(router + COST["review"] * passes):
             passes = 0  # the edit before its review: the budget left still covers the router
         use = key_ok() and fits(router)
@@ -2552,6 +2642,9 @@ def create_app(root: Path) -> FastAPI:
         d = st.run_dir(run_id)
         if st.busy(run_id):
             raise HTTPException(409, f"{st.jobs[run_id].label} is still running on this run")
+        if st.paid == run_id or st.exporting.get(run_id) or (export_lock.locked() and exporting_run[0] == run_id):
+            # the folder moved under a paid call or an export answered 500 and lost what it made (audit, 31/10)
+            raise HTTPException(409, "an export or a Muse Spark request is running on this project: archive it after")
         if is_sample(d):
             raise HTTPException(403, "the sample projects stay on the demo server for everyone")
         if not judges(d, request):

@@ -1,12 +1,19 @@
 """Timeline media for the UI: a filmstrip sprite and waveform peaks per cut, one ffmpeg pass each, cached under
-<run>/ui/cache/ (never next to the engine's outputs) and rebuilt when the cut is newer than the cache."""
+<run>/ui/cache/ (never next to the engine's outputs) and rebuilt when the cut is newer than the cache.
+
+Every file here is written to a temp name and renamed over the old one, never rewritten in place: a hosted judge's
+copy of a sample hard-links the sample's ui/cache/edit/, and a write in place changed the file under every link (and
+a reader could see half of it; audit, 31/10)."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 from array import array
 from pathlib import Path
+
+from ..engine.api import write_atomic
 
 THUMB_W, THUMB_H = 54, 96  # one 9:16 frame of the sprite
 THUMB_STEP_S = 0.5
@@ -102,8 +109,7 @@ def peaks(src: Path, out: Path) -> dict:
         r = subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(src), "-map", "0:a:0", "-ac", "1",
                             "-ar", str(PEAKS_SR), "-f", "s16le", "-"], capture_output=True, check=True)
         data = {"rate": PEAKS_RATE, "peaks": peaks_from_pcm(r.stdout)}
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(data, separators=(",", ":")))
+        write_atomic(out, json.dumps(data, separators=(",", ":")))
         return data
 
 
@@ -141,7 +147,9 @@ def draft_filmstrip(source_strip: Path, segments: list[dict], duration: float, t
         j = min(n_src - 1, max(0, round((seg["t_in"] + c - seg["cut_t0"]) / THUMB_STEP_S)))
         img.paste(src.crop((j * THUMB_W, 0, (j + 1) * THUMB_W, THUMB_H)), (k * THUMB_W, 0))
     out.parent.mkdir(parents=True, exist_ok=True)
-    img.save(out, quality=80)
+    tmp = out.with_name(f".{out.name}.{os.getpid()}-{threading.get_ident()}.part")
+    img.save(tmp, format="JPEG", quality=80)
+    tmp.replace(out)
     return out
 
 

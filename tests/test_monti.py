@@ -210,7 +210,8 @@ def test_a_burst_cannot_get_past_the_hourly_cap(tmp_path, env):
     go.set()
     for t in threads:
         t.join(10)
-    assert sorted(got) == ["guide", "guide", "guide", "spark", "spark"]
+    # never past the cap; since the audit of 31/10 one call at a time, so the burst's others answer from the guide
+    assert sorted(got) == ["guide", "guide", "guide", "guide", "spark"]
 
 
 def test_a_failed_monti_call_gives_its_slot_back(tmp_path, env):
