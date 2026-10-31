@@ -144,7 +144,7 @@ folders, which stay out of the repository.
   compressor: the duck is exact, the same on every render and testable offline. The speech is normalised first, the
   bed mixed in, the mix normalised again. Peaks: the first mix measured -1.95 dBTP as PCM and -0.5 dBTP as AAC (the
   encode overshot on a plosive at 0.97 s), so the render now measures the AAC file and runs the pass again with TP
-  lowered by the overshoot: -2.2 dBTP after one retry. With the eight CC0 tracks at the defaults (-20 / -12), one version
+  lowered by the overshoot: -2.2 dBTP after one retry. With the eight CC0 tracks at the defaults of 28/10 (-20 / -12; since 30/10 -18 / -6, about 9 dB on run 015), one version
   each: -14.0 LUFS, -1.7 to -2.0 dBTP, the speech 15.8 to 17.8 dB (RMS) over the bed as the render measures it (the
   speech stem against the bed alone); a first set of synthesised loops gave 14 to 17 dB and was dropped for its sound.
   Hand-checked in 3 s windows: 14 to 17 dB at -20, 11 to 14 dB at -18, 17 to 20 dB at -22. Run 015's cut has no pause of 0.8 s and no title card, so the bed stays down for the whole cut;
@@ -194,8 +194,7 @@ folders, which stay out of the repository.
   200 s, $0.31). First-cut benchmark on seven runs re-planned from their stored Voice, watch and tracks ($0.56):
   first review mean 65.9 -> 78.7, passed at the first review 0 -> 2 (015 88, 016 100), title-card hook issues 7 -> 0;
   012 82 -> 100 at the second; 013, d1-nasa, d1-tedx and heli-01 still do not pass (close-up captions over the head,
-  overlapping speakers, an opening line the reviewer finds weak, a cut edge the preflight cannot clear). Notes:
-  `docs/notes/review-and-first-cut-research_2026-10-30.md`.
+  overlapping speakers, an opening line the reviewer finds weak, a cut edge the preflight cannot clear).
 
 - **Close-ups (30/10).** On run 013's interview SAM's head box takes in the long hair down to the shoulders (y 46-539
   of 540): 28 of 44 lines were "over the head" though they sat on the neck, and the head-in-frame check read 51 %
