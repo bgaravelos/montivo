@@ -265,6 +265,44 @@ def test_a_retext_takes_the_next_lines_words_it_already_says():
     assert lines[1][0].t_in == pytest.approx(58.9)
 
 
+def test_a_retext_never_takes_next_line_words_it_does_not_say():
+    from montivo.engine.captions import apply_overrides, covered
+    # audit 31/10: difflib matched "for the" inside the next line and the words before it went too
+    a, b = _line("we built", 10.0), _line("a tool for the people", 10.4)
+    assert covered(a, "we built it for the", b) == 0
+    assert covered(a, "we built for the", b) == 0  # "a tool" is not a doubling of anything said
+    lines, _ = apply_overrides([a, b], [{"span": "s2", "src_t": 10.01, "text": "we built it for the", "why": "review"}])
+    assert [" ".join(w.w for w in ln) for ln in lines] == ["we built it for the", "a tool for the people"]
+    # what it does say at the next line's start still goes, also past a word it corrects or adds
+    assert covered(_line("this is the", 20.0), "this is the heart of the", _line("of the matter is", 20.6)) == 2
+    assert covered(_line("I wrote down wrote", 1.0), "I wrote down the letters of", _line("down the leters of", 1.8)) == 4
+    assert covered(_line("I wrote down", 1.0), "I wrote down the letters of", _line("wrote down the letters of", 1.6)) == 5
+    assert covered(_line("it was the", 1.0), "it was the", _line("the best day", 1.6)) == 0
+
+
+def test_a_retext_of_a_line_whose_first_word_was_clipped_shows_it_once():
+    from montivo.engine.captions import apply_breaks, apply_overrides, group_lines, span_words
+    from montivo.engine.graphics import CaptionStyle, normalize_look
+    # audit 31/10: the edge pass moved the in edge past "So" (Voice put it in the silence before the passage), so
+    # "So" has no length at the line's start; a person's retext of that line used to leave it on a line of its own
+    words = [{"w": w, "t_start": 8.0 + 0.3 * k, "t_end": 8.3 + 0.3 * k, "turn_id": 0, "i": k}
+             for k, w in enumerate("So when the call came we were".split())]
+    span = {"id": "s2", "turn_id": 0, "word_from": 0, "word_to": 6, "t_in": 8.35, "t_out": 10.1}
+    ws = span_words([span], words)["s2"]
+    assert ws[0].t_in == ws[0].t_out == 8.35
+    lines = group_lines(ws, CaptionStyle.from_look(normalize_look(None)), breaks="phrase")
+    first = lines[0]
+    ov = [{"span": "s2", "src_t": round(first[0].t_in + 0.01, 3), "text": "So when the call came", "why": "human",
+           "until": first[-1].t_out}]
+    out, _ = apply_overrides(lines, ov)
+    assert [" ".join(w.w for w in ln) for ln in out][0] == "So when the call came"
+    assert sum(w.w == "So" for ln in out for w in ln) == 1
+    # a hand break at "when" (same source second as the clipped "So") lands on "when", not on "So"
+    one = [list(ws)]
+    out = apply_breaks(one, [{"span": "s2", "src_t": 8.35}])
+    assert [ln[0].w for ln in out] == ["So", "when"]
+
+
 def test_a_retext_of_its_own_words_leaves_the_next_line_alone():
     from montivo.engine.captions import apply_overrides, covered
     # run 015's hand edits: the corrected words are the line's own

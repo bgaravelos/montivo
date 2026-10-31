@@ -49,6 +49,9 @@ DROPPED_HEARD = 0.5  # a dropped word whose own Voice window is this much speech
 MIN_MOVE_S = 0.03  # smaller moves are left alone (a frame at 30 fps)
 WIDEN_S = 0.4  # a clipped edge looks this far outward for the gap after (before) the word it cuts
 JOIN_GAP_S = 0.05  # render.CONTIGUOUS_GAP_S: spans of one turn closer than this render as one segment
+MIN_SPAN_S = 0.2  # an edge moving inward stops this far from the span's other edge: the bound is the middle of the
+                  # joined group, so a short first span of a group ("Hi." 10.0-10.5 s, its speech heard from 10.9 s)
+                  # used to come out with t_in past t_out (audit 31/10: s1 10.79 -> 10.5, -0.29 s)
 
 
 def level_db(pcm: array.array, rate: int, t0: float, t1: float) -> float:
@@ -250,9 +253,13 @@ def tighten_edge(span: dict, words: Words, edge: str, audio: Audio, tail: float 
     """Move one edge of the span to the speech onset - LEAD_S (in) or the speech offset + tail (out), inward and never
     past `bound` (the middle of the segment the span opens or closes); a clipped edge instead moves outward to the
     first quiet stretch (widen). `kept`: the turn's words other spans keep (default `blocked`); a neighbour word
-    outside it is dropped from the cut. Returns the record, None when the edge stays."""
+    outside it is dropped from the cut. An inward move never brings the edge within MIN_SPAN_S of the span's other
+    edge. Returns the record, None when the edge stays."""
     key = "t_in" if edge == "in" else "t_out"
     before = span[key]
+    if bound is None:
+        bound = (span["t_in"] + span["t_out"]) / 2
+    bound = min(bound, span["t_out"] - MIN_SPAN_S) if edge == "in" else max(bound, span["t_in"] + MIN_SPAN_S)
     widened = False
     kept = (blocked or set()) if kept is None else kept
     nb = span["word_from"] - 1 if edge == "in" else span["word_to"] + 1

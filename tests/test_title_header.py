@@ -65,3 +65,21 @@ def test_the_reviewer_is_told_the_header_is_the_title():
     caps = {"lines": 0, "over_face": [], "min_clearance_px": None}
     text = facts_text([], caps, 30.0, title_header={"text": "Raw in", "t_in": 0.0, "t_out": 2.2})
     assert '"Raw in"' in text and "not a callout" in text and "speech already runs" in text
+
+
+def test_a_long_title_and_a_long_retext_stay_inside_the_frame(tmp_path):
+    from montivo.engine.captions import fit_line
+    from montivo.engine.graphics import CaptionStyle, line_width, normalize_look
+    # audit 31/10: a person's 13-word retext is one line and was 1181 px wide at the 36 px floor (frame 1080); a
+    # title of 14 words stayed wider than the frame at 40 px (1431 px)
+    st = CaptionStyle.from_look(normalize_look(None))
+    texts = "and we edit short form videos for clients every single day in Athens".split()
+    fs = fit_line(texts, st)
+    assert line_width(texts, fs) <= st.max_w and fs.size >= 24
+    short = "Hi. I'm Billy.".split()
+    assert fit_line(short, st) is st  # a line that fits keeps its style
+    edl, words, seg, path, head, person = scene()
+    edl.update({"title_card_text": "Every AI editor we tried stops at the first cut and never checks its work", "title_style": "header"})
+    fields, _ = build_overlays(edl, words, [seg], [path], head, person, tmp_path)
+    x, y, w, hh = fields["title_header"]["box"]
+    assert x >= 0 and x + w <= 1080

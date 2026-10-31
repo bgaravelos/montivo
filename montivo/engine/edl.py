@@ -114,34 +114,71 @@ def normalize_roles(spans: list[Span]) -> list[str]:
     return notes
 
 
-def locate(span_text: str, turn_words: list[Word]) -> tuple[int, int, bool, float] | None:
-    """Return (first index, last index, exact, ratio) of the span inside the turn's words."""
+# a fuzzy match must find at least this share of the quote's words in order, else it is unplaced; measured 31/10 on
+# 4500 planner-like paraphrases of real turns (runs 001, 012-016): every quote with one or two words dropped or
+# changed keeps >= 0.6 (13 of 900 with three changes fall under), quotes from another turn of the same run reach it
+# 2 times in 750 (p99 0.44)
+LOCATE_SHARE = 0.6
+LOCATE_SLACK = 0.5  # ... inside a window at most this much longer than the quote (Voice's doubles, dropped fillers)
+
+
+def locate(span_text: str, turn_words: list[Word], after: int = -1,
+           taken: list[tuple[int, int]] | None = None) -> tuple[int, int, bool, float] | None:
+    """Return (first index, last index, exact, ratio) of the span inside the turn's words, None when the quote is not
+    there. A quote said more than once (a retake: "this is the part that matters ... let me say that again, this is
+    the part that matters") resolves to the last take after word `after` (the end of the plan's previous span in
+    this turn), else the last take, never one overlapping `taken`. A fuzzy match is the densest window at most
+    LOCATE_SLACK longer than the quote; under LOCATE_SHARE of the quote's words found there it is unplaced (run 013:
+    a slightly-off quote became an 88-word span at ratio 0.108, audit 31/10)."""
     want = norm_tokens(span_text)
     have = [norm(w.w) for w in turn_words]
     if not want or not have:
         return None
     n = len(want)
+    taken = taken or []
+
+    def pick(hits: list[tuple[int, int]]) -> tuple[int, int] | None:
+        free = [h for h in hits if not any(h[0] <= b and a <= h[1] for a, b in taken)] or hits
+        later = [h for h in free if h[0] > after]
+        return (later or free)[-1] if free else None
+
     # the planner reads the transcript without Voice's short duplicate words (voice.shown_words): match there first
     # and map back to the turn's own word indices, so a quote opening on "200" starts on the real "200", not on its
     # 80 ms copy (heli-02 18.02 / 18.38 s); an older plan that quoted the double matches on every word below
-    pos = [k for k in range(len(turn_words)) if k not in artefact_doubles(turn_words)]
-    if len(pos) < len(have):
+    drop = artefact_doubles(turn_words)
+    if drop:
+        pos = [k for k in range(len(turn_words)) if k not in drop]
         shown = [have[k] for k in pos]
-        for i in range(0, len(shown) - n + 1):
-            if shown[i:i + n] == want:
-                return pos[i], pos[i + n - 1], True, 1.0
-    for i in range(0, len(have) - n + 1):
-        if have[i:i + n] == want:
-            return i, i + n - 1, True, 1.0
-    sm = difflib.SequenceMatcher(a=have, b=want, autojunk=False)
-    blocks = [b for b in sm.get_matching_blocks() if b.size > 0]
-    if not blocks:
+        if hit := pick([(pos[i], pos[i + n - 1]) for i in range(len(shown) - n + 1) if shown[i:i + n] == want]):
+            return hit[0], hit[1], True, 1.0
+    if hit := pick([(i, i + n - 1) for i in range(len(have) - n + 1) if have[i:i + n] == want]):
+        return hit[0], hit[1], True, 1.0
+    cap = n + max(2, int(round(LOCATE_SLACK * n)))
+    wanted = set(want)
+    cands: dict[tuple[int, int], int] = {}  # (first, last) -> quote words found in order inside it
+    for i in range(len(have)):
+        if have[i] not in wanted:
+            continue
+        blocks = [b for b in difflib.SequenceMatcher(a=have[i:i + cap], b=want, autojunk=False).get_matching_blocks()
+                  if b.size]
+        found = 0
+        for blk in blocks:  # every run of blocks from the first: a far trailing match may be a stray "and"
+            found += blk.size
+            key = (i + blocks[0].a, i + blk.a + blk.size - 1)
+            cands[key] = max(cands.get(key, 0), found)
+    if not cands:
         return None
-    first = min(b.a for b in blocks)
-    last = max(b.a + b.size - 1 for b in blocks)
-    # keep the window the size of the request around the matched blocks
+    # the window that best matches the quote (difflib's ratio on that window alone), so a stray common word a few
+    # words on does not stretch it; ties go to the retake rule
+    score = {k: 2 * f / (k[1] - k[0] + 1 + n) for k, f in cands.items()}
+    top = max(score.values())
+    first, last = pick(sorted(k for k, v in score.items() if v == top))
+    if cands[(first, last)] < LOCATE_SHARE * n:
+        return None
+    # keep the window the size of the request around the matched words
     last = min(len(have) - 1, max(last, first + n - 1))
-    return first, last, False, round(sm.ratio(), 3)
+    ratio = difflib.SequenceMatcher(a=have[first:last + 1], b=want, autojunk=False).ratio()
+    return first, last, False, round(ratio, 3)
 
 
 OVER_TARGET = 1.10  # a plan running more than 10 % over the target loses its weakest body span (fit_length)
@@ -202,9 +239,11 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
     for k, item in enumerate(plan.get("paper_edit", [])):
         tid = int(item["turn_id"])
         tw = by_turn.get(tid, [])
-        loc = locate(item["words"], tw)
+        placed = [(s.word_from, s.word_to) for s in spans if s.turn_id == tid]
+        loc = locate(item["words"], tw, after=placed[-1][1] if placed else -1, taken=placed)
         if loc is None:
-            missing.append({"order": k, **item, "reason": "turn not found or no overlap"})
+            missing.append({"order": k, **item,
+                            "reason": "quote not found in the turn" if tw else "turn not found"})
             continue
         a, b, exact, ratio = loc
         t_in, t_out = tw[a].t_start, tw[b].t_end
@@ -360,8 +399,10 @@ def plan_check(edl: dict, target_s: float) -> list[str]:
         if c["status"] != "missed":
             continue
         if c["kind"] == "length":
-            out.append(f"length: the cut runs {c['found']}, the brief allows {c['min_s']:g} to {c['max_s']:g} s "
-                       f"({c['item']})")
+            lo, hi = c.get("min_s", -1), c.get("max_s", -1)  # -1 = no bound on that side
+            allows = (f"{lo:g} to {hi:g} s" if lo >= 0 and hi >= 0 else f"at most {hi:g} s" if hi >= 0
+                      else f"at least {lo:g} s")
+            out.append(f"length: the cut runs {c['found']}, the brief allows {allows} ({c['item']})")
         elif c["kind"] in ("opening", "ending"):
             out.append(f"{c['kind']}: the cut {'opens' if c['kind'] == 'opening' else 'ends'} on \"{c['found']}\", the "
                        f"brief wants \"{c['quote']}\" ({c['item']})")

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import os
 import re
+import struct
+import unicodedata
 from dataclasses import asdict, dataclass, field, fields, replace
 from functools import lru_cache
 from pathlib import Path
@@ -176,8 +178,92 @@ def font(size: int, key: str = DEFAULT_FONT) -> ImageFont.FreeTypeFont | ImageFo
     return ImageFont.truetype(p, size) if p else ImageFont.load_default(size)
 
 
+@lru_cache(maxsize=16)
+def charset(path: str) -> frozenset[int]:
+    """The code points a TrueType / OpenType font maps to a glyph (its cmap table, formats 4 and 12); empty when the
+    file cannot be read that way (then every character counts as there)."""
+    try:
+        data = Path(path).read_bytes()
+        tables = {data[12 + 16 * k:16 + 16 * k]: struct.unpack(">I", data[20 + 16 * k:24 + 16 * k])[0]
+                  for k in range(struct.unpack(">H", data[4:6])[0])}
+        at = tables[b"cmap"]
+        out: set[int] = set()
+        for k in range(struct.unpack(">H", data[at + 2:at + 4])[0]):
+            t = at + struct.unpack(">I", data[at + 8 + 8 * k:at + 12 + 8 * k])[0]
+            fmt = struct.unpack(">H", data[t:t + 2])[0]
+            if fmt == 4:
+                seg = struct.unpack(">H", data[t + 6:t + 8])[0] // 2
+                ends = struct.unpack(f">{seg}H", data[t + 14:t + 14 + 2 * seg])
+                starts = struct.unpack(f">{seg}H", data[t + 16 + 2 * seg:t + 16 + 4 * seg])
+                deltas = struct.unpack(f">{seg}h", data[t + 16 + 4 * seg:t + 16 + 6 * seg])
+                ro = t + 16 + 6 * seg
+                offs = struct.unpack(f">{seg}H", data[ro:ro + 2 * seg])
+                for i in range(seg):
+                    for c in range(starts[i], min(ends[i], 0xFFFE) + 1):
+                        if offs[i]:
+                            p = ro + 2 * i + offs[i] + 2 * (c - starts[i])
+                            g = struct.unpack(">H", data[p:p + 2])[0]
+                            g = (g + deltas[i]) & 0xFFFF if g else 0
+                        else:
+                            g = (c + deltas[i]) & 0xFFFF
+                        if g:
+                            out.add(c)
+            elif fmt == 12:
+                for i in range(struct.unpack(">I", data[t + 12:t + 16])[0]):
+                    a, b, g = struct.unpack(">III", data[t + 16 + 12 * i:t + 28 + 12 * i])
+                    out.update(c for c in range(a, b + 1) if g + c - a)
+        return frozenset(out)
+    except (OSError, KeyError, struct.error):
+        return frozenset()
+
+
+FALLBACK_FONT = DEFAULT_FONT  # Inter Tight has Latin and Greek: a word another font has no glyphs for is drawn in it
+
+
+def font_key(text: str, key: str = DEFAULT_FONT) -> str:
+    """The font a word (or a callout's line) is drawn in: the look's font when it has a glyph for every character,
+    else FALLBACK_FONT. Anton, Poppins, DM Serif Display and Montserrat have 0 to 8 of the 60 Greek letters, so Greek
+    captions came out as missing-glyph boxes in four of the five fonts (audit 31/10)."""
+    if key == FALLBACK_FONT or text.isascii():
+        return key
+    p = font_path(key)
+    have = charset(p) if p else frozenset()
+    return key if not have or all(c.isspace() or ord(c) in have for c in text) else FALLBACK_FONT
+
+
+@lru_cache(maxsize=64)
+def fallback_font(size: int, key: str) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """FALLBACK_FONT at the size whose capitals stand as tall as the look's font's (Anton's are 16 % taller than
+    Inter Tight's at one size), never so large that it leaves the look font's line box (ascent and descent)."""
+    main, fb = font(size, key), font(size, FALLBACK_FONT)
+    if not isinstance(main, ImageFont.FreeTypeFont) or not isinstance(fb, ImageFont.FreeTypeFont):
+        return fb
+    cap = lambda f: f.getbbox("H")[3] - f.getbbox("H")[1]  # noqa: E731
+    (ma, md), (fa, fd) = main.getmetrics(), fb.getmetrics()
+    k = min(cap(main) / max(1, cap(fb)), ma / max(1, fa), md / max(1, fd))
+    return font(max(1, int(size * k)), FALLBACK_FONT)
+
+
+def glyph_box(text: str, size: int, key: str = DEFAULT_FONT) -> tuple[float, float, float, float]:
+    """The ink box of `text` as drawn at an origin on the look font's ascent line (Pillow's default anchor): a word
+    in the fallback font sits on the look font's baseline."""
+    if font_key(text, key) == key:
+        return font(size, key).getbbox(text)
+    l, t, r, b = fallback_font(size, key).getbbox(text, anchor="ls")
+    asc = font(size, key).getmetrics()[0]
+    return l, t + asc, r, b + asc
+
+
+def draw_text(d: ImageDraw.ImageDraw, xy: tuple[float, float], text: str, size: int, key: str, **kw) -> None:
+    """ImageDraw.text in the look's font, or in the fallback font on the look font's baseline (font_key)."""
+    if font_key(text, key) == key:
+        d.text(xy, text, font=font(size, key), **kw)
+    else:
+        d.text((xy[0], xy[1] + font(size, key).getmetrics()[0]), text, font=fallback_font(size, key), anchor="ls", **kw)
+
+
 def text_w(text: str, size: int, key: str = DEFAULT_FONT) -> int:
-    l, _, r, _ = font(size, key).getbbox(text)
+    l, _, r, _ = glyph_box(text, size, key)
     return int(r - l)
 
 
@@ -202,7 +288,11 @@ class CaptionStyle:
                    pad_y=round(10 * k * box), font=look.font, upper=look.case == "upper", look=look)
 
     def shown(self, w: str) -> str:
-        return w.upper() if self.upper else w
+        if not self.upper:
+            return w
+        up = w.upper()  # Greek in capitals drops its accents (tonos), keeps the dialytika: "όλους" -> "ΟΛΟΥΣ"
+        return up if up.isascii() else unicodedata.normalize(
+            "NFC", re.sub("([\u0370-\u03ff]\u0308?)\u0301", r"\1", unicodedata.normalize("NFD", up)))
 
     def height(self) -> int:
         a, d = font(self.size, self.font).getmetrics()
@@ -221,7 +311,7 @@ def pill_rows(shown: list[str], style: CaptionStyle) -> tuple[int, int]:
     below it (31 / 10 px on "meta" at 84 px, a Discord report). Its height is unchanged (ascent + 2 * pad_y - 2)."""
     f = font(style.size, style.font)
     ascent, _ = f.getmetrics()
-    boxes = [f.getbbox(w) for w in shown if w.strip()] or [f.getbbox("H")]
+    boxes = [glyph_box(w, style.size, style.font) for w in shown if w.strip()] or [f.getbbox("H")]
     y = style.pad_y + style.stroke
     mid = y + (min(b[1] for b in boxes) + max(b[3] for b in boxes)) / 2
     half = (ascent + 2 * style.pad_y - 2) / 2
@@ -247,7 +337,7 @@ def draw_caption(words: list[str], active: int | None, highlight: list[bool], st
     shown = [style.shown(x) for x in words]
     xs, x = [], style.pad_x + style.stroke
     for word in shown:
-        l, _, r, _ = f.getbbox(word)
+        l, _, r, _ = glyph_box(word, style.size, style.font)
         xs.append((x, l, int(r - l)))
         x += int(r - l) + style.space
     if look.shadow:
@@ -255,8 +345,8 @@ def draw_caption(words: list[str], active: int | None, highlight: list[bool], st
         sd = ImageDraw.Draw(sh)
         off = max(2, style.size // 24)
         for word, (x, l, _) in zip(shown, xs):
-            sd.text((x - l, y + off), word, font=f, fill=(0, 0, 0, 230), stroke_width=style.stroke + max(2, style.size // 20),
-                    stroke_fill=(0, 0, 0, 230))
+            draw_text(sd, (x - l, y + off), word, style.size, style.font, fill=(0, 0, 0, 230),
+                      stroke_width=style.stroke + max(2, style.size // 20), stroke_fill=(0, 0, 0, 230))
         img = Image.alpha_composite(img, sh.filter(ImageFilter.GaussianBlur(max(2, style.size // 18))))
         d = ImageDraw.Draw(img)
     for i, (word, (x, l, ww)) in enumerate(zip(shown, xs)):
@@ -265,11 +355,11 @@ def draw_caption(words: list[str], active: int | None, highlight: list[bool], st
             top, bottom = pill_rows(shown, style)
             d.rounded_rectangle([x - style.pad_x, top, x + ww + style.pad_x, bottom],
                                 radius=max(8, round(18 * style.size / 84)), fill=act_bg)
-            d.text((x - l, y), word, font=f, fill=act_fg)
+            draw_text(d, (x - l, y), word, style.size, style.font, fill=act_fg)
             continue
         said = active is not None and (i == active if look.active == "color" else look.active == "karaoke" and i <= active)
         fill = act_bg if said else hl_c if (hl_c and highlight[i]) else text_c
-        d.text((x - l, y), word, font=f, fill=fill, **stroke)
+        draw_text(d, (x - l, y), word, style.size, style.font, fill=fill, **stroke)
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out)
     return w, h
@@ -285,15 +375,14 @@ def draw_callout(text: str, out: Path, size: int = 58, look: Look | None = None)
     """A callout pill: text in `callout_fg` on `callout_bg` (black on the accent colour by default) with a thin
     outline in the text colour, in the look's font."""
     look = look or Look()
-    f = font(size, look.font)
     w, h = callout_size(text, size, look.font)
     img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
     bg = rgba(look.callout_bg)
     fg = rgba(look.callout_fg)
     d.rounded_rectangle([0, 0, w - 1, h - 1], radius=h // 2, fill=bg[:3] + (min(bg[3], 240),), outline=fg, width=4)
-    l, _, _, _ = f.getbbox(text)
-    d.text((34 - l, 20), text, font=f, fill=fg)
+    l, _, _, _ = glyph_box(text, size, look.font)
+    draw_text(d, (34 - l, 20), text, size, look.font, fill=fg)
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out)
     return w, h

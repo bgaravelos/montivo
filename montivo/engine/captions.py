@@ -49,7 +49,8 @@ CALLOUT_LEAD_S = 0.3
 CALLOUT_MIN_S, CALLOUT_MAX_S = 2.0, 3.0
 CALLOUT_FADE_S = 0.2
 HEADER_S = 2.2  # the title header (edl.title_style "header") stays this long over the opening speech
-HEADER_SIZE, HEADER_MIN_SIZE = 64, 40  # its pill's font size, shrunk until the words fit the frame
+HEADER_SIZE, HEADER_MIN_SIZE = 64, 28  # its pill's font size, shrunk until the words fit the frame (40 left a long
+                                       # title wider than the frame)
 HEADER_SIDE = 54  # px kept clear at each side of the frame
 
 # The name fixes and the highlighted names of Billy's demo footage ("metal models" -> "Meta models", "Montivo" in the
@@ -471,16 +472,20 @@ def at_size(style: CaptionStyle, size: int) -> CaptionStyle:
                    pad_x=max(6, round(style.pad_x * k)), pad_y=max(4, round(style.pad_y * k)))
 
 
+FIT_MIN_SIZE = 24  # a line still wider than max_w at 36 px goes this small rather than off the frame
+
+
 def fit_line(texts: list[str], style: CaptionStyle, size: int | None = None) -> CaptionStyle:
     """The style a line is drawn in: its own, or smaller until the line fits style.max_w (a retexted line can be longer
     than the grouping allowed, and a big look like bold_pop leaves little room). `size` is a smaller size the layout
-    chose for room around the head (room_for, the caption entry's `size`)."""
+    chose for room around the head (room_for, the caption entry's `size`). Down to FIT_MIN_SIZE: a person's 13-word
+    retext is one line (isolate) and was 1181 px wide at 36 px, past both edges of the 1080 px frame (audit 31/10)."""
     if size is not None and size < style.size:
         return at_size(style, size)
     if line_width(texts, style) <= style.max_w:
         return style
     size = style.size
-    while size > 36:
+    while size > FIT_MIN_SIZE:
         size -= 4
         st = at_size(style, size)
         if line_width(texts, st) <= style.max_w:
@@ -623,15 +628,32 @@ def covered(line: list[CWord], text: str, nxt: list[CWord]) -> int:
     """How many leading words of the next line a retext of `line` already says. Voice can double a phrase across a
     line break (live run ui-1027-2252: "I wrote down wrote | down the letters of"); the reviewer's text for the first
     line is then the whole phrase ("I wrote down the letters of") and the next line must give those words up, or the
-    cut shows them twice. The new text is aligned against the line's heard words followed by the next line's; every
-    next-line word up to the last one the text matches is covered. Lines of different spans never share words."""
+    cut shows them twice. The new text is aligned against the line's heard words followed by the next line's; the
+    next line gives up its words up to the last one the text says, in order from its start. A next-line word the text
+    leaves out goes with them only as Voice's doubling (it repeats the words just before it, or continues words the
+    text leaves out of the line itself) or between two words the text says; one the text says something else for
+    stops the run: "we built" retexted "we built it for the" says nothing of "a tool for the people" (taking any
+    word difflib matched anywhere in the next line used to delete "a tool for the" too, audit 31/10). Lines of
+    different spans never share words."""
     if not nxt or nxt[0].span != line[0].span:
         return 0
     own = [norm(w.w) for w in line]
     both = own + [norm(w.w) for w in nxt]
-    sm = difflib.SequenceMatcher(None, both, [norm(x) for x in text.split()], autojunk=False)
-    last = max((m.a + m.size - 1 for m in sm.get_matching_blocks() if m.size), default=-1)
-    return max(0, last - len(own) + 1)
+    n = len(own)
+    out, seen = 0, False
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, both, [norm(x) for x in text.split()],
+                                                        autojunk=False).get_opcodes():
+        if i2 <= n:
+            continue  # the line's own words
+        if tag == "equal":
+            out, seen = i2 - n, True
+        elif tag == "delete":
+            if not (seen or i1 < n or both[i1:i2] == both[max(0, 2 * i1 - i2):i1]):
+                break
+        elif tag == "replace":
+            if not (seen and i1 >= n and i2 - i1 == j2 - j1):  # a misheard word between two the text says
+                break
+    return out
 
 
 def isolate(lines: list[list[CWord]], span: str, src_t: float, until: float) -> list[list[CWord]]:
@@ -640,7 +662,10 @@ def isolate(lines: list[list[CWord]], span: str, src_t: float, until: float) -> 
     words it was written for: a look with fewer words per line used to break them over several lines and show the
     rest twice next to the new text (015 "we edit short form | added | short | form"), one with more put other words
     on its line and the retext replaced them too."""
-    inside = lambda w: w.span == span and w.t_out > src_t and w.t_in < until - 0.01  # noqa: E731
+    # a first word the edge pass clipped to no length (t_in == t_out == the line's start) is inside too: src_t is its
+    # start + 0.01 s, so `t_out > src_t` alone left it on a line of its own beside the retext (audit 31/10)
+    inside = lambda w: w.span == span and w.t_in < until - 0.01 and (  # noqa: E731
+        w.t_out > src_t or w.t_in > src_t - 0.01 - 1e-6)
     out: list[list[CWord]] = []
     mine: list[CWord] | None = None
     for ln in lines:
@@ -672,11 +697,12 @@ def apply_breaks(lines: list[list[CWord]], breaks: list[dict]) -> list[list[CWor
     gone, or that is already so, changes nothing. Applied after the automatic breaks, before the overrides."""
     out = [list(ln) for ln in lines]
     for b in breaks:
-        hit: tuple[int, int, float] | None = None
+        hit: tuple[int, int, tuple[float, bool]] | None = None
         for j, ln in enumerate(out):
             for k, w in enumerate(ln):
-                d = abs(w.t_in - float(b["src_t"]))
-                if w.span == b["span"] and d <= BREAK_MATCH_S and (hit is None or d < hit[2]):
+                # a word clipped to no length shares its start with the next word: the tie goes to the word with time
+                d = (abs(w.t_in - float(b["src_t"])), w.t_out <= w.t_in)
+                if w.span == b["span"] and d[0] <= BREAK_MATCH_S and (hit is None or d < hit[2]):
                     hit = (j, k, d)
         if hit is None:
             continue
