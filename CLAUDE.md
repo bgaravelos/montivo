@@ -92,7 +92,7 @@ fixes: captions avoid only the followed head, a title-card issue drops the card,
 SAM $0.50 -> $0.33 on 166 s, a 150 s run about $0.48. API + UI (layout A, Review room, commit `b5f1f98`): `montivo serve` / `make ui`, `montivo/server/` (FastAPI + SSE,
 reads run folders, engine as subprocess), `montivo/human.py` (drop span, re-plan -> next edl_vN, source human), `web/`
 React/Vite built into `montivo/server/static` (`make web` after editing `web/src`); neutral dark, replay `?replay=4`,
-Compare; test UI actions with `env -u MODEL_API_KEY`. No sample release (Billy, 28/10): README "Try it" points only to the hosted demo.
+Compare; test UI actions with `env -u MODEL_API_KEY`. Sample release back (Billy, 1/11): README "Try it" = hosted demo, keyless samples (`make sample`), own key.
 NLE redesign (27/10, commit `767e5f2`): `web/src/Editor.tsx` replaces `Room.tsx` (icon rail + panels, 9:16 viewer, inspector,
 multi-track timeline with filmstrip / waveform / issue markers, J/K/L, export), trim by drag via `montivo.human trim`
 (snaps to word boundaries, reviewer rules), `montivo/server/media.py` (filmstrip, peaks). Caption style is read-only (one
@@ -1029,6 +1029,7 @@ in /seed, `modal run modal_app.py::seed` with the 012 / 015 zips taken out of /s
 re-extracted) and put back after; adopted, host spend $3.43 of $15; no container was running. Opens on v13 92 pass
 (checked on a clean root); `smoke --run 017 --span s4` on a copy: 37.9 s, -13.9 LUFS / -0.9 dBTP (v13 itself -1.4);
 `--live`: edit media 7.2 s, draft drop 143 ms. Not yet seen live with the sign-in.
+Offline demo (1/11, $0, branch `claude/offline-demo-40aeb8`, not merged, pushed or released): `montivo/server/sample.py` knows samples 015 (default) and 017 with size + sha256, `fetch --sample 015|017|all --from ZIP|DIR|file://|URL --force --no-verify` checks before it unpacks, writes only runs/<id>/ and footage/<clip> (runs/.fetch-<id> then a rename), keeps an existing runs/<id> (--force archives it); `pack` adds the model calls' JSON, cover / loop / hook records, the tracked video and proxy (Speakers thumbnails, Media), writes .sha256 and refuses a file holding a key from the shell. `make check` (Python 3.12+, ffmpeg + libx264, brew / apt lines), `make sample [SAMPLE=all] [FROM=...]`, `make ui [PORT=]` reads `.env`; `.env.example`. Zips (packed read-only from runs/015 and runs/017) in `dist/release-2026-11-01/`: 015 222796455 bytes, 017 423129038 bytes. Clean clone checked: make dev, make test (786), make sample SAMPLE=all FROM=dir, keyless make ui: Home lists both, 015 opens on v5 87, 017 on v13 92, Live drop + Make Version 15.9 s, Export 9:16 zip, Loop, Compare, Versions, music / style / caption / drop / Ask keywords render, every paid route 409 with the reason, Monti from the guide, no console errors. The GitHub release (`sample-015`, `sample-017`) needs Billy's yes.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
