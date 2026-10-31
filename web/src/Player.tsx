@@ -92,7 +92,9 @@ export const Player = forwardRef<PlayerHandle, {
       if (!el) return;
       if (back.current) { stopBack(); setRate(1); return; }
       calm();
-      if (el.paused) el.play().catch(() => {}); else el.pause();
+      // Live: a play still waiting for the audio decode counts as playing, so Space twice pauses (audit, 31/10)
+      const starting = el instanceof LiveMedia && el.starting;
+      if (el.paused && !starting) el.play().catch(() => {}); else el.pause();
     },
     step(dt) {
       const el = media();

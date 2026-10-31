@@ -203,6 +203,8 @@ export class LiveMedia {
     if (this.stretch) this.stretch.el.muted = m;
   }
 
+  /** A play() is waiting for the audio to decode: the transport's toggle reads it as playing, so a second Space cancels it. */
+  get starting(): boolean { return !!this.wantPlay; }
   async play(): Promise<void> {
     if (!this.paused || this.wantPlay) return; // a second play while the first waits starts nothing more
     // the play intent while the audio context resumes and the audio decodes: a pause in between cancels it (audit, 31/10)

@@ -92,6 +92,7 @@ export function Home({ go }: { go: (h: string) => void }) {
   const [footage, setFootage] = useState<Footage[]>([]);
   const [f, setF] = useState("");
   const [upload, setUpload] = useState<string | null>(null);
+  const [uploading, setUploading] = useState<string | null>(null); // the clip going up: Create waits for it
   const [limits, setLimits] = useState<Limits | null>(null);
   const [sheet, setSheet] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -144,13 +145,18 @@ export function Home({ go }: { go: (h: string) => void }) {
       return;
     }
     setUpload(`Uploading ${file.name}…`);
+    setUploading(file.name);
     const safe = file.name.replace(/[^A-Za-z0-9._-]/g, "_").slice(-80);
     const name = /^[A-Za-z0-9]/.test(safe) ? safe : `clip${safe}`;
-    const res = await fetch(`/api/footage/${name}`, { method: "PUT", body: file });
-    const why = res.ok ? null : await res.json().then((b) => b.error, () => null);
-    setUpload(res.ok ? null : `Upload failed (${res.status})${why ? `: ${why}` : ""}`);
-    // the server picks a free name (clip-2.mp4 when clip.mp4 exists): earlier projects keep their source
-    if (res.ok) { setF((await res.json()).path); loadFootage(); }
+    try { // a dropped connection rejects the fetch: it used to leave "Uploading…" on screen for good (audit, 31/10)
+      const res = await fetch(`/api/footage/${name}`, { method: "PUT", body: file });
+      const why = res.ok ? null : await res.json().then((b) => b.error, () => null);
+      setUpload(res.ok ? null : `Upload of ${file.name} failed (${res.status})${why ? `: ${why}` : ""}`);
+      // the server picks a free name (clip-2.mp4 when clip.mp4 exists): earlier projects keep their source
+      if (res.ok) { setF((await res.json()).path); loadFootage(); }
+    } catch (e) {
+      setUpload(`Upload of ${file.name} failed: ${(e as Error).message || "the connection dropped"}. Try again.`);
+    } finally { setUploading(null); }
   };
 
   // N opens the sheet, / goes to the search, Esc closes the sheet; a clip dropped anywhere opens it with that clip
@@ -282,7 +288,7 @@ export function Home({ go }: { go: (h: string) => void }) {
       </main>
 
       {sheet && (
-        <NewProject go={go} close={() => setSheet(false)} footage={footage} f={f} setF={setF} put={put} upload={upload}
+        <NewProject go={go} close={() => setSheet(false)} footage={footage} f={f} setF={setF} put={put} upload={upload} uploading={uploading}
           limits={limits} hasKey={hasKey} hasOpen={hasOpen} keyNote={keyNote} budget={budget} costs={costs} />
       )}
       {!sheet && <Monti place="home" hasKey={hasKey} budget={budget} ctx={{ page: "home" }} />}
@@ -538,9 +544,9 @@ function Tile({ r, onArchive }: { r: RunCard; onArchive: () => void }) {
 
 /** The new project sheet: footage as thumbnails, the kind of video (fills the brief), the brief, the length, the
  *  advanced switches folded, and the cost, time and Create always in view. */
-function NewProject({ go, close, footage, f, setF, put, upload, limits, hasKey, hasOpen, keyNote, budget, costs }: {
+function NewProject({ go, close, footage, f, setF, put, upload, uploading, limits, hasKey, hasOpen, keyNote, budget, costs }: {
   go: (h: string) => void; close: () => void; footage: Footage[]; f: string; setF: (p: string) => void; put: (file: File) => void;
-  upload: string | null; limits: Limits | null; hasKey: boolean; hasOpen: boolean; keyNote: string | null; budget: Budget | null; costs: Costs;
+  upload: string | null; uploading: string | null; limits: Limits | null; hasKey: boolean; hasOpen: boolean; keyNote: string | null; budget: Budget | null; costs: Costs;
 }) {
   const [kind, setKind] = useState<string | null>(null);
   const [brief, setBrief] = useState("");
@@ -565,7 +571,8 @@ function NewProject({ go, close, footage, f, setF, put, upload, limits, hasKey, 
   const picked = kits.find((x) => x.id === kit) ?? null;
   const clip = footage.find((x) => x.path === f) ?? null;
   const est = clip?.duration_s ? estimate(costs, clip.duration_s, { review, hookAb, open: planner === "open" }) : null;
-  const ready = hasKey && !!f && !!brief.trim() && !busy;
+  // while a clip goes up `f` is still the clip picked before it: Create then would start on the wrong video (audit, 31/10)
+  const ready = hasKey && !!f && !!brief.trim() && !busy && !uploading;
   const start = async () => {
     if (!ready) return;
     askToNotify(); // the first cut takes minutes: a notification when it is ready
@@ -596,7 +603,7 @@ function NewProject({ go, close, footage, f, setF, put, upload, limits, hasKey, 
               : "clips in footage/"}</span></div>
             <div className="hm-clips">
               {footage.map((x) => (
-                <button key={x.path} className={`hm-clip ${x.path === f ? "sel" : ""}`} onClick={() => setF(x.path)} aria-pressed={x.path === f} title={x.name}>
+                <button key={x.path} className={`hm-clip ${x.path === f && !uploading ? "sel" : ""}`} onClick={() => setF(x.path)} aria-pressed={x.path === f && !uploading} title={x.name}>
                   <video src={`/api/footage/${encodeURIComponent(x.name)}#t=1`} muted preload="metadata" playsInline />
                   <span className="mono">{x.name.replace(/\.[^.]+$/, "")}{x.duration_s ? ` · ${tc(x.duration_s, 0)}` : ""}</span>
                 </button>
@@ -606,7 +613,7 @@ function NewProject({ go, close, footage, f, setF, put, upload, limits, hasKey, 
                 <input type="file" accept="video/*" onChange={(e) => { const file = e.target.files?.[0]; if (file) put(file); }} />
               </label>
             </div>
-            {upload && <div className={`small ${/failed|takes/.test(upload) ? "warn" : "mute"}`}>{upload}</div>}
+            {upload && <div className={`small ${/failed|takes/.test(upload) ? "warn" : "mute"}`} role="status">{upload}</div>}
           </div>
           <div>
             <div className="hm-lbl">What kind of video <span>fills in the brief, you can edit it</span></div>
@@ -665,14 +672,14 @@ function NewProject({ go, close, footage, f, setF, put, upload, limits, hasKey, 
         </div>
         <div className="hm-sheet-f">
           <div className="hm-est" title="From the clip's length, measured on runs 014 and 015; a review loop that needs a third pass costs a little more">
-            <b>{est ? `About ${usd(est.usd)} · ${dur(est.s)}` : "Pick a clip to see the cost"}</b>
+            <b>{uploading ? `Uploading ${uploading}: Create waits for it` : est ? `About ${usd(est.usd)} · ${dur(est.s)}` : "Pick a clip to see the cost"}</b>
             {budget && hasKey && <span className="mute small">{usd(budget.left)} of the demo budget left</span>}
             <span className="hm-pipe">{steps.map((s) => <i key={s}>{s}</i>)}</span>
           </div>
           <span className="grow" />
           <button className="btn quiet" onClick={close}>Cancel</button>
           <button className="btn" disabled={!ready} onClick={start}
-            title={!hasKey ? "Needs the model key" : !brief.trim() ? "Write a brief or pick a kind of video" : "Create project (⌘↵)"}>
+            title={!hasKey ? "Needs the model key" : uploading ? `Wait for ${uploading} to finish uploading` : !brief.trim() ? "Write a brief or pick a kind of video" : "Create project (⌘↵)"}>
             {busy ? <MarkLoader mono /> : null}Create project <kbd>⌘↵</kbd>
           </button>
         </div>
