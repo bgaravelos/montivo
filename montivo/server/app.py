@@ -2712,8 +2712,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--port", type=int, default=8765)
     a = ap.parse_args(argv)
     import uvicorn
-    print(f"montivo-ui: http://{a.host}:{a.port}  (runs from {a.root.resolve() / 'runs'}; "
-          f"MODEL_API_KEY {'set' if has_key() else 'not set: finished runs and drop span only'})", flush=True)
+    print(f"montivo-ui: http://{a.host}:{a.port}  (runs from {a.root.resolve() / 'runs'}; MODEL_API_KEY "
+          f"{'set' if has_key() else 'not set: finished runs and the $0 edits, model calls answer that they need it'})",
+          flush=True)
+    if not any((a.root / "runs").glob("*/run.json")):
+        print("montivo-ui: no runs yet: `make sample` fetches a finished one (no key needed), "
+              "or `montivo run footage/clip.mp4 --brief ...` with a key", flush=True)
     uvicorn.run(create_app(a.root), host=a.host, port=a.port, log_level="warning",
                 timeout_graceful_shutdown=SHUTDOWN_GRACE_S)  # an open /events stream no longer holds a SIGTERM
     return 0

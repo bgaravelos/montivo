@@ -36,7 +36,8 @@ The Loop view shows exactly that: each version's frame and score, and between tw
 the reviewer's fix or a human edit, labelled (on run 015: v2 the agent's fixes, v3, v4 and v5 human edits). When a fix makes things worse the agent keeps the earlier cut: on a
 hosted test upload the reviewer's own hook swap scored 48 against 74, and the regression guard kept the 74.
 
-**Judges:** the hosted link and password are in the submission. Open a finished sample, press **Loop**, compare the
+**Judges:** the hosted link and password are in the submission, and the finished samples also run from this repo
+with no key ([Try it](#try-it)). Open a finished sample, press **Loop**, compare the
 issue, the fix and the result, then make an edit of your own. The editor opens in **Live**: your edits play at once
 from the footage and become a new version (one render, $0) only when you press **Make Version N**, so until then the
 Loop shows nothing new; switch to **Rendered** (V) for one version per edit. Details under [Try it](#try-it) and
@@ -73,26 +74,46 @@ The full table is under [Measured results](#measured-results).
 
 ## Try it
 
-**Judges:** Montivo runs hosted for you, with my Meta key on the server. The link and the password are in the
-submission. Two finished projects open there, and you can upload your own clip (up to 90 s) and let the agent plan,
-cut, review and re-cut it; your edits go to your own copy, so every judge starts from the same samples. A shared
+Three ways in, quickest first.
+
+**1. Hosted (judges).** Montivo runs hosted for you, with my Meta key on the server. The link and the password are in
+the submission. Two finished projects open there, and you can upload your own clip (up to 90 s) and let the agent
+plan, cut, review and re-cut it; your edits go to your own copy, so every judge starts from the same samples. A shared
 budget caps the Meta model calls; past it, the finished projects and the $0 edits still work.
 
-Locally, without an API key:
+**2. From this repo, no API key.** You need Python 3.12+ and ffmpeg with libx264 (macOS: `brew install python@3.12
+ffmpeg`; Debian / Ubuntu: `sudo apt install python3.12-venv ffmpeg`); `make dev` checks both and says what is missing.
 
 ```bash
-make dev    # Python 3.12 venv, needs ffmpeg and ffprobe on the PATH
-make test   # the offline tests (recorded Voice and SAM streams, no network)
+git clone https://github.com/bgaravelos/montivo && cd montivo
+make dev       # the Python venv
+make sample    # run 015, the one the demo video shows (223 MB): checked against its sha256, unpacked into runs/ and footage/
+make ui        # http://127.0.0.1:8765 (make ui PORT=8800 if that port is taken)
 ```
 
-With a key (`MODEL_API_KEY`, dev.meta.ai), on your own footage:
+`make sample SAMPLE=all` adds run 017 (a 132 s clip, 13 versions, 92 and a pass; 423 MB). A zip downloaded by hand
+from the [releases page](https://github.com/bgaravelos/montivo/releases) unpacks with `make sample FROM=~/Downloads`.
+A sample is the run folder as the agent left it: every version, every blind review with its notes and measured
+checks, and every model call's request, response and cost (`ledger.json`). Without a key you get everything that runs
+on your machine, $0, each edit rendered by your ffmpeg: the player, the Loop film, Compare and Versions, the Live
+editor and Make Version, delete, trim, split, move and word cuts, captions and their style, callouts, music and the
+mix, punch-ins, speaker framing, Export (9:16, 4:5, 1:1, with the pre-flight), and Ask Montivo and Monti reading
+keywords instead of calling a model. What calls a model (a new project, a review, a re-plan, the hook A/B, a look or a
+cover from words, B-roll) is greyed out with the reason. `make test` runs the offline tests (recorded Voice and SAM
+streams, no network).
+
+**3. With your own key**, on your own footage (Meta's models, dev.meta.ai; a 60 to 90 s clip with its review loop
+costs about $0.20 to $0.40, logged per call in the run's `ledger.json`):
 
 ```bash
-make dev
-export MODEL_API_KEY=...
-.venv/bin/montivo run footage.mp4 --brief "A 40 second vertical reel: ..." --target 40 --review --out runs/001
-make ui
+export MODEL_API_KEY=...       # optional: export BASETEN_API_KEY=... for Muse Spark Open as the planner
+.venv/bin/montivo run footage/clip.mp4 --brief "A 40 second vertical reel: ..." --target 40 --review --out runs/001
+make ui                        # or start from New project in the UI and upload the clip there
 ```
+
+To keep the keys in a file: `cp .env.example .env` and fill it in; `make ui` reads it (for the CLI:
+`set -a; . ./.env; set +a`). With `BASETEN_API_KEY` set, `--planner open` (or the planner menu) plans on Muse Spark
+Open. Every flag and the run folder layout are in [docs/pipeline.md](docs/pipeline.md).
 
 ## How the loop works
 
