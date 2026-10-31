@@ -977,6 +977,15 @@ the cleanup session moved 5.4 GB of runs and the 9 merged worktrees to `~/.Trash
 Deployed 31/10 on Billy's go from a clean worktree of main at 42112a2 (no container was running, so no job and no old
 container to stop); /api/health 200, /api/runs 401, /s/nope 404, /api/monti 401 without the cookie, host spend $3.39
 of $15; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 10.5 s.
+Live check with the sign-in (31/10, $0.02, commit `e71eef2`): driven in the app's browser pane after Billy signed in;
+Home, the Live editor (delete keeps the playhead, Discard, Make Version -> the judge's copy), rail panels 1-8, ⌘P,
+Monti + Show me, Export pre-flight and the 375 px review mode / Monti sheet all passed. Found: Ask Montivo with a Live
+draft open failed everywhere (the editor sends the draft's own number as "from", montivo.agent read edl_v3.json of a
+v1-v2 run: FileNotFoundError); the server now passes the draft's base. The Speakers panel no longer asks for head
+thumbnails when the run has no tracked video (hosted samples ship without it). Deployed on Billy's go (the check's own
+container stopped after); /api/health 200, /api/runs 401, /s/nope 404; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP,
+render 7.3 s; the live ask then put Chill Lofi into the open draft beside the judge's delete. Not checked: sound on
+iPhone Safari and Safari on the Mac (Billy). 015's pre-flight: 23 of 26 caption lines under the apps' buttons.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
