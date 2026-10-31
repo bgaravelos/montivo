@@ -4,17 +4,21 @@ Both switch on from the environment only, so `montivo serve` on a laptop is unch
 
     MONTIVO_PASSWORD=...        every page and API call needs the sign-in cookie (/api/health and /login stay open)
     MONTIVO_BUDGET_USD=15       paid actions stop once the runs' ledgers have spent this much since the host started
+    MONTIVO_JUDGE_BUDGET_USD=3  and for one judge once their own projects and copies have spent this much (0 = no cap)
     MONTIVO_ONE_JOB=1           one engine job at a time across all runs (one container, one CPU budget)
     MONTIVO_MAX_FOOTAGE_S=95    a new run's clip may be at most this long
     MONTIVO_MAX_UPLOAD_MB=1000  an upload stops past this size (95 s of iPhone 4K HDR is about 600 MB)
-    MONTIVO_MAX_UPLOADS=5       clips one judge may upload (with the budget on)
-    MONTIVO_MAX_UPLOADS_ALL=30  clips all judges together may upload (a new sign-in is a new judge)
+    MONTIVO_MAX_UPLOADS=3       clips one judge may upload (with the budget on; 0 = no cap)
+    MONTIVO_MAX_UPLOADS_ALL=60  clips all judges together may upload (a new sign-in is a new judge)
+    MONTIVO_JOB_MAX_S=900       a job still running after this long is stopped (its process group ended)
     MONTIVO_JUDGE_SECRET=...    signs the judge cookies (else <root>/judge.key, made once; never the password)
 
 The budget is read from the ledgers every run writes (runs/<id>/ledger.json `total_cost_usd`), counted from a baseline
 taken the first time the host saw each run (budget.json next to runs/): the seeded sample runs bring their own Mac
 spend with them, and only what was spent on the host counts. A paid action is refused when what is left does not cover
-its expected cost, so the cap holds within one action's estimate; the $0 edits never touch it. Every browser gets a
+its expected cost, so the cap holds within one action's estimate; the $0 edits never touch it. One judge's share is
+what the ledgers of the runs they own (ui/owner: their uploads' runs and their copies of the samples) grew by on the
+host, so one judge cannot spend the whole cap (audit, 31/10: 110 reviews or 35 runs did). Every browser gets a
 judge id at sign-in (JUDGE), and only there: its first edit on a sample copies the sample to runs/<id>-<judge> (app.own), and the project
 list shows each judge the samples (or their copy) and their own runs. A run copied onto the
 host later is adopted the same way: `python -m montivo.server.hosted adopt --root /data 015`.
@@ -29,8 +33,11 @@ import json
 import os
 import re
 import secrets
+import sys
+import threading
 import time
 from collections import deque
+from contextvars import ContextVar
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -46,8 +53,10 @@ MIN_PAID_USD = 0.01  # the cheapest paid action (a Muse Image title card)
 MONTI = "_monti"  # the budget key of Monti's ledger (no run has a name starting with _)
 ARCHIVED = "_archive"  # runs/_archive/<id> (app.ARCHIVE)
 UNSAFE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
-LOGIN_FAILS_PER_MIN = 10  # wrong passwords one address may send in a minute; past it 429 without a check
-LOGIN_FAILS_ALL_PER_MIN = 100  # and all addresses together (an address is only the proxy's X-Forwarded-For)
+LOGIN_FAILS_PER_MIN = 10  # wrong passwords one address may send in a minute; past it a wrong one is a 429
+LOGIN_FAILS_ALL_PER_MIN = 100  # and all addresses together; a right password is never refused (login)
+JUDGE_CAP_USD = 3.0  # what one judge may spend of the hosted budget (MONTIVO_JUDGE_BUDGET_USD)
+CURRENT_JUDGE: ContextVar[str | None] = ContextVar("montivo_judge", default=None)  # the request's judge (app sets it)
 
 
 def usd(x: float) -> str:
@@ -64,8 +73,12 @@ def env_float(name: str) -> float | None:
 class Budget:
     """Spend since the host started, from the run ledgers, against a cap in dollars."""
 
-    def __init__(self, root: Path, cap: float):
+    def __init__(self, root: Path, cap: float, judge_cap: float | None = None):
         self.root, self.cap = root, cap
+        self.judge_cap = judge_cap if judge_cap and judge_cap > 0 else None  # one judge's share, None = no cap
+        # the copy threads (app.copy_sample) adopt while requests read: json.dumps over a dict another thread updates
+        # raises, and two read-modify-writes of budget.json lose one (audit, 31/10)
+        self.lock = threading.RLock()
         self.file = root / "budget.json"
         first = not self.file.is_file()
         self.data = {"baseline": {}, "since": time.time()} if first else json.loads(self.file.read_text())
@@ -82,8 +95,9 @@ class Budget:
     def adopt(self, names: list[str]) -> None:
         """Runs copied onto the host (seeded samples): what their ledgers hold now was spent elsewhere."""
         totals = self.ledgers()
-        self.baseline.update({n: totals.get(n, 0.0) for n in names})
-        self.save()
+        with self.lock:
+            self.baseline.update({n: totals.get(n, 0.0) for n in names})
+            self.save()
 
     def ledgers(self) -> dict[str, float]:
         """Every run's ledger total, archived runs included (an archive moves the folder, the spend stays), keyed
@@ -104,44 +118,94 @@ class Budget:
 
     def move(self, old: str, new: str) -> None:
         """A run archived or restored: its baseline goes with the folder."""
-        if old in self.baseline:
-            self.baseline[new] = self.baseline.pop(old)
-            self.save()
+        with self.lock:
+            if old in self.baseline:
+                self.baseline[new] = self.baseline.pop(old)
+                self.save()
 
     def save(self) -> None:
-        write_atomic(self.file, json.dumps(self.data, indent=1))
+        with self.lock:
+            write_atomic(self.file, json.dumps(self.data, indent=1))
 
     def hold(self, usd: float, run: str) -> None:
         """Count `usd` as spent with no ledger entry: a stopped job's call may have reached the model (and been
         billed) before its answer, and with it the ledger entry, came back."""
         if usd > 0:
-            self.data.setdefault("held", []).append({"run": run, "usd": round(usd, 4), "t": round(time.time())})
-            self.save()
+            with self.lock:
+                self.data.setdefault("held", []).append({"run": run, "usd": round(usd, 4), "t": round(time.time())})
+                self.save()
 
     def spent(self) -> float:
-        held = sum(h.get("usd", 0.0) for h in self.data.get("held", []))
-        return round(sum(max(0.0, c - self.baseline.get(n, 0.0)) for n, c in self.ledgers().items()) + held, 4)
+        totals = self.ledgers()
+        with self.lock:
+            held = sum(h.get("usd", 0.0) for h in self.data.get("held", []))
+            return round(sum(max(0.0, c - self.baseline.get(n, 0.0)) for n, c in totals.items()) + held, 4)
 
     def left(self) -> float:
         return round(self.cap - self.spent(), 4)
 
-    def public(self) -> dict:
-        spent = self.spent()
-        return {"cap": self.cap, "spent": round(spent, 2), "left": round(max(0.0, self.cap - spent), 2)}
-
-    def note(self) -> str | None:
-        """What the UI says instead of "set MODEL_API_KEY" once nothing paid fits any more."""
-        if self.left() >= MIN_PAID_USD:
+    def owner(self, key: str) -> str | None:
+        """The judge a ledger key's run belongs to (runs/<id>/ui/owner, archived runs too), None for a sample."""
+        name = key.removeprefix(f"{ARCHIVED}/")
+        folder = self.root / "runs" / (f"{ARCHIVED}/{name}" if name != key else name)
+        try:
+            return (folder / "ui" / "owner").read_text().strip() or None
+        except OSError:
             return None
-        return (f"This demo's model budget ({usd(self.cap)}) is spent: the finished projects open and the $0 edits "
-                "(delete, trim, captions, move, punch-ins, speakers) still render.")
 
-    def require(self, what: str, est: float) -> None:
+    def judge_spent(self, judge: str) -> float:
+        """What one judge's own runs and copies spent on the host, the holds of their stopped jobs included."""
+        totals = self.ledgers()
+        with self.lock:
+            runs = sum(max(0.0, c - self.baseline.get(n, 0.0)) for n, c in totals.items()
+                       if n != MONTI and self.owner(n) == judge)
+            held = sum(h.get("usd", 0.0) for h in self.data.get("held", [])
+                       if judge in (self.owner(str(h.get("run"))), self.owner(f"{ARCHIVED}/{h.get('run')}")))
+        return round(runs + held, 4)
+
+    def judge_left(self, judge: str | None) -> float | None:
+        """What is left of one judge's share (None: no per-judge cap, or no judge)."""
+        if self.judge_cap is None or not judge:
+            return None
+        return round(self.judge_cap - self.judge_spent(judge), 4)
+
+    def left_for(self, judge: str | None) -> float:
+        """What a paid action of this judge may still spend: the whole budget's left, or their share's when less."""
+        mine = self.judge_left(judge)
         left = self.left()
-        if left < round(max(est, MIN_PAID_USD), 4):  # 3 x $0.035 is 0.10500000000000001: refused at exactly $0.105
+        return left if mine is None else min(left, mine)
+
+    def public(self, judge: str | None = None) -> dict:
+        spent = self.spent()
+        out = {"cap": self.cap, "spent": round(spent, 2), "left": round(max(0.0, self.cap - spent), 2)}
+        if (mine := self.judge_left(judge)) is not None:  # this judge's share (the UI may show it next to the cap)
+            out["judge"] = {"cap": self.judge_cap, "spent": round(self.judge_cap - mine, 2), "left": round(max(0.0, mine), 2)}
+        return out
+
+    def note(self, judge: str | None = None) -> str | None:
+        """What the UI says instead of "set MODEL_API_KEY" once nothing paid fits any more."""
+        if self.left() < MIN_PAID_USD:
+            return (f"This demo's model budget ({usd(self.cap)}) is spent: the finished projects open and the $0 "
+                    "edits (delete, trim, captions, move, punch-ins, speakers) still render.")
+        mine = self.judge_left(judge)
+        if mine is not None and mine < MIN_PAID_USD:
+            return (f"You have used the {usd(self.judge_cap)} of model calls each judge gets on this demo: your projects "
+                    "open and the $0 edits (delete, trim, captions, move, punch-ins, speakers) still render.")
+        return None
+
+    def require(self, what: str, est: float, judge: str | None = None) -> None:
+        need = round(max(est, MIN_PAID_USD), 4)  # 3 x $0.035 is 0.10500000000000001: refused at exactly $0.105
+        left = self.left()
+        if left < need:
             raise HTTPException(409, f"{what} needs about ${est:.2f} of Meta model calls and this demo has "
                                      f"${max(left, 0):.2f} of its {usd(self.cap)} budget left. The finished projects "
                                      "and the $0 edits (delete, trim, captions, move, punch-ins, speakers) still work.")
+        mine = self.judge_left(judge)
+        if mine is not None and mine < need:
+            raise HTTPException(409, f"{what} needs about ${est:.2f} of Meta model calls and you have "
+                                     f"${max(mine, 0):.2f} left of the {usd(self.judge_cap)} each judge gets on this "
+                                     "demo. Your projects and the $0 edits (delete, trim, captions, move, punch-ins, "
+                                     "speakers) still work.")
 
 
 # --------------------------------------------------------------------------- the sign-in
@@ -241,8 +305,11 @@ class LoginLimit:
 
 
 def client(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for", "")
-    return fwd.split(",")[0].strip() or (request.client.host if request.client else "?")
+    """The address a sign-in comes from: the LAST X-Forwarded-For hop, the one the host's proxy appended. The first
+    is whatever the client wrote there: a guesser who sent a new one with each wrong password was never held back
+    as one address and kept the all-addresses limit tripped for everyone (audit, 31/10)."""
+    fwd = [x.strip() for x in request.headers.get("x-forwarded-for", "").split(",") if x.strip()]
+    return fwd[-1] if fwd else (request.client.host if request.client else "?")
 
 
 LOGIN_HTML = """<!doctype html>
@@ -279,6 +346,7 @@ def install(app, password: str | None, root: Path) -> None:
         return
     key = judge_key(root)
     limit = LoginLimit()
+    hops_seen = set()  # the X-Forwarded-For lengths logged once each: what the host's proxy sends (never the addresses)
 
     @app.middleware("http")
     async def gate(request: Request, call_next):
@@ -306,9 +374,14 @@ def install(app, password: str | None, root: Path) -> None:
 
     @app.post("/api/login")
     async def login(request: Request):
+        """The password first, then the limit: a right password always signs in (audit, 31/10: wrong passwords from
+        one script kept the all-addresses limit tripped, and every new judge got 429 with the right one); only the
+        wrong ones count, and past the limit a wrong one is a 429."""
         who = client(request)
-        if limit.blocked(who):
-            return JSONResponse({"error": "too many wrong passwords: wait a minute"}, status_code=429)
+        hops = len([x for x in request.headers.get("x-forwarded-for", "").split(",") if x.strip()])
+        if hops not in hops_seen:
+            hops_seen.add(hops)
+            print(f"montivo-ui: a sign-in with {hops} X-Forwarded-For entr{'y' if hops == 1 else 'ies'}", file=sys.stderr)
         body = (await request.body())[:2048].decode(errors="replace")
         if request.headers.get("content-type", "").startswith("application/json"):
             try:
@@ -318,8 +391,12 @@ def install(app, password: str | None, root: Path) -> None:
         else:
             given = (parse_qs(body).get("password") or [""])[0]
         if not hmac.compare_digest(token(given), token(password)):
-            limit.failed(who)
+            blocked = limit.blocked(who)
+            if not blocked:  # past the limit nothing more is kept: a flood of wrong ones stays a 100-entry deque
+                limit.failed(who)
             await asyncio.sleep(1.0)  # slows a guesser down without holding the other requests
+            if blocked:
+                return JSONResponse({"error": "too many wrong passwords: wait a minute"}, status_code=429)
             return RedirectResponse("/login?error=1", status_code=303)
         resp = RedirectResponse("/", status_code=303)
         jid = judge_id(request, key) or secrets.token_hex(4)

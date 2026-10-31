@@ -17,7 +17,8 @@ def ledger(d, usd):
 @pytest.fixture
 def hosted_env(monkeypatch):
     for k in ("MONTIVO_PASSWORD", "MONTIVO_BUDGET_USD", "MONTIVO_ONE_JOB", "MONTIVO_MAX_FOOTAGE_S",
-              "MONTIVO_MAX_UPLOAD_MB", "MONTIVO_MAX_UPLOADS", "MONTIVO_JUDGE_SECRET"):
+              "MONTIVO_MAX_UPLOAD_MB", "MONTIVO_MAX_UPLOADS", "MONTIVO_JUDGE_SECRET", "MONTIVO_JUDGE_BUDGET_USD",
+              "MONTIVO_MAX_UPLOADS_ALL", "MONTIVO_JOB_MAX_S"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("MODEL_API_KEY", "test")
     return monkeypatch
@@ -85,7 +86,8 @@ def test_paid_actions_stop_at_the_cap_and_free_edits_go_on(tmp_path, hosted_env)
     hosted_env.setenv("MONTIVO_BUDGET_USD", "0.20")
     seen = fake_jobs(hosted_env)
     c = TestClient(A.create_app(tmp_path))
-    assert c.get("/api/runs/r1").json()["budget"] == {"cap": 0.2, "spent": 0.0, "left": 0.2}
+    assert c.get("/api/runs/r1").json()["budget"] == {"cap": 0.2, "spent": 0.0, "left": 0.2,
+                                                      "judge": {"cap": 3.0, "spent": 0.0, "left": 3.0}}
     assert c.post("/api/runs/r1/hook", json={"from": 2}).status_code == 200  # $0.145 with the judge fits in $0.20
     ledger(d, 0.10)  # what the hook A/B spent
     r = c.post("/api/runs/r1/review", json={"from": 2, "passes": 3})  # three reviews, $0.105, do not
