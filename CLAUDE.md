@@ -996,6 +996,21 @@ modals and greets once, timeline drags end on pointercancel, Share copies inside
 container, Versions cards no longer take the chat's `.you` rule. Second pass: 0 page overflow (was 30), 0 text spill
 (was 54). Real Safari and an iPhone not tried. Deployed 31/10 on Billy's go from a clean worktree (no container was
 running); /api/health 200, /api/runs 401, /s/nope 404; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 7.8 s.
+Full code audit + fixes (31/10, $0, Billy: every Must and Should despite the freeze; report and proofs in
+`docs/notes/full-audit_2026-10-31.md`, `docs/notes/full-audit-proofs/`): six reviewers found 5 Must, ~30 Should; fixed in
+six branches merged on `audit-integration` (766 tests, combo_check on 016 0 failures, 015 v5 / 012 v2 render
+bit-identical). Must: drop / reorder / insert / cut re-tighten edges with every word no clip keeps blocked
+(`human.retighten`, `unused_words`; split + delete brought a deleted word back in 71 of 392 cases) and an outward trim
+is held out of the next unused word; pause records carry their two words and `prune_pauses` drops stale ones; a draft
+commit refuses a rebase whose clip ids mean other clips (`draft.rebase_conflict`); preflight resolves measured faults on
+the laid EDL (1.5 s off with a title card); sign-in checks the password first and keys the limit on the proxy's hop.
+Should: the loop's `version`, `best_of`, one-edge trims, hook B preflight, heard cache; `locate` floor (0.6) and retakes
+to the last take; no inverted spans; `covered` / `isolate`; Greek in Inter Tight when the look's font lacks it (render
+and Live); segments past the picture hold the last frame (render `tpad`, Live clamp); no repeated frame at abutting
+spans; kit keeps start / fade / duck edits; breaks and jump-cut skips follow split and re-plan; hosted: $3 per judge
+(`MONTIVO_JUDGE_BUDGET_USD`), uploads 3 a judge / 60 all, samples never written by a judge's cover or suggest, jobs end
+in a finally with a 15 min watchdog, 409 instead of queueing exports and Monti; UI: an undone draft closes, Create waits
+for the upload, stale guards. Not deployed; after the deploy check Modal's X-Forwarded-For and the draft filmstrip live.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
