@@ -74,18 +74,31 @@ def crop_size(source_w: int, source_h: int, aspect: tuple[int, int] = (9, 16)) -
     return w, min(source_h - source_h % 2, int(round(w * aspect[1] / aspect[0] / 2)) * 2)
 
 
-def crop_top(track: dict | None, track_id: str | None, t_in: float, t_out: float, sh: int, crop_h: int) -> int:
-    """The crop's y when it is shorter than the source: the followed box's median centre HEAD_Y_FRAC down the crop
-    over the window, else the middle; even and inside the frame."""
-    if crop_h >= sh:
-        return 0
-    y = (sh - crop_h) / 2
+def picture_box(source: dict) -> tuple[int, int, int, int]:
+    """(x, y, w, h) of the picture inside the source frame: the EDL source's `picture` (ingest.detect_picture, a
+    letterboxed or pillarboxed clip: heli-02 is 1920x1012 inside 1080), else the whole frame."""
+    sw, sh = int(source["width"]), int(source["height"])
+    b = source.get("picture")
+    if not b:
+        return 0, 0, sw, sh
+    return int(b["x"]), int(b["y"]), int(b["w"]), int(b["h"])
+
+
+def crop_top(track: dict | None, track_id: str | None, t_in: float, t_out: float, sh: int, crop_h: int,
+             top: int = 0, height: int | None = None) -> int:
+    """The crop's y when it is shorter than the picture (rows top .. top + height of the source, the whole frame by
+    default): the followed box's median centre HEAD_Y_FRAC down the crop over the window, else the middle; even and
+    inside the picture."""
+    height = sh if height is None else height
+    if crop_h >= height:
+        return top
+    y = top + (height - crop_h) / 2
     if track and track_id and track_id in (track.get("objects") or {}):
         fy = sh / float(track["source"]["height"])
         cs = sorted((r["box"][1] + r["box"][3]) / 2 * fy for r in track["objects"][track_id] if t_in <= r["t"] <= t_out)
         if cs:
             y = cs[len(cs) // 2] - HEAD_Y_FRAC * crop_h
-    return int(round(min(sh - crop_h, max(0.0, y)) / 2)) * 2
+    return int(round(min(top + height - crop_h, max(float(top), y)) / 2)) * 2
 
 
 def pick_track(objects: dict[str, list[dict]], t_in: float, t_out: float, track_fps: float, frame_w: int,
@@ -260,7 +273,8 @@ def plan_segment(t_in: float, t_out: float, source: dict, track: dict | None, pa
     and never holding the x of the other shot; `pieces` then lists them."""
     params = params or ReframeParams()
     sw, sh, fps = int(source["width"]), int(source["height"]), float(source["fps"])
-    crop_w, crop_h = crop_size(sw, sh, aspect)
+    bx, by, bw, bh = picture_box(source)  # the crop stays inside the picture: no letterbox bars in the cut
+    crop_w, crop_h = crop_size(bw, bh, aspect)
     pieces: list[dict] = []
     fallbacks: list[dict] = []
     cuts = sorted(c for c in shots or [] if t_in + 1.0 / fps < c < t_out - 1.0 / fps)
@@ -316,9 +330,10 @@ def plan_segment(t_in: float, t_out: float, source: dict, track: dict | None, pa
         if how != "track":
             fallbacks.append({"t_in": round(t_in, 4), "t_out": round(t_out, 4), "by": how})
     xs = [int(round(c - crop_w / 2)) for c in centres]  # 1 px steps (the render crops with exact=1)
-    xs = [min(sw - crop_w, max(0, x)) for x in xs]
+    xs = [min(bx + bw - crop_w, max(bx, x)) for x in xs]
     seg = SegmentPath(t_in=t_in, t_out=t_out, track_id=track_id, crop_w=crop_w, crop_h=crop_h, xs=xs, fps=fps,
-                      pieces=pieces, crop_y=crop_top(track, track_id, t_in, t_out, sh, crop_h), fallbacks=fallbacks)
+                      pieces=pieces, crop_y=crop_top(track, track_id, t_in, t_out, sh, crop_h, by, bh),
+                      fallbacks=fallbacks)
     seg.keyframes = keyframes_for(xs, fps, t_in, params.keyframe_every_s, params.edge_px, span_ids or [])
     return seg
 

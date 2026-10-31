@@ -153,6 +153,7 @@ def run(opts: RunOptions) -> dict:
                              f"{opts.footage}{' with --hflip' if opts.hflip else ''}; use a new --out for other footage")
         ing = Ingested(source=Path(d["source"]), probe=Probe(**d["probe"]), proxy=Path(d["proxy"]), proxy_probe=Probe(**d["proxy_probe"]),
                        wav=Path(d["wav"]), file_id=d["file_id"], upload_seconds=d["upload_seconds"])
+        ing.picture = d.get("picture")  # an ingest from before bar detection keeps the whole frame
         if "shots" in d:
             ing.shots = list(d["shots"])
         else:  # ingested before shot detection ($0, a few seconds): found now and kept
@@ -312,7 +313,8 @@ def run(opts: RunOptions) -> dict:
     source = {"path": str(ing.source), "original_path": str(opts.footage), "hflip": ing.source != opts.footage,
               "proxy": str(ing.proxy), "file_id": ing.file_id, "duration_s": ing.probe.duration,
               "width": ing.probe.width, "height": ing.probe.height, "fps": ing.probe.fps,
-              "proxy_width": ing.proxy_probe.width, "proxy_height": ing.proxy_probe.height, "shots": ing.shots}
+              "proxy_width": ing.proxy_probe.width, "proxy_height": ing.proxy_probe.height, "shots": ing.shots,
+              **({"picture": ing.picture} if ing.picture else {})}
     track_summary = {c: t.summary() for c, t in tracks.items()}
     if reuse and (out / "edl_v1.json").is_file():
         # the same plan builds the same v1, and later versions were patched from this file: keep it as it is

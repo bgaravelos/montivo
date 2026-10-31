@@ -45,6 +45,7 @@ class Ingested:
     file_id: str
     upload_seconds: float
     shots: list[float] = field(default_factory=list)  # camera cuts in source seconds (detect_shots)
+    picture: dict | None = None  # the picture box inside black bars, source px (detect_picture); None = whole frame
 
     def to_json(self) -> dict:
         d = asdict(self)
@@ -245,6 +246,52 @@ def detect_shots(proxy: Path, threshold: float = SHOT_THRESHOLD, min_s: float = 
     return shot_cuts([(float(a), float(b)) for a, b in _SCD.findall(proc.stderr)], threshold, min_s)
 
 
+PICTURE_BLACK = 24  # cropdetect's black limit (8-bit luma): a letterbox bar sits at 16, the picture far over it
+PICTURE_MIN_BAR = 0.015  # each bar at least this share of the frame side (heli-02: 34 of 1080 px, 3.1 %)
+_CROP = re.compile(r"crop=(\d+):(\d+):(\d+):(\d+)")
+
+
+def picture_from_crop(crop: tuple[int, int, int, int], proxy_w: int, proxy_h: int, src_w: int,
+                      src_h: int) -> dict | None:
+    """The picture box in source pixels from cropdetect's box on the proxy (w, h, x, y), or None when there are no
+    bars: a pair of bars counts only when both are at least PICTURE_MIN_BAR of the side and about the same size (a
+    letterbox or pillarbox is centred; one dark edge of a scene is not), and the picture keeps at least half of each
+    side. Rounded inward by one proxy pixel more on each barred side, to even numbers, so no black row survives the
+    proxy's scale (heli-02: rows 32-1044 from the proxy, 34-1046 measured on the source)."""
+    w, h, x, y = crop
+    fx, fy = src_w / float(proxy_w), src_h / float(proxy_h)
+
+    def bars(a: int, b: int, side: int) -> bool:
+        return min(a, b) >= PICTURE_MIN_BAR * side and abs(a - b) <= max(2, 0.25 * max(a, b))
+
+    vert, horiz = bars(y, proxy_h - y - h, proxy_h), bars(x, proxy_w - x - w, proxy_w)
+    if not (vert or horiz) or w < proxy_w / 2 or h < proxy_h / 2:
+        return None
+    x0, x1 = ((x + 1) * fx, (x + w - 1) * fx) if horiz else (0.0, float(src_w))
+    y0, y1 = ((y + 1) * fy, (y + h - 1) * fy) if vert else (0.0, float(src_h))
+    bx, by = int(-(-x0 // 2)) * 2, int(-(-y0 // 2)) * 2  # up to even
+    bw, bh = int((x1 - bx) // 2) * 2, int((y1 - by) // 2) * 2  # down to even
+    if (bw, bh) == (src_w - src_w % 2, src_h - src_h % 2):
+        return None
+    return {"x": bx, "y": by, "w": bw, "h": bh}
+
+
+def detect_picture(proxy: Path, proxy_w: int, proxy_h: int, src_w: int, src_h: int, log=None) -> dict | None:
+    """Black bars baked into the footage (a letterboxed 16:9 export, heli-02), from ffmpeg's cropdetect over the whole
+    proxy (reset=0: the box only grows, so a dark scene does not count as a bar), $0 and a few seconds: the picture
+    box in source pixels (picture_from_crop), None without bars. The reframe crops inside it."""
+    proc = subprocess.run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(proxy), "-map", "0:v:0", "-an", "-vf",
+                           f"cropdetect=limit={PICTURE_BLACK}:round=2:reset=0", "-f", "null", "-"],
+                          capture_output=True, text=True)
+    found = _CROP.findall(proc.stderr)
+    if proc.returncode != 0 or not found:
+        if log and proc.returncode != 0:
+            log(f"ingest: bar detection failed (ffmpeg exit {proc.returncode}), the crop uses the whole frame")
+        return None
+    w, h, x, y = (int(v) for v in found[-1])
+    return picture_from_crop((w, h, x, y), proxy_w, proxy_h, src_w, src_h)
+
+
 def make_wav(src: Path, dst: Path, rate: int = 24000, start: float | None = None, seconds: float | None = None,
              log=None) -> Path:
     """24 kHz mono 16-bit PCM wav, the format the Voice endpoint measures best on."""
@@ -345,6 +392,14 @@ def ingest(source: Path, out: Path, ledger: Ledger, log=print, hflip: bool = Fal
     ledger.add(Entry(stage="ingest.shots", model="ffmpeg", seconds=t_shots.seconds, cost_usd=0.0,
                      note=f"{len(shots)} camera cut(s) (scdet {SHOT_THRESHOLD:g})"))
     log(f"ingest: {len(shots)} camera cut(s){': ' + ', '.join(f'{c:g}' for c in shots[:12]) if shots else ''} in {t_shots.seconds}s")
+    with Timer() as t_bars:
+        picture = detect_picture(proxy, pp.width, pp.height, probe.width, probe.height, log=log)
+    if picture:
+        ledger.add(Entry(stage="ingest.bars", model="ffmpeg", seconds=t_bars.seconds, cost_usd=0.0,
+                         note=f"picture {picture['w']}x{picture['h']} at {picture['x']},{picture['y']} inside "
+                              f"{probe.width}x{probe.height}"))
+        log(f"ingest: black bars: the picture is {picture['w']}x{picture['h']} at {picture['x']},{picture['y']}, "
+            f"the crop stays inside it ({t_bars.seconds}s)")
 
     up = upload_file(proxy, "video/mp4")
     ledger.add(Entry(stage="ingest.upload", model="files", seconds=up["upload_seconds"], cost_usd=0.0,
@@ -352,7 +407,7 @@ def ingest(source: Path, out: Path, ledger: Ledger, log=print, hflip: bool = Fal
     log(f"ingest: uploaded proxy as {up['id']} in {up['upload_seconds']}s")
 
     ing = Ingested(source=source, probe=probe, proxy=proxy, proxy_probe=pp, wav=wav,
-                   file_id=up["id"], upload_seconds=up["upload_seconds"], shots=shots)
+                   file_id=up["id"], upload_seconds=up["upload_seconds"], shots=shots, picture=picture)
     dump_json(out / "ingest.json", {**ing.to_json(), "hflip": hflip, "rotation": rotation, "standardised": reasons,
                                     "original_source": str(original),
                                     "upload": {k: v for k, v in up.items() if k != "upload_seconds"}})
