@@ -40,6 +40,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from .. import human
 from ..engine.api import dump_json
+from ..engine.edl import title_card_on
 from ..engine.preview import preview_data
 
 SPAN = re.compile(r"s\d{1,4}")
@@ -311,9 +312,28 @@ def resolve(run_dir: Path, edl: dict, o: dict) -> dict:
     return o
 
 
-def cost(ops: list[dict]) -> float:
-    """What a commit of these ops spends: one Muse Image card for new title words, else nothing."""
-    return TITLE_COST if any(o["op"] == "text" and o["args"].get("title") for o in ops) else 0.0
+def cost(ops: list[dict], run_dir: Path | None = None, edl: dict | None = None, base: dict | None = None) -> float:
+    """What a commit of these ops spends: one Muse Image card for new title words, else nothing. Given the EDL the ops
+    make (and the one they start from), what its render will make: a card the base did not show, with no image yet
+    for its words, is a card too, whatever op turned it on (a text op's title_style "card" on a header EDL, a kit with
+    a title card: priced $0 before, audit 31/10)."""
+    words = TITLE_COST if any(o["op"] == "text" and o["args"].get("title") for o in ops) else 0.0
+    if edl is None or words:
+        return words
+    new = title_card_on(edl) and not (base is not None and title_card_on(base)
+                                      and base.get("title_card_text") == edl["title_card_text"])
+    return TITLE_COST if new and not card_made(run_dir, edl["title_card_text"]) else 0.0
+
+
+def card_made(run_dir: Path | None, text: str) -> bool:
+    """title/title_card.png exists for these words (run.title_card reuses it then, no Muse Image call)."""
+    if run_dir is None:
+        return False
+    png, req = run_dir / "title" / "title_card.png", run_dir / "title" / "request.json"
+    try:
+        return png.is_file() and f'"{text}"' in json.loads(req.read_text()).get("prompt", "")
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 # --------------------------------------------------------------------------- the draft on disk
@@ -326,6 +346,20 @@ def folder(run_dir: Path, judge: str | None) -> Path:
     if not JUDGE.fullmatch(judge):
         raise HTTPException(400, "bad judge id")
     return run_dir / "ui" / "draft" / judge
+
+
+def move(src: Path, dest: Path, judge: str) -> bool:
+    """A judge's open draft on a hosted sample into their copy of it (Ask Montivo in Live makes the copy, and the copy
+    leaves every draft on the sample), unless a commit is in flight there or the copy has a draft of its own."""
+    sfd, dfd = folder(src, judge), folder(dest, judge)
+    with run_lock(src), run_lock(dest):
+        state = load(sfd)
+        if state is None or state.get("commit") or load(dfd) is not None:
+            return False
+        shutil.rmtree(dfd, ignore_errors=True)
+        dfd.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(sfd), str(dfd))
+        return True
 
 
 def load(fd: Path) -> dict | None:
@@ -579,11 +613,18 @@ def router(st, own, judge_of, need_key, hosted: bool = False) -> APIRouter:
         b = await request.json() if (await request.body()) else {}
         b = b if isinstance(b, dict) else {}
         passes = review_passes(b)
-        title = cost((await asyncio.to_thread(load, fd) or {}).get("ops") or [])
+        td = st.runs / target
+
+        def priced() -> float:  # the draft as it stands, its card looked up where the version will render
+            with run_lock(d):
+                state = load(fd) or {}
+                if not state.get("ops"):
+                    return 0.0
+                return cost(state["ops"], td, current(fd, d, state), base_edl(d, state["base"]))
+        title = await asyncio.to_thread(priced)
         if passes or title:
             need_key("New title card words (Muse Image)" if title else "Reviewing the new cut", title + COST["review"] * passes)
         rebase = b.get("rebase", True) is not False
-        td = st.runs / target
 
         def go() -> dict:
             with run_lock(d):

@@ -65,6 +65,18 @@ def test_all_judges_together_have_an_upload_quota(tmp_path, hosted_env, monkeypa
     assert codes == [200, 200, 429]  # three sign-ins are three judges, the third upload still waits
 
 
+
+def test_the_global_upload_quota_holds_without_a_per_judge_one(tmp_path, hosted_env, monkeypatch):
+    """Audit 31/10: MONTIVO_MAX_UPLOADS_ALL counted only when MONTIVO_MAX_UPLOADS was set, and 0 meant 30."""
+    host(tmp_path, hosted_env)
+    hosted_env.delenv("MONTIVO_MAX_UPLOADS", raising=False)
+    hosted_env.setenv("MONTIVO_MAX_UPLOADS_ALL", "1")
+    _clip(tmp_path / "src.mp4")
+    data = (tmp_path / "src.mp4").read_bytes()
+    assert [signed_in(tmp_path).put(f"/api/footage/v{k}.mp4", content=data).status_code for k in range(2)] == [200, 429]
+    hosted_env.setenv("MONTIVO_MAX_UPLOADS_ALL", "0")
+    assert signed_in(tmp_path).put("/api/footage/w.mp4", content=data).status_code == 429
+
 def test_the_host_picks_the_run_id_and_claims_its_folder(tmp_path, hosted_env):
     host(tmp_path, hosted_env)
     seen = fake_jobs(hosted_env)

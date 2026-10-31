@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, tc } from "./api";
 import { Icon, MarkLoader } from "./icons";
 import type { Costs, Version } from "./types";
@@ -39,6 +39,8 @@ export function CoverMaker({ id, v, total, aspect, W, H, grid, bands, cover, set
   const [rendering, setRendering] = useState(false);
   const [designing, setDesigning] = useState(false);
   const [masking, setMasking] = useState(false);
+  const vNow = useRef(v?.n); // the version on the page now: a design asked for an older one is dropped (audit, 31/10)
+  vNow.current = v?.n;
   const designCost = costs?.cover_design ?? 0.05;
   const maskCost = costs?.cover_mask ?? 0.01;
   useEffect(() => {
@@ -57,7 +59,9 @@ export function CoverMaker({ id, v, total, aspect, W, H, grid, bands, cover, set
     if (!v) return;
     setDesigning(true); onErr(null);
     try {
-      const r = await api<CoverRecord & { run?: string }>(`/api/runs/${id}/cover/design`, { v: v.n, aspect });
+      const at = v.n;
+      const r = await api<CoverRecord & { run?: string }>(`/api/runs/${id}/cover/design`, { v: at, aspect });
+      if (at !== vNow.current) return;
       setRecord(r);
       if (r.run && r.run !== id) onMoved?.(r.run); // on a sample it went into the judge's own copy
       const f = r.design?.final;

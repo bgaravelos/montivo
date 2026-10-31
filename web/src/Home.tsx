@@ -103,14 +103,27 @@ export function Home({ go }: { go: (h: string) => void }) {
   const [showArchived, setShowArchived] = useState(false);
   const [toast, setToast] = useState<{ text: string; undo?: string; tone?: string } | null>(null);
 
+  // a failed list (a 401 once the hosted sign-in expires) says so instead of skeleton tiles; the poll keeps trying
+  // and a failed footage list is fetched again with the next good one (audit, 31/10)
+  const [loadErr, setLoadErr] = useState<{ text: string; login: boolean } | null>(null);
+  const footFailed = useRef(false);
+  const failed = (e: unknown) => {
+    const login = (e as { status?: number }).status === 401;
+    setLoadErr({ login, text: login ? "Your sign-in has expired." : `Could not load the projects: ${(e as Error).message ?? e}. Trying again…` });
+  };
   const loadRuns = () => api<{ runs: RunCard[]; has_key: boolean; has_open_key: boolean; costs: Costs; key_note?: string | null; budget?: Budget | null; limits?: Limits | null }>("/api/runs").then((r) => {
     const recv = performance.now();
     setRuns(r.runs.map((x) => (x.progress ? { ...x, progress: { ...x.progress, recv } } : x)));
     setHasKey(r.has_key); setHasOpen(r.has_open_key); if (r.costs) setCosts(r.costs);
     setKeyNote(r.key_note ?? null); setBudget(r.budget ?? null); setLimits(r.limits ?? null);
-  });
+    setLoadErr(null);
+    if (footFailed.current) loadFootage();
+  }).catch(failed);
   const loadArchived = () => api<{ runs: RunCard[] }>("/api/archive").then((r) => setArchived(r.runs)).catch(() => setArchived([]));
-  const loadFootage = () => api<{ files: Footage[] }>("/api/footage").then((r) => { setFootage(r.files); if (!f && r.files[0]) setF(r.files[0].path); });
+  const loadFootage = () => api<{ files: Footage[] }>("/api/footage").then((r) => {
+    footFailed.current = false;
+    setFootage(r.files); if (!f && r.files[0]) setF(r.files[0].path);
+  }).catch((e) => { footFailed.current = true; failed(e); });
   useEffect(() => { loadRuns(); loadArchived(); loadFootage(); }, []); // eslint-disable-line
   const anyRunning = !!runs?.some((r) => r.job?.running);
   useEffect(() => {
@@ -235,7 +248,8 @@ export function Home({ go }: { go: (h: string) => void }) {
               </select>
             </>}
           </div>
-          {!runs && <div className="hm-grid" aria-busy="true">{[0, 1, 2, 3].map((k) => <div key={k} className="hm-tile skeleton"><div className="hm-poster" /></div>)}</div>}
+          {loadErr && <div className="mute">{loadErr.text}{loadErr.login && <> <a className="link" href="/login">Sign in again</a></>}</div>}
+          {!runs && !loadErr && <div className="hm-grid" aria-busy="true">{[0, 1, 2, 3].map((k) => <div key={k} className="hm-tile skeleton"><div className="hm-poster" /></div>)}</div>}
           {runs && !!all.length && !shown.length && <div className="mute">No project matches. <button className="link" onClick={() => { setQ(""); setOnly("all"); }}>Show all</button></div>}
           {runs && (
             <div className="hm-grid" data-monti="home.grid">

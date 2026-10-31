@@ -264,22 +264,29 @@ export function Editor({ id, replay, go }: Props) {
     } catch (e) { refusal.current = String((e as Error).message); flash(refusal.current, "error"); return false; }
   }, [id, flash, go, forkFrom, newest, state]);
   /** The open draft: GET /draft settles a commit that has ended (its version exists now: no draft), then its preview. */
+  const draftSeq = useRef(0); // the newest loadDraft: a slower earlier preview that lands last is dropped (audit, 31/10)
   const loadDraft = useCallback(async (settle = true) => {
+    const seq = ++draftSeq.current;
     try {
       if (settle) {
         const sum = await api<{ draft: DraftSum | null }>(`/api/runs/${id}/draft`);
+        if (seq !== draftSeq.current) return;
         setDraftSum(sum.draft);
         if (!sum.draft) return setDraftData(null);
       }
-      setDraftData(await api<LiveData>(`/api/runs/${id}/draft/preview`));
-    } catch (e) { setDraftData(null); flash(String((e as Error).message), "error"); }
+      const data = await api<LiveData>(`/api/runs/${id}/draft/preview`);
+      if (seq === draftSeq.current) setDraftData(data);
+    } catch (e) { if (seq === draftSeq.current) { setDraftData(null); flash(String((e as Error).message), "error"); } }
   }, [id, flash]);
   useEffect(() => { if (live0) loadDraft(); else { setDraftData(null); setDraftSum(null); } }, [live0, newest, loadDraft]);
   /** One structural edit into the draft (started from the version on screen), in milliseconds and $0. */
+  const opSeq = useRef(0);
   const draftOp = useCallback(async (op: string, args: Record<string, unknown>) => {
     try {
       madeDraft.current = true;
+      const seq = ++opSeq.current;
       const r = await api<{ draft: DraftSum | null }>(`/api/runs/${id}/draft`, { op, args, ...(draftSum ? {} : { from: v?.n }) });
+      if (seq !== opSeq.current) return true; // a later edit's answer has the newer draft (audit, 31/10)
       setDraftSum(r.draft);
       await loadDraft(false);
       return true;
@@ -296,13 +303,17 @@ export function Editor({ id, replay, go }: Props) {
     if (gen) return act("op", { op: gen.op, args: gen.args(body), from: body.from, review: body.review });
     return act(path, body);
   }, [live0, draftOp, draftV, draftData, draftSum, flash, act]);
+  const [committing, setCommitting] = useState(false); // the commit request in flight: a double click makes one job (audit, 31/10)
   const commitDraft = async () => {
+    if (committing) return;
+    setCommitting(true);
     try {
       const r = await api<{ run?: string; job?: { run?: string } }>(`/api/runs/${id}/draft/commit`, { review: 0 });
       flash(`Making Version ${draftData?.draft?.n ?? ""}: one render of the draft's ${edits(draftSum?.ops.length ?? 0)} ($0).`);
       const to = r.job?.run ?? r.run;
       if (to && to !== id) go(`#/run/${to}`); // the first commit on a sample makes the judge's own copy: follow it
     } catch (e) { flash(String((e as Error).message), "error"); }
+    finally { setCommitting(false); }
   };
   /** A look from words: in Live, Muse Spark suggests it (one call, no version) and it goes into the draft (A3). */
   const stylePrompt = async (text: string) => {
@@ -618,7 +629,7 @@ export function Editor({ id, replay, go }: Props) {
         {draftV && !busy && (
           <span className="draft-bar" data-monti="top.draft">
             <button className="btn quiet" onClick={discardDraft} title="Drop the draft's edits: the viewer goes back to the version they started from">Discard</button>
-            <button className="btn primary" onClick={commitDraft} disabled={!draftSum?.ops.length}
+            <button className="btn primary" onClick={commitDraft} disabled={!draftSum?.ops.length || committing}
               title="One render of every edit in the draft ($0); the version list gains one version, not one per edit">
               Make Version {draftData?.draft?.n}
             </button>
@@ -768,8 +779,8 @@ export function Editor({ id, replay, go }: Props) {
             Safe area: {GUIDE_NAME[guide]}
           </button>
         )}
-        {v && (v.cut || live0) ? (
-          <Player ref={player} key={draftV ? `draft-${draftData!.draft!.id}` : `${v.n}${live0 ? "-live" : ""}`}
+        {v && (v.cut || live0) ? ( // a draft keeps its base version's key: the first edit swaps in place, no remount (audit, 31/10)
+          <Player ref={player} key={draftV ? `${draftSum?.base ?? draftData!.draft!.n}-live` : `${v.n}${live0 ? "-live" : ""}`}
             src={v.cut ? fileUrl(id, v.cut) : ""} onTime={onTime} onPlaying={setPlaying}
             live={draftV ? draftData! : live0 ? `/api/runs/${id}/preview?v=${v.n}` : undefined}
             liveMix={live0 && mixStaged ? mix : null} liveSwap={live0 && styleKey ? styled : null}

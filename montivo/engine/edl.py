@@ -10,7 +10,7 @@ import difflib
 import re
 from dataclasses import asdict, dataclass
 
-from .edges import Audio, Words, tighten_edges
+from .edges import Audio, Words, cut_edges, tighten_edges
 from .voice import VoiceResult, Word, artefact_doubles
 
 _PUNCT = re.compile(r"[^\w'%$€]+", re.U)
@@ -252,11 +252,26 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
         "captions": [],  # filled by the caption step (evening 3)
         "reframe": [],  # filled by the reframe step (evening 2)
     }
+    words = Words([asdict(w) for w in voice.words])
     if audio is not None and edl["spans"]:
-        tighten_edges(edl, Words([asdict(w) for w in voice.words]), audio)
+        tighten_edges(edl, words, audio)
+    before = edge_ids(edl["spans"])
     if fit := fit_length(edl, target_s):
         edl["length_fit"] = fit
+        # a dropped span that was joined to its neighbours leaves two new cuts the pass above skipped as joins: they
+        # sat on Voice's word boundaries, up to 0.3 s off the speech (audit, 31/10)
+        if audio is not None and (new := edge_ids(edl["spans"]) - before):
+            more = tighten_edges(edl, words, audio, only=new)
+            if (ep := edl.get("edge_pass")) and more["moves"]:
+                ep["moves"] += more["moves"]
+                ep.update(moved=len(ep["moves"]), widened=sum(m["widened"] for m in ep["moves"]),
+                          removed_s=round(sum(abs(m["to"] - m["from"]) for m in ep["moves"]), 2))
     return edl
+
+
+def edge_ids(spans: list[dict]) -> set[tuple[str, str]]:
+    """The (span id, edge) pairs that are cuts."""
+    return {(spans[k]["id"], edge) for k, edge, _ in cut_edges(spans)}
 
 
 # --------------------------------------------------------------------------- the brief as a checklist (C1, A4)

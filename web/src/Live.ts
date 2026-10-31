@@ -95,6 +95,7 @@ export class LiveMedia {
   private sizes = { w: 0, h: 0 };
   private playCalled = 0;
   private dead = false;
+  private wantPlay: object | null = null; // a play() still waiting for the audio
   private vids: [HTMLVideoElement, HTMLVideoElement];
   private zoom: HTMLDivElement;
   private overlay: LiveOverlay;
@@ -106,7 +107,8 @@ export class LiveMedia {
       .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`edit audio: ${r.status}`))))
       .then((b) => audioCtx().decodeAudioData(b))
       .then((buf) => { this.buffer = buf; })
-      .then(() => this.loadBed());
+      // a bed that fails to load leaves the speech playing without it, not the whole preview stuck (audit, 31/10)
+      .then(() => this.loadBed().catch((e) => console.warn("live: music bed not loaded", e)));
     this.zoom = document.createElement("div");
     this.zoom.className = "live-zoom";
     this.vids = [document.createElement("video"), document.createElement("video")];
@@ -202,11 +204,16 @@ export class LiveMedia {
   }
 
   async play(): Promise<void> {
-    if (!this.paused) return;
-    const ctx = audioCtx();
-    await ctx.resume();
-    await this.ready;
-    if (this.dead) return;
+    if (!this.paused || this.wantPlay) return; // a second play while the first waits starts nothing more
+    // the play intent while the audio context resumes and the audio decodes: a pause in between cancels it (audit, 31/10)
+    const want = this.wantPlay = {};
+    try {
+      await audioCtx().resume();
+      await this.ready;
+    } catch (e) { if (this.wantPlay === want) this.wantPlay = null; throw e; }
+    if (this.wantPlay !== want) return; // paused while it waited
+    this.wantPlay = null;
+    if (this.dead || !this.paused) return;
     if (this.at >= this.duration - 1e-3) this.at = 0;
     this.paused = false;
     this.playCalled = performance.now();
@@ -214,6 +221,7 @@ export class LiveMedia {
     this.onstate?.();
   }
   pause() {
+    this.wantPlay = null;
     if (this.paused) return;
     this.at = this.currentTime;
     this.paused = true;

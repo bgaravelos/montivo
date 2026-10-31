@@ -3,6 +3,7 @@ targets exist, the schema is closed over those targets, the answer drops a targe
 keyword fallback finds the right place in English and Greek and hands an edit request to Ask Montivo, and the call
 lands in <root>/monti/ledger.json, which the hosted budget counts."""
 import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -183,6 +184,46 @@ def test_the_hosted_hourly_cap_per_judge(tmp_path, env):
     got = [c.post("/api/monti", json={"message": "music?"}).json()["source"] for _ in range(3)]
     assert got == ["spark", "spark", "guide"]
 
+
+
+def test_a_burst_cannot_get_past_the_hourly_cap(tmp_path, env):
+    """Audit 31/10: the caps were read before the call and the answer counted after it, so requests fired together all
+    passed (the calls only queued on monti.LOCK)."""
+    import threading
+    (tmp_path / "runs").mkdir()
+    env.setenv("MONTIVO_BUDGET_USD", "15")
+    env.setattr(A, "MONTI_PER_HOUR", 2)
+    fake_spark(env, MUSIC)
+    real, go = monti.ask, threading.Event()
+
+    def slow(*a, **k):
+        go.wait(5)
+        return real(*a, **k)
+    env.setattr(monti, "ask", slow)
+    c = TestClient(A.create_app(tmp_path))
+    got = []
+    threads = [threading.Thread(target=lambda: got.append(c.post("/api/monti", json={"message": "music?"}).json()["source"]))
+               for _ in range(5)]
+    for t in threads:
+        t.start()
+    time.sleep(0.5)
+    go.set()
+    for t in threads:
+        t.join(10)
+    assert sorted(got) == ["guide", "guide", "guide", "spark", "spark"]
+
+
+def test_a_failed_monti_call_gives_its_slot_back(tmp_path, env):
+    (tmp_path / "runs").mkdir()
+    env.setenv("MONTIVO_BUDGET_USD", "15")
+    env.setattr(A, "MONTI_PER_HOUR", 1)
+    real = monti.ask
+    env.setattr(monti, "ask", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("503")))
+    c = TestClient(A.create_app(tmp_path))
+    assert "failed" in c.post("/api/monti", json={"message": "music?"}).json()["why"]
+    env.setattr(monti, "ask", real)
+    fake_spark(env, MUSIC)
+    assert c.post("/api/monti", json={"message": "music?"}).json()["source"] == "spark"
 
 def test_no_em_dashes_in_an_answer():
     a = monti.answer("Open a project first — music lives in Music — key 6.", steps=["**Pick** a track"])

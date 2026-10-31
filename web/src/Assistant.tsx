@@ -531,12 +531,18 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
       else setRefused((x) => [...x, { text: q.text, why: r }]);
     });
   };
+  const [holdEnd, setHoldEnd] = useState(0);
   useEffect(() => {
     const q = queue[0];
-    if (running || replay || !q || Date.now() - waiting.current < 8000) return;
+    if (running || replay || !q) return;
+    const left = 8000 - (Date.now() - waiting.current);
+    if (left > 0) { // held after a send: look again when the hold ends, or nothing would send it (audit, 31/10)
+      const h = window.setTimeout(() => setHoldEnd((x) => x + 1), left + 50);
+      return () => window.clearTimeout(h);
+    }
     setQueue(queue.slice(1));
     post(q, true);
-  }, [running, replay, queue, refused.length]); // eslint-disable-line -- a refusal lets the next one go at once
+  }, [running, replay, queue, refused.length, holdEnd]); // eslint-disable-line -- a refusal lets the next one go at once
   const send = () => {
     if (!text.trim() || blocked) return;
     enqueue({ text: text.trim(), chips, review: review && state.has_key ? 1 : 0, planner, scope });

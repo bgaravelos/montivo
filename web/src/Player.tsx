@@ -46,9 +46,8 @@ export const Player = forwardRef<PlayerHandle, {
   const lm = useRef<LiveMedia | null>(null);
   const media = (): Media | null => (live ? lm.current : video.current);
   const box = useRef<HTMLDivElement>(null);
-  const liveRef = useRef(live);
-  liveRef.current = live;
-  const mediaKey = typeof live === "string" ? live : live ? live.media.video : null;
+  const liveSwapRef = useRef(liveSwap);
+  liveSwapRef.current = liveSwap;
   const loaded = useRef<LiveData | null>(null); // the data the player loaded or a draft edit handed it
   const [liveData, setLiveData] = useState<LiveData | null>(null);
   const [liveErr, setLiveErr] = useState<string | null>(null);
@@ -128,35 +127,43 @@ export const Player = forwardRef<PlayerHandle, {
   useImperativeHandle(ref, () => api);
 
   useEffect(() => { // live mode: the segments, crop path and graphics, then the edit proxy on two <video>s
-    if (!mediaKey) return;
-    let on = true, made: LiveMedia | null = null;
-    setLiveData(null); setLiveErr(null);
-    const cur = liveRef.current;
-    const got: Promise<LiveData> = typeof cur === "string"
-      ? fetch(cur).then((r) => (r.ok ? r.json() : r.text().then((x) => Promise.reject(new Error(x || `preview: ${r.status}`)))))
-      : Promise.resolve(cur as LiveData);
+    if (!live) { lm.current?.destroy(); lm.current = null; return; }
+    let on = true;
+    setLiveErr(null);
+    const got: Promise<LiveData> = typeof live === "string"
+      ? fetch(live).then((r) => (r.ok ? r.json() : r.text().then((x) => Promise.reject(new Error(x || `preview: ${r.status}`)))))
+      : Promise.resolve(live);
     got.then((data) => {
       if (!on || !box.current) return;
-      made = new LiveMedia(data, box.current);
-      made.onstate = () => { const p = !made!.paused; setPlaying(p); onPlaying?.(p); };
+      const m = lm.current;
+      // the same source as what plays (a version's first draft edit, a discard back to it, every later edit): swapped
+      // in place, so the playhead stays and the edit audio is not fetched and decoded again (audit, 31/10)
+      if (m && m.data.media.video === data.media.video && m.data.media.audio === data.media.audio) {
+        loaded.current = data;
+        if (liveSwapRef.current || m.data === data) return;
+        m.setData(data);
+        setLiveData(data); setD(data.duration_s); last.current = -1;
+        return;
+      }
+      m?.destroy();
+      setLiveData(null);
+      const made = new LiveMedia(data, box.current);
+      made.onstate = () => { const p = !made.paused; setPlaying(p); onPlaying?.(p); };
       made.muted = mute;
       lm.current = made;
       loaded.current = data;
       setLiveData(data); setD(data.duration_s); setT(0); last.current = -1;
-      made.ready.catch((e) => on && setLiveErr(String(e.message ?? e)));
+      made.ready.catch((e) => on && lm.current === made && setLiveErr(String(e.message ?? e)));
     }).catch((e) => on && setLiveErr(String(e.message ?? e)));
-    const ro = new ResizeObserver(() => lm.current?.layout());
-    if (box.current) ro.observe(box.current);
-    return () => { on = false; ro.disconnect(); made?.destroy(); if (lm.current === made) lm.current = null; };
-  }, [mediaKey]); // eslint-disable-line
-  useEffect(() => { // a draft edit: the same source with another EDL, swapped in place (the playhead stays)
-    const m = lm.current;
-    if (!m || !live || typeof live === "string" || m.data === live) return;
-    loaded.current = live;
-    if (liveSwap) return;
-    m.setData(live);
-    setLiveData(live); setD(live.duration_s); last.current = -1;
+    return () => { on = false; };
   }, [live]); // eslint-disable-line
+  useEffect(() => () => { lm.current?.destroy(); lm.current = null; }, []);
+  useEffect(() => { // the live box follows the frame's size
+    if (!live || !box.current) return;
+    const ro = new ResizeObserver(() => lm.current?.layout());
+    ro.observe(box.current);
+    return () => ro.disconnect();
+  }, [!!live]); // eslint-disable-line
   useEffect(() => { // A4: a staged look over what is loaded, and back to it when the look is applied or dropped
     const m = lm.current, want = liveSwap ?? loaded.current;
     if (!m || !want || m.data === want) return;

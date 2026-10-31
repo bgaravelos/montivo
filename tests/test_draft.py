@@ -379,3 +379,62 @@ def test_chat_edits_join_the_draft_and_a_refused_one_is_said(tmp_path, monkeypat
     assert done and [o["op"] for o in draft.load(fd)["ops"]] == ["drop", "punch"]
     _, done, skipped = draft.push(d, fd, [{"op": "nope", "args": {}}], 1)
     assert not done and skipped and len(draft.load(fd)["ops"]) == 2
+
+
+def test_a_judges_draft_moves_to_their_copy_when_live_ask_makes_it(tmp_path, monkeypatch):
+    """Audit 31/10: Ask Montivo in Live on a sample made the judge's copy without their draft (copy_sample leaves every
+    draft behind), so the router read the sample's version and the copy showed only the chat's edits."""
+    from montivo.server import draft
+    d = _run(tmp_path, monkeypatch)
+    c, _ = _client(tmp_path, hosted=True, own=None)
+    a = {"x-judge": "aaa"}
+    assert c.post("/api/runs/h1/draft", headers=a, json={"op": "split", "args": {"span": "s3", "word": 4}}).status_code == 200
+    assert c.post("/api/runs/h1/draft", headers={"x-judge": "bbb"}, json={"op": "drop", "args": {"span": "s2"}}).status_code == 200
+    mine = tmp_path / "runs" / "h1-aaa"
+    shutil.copytree(d, mine, ignore=shutil.ignore_patterns("draft"))
+    assert draft.move(d, mine, "aaa")
+    state = draft.load(draft.folder(mine, "aaa"))
+    assert [o["op"] for o in state["ops"]] == ["split"] and (draft.folder(mine, "aaa") / "edl.json").is_file()
+    assert draft.load(draft.folder(d, "aaa")) is None  # gone from the sample: it is not shown twice
+    assert draft.load(draft.folder(d, "bbb"))["ops"][0]["op"] == "drop"  # the other judge's stays
+    assert not draft.move(d, mine, "aaa")  # nothing left to move
+
+
+def test_a_draft_does_not_move_over_one_or_during_a_commit(tmp_path, monkeypatch):
+    from montivo.server import draft
+    d = _run(tmp_path, monkeypatch)
+    mine = tmp_path / "runs" / "h1-aaa"
+    for run in (d, mine):
+        draft.folder(run, "aaa").mkdir(parents=True)
+    (draft.folder(d, "aaa") / "state.json").write_text(json.dumps({"id": "x", "base": 1, "ops": [{"op": "drop"}], "commit": {"job": "j"}}))
+    assert not draft.move(d, mine, "aaa")  # a commit in flight stays where its job looks for it
+    (draft.folder(d, "aaa") / "state.json").write_text(json.dumps({"id": "x", "base": 1, "ops": [{"op": "drop"}]}))
+    (draft.folder(mine, "aaa") / "state.json").write_text(json.dumps({"id": "y", "base": 1, "ops": []}))
+    assert not draft.move(d, mine, "aaa")  # the copy's own draft is never overwritten
+    assert draft.load(draft.folder(mine, "aaa"))["id"] == "y"
+
+
+def test_a_card_switched_on_in_a_draft_is_priced_and_needs_the_key(tmp_path, monkeypatch):
+    """Audit 31/10: draft.cost counted only new title words, so title_style "card" on a header EDL (every run since
+    30/10) or a kit's title card committed at $0 and the render then called Muse Image (no key: the job failed)."""
+    import montivo.human as H
+    from montivo.server import draft
+    d = _run(tmp_path, monkeypatch)
+    edl = json.loads((d / "edl_v1.json").read_text())
+    edl["title_style"] = "header"
+    (d / "edl_v1.json").write_text(json.dumps(edl))
+    card = {"op": "text", "args": {"callouts": {}, "title_style": "card"}}
+    made, _ = H.step(edl, *draft.inputs(d), card)
+    assert draft.cost([card], d, made, edl) == draft.TITLE_COST
+    assert draft.cost([card], d, made, made) == 0.0  # the base showed the same card already: nothing new
+    (d / "title").mkdir()
+    (d / "title" / "title_card.png").write_bytes(b"png")
+    (d / "title" / "request.json").write_text(json.dumps({"prompt": 'a card that reads "Raw In"'}))
+    assert draft.cost([card], d, made, edl) == 0.0  # the image for these words is there: run.title_card reuses it
+    assert draft.cost([card], d, edl, edl) == 0.0  # header: nothing in front
+    (d / "title" / "request.json").write_text(json.dumps({"prompt": 'a card that reads "Old words"'}))
+    c, st = _client(tmp_path)
+    assert c.post("/api/runs/h1/draft", json={"op": "text", "args": {"callouts": {}, "title_style": "card"}}).status_code == 200
+    _fake_jobs(monkeypatch, st)
+    r = c.post("/api/runs/h1/draft/commit", json={})
+    assert r.status_code == 409 and "Muse Image" in r.json()["error"]  # need_key refused before any job

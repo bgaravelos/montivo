@@ -51,10 +51,14 @@ function PostText({ id, n, post, setPost, hasKey, keyNote, onErr, onMoved }: {
   const [tab, setTab] = useState("reels");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const nNow = useRef(n);
+  nNow.current = n;
   const write = async () => {
     setBusy(true); onErr(null);
     try {
-      const r = await api<PostRecord & { run?: string }>(`/api/runs/${id}/export/post`, { v: n });
+      const at = n;
+      const r = await api<PostRecord & { run?: string }>(`/api/runs/${id}/export/post`, { v: at });
+      if (at !== nNow.current) return; // the text of an older version is not this one's (audit, 31/10)
       setPost(r);
       if (r.run && r.run !== id) onMoved?.(r.run); // on a sample it went into the judge's own copy
     } catch (e) { onErr(String((e as Error).message)); } finally { setBusy(false); }
@@ -125,14 +129,23 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<{ name: string; url: string; bytes: number }[] | null>(null);
   const [post, setPost] = useState<PostRecord | null>(null);
-  useEffect(() => { setPost(null); api<PostRecord>(`/api/runs/${id}/export/post?v=${n}`).then(setPost).catch(() => {}); }, [id, n]);
+  // the post text and cover of version n: an answer that lands after the version changed is dropped (audit, 31/10)
   useEffect(() => {
+    let on = true;
+    setPost(null);
+    api<PostRecord>(`/api/runs/${id}/export/post?v=${n}`).then((r) => { if (on) setPost(r); }).catch(() => {});
+    return () => { on = false; };
+  }, [id, n]);
+  useEffect(() => {
+    let on = true;
     setRecord(null);
     api<CoverRecord>(`/api/runs/${id}/export/cover?v=${n}`).then((r) => {
+      if (!on) return;
       setRecord(r);
       const f = r.design?.final;
       setCover(f ? { t: f.t_s, template: f.template, text: f.text, highlight: f.highlight } : (c) => ({ ...c, t: r.moments[0]?.t_s ?? c.t }));
     }).catch(() => {});
+    return () => { on = false; };
   }, [id, n]);
   useEffect(() => { try { localStorage.setItem("montivo.export", JSON.stringify(saved)); } catch { /* this tab only */ } }, [saved]);
   useEffect(() => { setName((x) => x.replace(/-v\d+$/, `-v${n}`)); setChecks(null); setDone(null); setErr(null);

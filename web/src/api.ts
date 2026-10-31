@@ -8,7 +8,7 @@ export async function api<T = unknown>(path: string, body?: unknown, method?: st
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? `${res.status} ${res.statusText}`);
+  if (!res.ok) throw Object.assign(new Error((data as { error?: string }).error ?? `${res.status} ${res.statusText}`), { status: res.status });
   return data as T;
 }
 

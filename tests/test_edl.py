@@ -105,3 +105,23 @@ def test_watch_gets_more_output_room_on_a_clip_with_many_shots(tmp_path, monkeyp
     for shots in (0, 11, 26, 200):
         sp.watch("file-1", "T", "b", 90.0, shots=shots)
     assert seen == [12000, 12400, 18400, 24000]  # heli-04: 26 cuts, 12000 came back incomplete, 18000 worked
+
+
+def test_the_cuts_a_length_fit_leaves_are_tightened_too():
+    """Audit 31/10: three joined spans of one turn, the middle one dropped for length: the new cut was skipped by the
+    edge pass (a join then) and stayed on Voice's boundary, in the pause before the speech."""
+    from tests.test_edges import SynthAudio
+    ws = [Word(w=f"w0{k}", t_start=10 + 0.5 * k, t_end=10.5 + 0.5 * k, turn_id=0, speaker="A", i=k) for k in range(8)]
+    voice = VoiceResult(turns=[Turn(turnId=0, startMs=10000, endMs=14000, speaker="A", transcript="")], words=ws,
+                        audio_s=40.0, chunks=[])
+    plan = {"paper_edit": [{"turn_id": 0, "words": "w00 w01", "role": "hook", "strength": 5},
+                           {"turn_id": 0, "words": "w02 w03", "role": "body", "strength": 1},
+                           {"turn_id": 0, "words": "w04 w05", "role": "payoff", "strength": 5}]}
+    audio = SynthAudio([(10.0, 10.9), (11.0, 11.8), (12.3, 12.95)])  # w04's speech 0.3 s after Voice's boundary
+    edl = build_edl(plan, voice, {}, {"fps": 30.0}, "b", {}, audio=audio, target_s=1.9)
+    assert [s["id"] for s in edl["spans"]] == ["s1", "s3"]
+    s3 = edl["spans"][1]
+    assert 12.1 < s3["t_in"] < 12.3  # was 12.0, in the pause
+    assert ("s3", "in") in {(m["span"], m["edge"]) for m in edl["edge_pass"]["moves"]}
+    assert edl["edge_pass"]["moved"] == len(edl["edge_pass"]["moves"])
+    assert edl["runtime_s"] == round(sum(s["t_out"] - s["t_in"] for s in edl["spans"]), 2)

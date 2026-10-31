@@ -494,7 +494,8 @@ def create_app(root: Path) -> FastAPI:
     max_footage_s = hosted.env_float("MONTIVO_MAX_FOOTAGE_S")
     max_upload_mb = hosted.env_float("MONTIVO_MAX_UPLOAD_MB")
     max_uploads = hosted.env_float("MONTIVO_MAX_UPLOADS")
-    max_uploads_all = hosted.env_float("MONTIVO_MAX_UPLOADS_ALL") or MAX_UPLOADS_ALL
+    max_uploads_all = hosted.env_float("MONTIVO_MAX_UPLOADS_ALL")
+    max_uploads_all = MAX_UPLOADS_ALL if max_uploads_all is None else max_uploads_all  # 0 = no uploads at all
 
     @app.middleware("http")
     async def only_their_runs(request: Request, call_next):
@@ -612,6 +613,8 @@ def create_app(root: Path) -> FastAPI:
                 "limits": {"footage_s": max_footage_s, "upload_mb": max_upload_mb, "uploads": max_uploads}}
 
     monti_seen: dict[str, list[float]] = {}  # judge -> times of their model answers (the hosted hourly cap)
+    monti_gate = threading.Lock()
+    monti_flying = [0]  # Monti calls in flight, each holding its cost against the hosted budget
 
     @app.post("/api/monti")
     def monti_ask(request: Request, b: dict):
@@ -631,20 +634,32 @@ def create_app(root: Path) -> FastAPI:
         page = ctx.get("page") if ctx.get("page") in monti.PAGES else "editor"
         who = judge_of(request) if budget is not None else "local"
         now = time.time()
-        recent = [x for x in monti_seen.get(who, []) if now - x < 3600]
-        everyone = sum(1 for xs in monti_seen.values() for x in xs if now - x < 3600)
-        why = ("no MODEL_API_KEY on this server" if not has_key()
-               else "the demo's model budget is spent" if budget is not None and budget.left() < monti.COST_USD
-               else f"more than {MONTI_PER_HOUR} questions this hour" if budget is not None and len(recent) >= MONTI_PER_HOUR
-               else "the demo's questions this hour are used up" if budget is not None and everyone >= MONTI_PER_HOUR_ALL
-               else None)
+        # the caps and the budget are checked and the slot taken in one step: a burst of requests used to all pass
+        # before the first answer was counted (audit, 31/10); a call in flight holds its cost against the budget
+        with monti_gate:
+            recent = [x for x in monti_seen.get(who, []) if now - x < 3600]
+            everyone = sum(1 for xs in monti_seen.values() for x in xs if now - x < 3600)
+            why = ("no MODEL_API_KEY on this server" if not has_key()
+                   else "the demo's model budget is spent"
+                   if budget is not None and budget.left() - monti_flying[0] * monti.COST_USD < monti.COST_USD
+                   else f"more than {MONTI_PER_HOUR} questions this hour" if budget is not None and len(recent) >= MONTI_PER_HOUR
+                   else "the demo's questions this hour are used up" if budget is not None and everyone >= MONTI_PER_HOUR_ALL
+                   else None)
+            if why is None:
+                monti_seen[who] = [*recent, now]
+                monti_flying[0] += 1
         out = None
         if why is None:
             try:
                 out = monti.ask(st.root, message, ctx, history)
-                monti_seen[who] = [*recent, now]
             except Exception as e:  # noqa: BLE001 - a failed call still gets the guide's answer
                 why = f"the model call failed ({str(e)[:120]})"
+                with monti_gate:  # a failed call spent nothing: its slot goes back
+                    if now in monti_seen.get(who, []):
+                        monti_seen[who].remove(now)
+            finally:
+                with monti_gate:
+                    monti_flying[0] -= 1
         if out is None:
             out = monti.fallback(message, page) | {"source": "guide", "model": None, "cost_usd": 0.0, "seconds": 0.0,
                                                     "why": why}
@@ -1371,10 +1386,11 @@ def create_app(root: Path) -> FastAPI:
 
         def check_quota() -> None:
             """Asked before the body (no 400 MB for nothing) and again before the rename (two uploads at once)."""
-            if budget is None or not max_uploads:
+            if budget is None:
                 return
             mine, owners = judge_of(request), (read_json(owners_file) or {}).values()
-            if sum(o == mine for o in owners) >= max_uploads:
+            # the two caps apart: the global one used to count only when the per-judge one was set (audit, 31/10)
+            if max_uploads and sum(o == mine for o in owners) >= max_uploads:
                 raise HTTPException(429, f"the demo server takes {max_uploads:.0f} uploads per judge: "
                                          "start a new project from a clip you already uploaded")
             if len(owners) >= max_uploads_all:  # a new sign-in is a new judge: the Volume has a limit of its own
@@ -1906,11 +1922,12 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(404, f"no edl_v{frm}.json")
         o = await asyncio.to_thread(draft.resolve, d, edl, o)
         try:  # refuse here what the job would refuse, before it starts
-            _, rec = human.step(edl, *draft.inputs(d), o)
+            made, rec = human.step(edl, *draft.inputs(d), o)
         except SystemExit as e:
             raise HTTPException(409, str(e))
-        if passes:
-            need_key("Reviewing the new cut", COST["review"] * passes)
+        card = draft.cost([o], d, made, edl)  # a kit or a text op that turns a card on with no image yet: Muse Image
+        if passes or card:
+            need_key("A title card (Muse Image)" if card else "Reviewing the new cut", card + COST["review"] * passes)
         args = ["-m", "montivo.human", "op", f"runs/{run_id}", "--op", o["op"], "--args", json.dumps(o["args"]),
                 "--from", str(frm), "--review", str(passes)]
         job = start_job(st, run_id, o["op"], OP_LABEL.get(o["op"], "Edit"), args,
@@ -2362,9 +2379,14 @@ def create_app(root: Path) -> FastAPI:
         """Ask Montivo: {"message", "chips", "from", "review", "planner"} -> montivo.agent: one Spark call picks the
         edits (music, look, punch-ins, captions, callouts, title, clips, a re-plan), one new version. Without the key
         (or past the hosted budget) a keyword reader does the few edits it can name safely, $0."""
+        asked = run_id
         run_id = await own(run_id, request, lambda b: 0.0)  # short of the budget it falls back to $0, never refuses
         d = st.run_dir(run_id)
         b = await request.json()
+        if run_id != asked and b.get("live") is True:
+            # the judge's Live draft on the sample moves to their copy with them: copy_sample leaves every draft
+            # behind, so the router read the sample's version and the copy showed only the chat's edits (audit, 31/10)
+            await asyncio.to_thread(draft.move, st.run_dir(asked), d, judge_of(request))
         model = planner_of(b)
         text = (b.get("message") or b.get("instruction") or "").strip()
         if not text:

@@ -113,3 +113,21 @@ def test_nan_and_inf_are_a_400_not_a_500(tmp_path, monkeypatch):
                         ("export/bundle", '{"v": 2, "include": ["video"], "cover_t": NaN}')):
         r = c.post(f"/api/runs/r1/{route}", content=body, headers={"content-type": "application/json"})
         assert r.status_code == 400, (route, r.status_code, r.text[:200])
+
+
+def test_live_ask_on_a_sample_takes_the_judges_draft_to_their_copy(tmp_path, hosted_env):
+    """Audit 31/10: the copy Ask Montivo made left the judge's Live draft on the sample, so the router read v2 instead
+    of the draft and the editor, now on the copy, showed only the chat's edits."""
+    import json
+    from montivo.server import draft
+    d, c = sample_client(tmp_path, hosted_env, "cc33")
+    seen = fake_jobs(hosted_env)
+    fd = draft.folder(d, "cc33")
+    fd.mkdir(parents=True)
+    (fd / "state.json").write_text(json.dumps({"id": "dr1", "base": 2, "ops": [{"op": "drop", "args": {"span": "s1"}}]}))
+    (fd / "edl.json").write_text(json.dumps({"spans": []}))
+    r = c.post("/api/runs/r1/ask", json={"message": "put some music on", "live": True})
+    assert r.status_code == 200 and r.json()["job"]["run"] == "r1-cc33"
+    mine = draft.folder(tmp_path / "runs" / "r1-cc33", "cc33")
+    assert draft.load(mine)["id"] == "dr1" and not fd.exists()
+    assert seen[-1][seen[-1].index("--draft-edl") + 1] == str(mine / "edl.json")
