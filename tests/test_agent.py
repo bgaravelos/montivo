@@ -198,3 +198,48 @@ def test_the_free_checks_in_one_sentence():
     assert "no cut" not in agent.checked_text({"ok": True, "reasons": [], "more": 0, "audio": False})
     t = agent.checked_text({"ok": False, "reasons": ["cut at 2.00 s inside speech"], "more": 2, "audio": True})
     assert "cut at 2.00 s inside speech (and 2 more)" in t
+
+
+def test_undo_that_in_live_is_the_drafts_undo(tmp_path, monkeypatch):
+    """With a Live draft open, "undo that" after the chat put edits in it takes those edits off the draft (a UI op the
+    editor runs) instead of a restore, which a draft refuses; a message naming a version still restores."""
+    d = _run(tmp_path, {"version": 3, "spans": SPANS, "runtime_s": 2.0, "patches": []})
+    fd = d / "ui" / "draft"
+    fd.mkdir(parents=True)
+    (fd / "edl.json").write_text(json.dumps({"version": 3, "spans": SPANS, "runtime_s": 2.0, "patches": []}))
+    (fd / "state.json").write_text(json.dumps({"id": "x", "base": 3, "ops": [
+        {"op": "split", "args": {}, "say": "s1 split"}, {"op": "music", "args": {}, "say": "music: Ukulele"},
+        {"op": "cut", "args": {}, "say": "s2 loses “and”"}]}))
+    (d / "ui" / "chat.jsonl").write_text("\n".join(json.dumps(x) for x in [
+        {"role": "user", "text": "ukulele and cut the double and"},
+        {"role": "agent", "kind": "draft", "draft_edits": 2,
+         "text": "Done. In the draft: music: Ukulele; s2 loses “and”. Make Version renders it."},
+        {"role": "user", "text": "undo that"}]))
+    monkeypatch.setattr(agent, "route", lambda *a, **kw: ({"reply": "Back to v2.", "question": "",
+                                                           "ops": [op("restore", version=2)]}, 0.004))
+    out = agent.ask(d, "undo that", draft=True, draft_edl=fd / "edl.json")
+    assert out["ui"] == [{"op": "undo", "steps": 2}] and out["ops"] == [] and out["version"] is None
+    assert "2 edits" in out["reply"] and "Ukulele" in out["reply"] and "draft" not in out
+    # the last edit was the editor's own (not the chat's): one step
+    state = json.loads((fd / "state.json").read_text())
+    state["ops"].append({"op": "trim", "args": {}, "say": "s1 ends earlier"})
+    (fd / "state.json").write_text(json.dumps(state))
+    out = agent.ask(d, "αναίρεσε αυτό", draft=True, draft_edl=fd / "edl.json")
+    assert out["ui"] == [{"op": "undo", "steps": 1}] and out["reply"].startswith("Αναιρώ")
+    # without the key the keyword reader finds "undo" too
+    out = agent.ask(d, "undo", draft=True, draft_edl=fd / "edl.json", use_model=False)
+    assert out["ui"] == [{"op": "undo", "steps": 1}]
+    # "go back to v2" names a version: the restore stays, and a version needs Make Version first
+    out = agent.ask(d, "go back to v2", draft=True, draft_edl=fd / "edl.json")
+    assert "ui" not in out and any("Make Version first" in x for x in out["skipped"])
+
+
+def test_the_checks_stay_on_the_version_for_fix_it(tmp_path):
+    d = _run(tmp_path)
+    edl = json.loads((d / "edl_v3.json").read_text())
+    edl["patches"][-1]["agent"] = {"message": "m"}
+    (d / "edl_v3.json").write_text(json.dumps(edl))
+    checks = {"ok": False, "reasons": ["cut at 2.00 s inside speech (out edge over -20.0 dB)"], "more": 0, "audio": True}
+    agent.keep_checks(d, 3, checks)
+    assert json.loads((d / "edl_v3.json").read_text())["patches"][-1]["agent"]["checks"] == checks
+    assert "Fix what the checks found" in agent.PROMPT

@@ -191,7 +191,8 @@ export function Editor({ id, replay, go }: Props) {
     seenAgent.current = t;
     if (lastAgent?.kind === "draft" && live0) loadDraft(); // A5: the chat's edits went into the Live draft (its ops and preview)
     for (const o of lastAgent?.ui ?? []) {
-      if (o.op === "seek" && o.at_s != null) { // again once a version or review that landed with it has reloaded the player
+      if (o.op === "undo") void undoDraft(o.steps ?? 1); // "undo that" with a draft open: the draft's own undo
+      else if (o.op === "seek" && o.at_s != null) { // again once a version or review that landed with it has reloaded the player
         const at = o.at_s, go = () => { player.current?.pause(); player.current?.seek(at); };
         window.setTimeout(go, 120);
         window.setTimeout(() => { if (Math.abs(tRef.current - at) > 0.3) go(); }, 1500);
@@ -224,7 +225,10 @@ export function Editor({ id, replay, go }: Props) {
   // stays what the render burns. M1: so does a track staged in the Music panel (the cut with that bed under it)
   const [styled, setStyled] = useState<LiveData | null>(null);
   const musicStaged = live0 && panel === "music" && musicDraft !== undefined;
-  const styleKey = live0 && v && ((styling && staged > 0) || musicStaged)
+  // a B-roll still on screen at the paused playhead: the server's preview still leaves stills out, so the Style canvas
+  // lays them and the graphics over it from the same styled layout (in Rendered too, for that frame only)
+  const stillAt = !!v?.overlays.some((o) => o.shown && o.t_in != null && o.t_out != null && t >= o.t_in && t < o.t_out);
+  const styleKey = v && ((live0 && ((styling && staged > 0) || musicStaged)) || (!live0 && styling && staged > 0 && stillAt))
     ? JSON.stringify([rev, styling ? [styleDraft.look, styleDraft.callouts, styleDraft.clips] : null, musicStaged ? musicDraft : "-"]) : null;
   useEffect(() => {
     if (!styleKey || !v) return setStyled(null);
@@ -248,6 +252,7 @@ export function Editor({ id, replay, go }: Props) {
     setToast({ text, tone, action }); window.setTimeout(() => setToast(null), action ? 6000 : 4500);
   }, []);
   const forkFrom = v && newest != null && v.n < newest && !replay ? v.n : null;
+  const refusal = useRef(""); // why the server refused the last action: the chat queue shows it on the message
   const act = useCallback(async (path: string, body: unknown) => {
     if (["ask", "review", "hook"].includes(path)) askToNotify(); // the jobs that take a minute or more
     if (forkFrom != null && MAKES_VERSION.includes(path) && state)
@@ -256,7 +261,7 @@ export function Editor({ id, replay, go }: Props) {
       const r = await api<{ job?: { run?: string } }>(`/api/runs/${id}/${path}`, body);
       if (r.job?.run && r.job.run !== id) go(`#/run/${r.job.run}`); // the hosted demo edits the judge's own copy of a sample
       return true;
-    } catch (e) { flash(String((e as Error).message), "error"); return false; }
+    } catch (e) { refusal.current = String((e as Error).message); flash(refusal.current, "error"); return false; }
   }, [id, flash, go, forkFrom, newest, state]);
   /** The open draft: GET /draft settles a commit that has ended (its version exists now: no draft), then its preview. */
   const loadDraft = useCallback(async (settle = true) => {
@@ -286,7 +291,7 @@ export function Editor({ id, replay, go }: Props) {
     const to = live0 ? DRAFT_OPS[path] : undefined;
     if (to) return draftOp(to.op, to.args(body));
     if (draftV && MAKES_VERSION.includes(path) && !(path === "ask" && live0)) // the chat edits the draft in Live (A5)
-      return (flash(`Make Version ${draftData?.draft?.n ?? ""} first: the draft's ${edits(draftSum?.ops.length ?? 0)} are not a version yet.`), false);
+      return (refusal.current = `Make Version ${draftData?.draft?.n ?? ""} first: the draft's ${edits(draftSum?.ops.length ?? 0)} are not a version yet.`, flash(refusal.current), false);
     const gen = OP_ROUTE[path]; // a newer panel edit with no route of its own: POST /op runs its pure op as a version
     if (gen) return act("op", { op: gen.op, args: gen.args(body), from: body.from, review: body.review });
     return act(path, body);
@@ -465,6 +470,20 @@ export function Editor({ id, replay, go }: Props) {
       const r = await api<{ draft: DraftSum | null }>(`/api/runs/${id}/draft/${dir < 0 ? "undo" : "redo"}`, {});
       if (r.draft && !r.draft.ops.length && !r.draft.can_redo) return void discardDraft();
       setDraftSum(r.draft);
+      await loadDraft(false);
+    } catch (e) { flash(String((e as Error).message), "error"); }
+  };
+
+  /** The chat's "undo that" in Live: the draft's last `n` edits off in one go (the ones its message put in). */
+  const undoDraft = async (n: number) => {
+    try {
+      let r: { draft: DraftSum | null } | null = null;
+      for (let k = 0; k < n; k++) {
+        r = await api<{ draft: DraftSum | null }>(`/api/runs/${id}/draft/undo`, {});
+        if (!r.draft?.can_undo) break;
+      }
+      if (r?.draft && !r.draft.ops.length && !r.draft.can_redo) return void discardDraft();
+      setDraftSum(r?.draft ?? null);
       await loadDraft(false);
     } catch (e) { flash(String((e as Error).message), "error"); }
   };
@@ -661,7 +680,11 @@ export function Editor({ id, replay, go }: Props) {
         {panel === "assistant" && (
           <Assistant state={state} versions={visible} lines={lines} job={job} seen={seen} progress={progress} replay={replay} v={v}
             selection={selection} getTime={getTime} focusNonce={askNonce} prefill={prefill}
-            onSend={(text, chips, review, planner, scope, latest) => edit("ask", { message: text, chips, scope, from: latest ? undefined : v?.n, review, planner, preview: true, live: live0 && !replay })}
+            onSend={async (text, chips, review, planner, scope, latest) => {
+              refusal.current = "";
+              const ok = await edit("ask", { message: text, chips, scope, from: latest ? undefined : v?.n, review, planner, preview: true, live: live0 && !replay });
+              return ok ? true : refusal.current || "the server refused it";
+            }}
             onApply={(pending, review) => act("ask/apply", { pending, review })} onRetry={(pending) => act("ask/retry", { pending })}
             onRetryJob={() => act("retry", {})}
             onStop={() => act("stop", {})} onPick={pick} onSeek={(x) => { player.current?.pause(); seek(x); }}
@@ -749,11 +772,11 @@ export function Editor({ id, replay, go }: Props) {
           <Player ref={player} key={draftV ? `draft-${draftData!.draft!.id}` : `${v.n}${live0 ? "-live" : ""}`}
             src={v.cut ? fileUrl(id, v.cut) : ""} onTime={onTime} onPlaying={setPlaying}
             live={draftV ? draftData! : live0 ? `/api/runs/${id}/preview?v=${v.n}` : undefined}
-            liveMix={live0 && mixStaged ? mix : null} liveSwap={styleKey ? styled : null}
+            liveMix={live0 && mixStaged ? mix : null} liveSwap={live0 && styleKey ? styled : null}
             marks={blocks.filter((b) => b.kind !== "ghost").map((b) => b.t0)}
             label={draftV ? `Draft · ${edits(draftSum?.ops.length ?? 0)}` : `v${v.n}${live0 ? " · live" : ""}`} labelTone={draftV ? "draft" : undefined}
             safe={{ label: GUIDE_NAME[guide], on: guide !== "off", next: nextGuide }} overlay={<>
-              {v && <StyleCanvas v={v} t={t} draft={styleDraft} setDraft={setStyleDraft} preview={stylePreview} busy={previewBusy}
+              {v && <StyleCanvas v={v} t={t} draft={styleDraft} setDraft={setStyleDraft} preview={stylePreview} busy={previewBusy} stills={stillAt ? styled : null}
                 show={styling && !playing} />}
               {v && <HeadPicker id={id} v={v} t={t} show={panel === "speakers" && !playing && !replay && !canEdit} staged={pinStage}
                 onPick={(speaker, head) => setPinStage(v.speaker_pins[speaker] === head && pinStage?.speaker !== speaker ? null : { speaker, head })} />}

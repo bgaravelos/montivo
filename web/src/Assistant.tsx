@@ -4,7 +4,7 @@ import { selRange, sevRank, speakerName, type FlatWord, type WordSel } from "./e
 import { Icon, MarkLoader } from "./icons";
 import { MishearList, openSuggestions, useHiddenSuggestions } from "./Panels";
 import { Bar, expTip, measure, useTick } from "./Progress";
-import type { AgentUi, AskScope, ChatLine, Job, LogLine, PendingCard, PlanSide, Planner, Progress, RunState, Stage, Version } from "./types";
+import type { AgentChecks, AgentUi, AskScope, ChatLine, Job, LogLine, PendingCard, PlanSide, Planner, Progress, RunState, Stage, Version } from "./types";
 
 // ------------------------------------------------------------------- pipeline checklist
 
@@ -108,13 +108,20 @@ type Item =
   | { kind: "review"; v: Version }
   | { kind: "mishear"; v: Version } // C3: "Did you say ...?" under a planned version
   | { kind: "preview"; card: PendingCard; status: "open" | "applying" | "applied" | "retried" }
-  | { kind: "error"; text: string; charged?: number | null; retry?: boolean };
+  | { kind: "error"; text: string; charged?: number | null; retry?: boolean }
+  | { kind: "checks"; v: Version; checks: AgentChecks }; // B1: the $0 checks on a version the chat made, with Fix it
 
 /** The message as typed: the server adds the chips for the router as " (about s3, @00:12.00)". */
 const typed = (m: string | null | undefined) => (m ?? "").replace(/ \(about [^()]*\)$/, "");
 const vName = (n: number | undefined) => (n == null ? "the cut" : `Version ${n}`);
 /** The cut seconds an ask's reply points at (seek ops): a link under the reply plays from there again. */
 const seeks = (ui: AgentUi[] | null | undefined) => (ui ?? []).filter((o) => o.op === "seek" && o.at_s != null).map((o) => o.at_s!);
+/** The checks in one sentence (agent.py checked_text). */
+const checkedText = (c: AgentChecks) => c.ok
+  ? `Checked the new cut: ${c.audio ? "no cut lands in speech, " : ""}captions clear of the face, the head in frame.`
+  : `Checked the new cut: ${c.reasons.join("; ")}${c.more ? ` (and ${c.more} more)` : ""}.`;
+/** Fix it: the next ask, made of what the checks measured (agent.py PROMPT reads it). */
+const fixText = (c: AgentChecks) => `Fix what the checks found on this version: ${c.reasons.join("; ")}.`;
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : /(s|x|ch|sh)$/.test(w) ? "es" : "s"}`;
 
 /** The selection an ask was about, as chips: "s3", "s3, s5 · 2 clips", "s3 · 4 words", "caption 00:12.0". */
@@ -195,6 +202,7 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
     const by = v.planner && (o.source === "plan" || o.action === "replan")
       ? `Planned by ${v.planner.name}${side?.plan_cost_usd != null ? ` in ${side.plan_seconds?.toFixed(1)} s for ${usd(side.plan_cost_usd, 3)}` : ""}` : "";
     out.push({ kind: "version", v, by });
+    if (o.source === "human" && o.agent?.checks) out.push({ kind: "checks", v, checks: o.agent.checks });
     const missing = o.source === "plan" || o.action === "replan" ? v.brief_missing ?? [] : [];
     if ((o.source === "plan" || o.action === "replan") && v.glossary_suggestions?.length) out.push({ kind: "mishear", v });
     if (missing.length) out.push({ kind: "text", who: "montivo", text: `Your brief asks for ${missing.map((x) => `“${x}”`).join(", ")}, but ${missing.length === 1 ? "it is" : "they are"} not in the footage, so the cut goes without ${missing.length === 1 ? "it" : "them"}. The reviewer is told the same.` });
@@ -452,15 +460,19 @@ export function wordScope(flat: FlatWord[], sel: WordSel | null): Selection["wor
   return out;
 }
 
-/** A message typed while a job runs: it waits here and is sent when the job ends (never dropped, never sent over it). */
-type Queued = { text: string; review: number; planner: Planner; scope: AskScope; chips: string[]; failed?: boolean };
+/** A message typed while a job runs: it waits here and is sent when the job ends (never dropped, never sent over it).
+ *  `retried`: the server said busy once (a job started a moment before): it waits for that one too, then it is refused. */
+type Queued = { text: string; review: number; planner: Planner; scope: AskScope; chips: string[]; retried?: boolean };
+/** A message the server refused: out of the queue (the next one goes), shown with why until it is taken back. */
+type Refused = { text: string; why: string };
+const BUSY = /is (still )?running|try again|rendering|being made/i;
 const queueKey = (id: string) => `montivo.queue.${id}`;
 
 export function Assistant({ state, versions, lines, job, seen, progress, replay, v, selection, getTime, focusNonce, prefill, onSend, onStop, onPick, onSeek, onCompare, onRestore, onApply, onRetry, onRetryJob, onGlossary }: {
   state: RunState; versions: Version[]; lines: LogLine[]; job: Job | null; seen: Seen; progress: Progress | null; replay: number; v: Version | null;
   selection: Selection; getTime: () => number; focusNonce: number;
   prefill?: { text: string; nonce: number } | null; // Monti's hand-off: an edit request put in the box, not sent
-  onSend: (text: string, chips: string[], review: number, planner: Planner, scope: AskScope, latest: boolean) => Promise<boolean>; onStop: () => void;
+  onSend: (text: string, chips: string[], review: number, planner: Planner, scope: AskScope, latest: boolean) => Promise<true | string>; onStop: () => void; // a string: why it was refused
   onPick: (n: number) => void; onSeek: (t: number) => void; onCompare: (a: number, b: number) => void;
   onRestore: ((n: number) => void) | null; // null while an edit runs or in replay
   onApply: (pending: string, review: number) => void; onRetry: (pending: string) => void; onRetryJob: () => void;
@@ -472,7 +484,10 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
   const [time, setTime] = useState<number | null>(null);
   const [review, setReview] = useState(true);
   const [planner, setPlanner] = useState<Planner>("spark");
-  const [queue, setQueue] = useState<Queued[]>(() => { try { return JSON.parse(localStorage.getItem(queueKey(state.id)) ?? "[]"); } catch { return []; } });
+  const [queue, setQueue] = useState<Queued[]>(() => {
+    try { return (JSON.parse(localStorage.getItem(queueKey(state.id)) ?? "[]") as (Queued & { failed?: boolean })[]).map(({ failed: _, ...q }) => q); } catch { return []; }
+  });
+  const [refused, setRefused] = useState<Refused[]>([]);
   const items = story(state, versions, lines, job, replay);
   const end = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -504,28 +519,36 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
   // a queued message goes once the job has ended; `waiting` holds the next one until the job it started is seen
   const waiting = useRef(0);
   useEffect(() => { if (running) waiting.current = 0; }, [running]);
-  // a send the server refused (a job started a moment before, say) comes back to the queue, never lost; refused twice,
-  // it stays there with Send for the editor to try
+  // a send the server refused leaves the queue with why (the next one goes, nothing waits behind it); only "busy" (a job
+  // started a moment before) puts it back first, once, to go when that job ends
   const post = (q: Queued, queued: boolean) => {
     waiting.current = Date.now();
     // a queued message edits the newest version (the job it waited for made one), not the one on screen when it was typed
-    onSend(q.text, q.chips, q.review, q.planner, q.scope, queued).then((ok) => {
-      if (!ok) { waiting.current = 0; setQueue((x) => [{ ...q, failed: queued }, ...x]); }
+    onSend(q.text, q.chips, q.review, q.planner, q.scope, queued).then((r) => {
+      if (r === true) return;
+      waiting.current = 0;
+      if (BUSY.test(r) && !q.retried) setQueue((x) => [{ ...q, retried: true }, ...x]);
+      else setRefused((x) => [...x, { text: q.text, why: r }]);
     });
   };
   useEffect(() => {
     const q = queue[0];
-    if (running || replay || !q || q.failed || Date.now() - waiting.current < 8000) return;
+    if (running || replay || !q || Date.now() - waiting.current < 8000) return;
     setQueue(queue.slice(1));
     post(q, true);
-  }, [running, replay, queue]); // eslint-disable-line
+  }, [running, replay, queue, refused.length]); // eslint-disable-line -- a refusal lets the next one go at once
   const send = () => {
     if (!text.trim() || blocked) return;
-    const msg: Queued = { text: text.trim(), chips, review: review && state.has_key ? 1 : 0, planner, scope };
-    if (running || queue.length) setQueue((q) => [...q, msg]);
-    else post(msg, false);
+    enqueue({ text: text.trim(), chips, review: review && state.has_key ? 1 : 0, planner, scope });
     setText(""); setTime(null);
   };
+  const enqueue = (msg: Queued) => {
+    if (running || queue.length) setQueue((q) => [...q, msg]);
+    else post(msg, false);
+  };
+  // Fix it: the checks' faults as the next message on the newest version, no review (the router call is the cost)
+  const fixIt = (c: AgentChecks) => enqueue({ text: fixText(c), chips: [], review: 0, planner, scope: {} });
+  const askCost = state.costs.ask ?? 0.006;
   const tips = !blocked && !text && !queue.length ? suggestions(state, v) : [];
   const busyNote = running ? `${job!.label} is running` : blocked;
   const nWords = selection.words?.reduce((a, w) => a + w.to - w.from + 1, 0) ?? 0;
@@ -548,6 +571,17 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
                   {it.seek?.map((t) => <button key={t} className="seek-at" onClick={() => onSeek(t)} title="Play from here"><Icon name="play" size={10} /> {tc(t)}</button>)}</p>
                 : it.kind === "steps" ? <Steps key={j} title={it.title} lines={it.lines} live={it.live} />
                 : it.kind === "version" ? <VersionCard key={j} id={state.id} v={it.v} by={it.by} current={it.v.n === v?.n} newest={it.v.n === versions.at(-1)?.n} onPick={onPick} onCompare={onCompare} onRestore={onRestore} />
+                : it.kind === "checks" ? (
+                  <div key={j} className={`say checks ${it.checks.ok ? "ok" : "warn"}`}>
+                    <p>{checkedText(it.checks)}</p>
+                    {!it.checks.ok && it.v.n === versions.at(-1)?.n && state.has_key && !blocked && (
+                      <div className="err-acts">
+                        <button className="btn small" onClick={() => fixIt(it.checks)}
+                          title={`Sends “${fixText(it.checks)}” as your next message: one Muse Spark call picks the edits (about ${usd(askCost, 3)}), the render is $0, no review`}>
+                          <Icon name="spark" size={12} />Fix it</button>
+                        <span className="mute small">about {usd(askCost, 3)}, render $0</span>
+                      </div>)}
+                  </div>)
                 : it.kind === "review" ? <ReviewCard key={j} v={it.v} current={it.v.n === v?.n} onPick={onPick} onSeek={onSeek} />
                 : it.kind === "mishear" ? (() => {
                     const items = openSuggestions(it.v, versions.at(-1), hiddenSugg);
@@ -578,15 +612,26 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
       {tips.length > 0 && <div className="sugg">{tips.map((s) => <button key={s} onClick={() => { setText(s); box.current?.focus(); }}>{s}</button>)}</div>}
       <div className="composer" data-monti="chat.composer">
         <Tray state={state} lines={lines} job={job} seen={seen} progress={progress} replay={replay} onStop={onStop} />
+        {refused.map((r, k) => (
+          <div key={`r${k}`} className="queued refused" role="status">
+            <Icon name="flag" size={12} />
+            <span className="q-text" title={r.text}>{r.text}</span>
+            <button className="ib" onClick={() => setRefused((x) => x.filter((_, i) => i !== k))} title="Dismiss" aria-label="Dismiss the refused message"><Icon name="close" size={11} /></button>
+            <div className="q-foot">
+              <span className="small">Not sent: {r.why}</span>
+              <button className="btn quiet small" onClick={() => { setRefused((x) => x.filter((_, i) => i !== k)); setText(r.text); box.current?.focus(); }}
+                title="Put the message back in the box to change it or send it again">Edit</button>
+            </div>
+          </div>
+        ))}
         {queue.map((q, k) => (
           <div key={k} className="queued">
             <Icon name="clock" size={12} />
             <span className="q-text" title={q.text}>{q.text}</span>
             <button className="ib" onClick={() => setQueue((x) => x.filter((_, i) => i !== k))} title="Take this message back" aria-label="Remove the queued message"><Icon name="close" size={11} /></button>
             <div className="q-foot">
-              <span className="mute small">{q.failed ? "Not sent: the server refused it." : running ? `Waiting: it goes when ${job!.label} ends.` : "Sending…"}</span>
-              {q.failed ? <button className="btn quiet small" disabled={running} onClick={() => { setQueue((x) => x.filter((_, i) => i !== k)); post({ ...q, failed: false }, true); }}>Send</button>
-                : running && k === 0 ? <button className="btn quiet small" onClick={onStop} title="Stop the running job; this message goes as soon as it has stopped">Send now (stops the current job)</button> : null}
+              <span className="mute small">{running ? `Waiting: it goes when ${job!.label} ends.` : k ? "Next after the one above." : "Sending…"}</span>
+              {running && k === 0 ? <button className="btn quiet small" onClick={onStop} title="Stop the running job; this message goes as soon as it has stopped">Send now (stops the current job)</button> : null}
             </div>
           </div>
         ))}

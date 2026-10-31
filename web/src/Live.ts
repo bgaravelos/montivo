@@ -42,6 +42,19 @@ const PREROLL_S = 0.15; // the next segment's <video> starts playing (hidden) th
 
 type Stats = { swaps: { seg: number; late_ms: number; ready: number; by: string }[]; drift: number[]; firstFrameMs: number[]; ticks: number };
 
+/** An AudioBuffer as a 16-bit PCM WAV. */
+function wav(b: AudioBuffer): Blob {
+  const ch = b.numberOfChannels, n = b.length, out = new DataView(new ArrayBuffer(44 + n * ch * 2));
+  const str = (o: number, x: string) => { for (let i = 0; i < x.length; i++) out.setUint8(o + i, x.charCodeAt(i)); };
+  str(0, "RIFF"); out.setUint32(4, 36 + n * ch * 2, true); str(8, "WAVE"); str(12, "fmt ");
+  out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, ch, true); out.setUint32(24, b.sampleRate, true);
+  out.setUint32(28, b.sampleRate * ch * 2, true); out.setUint16(32, ch * 2, true); out.setUint16(34, 16, true);
+  str(36, "data"); out.setUint32(40, n * ch * 2, true);
+  const data = Array.from({ length: ch }, (_, c) => b.getChannelData(c));
+  for (let i = 0, o = 44; i < n; i++) for (let c = 0; c < ch; c++, o += 2) out.setInt16(o, Math.max(-1, Math.min(1, data[c][i])) * 0x7fff, true);
+  return new Blob([out], { type: "audio/wav" });
+}
+
 /** The cut played from the edit proxy without a render: the audio leads (one AudioBufferSourceNode per segment on the
  *  Web Audio clock, the render's loudness gain into a limiter), two <video> elements take turns on the picture (the
  *  next one waits paused on its in point), each frame's 9:16 crop is a CSS transform from the render's own crop path,
@@ -62,6 +75,13 @@ export class LiveMedia {
   private bedUrl = "";
   private mixOver: { level_db: number; voice_db: number } | null = null;
   private nodes: AudioBufferSourceNode[] = [];
+  // at 1.5x / 2x a source node's playbackRate also raises the pitch: the cut's mix is rendered once (OfflineAudioContext,
+  // the same graph at 1x) into a WAV and played by an <audio> element, which keeps the pitch (preservesPitch, the
+  // browser's own time-stretch). `gen` counts changes to what the audio plays (an edit, the faders, the bed).
+  private gen = 0;
+  private stretch: { gen: number; el: HTMLAudioElement; url: string } | null = null;
+  private making = -1;
+  private viaEl = false;
   private anchorCtx = 0;
   private anchorT = 0;
   private at = 0; // the cut time while paused
@@ -111,6 +131,7 @@ export class LiveMedia {
     cancelAnimationFrame(this.raf);
     this.stopAudio();
     this.master?.disconnect();
+    if (this.stretch) { this.stretch.el.pause(); URL.revokeObjectURL(this.stretch.url); this.stretch = null; }
     for (const v of this.vids) { v.pause(); v.removeAttribute("src"); v.load(); }
     this.box.replaceChildren();
   }
@@ -125,6 +146,7 @@ export class LiveMedia {
     const buf = await fetch(url).then((r) => r.arrayBuffer()).then((b) => audioCtx().decodeAudioData(b));
     if (this.bedUrl === url) {
       this.bedBuf = buf;
+      this.gen++;
       if (!this.paused) this.start(this.currentTime);
     }
   }
@@ -133,6 +155,7 @@ export class LiveMedia {
   setMix(m: { level_db: number; voice_db: number } | null) {
     if (JSON.stringify(m) === JSON.stringify(this.mixOver)) return;
     this.mixOver = m;
+    this.gen++;
     if (!this.paused) this.start(this.currentTime);
   }
 
@@ -140,6 +163,7 @@ export class LiveMedia {
   setData(data: LiveData) {
     const t = Math.min(this.currentTime, data.duration_s);
     this.data = data;
+    this.gen++;
     this.loadBed().catch(() => {});
     this.duration = data.duration_s;
     this.overlay.setData(data);
@@ -152,6 +176,7 @@ export class LiveMedia {
 
   get currentTime(): number {
     if (this.paused) return this.at;
+    if (this.viaEl && this.stretch) return Math.min(this.duration, this.stretch.el.currentTime);
     return Math.min(this.duration, this.anchorT + (audioCtx().currentTime - this.anchorCtx) * this.rate);
   }
   set currentTime(t: number) {
@@ -164,12 +189,14 @@ export class LiveMedia {
   set playbackRate(r: number) {
     const t = this.currentTime;
     this.rate = r > 0 ? r : 1;
+    if (this.rate !== 1) this.makeStretch().catch(() => {});
     if (!this.paused) this.start(t);
   }
   get muted() { return this.mute; }
   set muted(m: boolean) {
     this.mute = m;
     if (this.master) this.master.gain.setTargetAtTime(m ? 0 : 1, audioCtx().currentTime, 0.01);
+    if (this.stretch) this.stretch.el.muted = m;
   }
 
   async play(): Promise<void> {
@@ -223,53 +250,102 @@ export class LiveMedia {
     return Math.pow(10, (gain + m.duck_db * duck) / 20) * Math.max(0, fade);
   }
 
-  /** (Re)start the audio at cut time t: every segment from there on scheduled at once on the context's clock. */
+  /** (Re)start the audio at cut time t: every segment from there on scheduled at once on the context's clock; at
+   *  another speed the stretched copy from t (until it is made, a fraction of a second, the nodes play pitched). */
   private start(t: number) {
     const ctx = audioCtx();
     this.stopAudio();
-    const out = this.chain();
+    if (this.rate !== 1 && this.stretch?.gen === this.gen) {
+      const el = this.stretch.el;
+      el.currentTime = t; el.playbackRate = this.rate; el.preservesPitch = true; el.muted = this.mute;
+      el.play().catch(() => {});
+      this.viaEl = true;
+      return;
+    }
+    if (this.rate !== 1) this.makeStretch().catch(() => {});
     const now = ctx.currentTime + LEAD_S;
     this.anchorCtx = now;
     this.anchorT = t;
+    this.nodes = this.schedule(ctx, t, this.rate, now, this.chain(), this.master!);
+  }
+
+  /** The cut's audio from cut time t on `ctx`: one source per segment (gain ramps at the cut edges) into `out`, the
+   *  bed with its duck curve into `bedOut`. Shared by the live graph and the offline render of the stretched copy. */
+  private schedule(ctx: BaseAudioContext, t: number, rate: number, now: number, out: AudioNode, bedOut: AudioNode): AudioBufferSourceNode[] {
+    const nodes: AudioBufferSourceNode[] = [];
     const buf = this.buffer;
-    if (!buf) return;
+    if (!buf) return nodes;
     const fps = this.data.fps;
     for (const [k, s] of this.data.segments.entries()) {
       const c1 = s.cut_t0 + s.frames / fps;
       if (c1 <= t) continue;
       const from = Math.max(t, s.cut_t0);
-      const when = now + (from - s.cut_t0 > 0 ? 0 : (s.cut_t0 - t) / this.rate);
+      const when = now + (from - s.cut_t0 > 0 ? 0 : (s.cut_t0 - t) / rate);
       const off = s.t_in + (from - s.cut_t0);
       const dur = c1 - from;
       const src = ctx.createBufferSource();
       src.buffer = buf;
-      src.playbackRate.value = this.rate;
+      src.playbackRate.value = rate;
       const g = ctx.createGain();
-      const end = when + dur / this.rate;
+      const end = when + dur / rate;
       g.gain.setValueAtTime(k > 0 && from === s.cut_t0 ? 0 : 1, when);
       g.gain.linearRampToValueAtTime(1, when + RAMP_S);
       g.gain.setValueAtTime(1, Math.max(when + RAMP_S, end - RAMP_S));
       g.gain.linearRampToValueAtTime(k < this.data.segments.length - 1 ? 0 : 1, end);
       src.connect(g).connect(out);
       src.start(when, off, dur);
-      this.nodes.push(src);
+      nodes.push(src);
     }
     const bed = this.bedBuf;
     if (this.data.music && bed && t < this.duration) { // the loop from the cut's start, its gain as one curve
       const src = ctx.createBufferSource();
-      src.buffer = bed; src.loop = true; src.playbackRate.value = this.rate;
+      src.buffer = bed; src.loop = true; src.playbackRate.value = rate;
       const g = ctx.createGain();
       const span = this.duration - t, n = Math.max(2, Math.ceil(span * 50));
-      g.gain.setValueCurveAtTime(Float32Array.from({ length: n }, (_, i) => this.bedGain(t + (span * i) / (n - 1))), now, span / this.rate);
-      src.connect(g).connect(this.master!);
+      g.gain.setValueCurveAtTime(Float32Array.from({ length: n }, (_, i) => this.bedGain(t + (span * i) / (n - 1))), now, span / rate);
+      src.connect(g).connect(bedOut);
       src.start(now, ((this.data.music.start_s ?? 0) + t) % bed.duration); // M4: where in the loop the bed starts
-      src.stop(now + span / this.rate);
-      this.nodes.push(src);
+      src.stop(now + span / rate);
+      nodes.push(src);
     }
+    return nodes;
   }
   private stopAudio() {
     for (const n of this.nodes) { try { n.stop(); } catch { /* not started */ } n.disconnect(); }
     this.nodes = [];
+    if (this.viaEl) this.stretch?.el.pause();
+    this.viaEl = false;
+  }
+
+  /** The stretched copy: the whole cut's mix rendered at 1x the way the live graph plays it (loudness gain and voice_db,
+   *  the bed and its ducking, the -1.5 dBTP limiter), as a 16-bit WAV for an <audio> element. Made once per `gen`. */
+  private async makeStretch() {
+    const gen = this.gen;
+    if (this.making === gen || this.stretch?.gen === gen) return;
+    this.making = gen;
+    try {
+      await this.ready;
+      const buf = this.buffer;
+      if (!buf || this.dead) return;
+      const sr = buf.sampleRate;
+      const off = new OfflineAudioContext(2, Math.max(1, Math.ceil(this.duration * sr)), sr);
+      const level = off.createGain(), master = off.createGain(), lim = off.createDynamicsCompressor();
+      lim.threshold.value = -1.5; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.002; lim.release.value = 0.05;
+      level.gain.value = Math.pow(10, ((this.data.gain_db ?? 0) + (this.mixOver?.voice_db ?? this.data.music?.voice_db ?? 0)) / 20);
+      level.connect(master).connect(lim).connect(off.destination);
+      this.schedule(off, 0, 1, 0, level, master);
+      const out = await off.startRendering();
+      if (gen !== this.gen || this.dead) return;
+      const url = URL.createObjectURL(wav(out));
+      const el = new Audio(url);
+      el.preload = "auto"; el.preservesPitch = true;
+      const old = this.stretch;
+      this.stretch = { gen, el, url };
+      if (old) { old.el.pause(); URL.revokeObjectURL(old.url); }
+      if (!this.paused && this.rate !== 1) this.start(this.currentTime);
+    } finally {
+      if (this.making === gen) this.making = -1;
+    }
   }
 
   /** The segment playing at cut time t; -1 on the title card. */

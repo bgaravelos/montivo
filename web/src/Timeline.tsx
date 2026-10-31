@@ -1,6 +1,6 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, crit, fileUrl, tc } from "./api";
-import { blockAt, edgeSnaps, flatWords, ghostRestore, punchLabel, selRange, sevRank, speakerColor, speakerName, speakerOf, spanText, unusedRuns, type Block, type Snap, type WordSel } from "./edit";
+import { blockAt, clearCallout, edgeSnaps, fullStills, flatWords, ghostRestore, punchLabel, selRange, sevRank, speakerColor, speakerName, speakerOf, spanText, unusedRuns, type Block, type Snap, type WordSel } from "./edit";
 import { Icon } from "./icons";
 import { LEVEL_RANGE, VOICE_RANGE, type Mix } from "./Mix";
 import type { CaptionLine, DuckEdit, Issue, Overlay, PausePlan, Version, Word } from "./types";
@@ -428,15 +428,22 @@ const Tracks = memo(function Tracks(p: TrackProps) {
             <span>T&nbsp;&nbsp;{v.title_card_text}</span>
           </button>
         )}
-        {v.callouts.map((c, k) => (
-          <button key={k} className={`item text callout ${selected === `callout:${c.span}` ? "sel" : ""}`}
-            style={{ left: c.t_in * pps, width: Math.max(4, (c.t_out - c.t_in) * pps - 1) }}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => { p.onPick(`callout:${c.span}`); onSeek(c.t_in + 0.01); }}
-            title={`Callout “${c.text}” · clip ${c.span}\nClick: open it in Text · ⌫ removes it`}>
-            <span>{c.text}</span>
-          </button>
-        ))}
+        {v.callouts.map((c0, k) => { // a full-frame still hides the pill where it plays (engine/broll.clear_callouts)
+          const c = clearCallout(c0, fullStills(v.overlays)), hidden = c !== c0;
+          const tip = hidden ? (c ? "\nPart of it is hidden: a full-frame B-roll still plays over it" : "\nNot drawn: a full-frame B-roll still plays over all of it") : "";
+          return (
+            <Fragment key={k}>
+              {hidden && <span className="item text callout hidden" aria-hidden style={{ left: c0.t_in * pps, width: Math.max(4, (c0.t_out - c0.t_in) * pps - 1) }} />}
+              <button className={`item text callout ${c ? "" : "hidden"} ${selected === `callout:${c0.span}` ? "sel" : ""}`}
+                style={{ left: (c ?? c0).t_in * pps, width: Math.max(4, ((c ?? c0).t_out - (c ?? c0).t_in) * pps - 1) }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => { p.onPick(`callout:${c0.span}`); onSeek((c ?? c0).t_in + 0.01); }}
+                title={`Callout “${c0.text}” · clip ${c0.span}${tip}\nClick: open it in Text · ⌫ removes it`}>
+                <span>{c0.text}</span>
+              </button>
+            </Fragment>
+          );
+        })}
       </div>
       {/* captions */}
       <div className="track" style={{ height: TRACK_H.captions }} onPointerDown={(e) => { if (e.target === e.currentTarget) { onSelect(null); onSeek(timeAt(e.clientX)); } }}>

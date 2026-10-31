@@ -47,6 +47,24 @@ const SPOT_NAME: Record<SpotKind, string> = { rail: "Under the panel icons", br:
 const load = <T,>(key: string): T | null => { try { return JSON.parse(localStorage.getItem(key) ?? "null"); } catch { return null; } };
 const save = (key: string, v: unknown) => { try { if (v == null) localStorage.removeItem(key); else localStorage.setItem(key, JSON.stringify(v)); } catch { /* this tab only */ } };
 const clamp = (x: number, a: number, b: number) => Math.min(b, Math.max(a, x));
+// Under 900 px in the editor he stays in the corner, but never on a control: he climbs above whatever button, link or
+// field he would cover there (the chat's Send, the player's play), and steps aside when there is no free room
+const CONTROLS = "button, a[href], input, textarea, select, [role=button], [role=slider], [tabindex='0']";
+const NARROW_PAD = 12, NARROW_TOP = 56; // the corner's margin; never higher than under the top bar
+/** The lowest bottom offset (px) at which a box w x h at the right edge covers no control, or null when none fits. */
+function freeLift(w: number, h: number): number | null {
+  const W = window.innerWidth, H = window.innerHeight, left = W - NARROW_PAD - w, right = W - NARROW_PAD;
+  const hits = [...document.querySelectorAll<HTMLElement>(CONTROLS)].filter((e) => !e.closest(".monti, .monti-tuck"))
+    .map((e) => e.getBoundingClientRect())
+    .filter((r) => r.width > 0 && r.height > 0 && r.right > left && r.left < right && r.bottom > 0 && r.top < H);
+  const tops = [NARROW_PAD, ...hits.map((r) => H - r.top + 6)].filter((b) => b >= NARROW_PAD).sort((a, b) => a - b);
+  for (const b of tops) {
+    const top = H - b - h, bot = H - b;
+    if (top < NARROW_TOP) return null;
+    if (!hits.some((r) => r.top < bot && r.bottom > top)) return b;
+  }
+  return null;
+}
 
 let STASH: Stash | null = load<Stash>(STASH_KEY);
 let LAST: Geo | null = null; // where the badge was last drawn: More > Hide Monti tucks him into the nearer edge
@@ -155,6 +173,20 @@ export function Monti({ ctx, budget, hasKey, place, nonce, prepare, onOpen, onHa
     if (rail) ro?.observe(rail);
     return () => { window.removeEventListener("resize", on); mq?.removeEventListener?.("change", on); ro?.disconnect(); };
   }, []);
+  const root = useRef<HTMLDivElement>(null);
+  const [lift, setLift] = useState<number | null>(NARROW_PAD);
+  useEffect(() => { // phones: climb above the control he would cover, again on every scroll, resize and layout change
+    if (!narrow || place !== "editor" || tucked || open) { setLift(NARROW_PAD); return; }
+    let raf = 0;
+    const fit = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => {
+      const el = root.current;
+      if (el) setLift(freeLift(el.offsetWidth, el.offsetHeight));
+    }); };
+    fit();
+    const iv = window.setInterval(fit, 700); // a panel or a chat line that lands moves the controls without a scroll
+    window.addEventListener("scroll", fit, true); window.addEventListener("resize", fit);
+    return () => { cancelAnimationFrame(raf); window.clearInterval(iv); window.removeEventListener("scroll", fit, true); window.removeEventListener("resize", fit); };
+  }, [narrow, place, tucked, open, hi]);
   const geo: Geo = dragAt ? { ...dragAt, h: BADGE_H, kind: "free" } : where(spot, place);
   if (!narrow && !tucked) LAST = geo;
   const at = anchor(geo);
@@ -292,7 +324,8 @@ export function Monti({ ctx, budget, hasKey, place, nonce, prepare, onOpen, onHa
       <button className={`monti-tuck ${STASH.side}`} style={{ top: clamp(STASH.y * H - 33, 56, H - 76) }} onClick={() => tuckMonti(false)}
         aria-label="Bring Monti back (? opens him)" title="Bring Monti back (? opens him)"><img src="/monti/peek.webp" alt="" /></button>
     )}
-    <div className={`monti monti-${place} ${narrow ? "" : at.cls} ${dragAt ? "dragging" : ""}`} style={narrow ? undefined : at.style}>
+    <div ref={root} className={`monti monti-${place} ${narrow ? "narrow" : at.cls} ${dragAt ? "dragging" : ""} ${narrow && lift == null && !open ? "no-room" : ""}`}
+      style={narrow ? (place === "editor" && lift != null ? { bottom: lift } : undefined) : at.style}>
       {showing && <ShowMe s={showing} onDone={endShow} />}
       {open && (
         <div className="monti-panel" role="dialog" aria-label="Monti, help">

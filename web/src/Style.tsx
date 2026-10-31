@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, tc } from "./api";
+import type { LiveData } from "./Live";
+import { LiveOverlay } from "./LiveOverlay";
+import { clearCallout, fullStills } from "./edit";
 import { LIVE_TIP } from "./Panels";
 import { Icon, MarkLoader } from "./icons";
 import type { Look, LooksInfo, SavedLook, Version } from "./types";
@@ -338,16 +341,38 @@ export function StylePanel({ id, v, t, next, canEdit, live, draft, setDraft, onS
   );
 }
 
+/** The B-roll stills on screen at t over the server's preview still (engine/look.py draws none), and the captions and
+ *  callouts again above them in HTML, as the render stacks them (stills under the graphics, no callout over a
+ *  full-frame still): the same LiveOverlay the live preview draws, at that one moment. */
+function StillLayer({ data, t }: { data: LiveData; t: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const box = ref.current;
+    if (!box) return;
+    const ov = new LiveOverlay(data);
+    box.replaceChildren(ov.root);
+    const fit = () => ov.layout(box.clientWidth);
+    fit();
+    ov.apply(t);
+    const ro = new ResizeObserver(fit);
+    ro.observe(box);
+    return () => { ro.disconnect(); box.replaceChildren(); };
+  }, [data, t]);
+  return <div className="style-stills" ref={ref} aria-hidden />;
+}
+
 /** The preview still over the paused video, and the drag handles for the caption on screen and every callout. Boxes
  *  are 1080 x 1920 frame pixels (the EDL's), drawn as percentages of the 9:16 viewer. */
-export function StyleCanvas({ v, t, draft, setDraft, preview, busy, show }: {
+export function StyleCanvas({ v, t, draft, setDraft, preview, busy, show, stills }: {
   v: Version; t: number; draft: StyleDraft; setDraft: (d: StyleDraft) => void; preview: Preview | null; busy: boolean; show: boolean;
+  stills?: LiveData | null; // the cut laid out with the staged look, when a B-roll still is on screen at t
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [drag, setDrag] = useState<{ kind: "caption" | "callout"; span?: string; box: number[]; dx: number; dy: number; head: number[] | null } | null>(null);
   const fresh = preview && !preview.title;
   const caps: PBox[] = fresh ? preview!.captions : v.caption_lines.filter((c) => c.box && t >= c.t_in && t < c.t_out).map((c) => ({ ...c, box: c.box!, placement: c.placement ?? "", head_box: c.head_box ?? null }));
-  const calls: PBox[] = fresh ? preview!.callouts : v.callouts.filter((c) => c.box && t >= c.t_in && t < c.t_out).map((c) => ({ ...c, box: c.box!, placement: c.placement ?? "", head_box: c.head_box ?? null }));
+  const calls: PBox[] = (fresh ? preview!.callouts : v.callouts.filter((c) => c.box && t >= c.t_in && t < c.t_out).map((c) => ({ ...c, box: c.box!, placement: c.placement ?? "", head_box: c.head_box ?? null })))
+    .filter((c) => { const k = clearCallout(c, fullStills(v.overlays)); return !!k && t >= k.t_in && t < k.t_out; }); // none under a full-frame still
   if (!show) return null;
   const look = draft.look ?? v.look;
   const toFrame = (e: React.PointerEvent) => {
@@ -389,6 +414,7 @@ export function StyleCanvas({ v, t, draft, setDraft, preview, busy, show }: {
   return (
     <div className="style-canvas" ref={ref} onPointerMove={move} onPointerUp={end} onClick={(e) => e.stopPropagation()}>
       {fresh && <img className="style-still" src={preview!.image} alt="Preview of the new version" />}
+      {fresh && stills && <StillLayer data={stills} t={t} />}
       {(fresh || busy) && <span className="style-tag">{busy ? <><MarkLoader size={14} /> Preview…</> : "Preview · not made yet"}</span>}
       {hb && box([hb[0], hb[1], hb[2] - hb[0], hb[3] - hb[1]], "sc-head", <span>face while it is up</span>)}
       {drag && <span className="sc-guide-v" style={{ left: "50%" }} />}

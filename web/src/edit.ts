@@ -364,3 +364,21 @@ export const speakerName = (v: { speaker_names?: Record<string, string>; speaker
 export const SPEAKER_COLORS = ["#4FA3FF", "#FF8A3D", "#B57BFF", "#5FD08E", "#FF5A8A", "#E8D44D"];
 export const speakerColor = (spk: string) =>
   SPEAKER_COLORS[[...spk].reduce((n, c) => n + c.charCodeAt(0), 0) % SPEAKER_COLORS.length]; // A, B, C ... in order
+
+/** What a callout keeps beside the full-frame B-roll stills (engine/broll.clear_callouts, in cut seconds): the render
+ *  draws no callout pill over a cutaway; the part before or after the stills stays when it lasts CALLOUT_MIN_S, else
+ *  the callout is not drawn at all (null). */
+export const CALLOUT_MIN_S = 0.5;
+export function clearCallout<T extends { t_in: number; t_out: number }>(c: T, windows: [number, number][]): T | null {
+  const hit = windows.filter(([a, b]) => a < c.t_out && b > c.t_in);
+  if (!hit.length) return c;
+  const a = Math.min(...hit.map((w) => w[0])), b = Math.max(...hit.map((w) => w[1]));
+  const before = a - c.t_in, after = c.t_out - b;
+  if (before >= Math.max(after, CALLOUT_MIN_S)) return { ...c, t_out: a };
+  if (after >= CALLOUT_MIN_S) return { ...c, t_in: b };
+  return null;
+}
+/** The cut-second windows of the full-frame stills that are drawn (a version's `overlays`, or the live preview's `stills`). */
+export const fullStills = (stills: { placement: string; t_in: number | null; t_out: number | null; shown?: boolean }[] | null | undefined) =>
+  (stills ?? []).filter((o) => o.placement === "full" && o.shown !== false && o.t_in != null && o.t_out != null)
+    .map((o) => [o.t_in!, o.t_out!] as [number, number]);
