@@ -192,7 +192,8 @@ def run(opts: RunOptions) -> dict:
                               cost_usd=0.0, seconds=0.0, response_id="")
             log("resume: watch from watch.json")
         else:
-            watch = spark.watch(ing.file_id, voice.transcript_text(), opts.brief, ing.probe.duration)
+            watch = spark.watch(ing.file_id, voice.transcript_text(), opts.brief, ing.probe.duration,
+                                shots=len(ing.shots))
             dump_json(out / "watch.json", watch.parsed)
             fresh.add("watch")
         # Watch's trackable concepts are suggestions only. SAM is one request per concept (about $0.125 per 125 s at

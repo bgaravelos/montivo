@@ -95,3 +95,13 @@ def test_the_plan_prompt_asks_for_whole_sentences_and_a_hard_maximum(tmp_path, m
     assert "starts where a sentence starts" in p and "ends where a sentence ends" in p
     assert "maximum is a hard limit" in p and "strength" in p
     assert "strength" in schemas.PLAN["properties"]["paper_edit"]["items"]["required"]
+
+
+def test_watch_gets_more_output_room_on_a_clip_with_many_shots(tmp_path, monkeypatch):
+    from montivo.engine import spark as S
+    seen = []
+    monkeypatch.setattr(S.Spark, "call", lambda self, name, prompt, schema, **k: seen.append(k["max_output_tokens"]))
+    sp = S.Spark(tmp_path, __import__("montivo.ledger", fromlist=["Ledger"]).Ledger(tmp_path / "l.json"))
+    for shots in (0, 11, 26, 200):
+        sp.watch("file-1", "T", "b", 90.0, shots=shots)
+    assert seen == [12000, 12400, 18400, 24000]  # heli-04: 26 cuts, 12000 came back incomplete, 18000 worked

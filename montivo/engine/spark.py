@@ -31,6 +31,14 @@ PLAN_EFFORT = "low"
 WATCH_EFFORT = "low"
 PARSE_RETRIES = 1  # an incomplete or unparsable answer is asked once more
 PARSE_RETRY_TOKENS = 1.5
+# watch logs every shot: an edited package (heli-04, 26 camera cuts) ran out of 12000 output tokens, came back as
+# incomplete JSON and was paid twice ($0.14); the first call gets more room per shot over 10 (ingest.detect_shots)
+WATCH_TOKENS, WATCH_TOKENS_PER_SHOT, WATCH_TOKENS_FREE_SHOTS, WATCH_TOKENS_MAX = 12000, 400, 10, 24000
+
+
+def watch_tokens(shots: int) -> int:
+    """The watch call's output limit for a clip with this many camera cuts (26 -> 18400, the retry that worked)."""
+    return min(WATCH_TOKENS_MAX, WATCH_TOKENS + WATCH_TOKENS_PER_SHOT * max(0, shots - WATCH_TOKENS_FREE_SHOTS))
 
 
 @dataclass
@@ -140,7 +148,7 @@ class Spark:
     # ----------------------------------------------------------------- the three editorial calls
 
     def watch(self, file_id: str, transcript_text: str, brief: str, duration_s: float,
-              reasoning_effort: str | None = None) -> SparkCall:
+              reasoning_effort: str | None = None, shots: int = 0) -> SparkCall:
         prompt = (
             "You are the assistant editor logging footage for a short-form video edit.\n"
             f"Brief from the producer: {brief}\n\n"
@@ -156,7 +164,8 @@ class Spark:
             "5) List moments where the on-camera speaker moves out of centre or handles a prop, with seconds "
             "(leans, stands up, picks up or shows an object, points at something).\n\n"
             f"TRANSCRIPT:\n{transcript_text}")
-        return self.call("watch", prompt, schemas.WATCH, file_id=file_id, reasoning_effort=reasoning_effort or WATCH_EFFORT)
+        return self.call("watch", prompt, schemas.WATCH, file_id=file_id, reasoning_effort=reasoning_effort or WATCH_EFFORT,
+                         max_output_tokens=watch_tokens(shots))
 
     def plan(self, brief: str, transcript_text: str, watch: dict, target_s: float, file_id: str | None = None,
              reasoning_effort: str | None = None, words_per_s: float = 2.5, repair: str | None = None,
