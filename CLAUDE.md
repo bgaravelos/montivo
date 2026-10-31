@@ -912,7 +912,7 @@ today are untouched. Found on the way: 013's speaker map gave A to a 25 px passe
 stopped, then 200 five times), /api/runs 401, /s/nope 404, host spend $3.37 of $15; smoke drop on 015: 34.3 s,
 -14.0 LUFS / -1.7 dBTP, render 10.1 s.
 Monti, the help gecko (30/10 night, $0.28 incl. the bench, committed on Billy's go after the screenshots in
-`docs/notes/monti-screens/`, branch `claude/monti-0641d4`; not merged, pushed or deployed): `montivo/monti.py` + `montivo/monti_guide.md` (47 sections, each with a `monti:` line:
+`docs/notes/monti-screens/`, commits 14907dc + 5e5428d): `montivo/monti.py` + `montivo/monti_guide.md` (47 sections, each with a `monti:` line:
 target, panel, keywords), `POST /api/monti {message, context, history}` -> one muse-spark-1.3 call over the whole guide
 (strict schema {reply, steps, target, open_panel, handoff_to_ask, suggestions, section}, effort low, 9K tokens in, no
 prompt cache on the Meta API: $0.013-0.014), the target checked against the page; ledger `<root>/monti/ledger.json`
@@ -926,6 +926,10 @@ request fills Ask Montivo's composer unsent (Assistant `prefill`); under 900 px 
 targets the layout hides. Drawings: ChatGPT's character sheet cut out (`web/public/monti/*.webp`, 256 + 512 px); README credits them in Billy's
 wording ("made with ChatGPT's image model at design time").
 `tools/monti_bench.py`: Spark 1.3 20/20 of the 24 (4 left unrun for the cap), keywords 21/24. 661 tests pass.
+Merged into main (fast-forward to 5e5428d), pushed and deployed 31/10 07:13 on Billy's go from a clean worktree (no
+container was running before it, so no job and no old container to stop); /api/health 200, /api/runs 401, /s/nope 404,
+/api/monti 401 without the cookie, host spend $3.37 of $15; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render
+10.2 s. Monti not yet asked live with the sign-in.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
