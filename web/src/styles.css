@@ -1221,7 +1221,10 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .live-box { position: absolute; inset: 0; overflow: hidden; background: #000; }
 .live-zoom { position: absolute; inset: 0; }
 .frame916 .live-box video { position: absolute; left: 0; top: 0; width: auto; height: auto; max-width: none; object-fit: fill; transform-origin: 0 0; will-change: transform; }
-.live-ov { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
+.live-ov { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none;
+  /* grayscale anti-aliasing like FreeType in the render: macOS's default smoothing dilates light text on dark, and the
+     captions came out heavier than Pillow's (fill +9-25 %); antialiased puts fill and stroke within 3 % at viewer size */
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 .lo-still { position: absolute; object-fit: fill; }
 .lo-line { position: absolute; box-sizing: border-box; display: flex; align-items: flex-start; justify-content: center; white-space: nowrap; font-weight: normal; font-synthesis: none; }
 .lo-w { position: relative; display: inline-block; }
