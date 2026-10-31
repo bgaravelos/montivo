@@ -35,6 +35,7 @@ DUCK_RANGE = (-30.0, 0.0)
 VOICE_RANGE = (-12.0, 6.0)
 ATTACK_S, RELEASE_S = 0.15, 0.45
 HOLD_GAP_S = 0.8  # a pause shorter than this keeps the bed down (>= ATTACK_S + RELEASE_S: the ramps never overlap)
+EPS_S = 1e-6  # seconds that differ by float noise only: a lift of 2.0 - 1.2 s is 0.8 s, not 0.7999999999999998
 FADE_IN_S, FADE_OUT_S = 0.5, 1.5
 FADE_OUT_RANGE = (0.0, 8.0)
 MAX_DUCK_EDITS = 40
@@ -94,7 +95,7 @@ def normalize_music(m: dict | None) -> dict | None:
             raise ValueError('music: a duck edit is {"a": s, "b": s, "duck": true|false}')
         if not isinstance(duck, bool) or not (math.isfinite(a) and math.isfinite(b)) or not 0 <= a < b <= 3600:
             raise ValueError("music: a duck edit's window is 0 <= a < b seconds, duck true or false")
-        if not duck and b - a < HOLD_GAP_S:
+        if not duck and b - a < HOLD_GAP_S - EPS_S:
             raise ValueError(f"music: a lifted window is at least {HOLD_GAP_S:g} s (the ramps need the room)")
         clean.append({"a": round(a, 2), "b": round(b, 2), "duck": duck})
     if clean:
@@ -178,7 +179,8 @@ def follow_cut(prev: dict, new: dict, severity: str = "human") -> list[dict]:
                 runs[-1][1] = max(runs[-1][1], y)
             else:
                 runs.append([x, y])
-        keep = [(round(x, 2), round(y, 2)) for x, y in runs if y - x >= (0.05 if e["duck"] else HOLD_GAP_S)]
+        keep = [(x, y) for x, y in ((round(x, 2), round(y, 2)) for x, y in runs)
+                if y - x >= (0.05 if e["duck"] else HOLD_GAP_S) - EPS_S]
         what = "held down" if e["duck"] else "lifted"
         if keep == [(round(a, 2), round(b, 2))]:
             out.append(dict(e))
@@ -204,7 +206,7 @@ def merge(intervals: list[tuple[float, float]], gap_s: float = HOLD_GAP_S) -> li
     for a, b in sorted(intervals):
         if b <= a:
             continue
-        if out and a - out[-1][1] < gap_s:
+        if out and a - out[-1][1] < gap_s - EPS_S:
             out[-1][1] = max(out[-1][1], b)
         else:
             out.append([a, b])

@@ -243,3 +243,22 @@ def test_a_staged_look_plays_live_on_a_version_and_on_a_draft(tmp_path):
     r = c.post("/api/runs/r1/preview/styled", json={"draft": True, "look": {"preset": "box"}})
     assert r.status_code == 200 and r.json()["version"] is None
     assert r.json()["segments"] == c.get("/api/runs/r1/draft/preview").json()["segments"]  # the draft's clips, s3 gone
+
+
+def test_an_older_version_does_not_show_the_newer_title_card(tmp_path):
+    """The run keeps one title_card.png: once a later version made a card for new words, the older version's recorded
+    png is that new card; the live preview shows the older version's words instead (audit 31/10)."""
+    png = (tmp_path / "title" / "title_card.png")
+    png.parent.mkdir()
+    png.write_bytes(b"png")
+    (tmp_path / "title" / "request.json").write_text(json.dumps({"prompt": 'a card that reads "Cut out"'}))
+    old = _edl(tmp_path / "x.mp4", title_card_text="Raw in",
+               render={"title": {"png": png.as_posix(), "seconds": 1.5, "text": "Raw in"}})
+    assert P.title_seconds(tmp_path, old) == (1.5, None)
+    data = P.preview_data(tmp_path, old, overlays=False)
+    assert data["title"]["png"] is None and data["title"]["text"] == "Raw in"
+    new = _edl(tmp_path / "x.mp4", title_card_text="Cut out",
+               render={"title": {"png": png.as_posix(), "seconds": 1.5, "text": "Cut out"}})
+    assert P.title_seconds(tmp_path, new) == (1.5, png.as_posix())
+    (tmp_path / "title" / "request.json").unlink()  # an older run folder without the request: the card there is
+    assert P.title_seconds(tmp_path, old) == (1.5, png.as_posix())

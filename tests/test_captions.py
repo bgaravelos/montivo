@@ -196,7 +196,9 @@ def test_overlay_graph_and_loudness_parsers():
     args, graph = _overlay_graph("[base]", [Overlay(Path("a.png"), 10, 20, 0.0, 1.0),
                                             Overlay(Path("b.png"), 30, 40, 0.5, 3.0, fade_s=0.2)], 1, 59.94)
     # the fading overlay loops at the segment's rate (was a fixed 30: the fade stepped every other frame at 59.94)
-    assert args == ["-i", "a.png", "-loop", "1", "-framerate", "59.94", "-t", "3.1000", "-i", "b.png"]
+    # and starts a frame before its own: 28 frames in, so 3.1 s less those (audit 31/10: a late still looped from 0)
+    assert args == ["-i", "a.png", "-loop", "1", "-framerate", "59.94", "-t", "2.6329", "-i", "b.png"]
+    assert "[2:v]setpts=PTS+28/(FRAME_RATE*TB),format=rgba," in graph
     assert "[base][o0]overlay=x=10:y=20" in graph and "gte(t,0.0000)*lt(t,1.0000)" in graph
     assert "fade=t=in:st=0.5000:d=0.2:alpha=1" in graph
     # every PNG goes to YUV with BT.709 limited range and the output is tagged so

@@ -327,3 +327,30 @@ def test_a_version_shows_its_music_once_the_render_recorded_the_bed():
     got = _music(edl, {"music": {"measured": {"margin_db": 16.9, "under_s": 30.1}, "ducked": [[0.2, 3.1]]}})
     assert got["track"] == "chill_lofi" and got["margin_db"] == 16.9 and got["ducked"] == [[0.2, 3.1]]
     assert _music({}, {"music": {"measured": {}}}) is None
+
+
+def test_a_lift_of_exactly_hold_gap_survives_float_noise():
+    """follow.py (audit 31/10): 0.02 -> 0.82 s is 0.7999999999999999 s as floats, so the lift was refused, cut out and
+    merged back (edit_ducks) or dropped when it followed the cut; all of them 0.80 s windows."""
+    tid = M.tracks()[0]["id"]
+    m = M.normalize_music({"track": tid, "duck_edits": [{"a": 0.02, "b": 0.82, "duck": False}]})
+    assert m["duck_edits"] == [{"a": 0.02, "b": 0.82, "duck": False}]
+    assert M.edit_ducks([(0.0, 10.0)], m) == [(0.0, 0.02), (0.82, 10.0)]
+    assert M.merge([(0.0, 3.04), (3.84, 5.0)]) == [(0.0, 3.04), (3.84, 5.0)]  # a 0.80 s pause is not under 0.8 s
+    assert M.merge([(0.0, 3.04), (3.83, 5.0)]) == [(0.0, 5.0)]
+
+
+def test_a_follow_keeps_a_lift_of_exactly_hold_gap():
+    tid = M.tracks()[0]["id"]
+    prev = {"source": {"fps": 30.0}, "title_card": False,
+            "spans": [{"id": "s1", "t_in": 0.0, "t_out": 1.0137, "turn_id": "t0", "role": "hook"},
+                      {"id": "s2", "t_in": 10.0, "t_out": 20.0, "turn_id": "t1", "role": "body"}]}
+    c2 = R.cut_map(prev)[1].cut_in
+    a = round(c2 + 1.0, 2)
+    prev["music"] = M.normalize_music({"track": tid, "duck_edits": [{"a": a, "b": round(a + 0.8, 2), "duck": False}]})
+    new = json.loads(json.dumps(prev))
+    new["spans"] = new["spans"][1:]
+    M.follow_cut(prev, new)
+    eds = new["music"].get("duck_edits")
+    assert eds and len(eds) == 1 and not eds[0]["duck"]
+    M.normalize_music(new["music"])

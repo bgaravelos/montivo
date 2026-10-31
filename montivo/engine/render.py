@@ -142,10 +142,16 @@ def merge_segments(spans: list[dict]) -> list[Segment]:
 
 
 def frame_align(segments: list[Segment], fps: float) -> list[Segment]:
-    """Snap each segment's in point to the source frame grid and its length to a whole number of frames."""
+    """Snap each segment's in point to the source frame grid and its length to a whole number of frames. A segment
+    that starts within a frame of where the one before it ends in the source (abutting spans of two turns) starts on
+    that one's last frame boundary: the floor of its in point would play the frame (and its audio) twice."""
+    prev_end: int | None = None
     for seg in segments:
         f_in = math.floor(seg.t_in * fps + 1e-6)
+        if prev_end is not None and f_in < prev_end and seg.t_in * fps > prev_end - 1:
+            f_in = prev_end
         n = max(1, int(round((seg.t_out - f_in / fps) * fps)))
+        prev_end = f_in + n
         seg.t_in = round(f_in / fps, 6)
         seg.t_out = round((f_in + n) / fps, 6)
         seg.frames = n
@@ -245,6 +251,31 @@ def apply_bias(path: SegmentPath, bias_px: int, source_w: int, x0: int = 0) -> N
         kf["bias_px"] = bias_px
 
 
+@functools.lru_cache(maxsize=16)
+def _video_end(path: str, mtime_ns: int, size: int) -> float | None:
+    proc = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                           "stream=start_time,duration:format=start_time", "-of", "json", path], capture_output=True, text=True)
+    try:
+        rec = json.loads(proc.stdout or "{}")
+        st = (rec.get("streams") or [{}])[0]
+        start = float(st.get("start_time") or 0.0) - float((rec.get("format") or {}).get("start_time") or 0.0)
+        end = start + float(st["duration"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return round(end, 6) if math.isfinite(end) and end > 0 else None
+
+
+def video_end(source: Path) -> float | None:
+    """Where the source's picture ends, in the seconds an input seek counts: its first video stream's own start and
+    duration, not the container's (a camera clip's audio can run on: 015's source is video 68.50 s, audio 68.96 s).
+    None when the stream does not say; segment_encode then pads nothing, as before."""
+    try:
+        st = source.stat()
+    except OSError:
+        return None
+    return _video_end(str(source), st.st_mtime_ns, st.st_size)
+
+
 def _ffmpeg(args: list[str]) -> None:
     proc = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *args], capture_output=True, text=True)
     if proc.returncode != 0:
@@ -266,21 +297,26 @@ def source_color(source: Path) -> dict:
 def _overlay_graph(base: str, overlays: list[Overlay], first_input: int, fps: float = 30.0) -> tuple[list[str], str]:
     """Input args and filter chain that burn `overlays` onto the stream labelled `base`; returns (args, graph) whose
     last output label is [v]. Times are segment-local; each overlay shows on frames with t_in <= t < t_out. A fading
-    overlay loops at the segment's `fps`, so its fade steps once per output frame. Every PNG goes to YUV with BT.709
-    limited range, as the base is (TO_709), so its colours land as drawn."""
+    overlay loops at the segment's `fps`, so its fade steps once per output frame; the loop starts on the last frame
+    boundary before t_in (moved there with setpts, the same frame times as a loop from 0), so a still late in a long
+    segment does not run every frame before it through the fade. Every PNG goes to YUV with BT.709 limited range, as
+    the base is (TO_709), so its colours land as drawn."""
     args: list[str] = []
     chain: list[str] = []
     cur = base
     for n, ov in enumerate(overlays):
         idx = first_input + n
+        shift = ""
         if ov.fade_s > 0:
-            args += ["-loop", "1", "-framerate", f"{fps:g}", "-t", f"{ov.t_out + 0.1:.4f}", "-i", str(ov.png)]
+            k = max(0, math.floor(ov.t_in * fps + 1e-6) - 1)  # whole frames before the loop's first one
+            args += ["-loop", "1", "-framerate", f"{fps:g}", "-t", f"{ov.t_out + 0.1 - k / fps:.4f}", "-i", str(ov.png)]
+            shift = f"setpts=PTS+{k}/(FRAME_RATE*TB)," if k else ""
             fade = (f"fade=t=in:st={ov.t_in:.4f}:d={ov.fade_s}:alpha=1," if ov.fade_in else "") + \
                    (f"fade=t=out:st={max(ov.t_in, ov.t_out - ov.fade_s):.4f}:d={ov.fade_s}:alpha=1," if ov.fade_out else "")
         else:
             args += ["-i", str(ov.png)]
             fade = ""
-        chain.append(f"[{idx}:v]format=rgba,{fade}{TO_709},format=yuva420p[o{n}]")
+        chain.append(f"[{idx}:v]{shift}format=rgba,{fade}{TO_709},format=yuva420p[o{n}]")
         nxt = f"[m{n}]"
         chain.append(f"{cur}[o{n}]overlay=x={ov.x}:y={ov.y}:format=yuv420:eof_action=repeat:"
                      f"enable='gte(t,{ov.t_in:.4f})*lt(t,{ov.t_out:.4f})'{nxt}")
@@ -344,10 +380,13 @@ def chunk_bounds(seg: Segment, zoom: dict | None = None) -> list[tuple[int, int]
 
 def segment_encode(source: Path, seg: Segment, path: SegmentPath, render_dir: Path,
                    overlays: list[Overlay] | None = None, zoom: dict | None = None, frame: Frame = FRAME_916,
-                   color: dict | None = None, part: tuple[int, int] | None = None) -> Encode:
+                   color: dict | None = None, part: tuple[int, int] | None = None,
+                   video_end: float | None = None) -> Encode:
     """One segment's video, or its frames part = (k0, k1): crop, scale to the frame (from the source's range and
     matrix, `color` = source_color, to limited BT.709), the zoom, the overlays (a part takes the ones on screen in it).
-    Writes the crop's sendcmd file; returns the encode."""
+    A part that runs to within a frame of `video_end` (the picture's end, video_end()) holds the last frame for the
+    rest (tpad), so it always has its k1 - k0 frames: the audio runs on to the segment's end, and a short segment
+    would play every later one early against its sound. Writes the crop's sendcmd file; returns the encode."""
     k0, k1 = part or (0, seg.frames)
     whole = (k0, k1) == (0, seg.frames)
     name = f"seg_{seg.index + 1:02d}" + ("" if whole else f"_{k0:05d}")
@@ -363,6 +402,13 @@ def segment_encode(source: Path, seg: Segment, path: SegmentPath, render_dir: Pa
     # offset in the segment, rounded to the stream's time base, and back to 0 after the overlays)
     seek = max(0.0, seg.t_in + c0 - 0.5 / seg.fps)
     rebase = "setpts=PTS-STARTPTS" + (f"+{c0:.9f}/TB+0.5" if k0 else "")
+    n = k1 - k0
+    if video_end is not None:
+        have = math.floor((video_end - seg.t_in - c0) * seg.fps + 1e-6)  # source frames from the part's first on
+        if have < n + 1:
+            rebase += f",tpad=stop_mode=clone:stop={n}"
+        if have < 1:  # the part starts past the last frame: it holds that frame throughout
+            seek = max(0.0, video_end - 1.5 / seg.fps)
     vf = (f"{rebase},sendcmd=f={cmds.as_posix()},crop={path.crop_w}:{path.crop_h}:{path.xs[k0]}:{path.crop_y}:exact=1,"
           f"scale={frame.w}:{frame.h}:flags=lanczos:in_range={color['range']}:in_color_matrix={color['matrix']}:"
           f"out_range=tv:out_color_matrix=bt709,format=yuv420p,setsar=1"
@@ -371,7 +417,6 @@ def segment_encode(source: Path, seg: Segment, path: SegmentPath, render_dir: Pa
     if k0:
         ov_graph = ov_graph[:-len("[v]")] + ",setpts=PTS-STARTPTS[v]"
     graph = f"[0:v]{vf}[base];{ov_graph}"
-    n = k1 - k0
     args = ["-ss", f"{seek:.6f}", "-t", f"{(n + 2) / seg.fps:.6f}", "-i", str(source), *ov_args,
             "-filter_complex", graph, "-map", "[v]", "-an", "-frames:v", str(n), "-r", f"{seg.fps:g}",
             "-fps_mode", "cfr", *X264, "-threads", str(X264_THREADS)]
@@ -384,7 +429,7 @@ def render_segment_video(source: Path, seg: Segment, path: SegmentPath, render_d
                          overlays: list[Overlay] | None = None, zoom: dict | None = None, frame: Frame = FRAME_916,
                          color: dict | None = None) -> Path:
     """segment_encode, encoded now without the cache."""
-    enc = segment_encode(source, seg, path, render_dir, overlays, zoom, frame, color)
+    enc = segment_encode(source, seg, path, render_dir, overlays, zoom, frame, color, video_end=video_end(source))
     _ffmpeg([*enc.args, str(enc.out)])
     return enc.out
 
@@ -910,6 +955,7 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
     concept, track, speaker_ids, fallback = reframe_inputs(run_dir, edl)
     segments, paths = plan_paths(edl, track, speaker_ids, params, fallback)
     color = source_color(source)
+    vend = video_end(source)
     if cache is None:
         cache = os.environ.get("MONTIVO_SEGCACHE", "1") != "0"
     cache_dir = render_dir / SEGCACHE if cache else None
@@ -978,7 +1024,8 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
             ovs = overlays.get(seg.index, [])
             parts = chunk_bounds(seg, zooms.get(seg.index))
             for part in parts:
-                encodes.append(segment_encode(source, seg, path, render_dir, ovs, zooms.get(seg.index), frame, color, part))
+                encodes.append(segment_encode(source, seg, path, render_dir, ovs, zooms.get(seg.index), frame, color, part,
+                                               vend))
                 owner.append(seg.index)
             keyframes.extend(path.keyframes)
             moving = sum(1 for a, b in zip(path.xs, path.xs[1:]) if a != b)
