@@ -11,7 +11,7 @@ import re
 from dataclasses import asdict, dataclass
 
 from .edges import Audio, Words, tighten_edges
-from .voice import VoiceResult, Word
+from .voice import VoiceResult, Word, artefact_doubles
 
 _PUNCT = re.compile(r"[^\w'%$€]+", re.U)
 
@@ -121,6 +121,15 @@ def locate(span_text: str, turn_words: list[Word]) -> tuple[int, int, bool, floa
     if not want or not have:
         return None
     n = len(want)
+    # the planner reads the transcript without Voice's short duplicate words (voice.shown_words): match there first
+    # and map back to the turn's own word indices, so a quote opening on "200" starts on the real "200", not on its
+    # 80 ms copy (heli-02 18.02 / 18.38 s); an older plan that quoted the double matches on every word below
+    pos = [k for k in range(len(turn_words)) if k not in artefact_doubles(turn_words)]
+    if len(pos) < len(have):
+        shown = [have[k] for k in pos]
+        for i in range(0, len(shown) - n + 1):
+            if shown[i:i + n] == want:
+                return pos[i], pos[i + n - 1], True, 1.0
     for i in range(0, len(have) - n + 1):
         if have[i:i + n] == want:
             return i, i + n - 1, True, 1.0
