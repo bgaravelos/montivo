@@ -65,7 +65,7 @@ from .edges import Audio
 from .frame import FRAME_916, Frame, frame_for
 from .music import normalize_music
 from .punch import plan_punches, zoom_filter
-from .reframe import ReframeParams, SegmentPath, plan_segment
+from .reframe import ReframeParams, SegmentPath, picture_box, plan_segment
 from .speakers import follow_ids
 
 OUT_W, OUT_H = FRAME_916.w, FRAME_916.h
@@ -236,12 +236,12 @@ def segment_bias(spans: list[dict], span_ids: list[str]) -> int:
     return int(round(sum(vals) / len(vals))) if vals else 0
 
 
-def apply_bias(path: SegmentPath, bias_px: int, source_w: int) -> None:
-    """Shift a planned crop path by bias_px (kept inside the frame); the keyframes follow."""
-    hi = source_w - path.crop_w
-    path.xs = [min(hi, max(0, x + bias_px)) for x in path.xs]
+def apply_bias(path: SegmentPath, bias_px: int, source_w: int, x0: int = 0) -> None:
+    """Shift a planned crop path by bias_px (kept inside the picture: source_w wide from x0); the keyframes follow."""
+    hi = x0 + source_w - path.crop_w
+    path.xs = [min(hi, max(x0, x + bias_px)) for x in path.xs]
     for kf in path.keyframes:
-        kf["x"] = min(hi, max(0, kf["x"] + bias_px))
+        kf["x"] = min(hi, max(x0, kf["x"] + bias_px))
         kf["bias_px"] = bias_px
 
 
@@ -878,7 +878,8 @@ def plan_paths(edl: dict, track: dict | None, speaker_ids: dict[str, list[str]],
         hold = path.xs[-1] + path.crop_w / 2
         bias = segment_bias(edl["spans"], seg.span_ids)
         if bias:
-            apply_bias(path, bias, int(edl["source"]["width"]))
+            bx, _, bw, _ = picture_box(edl["source"])
+            apply_bias(path, bias, bw, bx)
         paths.append(path)
     return segments, paths
 

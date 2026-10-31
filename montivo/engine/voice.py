@@ -30,6 +30,48 @@ WAV_BYTES_PER_S = 24000 * 2  # 24 kHz mono 16-bit
 CHUNK_RETRIES = 1
 
 
+# Voice sometimes emits a word twice, the second copy 40-80 ms long ("200 200", "C-130 C-130", "Huey Huey" on the
+# heli runs). The captions drop them (captions.dedupe_words); the text a model reads drops them too (shown_words).
+# The word indices never change: spans, the EDL and voice.json keep every word Voice gave.
+DUP_MAX_S = 0.09  # the artefact copy lasts at most this long
+DUP_SHORTER_S = 0.04  # and is at least this much shorter than the other copy ("and and" at 0.08 / 0.08 is a stutter)
+DUP_GAP_S = 0.15  # with at most this gap between the two
+_TOK = re.compile(r"[^\w']+")
+
+
+def _field(w, k: str):
+    return w[k] if isinstance(w, dict) else getattr(w, k)
+
+
+def artefact_doubles(words: list) -> set[int]:
+    """Positions in `words` (one turn's words in order, Word objects or voice.json dicts) of Voice's short duplicate
+    copies: the same word as its neighbour, DUP_MAX_S or shorter and DUP_SHORTER_S shorter than the neighbour, at most
+    DUP_GAP_S apart. A speaker's own repeats (two long copies, or two equally short ones) stay."""
+    out: set[int] = set()
+    for k in range(1, len(words)):
+        a, b = words[k - 1], words[k]
+        if k - 1 in out or _TOK.sub("", str(_field(a, "w")).lower()) != _TOK.sub("", str(_field(b, "w")).lower()):
+            continue
+        if not _TOK.sub("", str(_field(a, "w"))):
+            continue
+        if float(_field(b, "t_start")) - float(_field(a, "t_end")) > DUP_GAP_S:
+            continue
+        da = float(_field(a, "t_end")) - float(_field(a, "t_start"))
+        db = float(_field(b, "t_end")) - float(_field(b, "t_start"))
+        if db <= DUP_MAX_S and db <= da - DUP_SHORTER_S:
+            out.add(k)
+        elif da <= DUP_MAX_S and da <= db - DUP_SHORTER_S:
+            out.add(k - 1)
+    return out
+
+
+def shown_words(words: list) -> list:
+    """One turn's words as a model should read them: Voice's short duplicate copies left out (artefact_doubles), every
+    other word as it is, with its own index. For the planner's transcript and Ask Montivo's context (agent.context)."""
+    drop = artefact_doubles(words)
+    return [w for k, w in enumerate(words) if k not in drop]
+
+
 @dataclass
 class Word:
     w: str
@@ -82,8 +124,19 @@ class VoiceResult:
         return round(rate, 2) if lo <= rate <= hi else default
 
     def transcript_text(self) -> str:
-        """The authoritative transcript handed to Spark: one line per turn with id, times and speaker."""
-        return "\n".join(f"[turn {t.turnId} | {t.startMs / 1000:.2f}-{t.endMs / 1000:.2f}s | speaker {t.speaker}] {t.transcript}"
+        """The authoritative transcript handed to Spark: one line per turn with id, times and speaker. Voice's short
+        duplicate words are left out (shown_words) when the turn's text is its words joined, as it is on every run
+        folder; edl.locate finds a quote either way."""
+        by_turn: dict[int, list[Word]] = {}
+        for w in self.words:
+            by_turn.setdefault(w.turn_id, []).append(w)
+
+        def text(t: Turn) -> str:
+            tw = by_turn.get(t.turnId) or []
+            if not tw or " ".join(w.w for w in tw).strip() != t.transcript.strip():
+                return t.transcript
+            return " ".join(w.w for w in shown_words(tw))
+        return "\n".join(f"[turn {t.turnId} | {t.startMs / 1000:.2f}-{t.endMs / 1000:.2f}s | speaker {t.speaker}] {text(t)}"
                          for t in self.turns)
 
 

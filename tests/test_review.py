@@ -79,29 +79,73 @@ def test_move_cut_by_words_trims_a_weak_opening():
 
 
 class FakeAudio(R.Audio):
-    """Loud everywhere except a quiet gap at 11.06-11.12 s of source time."""
+    """Loud everywhere except quiet gaps (default one at 11.06-11.12 s of source time)."""
 
-    def __init__(self):
+    def __init__(self, *gaps):
         import array
         import math
         self.rate = 8000
         self.pcm = array.array("h", [int(8000 * math.sin(k / 3)) for k in range(int(40 * self.rate))])
-        for k in range(int(11.06 * self.rate), int(11.12 * self.rate)):
-            self.pcm[k] = 0
+        for a, b in gaps or ((11.06, 11.12),):
+            for k in range(int(a * self.rate), int(b * self.rate)):
+                self.pcm[k] = 0
 
 
 def test_move_cut_on_a_boundary_moves_to_the_quietest_point_once():
     edl, words = make_edl()
     fix, why = R.resolve(issue(2.8, "move_cut", edge="out"), 0, edl, words, R.cut_map(edl))
     assert fix is None and "no audio.wav" in why
-    audio = FakeAudio()
+    audio = FakeAudio((11.22, 11.28))  # just past s1's last kept word (w03 10.9-11.2)
     fix, _ = R.resolve(issue(2.8, "move_cut", edge="out"), 0, edl, words, R.cut_map(edl), audio)
-    assert (fix.target, fix.args["mode"]) == ("s1", "valley") and abs(fix.args["to"] - 11.08) < 0.021
+    assert (fix.target, fix.args["mode"]) == ("s1", "valley") and abs(fix.args["to"] - 11.25) < 0.021
     new, log = R.apply_fixes(edl, [fix], words)
     assert new["spans"][0]["t_out"] == fix.args["to"] and "quietest" in log[0]["note"]
     assert R.on_boundary(new["spans"][0], words, "out")  # a tuned edge is not snapped back
-    again, why = R.resolve(issue(2.6, "move_cut", edge="out"), 0, new, words, R.cut_map(new), audio)
+    again, why = R.resolve(issue(1.35, "move_cut", edge="out"), 0, new, words, R.cut_map(new), audio)  # no title now
     assert again is None and "already at the quietest point" in why
+
+
+def test_valley_never_cuts_the_spans_own_kept_words():
+    """heli-01/02/04: the only quiet point near an edge sat inside the clip's own last / first kept word, the valley
+    fix moved there and the word was gone. Now the edge stays out of its own words and goes outward to the next pause."""
+    edl, words = make_edl(title=False)
+    # out edge of s1 (ends 11.2, w03 10.9-11.2): quiet only inside w03, and after the next word w04 (11.2-11.5)
+    audio = FakeAudio((11.0, 11.06), (11.52, 11.58))
+    fix, why = R.resolve(issue(1.2, "move_cut", edge="out"), 0, edl, words, R.cut_map(edl), audio)
+    assert why == "" and fix.args["mode"] == "extend" and fix.args["word"] == 4 and fix.args["to"] >= 11.5 - 0.03
+    new, log = R.apply_fixes(edl, [fix], words, audio)
+    s1 = new["spans"][0]
+    assert s1["word_to"] == 4 and s1["t_out"] >= 11.47 and s1["words"].endswith("w03 w04") and "no pause" in log[0]["note"]
+    # in edge of s2 (starts 11.8 on w06 11.8-12.1): quiet only inside w06; w05 before it is free but has no pause
+    audio = FakeAudio((11.9, 11.96))
+    fix, why = R.resolve(issue(1.2, "move_cut", edge="in"), 0, edl, words, R.cut_map(edl), audio)
+    assert fix is None and "no pause at this cut" in why
+    for s in edl["spans"]:
+        tw = words.turn(s["turn_id"])
+        for edge in ("in", "out"):
+            x, _, _ = R.valley(s, words, edge, audio, R.kept_elsewhere(edl, s), R.fence(edl, s))
+            if edge == "out":
+                assert x >= tw[s["word_to"]]["t_end"] - 0.03 - 1e-6
+            else:
+                assert x <= tw[s["word_from"]]["t_start"] + 0.03 + 1e-6
+
+
+def test_no_pause_past_a_word_another_span_keeps():
+    edl, words = make_edl(title=False)
+    edl["spans"][0]["word_to"], edl["spans"][0]["t_out"] = 5, 11.8  # s1 = w00..w05 right up to s2 (w06..)
+    audio = FakeAudio((11.6, 11.66), (12.12, 12.2))  # quiet inside w05, and past w06, which s2 keeps
+    fix, why = R.resolve(issue(1.8, "move_cut", edge="out"), 0, edl, words, R.cut_map(edl), audio)
+    assert fix is None or fix.target != "s1" or fix.args["mode"] != "extend"
+
+
+def test_gate_says_speech_runs_on_where_no_pause_is_near():
+    edl, words = make_edl(title=False)
+    edges = R.cut_edge_levels(edl, FakeAudio((30.0, 30.0)))  # loud everywhere
+    assert any("out" in e.get("runs_on", []) for e in edges)
+    gate = R.gate_check({}, edges, None, None)
+    assert any("speech runs on" in r for r in gate["reasons"])
+    edges = R.cut_edge_levels(edl, FakeAudio((11.22, 11.28)))  # a pause right after s1
+    assert "out" not in edges[0].get("runs_on", []) and "in" in edges[0]["runs_on"]
 
 
 def test_extend_span_stops_at_words_another_span_keeps():
@@ -431,13 +475,13 @@ def test_a_trimmed_edge_settles_in_the_gap_and_a_clipped_word_is_never_fixed_by_
     assert fix.op == "trim_span"
     new, log = R.apply_fixes(edl, [fix], words, FakeAudio())
     assert new["spans"][0]["word_to"] == 2 and abs(new["spans"][0]["t_out"] - 11.08) < 0.021 and "settled" in log[0]["note"]
-    edl, words = make_edl(title=False)  # s1 ends 11.2, the gap at 11.06-11.12 is in reach
+    edl, words = make_edl(title=False)  # s1 ends 11.2, the gap at 11.22-11.28 is in reach
     mid = issue(1.2, "move_cut", sev="blocker", edge="out", seconds=-0.3)
     mid["criterion"] = "no_cut_mid_word"
-    fix, _ = R.resolve(mid, 0, edl, words, R.cut_map(edl), FakeAudio())
+    fix, _ = R.resolve(mid, 0, edl, words, R.cut_map(edl), FakeAudio((11.22, 11.28)))
     assert fix.args["mode"] == "valley"
     mid["criterion"] = "pacing"
-    fix, _ = R.resolve(mid, 0, edl, words, R.cut_map(edl), FakeAudio())
+    fix, _ = R.resolve(mid, 0, edl, words, R.cut_map(edl), FakeAudio((11.22, 11.28)))
     assert fix.args["mode"] == "words"
 
 

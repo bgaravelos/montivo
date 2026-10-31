@@ -153,6 +153,7 @@ def run(opts: RunOptions) -> dict:
                              f"{opts.footage}{' with --hflip' if opts.hflip else ''}; use a new --out for other footage")
         ing = Ingested(source=Path(d["source"]), probe=Probe(**d["probe"]), proxy=Path(d["proxy"]), proxy_probe=Probe(**d["proxy_probe"]),
                        wav=Path(d["wav"]), file_id=d["file_id"], upload_seconds=d["upload_seconds"])
+        ing.picture = d.get("picture")  # an ingest from before bar detection keeps the whole frame
         if "shots" in d:
             ing.shots = list(d["shots"])
         else:  # ingested before shot detection ($0, a few seconds): found now and kept
@@ -191,7 +192,8 @@ def run(opts: RunOptions) -> dict:
                               cost_usd=0.0, seconds=0.0, response_id="")
             log("resume: watch from watch.json")
         else:
-            watch = spark.watch(ing.file_id, voice.transcript_text(), opts.brief, ing.probe.duration)
+            watch = spark.watch(ing.file_id, voice.transcript_text(), opts.brief, ing.probe.duration,
+                                shots=len(ing.shots))
             dump_json(out / "watch.json", watch.parsed)
             fresh.add("watch")
         # Watch's trackable concepts are suggestions only. SAM is one request per concept (about $0.125 per 125 s at
@@ -312,7 +314,8 @@ def run(opts: RunOptions) -> dict:
     source = {"path": str(ing.source), "original_path": str(opts.footage), "hflip": ing.source != opts.footage,
               "proxy": str(ing.proxy), "file_id": ing.file_id, "duration_s": ing.probe.duration,
               "width": ing.probe.width, "height": ing.probe.height, "fps": ing.probe.fps,
-              "proxy_width": ing.proxy_probe.width, "proxy_height": ing.proxy_probe.height, "shots": ing.shots}
+              "proxy_width": ing.proxy_probe.width, "proxy_height": ing.proxy_probe.height, "shots": ing.shots,
+              **({"picture": ing.picture} if ing.picture else {})}
     track_summary = {c: t.summary() for c, t in tracks.items()}
     if reuse and (out / "edl_v1.json").is_file():
         # the same plan builds the same v1, and later versions were patched from this file: keep it as it is
@@ -321,7 +324,7 @@ def run(opts: RunOptions) -> dict:
     else:
         prev_v1 = json.loads((out / "edl_v1.json").read_text()) if (out / "edl_v1.json").is_file() else None
         edl = build_edl(planned.parsed, voice, watch.parsed, source, opts.brief, track_summary,
-                        reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out))
+                        reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out), target_s=opts.target_s)
         if prev_v1:  # a new plan on a resumed run keeps the run's caption words (an old v1's demo words too)
             carry_run_words(prev_v1, edl)
         # A4: the paper edit checked word by word against the brief's checklist (C1), the target, repeated takes and
@@ -337,7 +340,8 @@ def run(opts: RunOptions) -> dict:
                                      reasoning_effort=opts.plan_effort, words_per_s=wps, name="plan_repair",
                                      repair="\n".join(f"- {p}" for p in problems))
                 edl2 = build_edl(again.parsed, voice, watch.parsed, source, opts.brief, track_summary,
-                                 reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out))
+                                 reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out),
+                                 target_s=opts.target_s)
                 if prev_v1:
                     carry_run_words(prev_v1, edl2)
                 left = plan_check(edl2, opts.target_s)
@@ -354,6 +358,11 @@ def run(opts: RunOptions) -> dict:
         else:
             log("plan check: the paper edit meets the brief's checks")
         edl["plan_check"] = record
+        if edl.get("length_fit"):
+            lf = edl["length_fit"]
+            log(f"plan: {lf['before_s']} s over the {lf['limit_s']} s limit, dropped "
+                + ", ".join(f"{d['id']} ({d['duration']} s, strength {d.get('strength', '?')})" for d in lf["dropped"])
+                + f" -> {lf['after_s']} s")
         if edl["role_fixes"]:
             log(f"roles set by position (one hook first, the payoff last): {', '.join(edl['role_fixes'])}")
         if edl.get("brief_missing"):

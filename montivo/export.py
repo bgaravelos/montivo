@@ -200,8 +200,11 @@ def render_copy(run_dir: Path, edl: dict, out: Path, captions: bool = True, fram
     work.mkdir(parents=True, exist_ok=True)
     tmp = work / "edl.json"
     tmp.write_text(json.dumps(with_aspect(copy.deepcopy(edl), frame.aspect)))
-    rel = out.resolve().relative_to(run_dir.resolve())
-    render_run(run_dir, edl_path=tmp, out_name=str(rel), captions=captions, ledger=Ledger(work / "ledger.json"),
+    try:
+        rel = str(out.resolve().relative_to(run_dir.resolve()))
+    except ValueError:  # --out outside the run folder: the render writes there (run_dir / an absolute path = it)
+        rel = str(out.resolve())
+    render_run(run_dir, edl_path=tmp, out_name=rel, captions=captions, ledger=Ledger(work / "ledger.json"),
                log=lambda *a, **k: None, title=title_ready(run_dir, edl))
     shutil.rmtree(work, ignore_errors=True)
     return out

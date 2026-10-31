@@ -48,11 +48,17 @@ def sharpness(im: Image.Image) -> float:
     return ImageStat.Stat(mid.filter(ImageFilter.FIND_EDGES)).var[0]
 
 
-def settle(cut: Path, t: float, duration: float, reach: float = 0.25, steps: int = 7) -> tuple[float, float]:
-    """The sharpest frame within +-reach of t: (time, sharpness)."""
+TITLE_CLEAR_S = 0.1  # a settled moment stays this far past the title card (its last frames fade out)
+
+
+def settle(cut: Path, t: float, duration: float, reach: float = 0.25, steps: int = 7,
+           after: float = 0.0) -> tuple[float, float]:
+    """The sharpest frame within +-reach of t, never before `after` (the end of the title card: a moment 0.1 s past
+    the card used to settle back onto it): (time, sharpness)."""
     best = (t, -1.0)
+    lo = max(0.0, after + TITLE_CLEAR_S) if after > 0 else 0.0
     for k in range(steps):
-        x = min(max(0.0, t - reach + 2 * reach * k / (steps - 1)), max(0.0, duration - 0.05))
+        x = min(max(lo, t - reach + 2 * reach * k / (steps - 1)), max(lo, duration - 0.05))
         s = sharpness(frame(cut, x))
         if s > best[1]:
             best = (round(x, 2), round(s, 1))
@@ -92,10 +98,17 @@ def suggest(run_dir: Path, n: int, ledger, log=print, k: int = 3) -> dict:
         t = float(m.get("t_s") or 0.0)
         if not skip <= t <= duration:
             continue
-        st, sh = settle(cut, t, duration)
+        st, sh = settle(cut, t, duration, after=skip)
         moments.append({"t_s": st, "spark_t_s": round(t, 2), "why": str(m.get("why") or "").strip(), "sharpness": sh})
-    rec = {"version": n, "moments": moments[:k], "cost_usd": call.cost_usd, "seconds": call.seconds}
-    dump_json(run_dir / f"cover_v{n}.json", rec)
+    # the record is merged: the Cover maker's `design` (thumb.design) and anything else already in it stays
+    path = run_dir / f"cover_v{n}.json"
+    try:
+        old = json.loads(path.read_text()) if path.is_file() else {}
+    except json.JSONDecodeError:
+        old = {}
+    rec = {**(old if isinstance(old, dict) else {}), "version": n, "moments": moments[:k], "cost_usd": call.cost_usd,
+           "seconds": call.seconds}
+    dump_json(path, rec)
     log(f"cover: v{n} " + "; ".join(f"{m['t_s']:.2f}s {m['why'][:60]}" for m in rec["moments"]) + f", ${call.cost_usd:.4f}")
     return rec
 

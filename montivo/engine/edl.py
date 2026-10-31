@@ -11,7 +11,7 @@ import re
 from dataclasses import asdict, dataclass
 
 from .edges import Audio, Words, tighten_edges
-from .voice import VoiceResult, Word
+from .voice import VoiceResult, Word, artefact_doubles
 
 _PUNCT = re.compile(r"[^\w'%$€]+", re.U)
 
@@ -92,6 +92,7 @@ class Span:
     why: str
     contiguous_with_previous: bool = False  # same turn, no gap: render as one continuous cut, no boundary here
     planner_role: str = ""  # the planner's own label when normalize_roles changed it
+    strength: int = 0  # the planner's 1-5 (fit_length drops the weakest body span first), 0 = not given
 
 
 def normalize_roles(spans: list[Span]) -> list[str]:
@@ -120,6 +121,15 @@ def locate(span_text: str, turn_words: list[Word]) -> tuple[int, int, bool, floa
     if not want or not have:
         return None
     n = len(want)
+    # the planner reads the transcript without Voice's short duplicate words (voice.shown_words): match there first
+    # and map back to the turn's own word indices, so a quote opening on "200" starts on the real "200", not on its
+    # 80 ms copy (heli-02 18.02 / 18.38 s); an older plan that quoted the double matches on every word below
+    pos = [k for k in range(len(turn_words)) if k not in artefact_doubles(turn_words)]
+    if len(pos) < len(have):
+        shown = [have[k] for k in pos]
+        for i in range(0, len(shown) - n + 1):
+            if shown[i:i + n] == want:
+                return pos[i], pos[i + n - 1], True, 1.0
     for i in range(0, len(have) - n + 1):
         if have[i:i + n] == want:
             return i, i + n - 1, True, 1.0
@@ -134,10 +144,54 @@ def locate(span_text: str, turn_words: list[Word]) -> tuple[int, int, bool, floa
     return first, last, False, round(sm.ratio(), 3)
 
 
+OVER_TARGET = 1.10  # a plan running more than 10 % over the target loses its weakest body span (fit_length)
+UNDER_TARGET = 0.80  # never below this share of the target by a drop
+
+
+def fit_length(edl: dict, target_s: float | None) -> dict | None:
+    """The planner overshoots (heli-03 48.8 s and heli-04 46.6 s on a 40 s target, a brief of 45 s at most): while the
+    cut runs over OVER_TARGET x the target, or over the brief's own maximum (a length brief_check), drop the weakest
+    `body` span (the planner's lowest strength, then the one that leaves the runtime nearest the target), never the
+    hook or the payoff, never below UNDER_TARGET x the target. Returns the record kept as EDL `length_fit`, None when
+    nothing was dropped."""
+    if not target_s or target_s <= 0:
+        return None
+    limit = OVER_TARGET * target_s
+    for c in edl.get("brief_checks") or []:
+        if c.get("kind") == "length" and (c.get("max_s") or -1) > 0:
+            limit = min(limit, float(c["max_s"]) + LENGTH_SLACK_S)
+    spans = edl["spans"]
+
+    def runtime() -> float:
+        return round(sum(s["t_out"] - s["t_in"] for s in spans), 2)
+
+    before, dropped = runtime(), []
+    while runtime() > limit:
+        rt = runtime()
+        cands = [s for s in spans if s["role"] == "body"
+                 and rt - (s["t_out"] - s["t_in"]) >= UNDER_TARGET * min(target_s, limit)]
+        if not cands:
+            break
+        weak = min(cands, key=lambda s: (int(s.get("strength") or 3),
+                                         abs(rt - (s["t_out"] - s["t_in"]) - target_s)))
+        spans.remove(weak)
+        dropped.append({"id": weak["id"], "words": weak["words"], "duration": round(weak["t_out"] - weak["t_in"], 2),
+                        **({"strength": weak["strength"]} if weak.get("strength") else {})})
+    if not dropped:
+        return None
+    for k, s in enumerate(spans):
+        s["order"] = k
+        s["contiguous_with_previous"] = bool(k and s["turn_id"] == spans[k - 1]["turn_id"]
+                                             and s["word_from"] == spans[k - 1]["word_to"] + 1)
+    edl["runtime_s"] = runtime()
+    return {"limit_s": round(limit, 2), "before_s": before, "after_s": edl["runtime_s"], "dropped": dropped}
+
+
 def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: str, tracks: dict,
-              reframe_concept: str = "head", audio: "Audio | None" = None) -> dict:
+              reframe_concept: str = "head", audio: "Audio | None" = None, target_s: float | None = None) -> dict:
     """The EDL v1 on Voice word boundaries; with the source audio, every cut edge is then tightened to the speech
-    onset and offset (edges.py), so v1 does not open in the pause before the first word or hold after the last."""
+    onset and offset (edges.py), so v1 does not open in the pause before the first word or hold after the last.
+    With `target_s`, a plan that runs long loses its weakest body spans (fit_length)."""
     by_turn: dict[int, list[Word]] = {}
     for w in voice.words:
         by_turn.setdefault(w.turn_id, []).append(w)
@@ -157,7 +211,8 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
         spans.append(Span(id=f"s{k + 1}", order=k, turn_id=tid, speaker=turns[tid].speaker if tid in turns else "?",
                           role=item["role"], words=" ".join(w.w for w in tw[a:b + 1]), t_in=t_in, t_out=t_out,
                           duration=round(t_out - t_in, 3), verbatim=exact, match_ratio=ratio, word_from=a, word_to=b,
-                          callout=item.get("callout", ""), why=item.get("why", "")))
+                          callout=item.get("callout", ""), why=item.get("why", ""),
+                          strength=int(item.get("strength") or 0)))
 
     role_fixes = normalize_roles(spans)
     for prev, cur in zip(spans, spans[1:]):
@@ -199,6 +254,8 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
     }
     if audio is not None and edl["spans"]:
         tighten_edges(edl, Words([asdict(w) for w in voice.words]), audio)
+    if fit := fit_length(edl, target_s):
+        edl["length_fit"] = fit
     return edl
 
 

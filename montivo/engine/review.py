@@ -85,6 +85,8 @@ REACH_S = 0.05  # a sentence end one word past the trim point counts when that w
                # (run 012: "Billy." overlapped by 0.10 s and is kept; run 012-ktb: "So," by 0.01 s and stays out)
 VALLEY_RANGE_S = 0.3  # move_cut on an edge already on a Voice boundary: search the source audio this far each side
 VALLEY_STEP_S = 0.02  # for the quietest 40 ms (Voice word edges carry up to 0.3 s of slop and words always abut)
+VALLEY_OWN_WORD_S = 0.03  # a valley move goes at most this far into the span's own last / first kept word
+PAUSE_PAST_MAX_S = 1.5  # no pause at the edge: words added outward, this far at most, to reach the next one
 WORD_SHIFT_MIN_S = 0.3
 BIAS_PX = 60  # reframe_bias step in source px (10 % of a 608 px crop at 1920)
 CLOCK_FPS = 10
@@ -211,8 +213,14 @@ def cut_edge_levels(edl: dict, audio: "Audio") -> list[dict]:
             # segments meet on the same source second, so the sound goes on unbroken and nothing is cut inside a word
             continuous = abs(e - i) < 1.0 / float((edl.get("source") or {}).get("fps") or 30.0)
         loud = not continuous and max(end_db, start_db if start_db is not None else -120.0) > loud_db
+        # a loud side with no pause within VALLEY_RANGE_S either way: the speaker runs sentences together there, so no
+        # edge move can fix it (heli-01 "paying for it. A lot of" at 6.38 s); the gate says so instead of "mid-word"
+        runs_on = [side for side, at, db in (("out", e, end_db), ("in", i if after is not None else None, start_db))
+                   if loud and db is not None and db > loud_db
+                   and audio.quietest(at - VALLEY_RANGE_S, at + VALLEY_RANGE_S, step=VALLEY_STEP_S)[1] > loud_db]
         out.append({"t": round(t, 2), "end_db": end_db, "start_db": start_db, "end": after is None, "loud": loud,
-                    "loud_db": loud_db, **({"continuous": True} if continuous else {})})
+                    "loud_db": loud_db, **({"continuous": True} if continuous else {}),
+                    **({"runs_on": runs_on} if runs_on else {})})
     return out
 
 
@@ -655,7 +663,9 @@ def gate_check(caps: dict, edges: list[dict] | None, edge_words: dict | None, he
         if not e["loud"]:
             continue
         sides = [s for s, db in (("out", e["end_db"]), ("in", e["start_db"])) if db is not None and db > e["loud_db"]]
-        reasons.append(f"cut at {e['t']:.2f} s inside speech ({' and '.join(sides) or 'out'} edge over {e['loud_db']:.1f} dB)")
+        runs_on = f"; speech runs on at the {' and '.join(e['runs_on'])} edge, no pause near it" if e.get("runs_on") else ""
+        reasons.append(f"cut at {e['t']:.2f} s inside speech ({' and '.join(sides) or 'out'} edge over "
+                       f"{e['loud_db']:.1f} dB{runs_on})")
         for side in sides or ["out"]:
             issue(e["t"], e["t"], "no_cut_mid_word", "move_cut", f"speech still going at the {side} edge of the cut",
                   "loud_edge", edge=side)
@@ -880,16 +890,44 @@ def valley(span: dict, words: Words, edge: str, audio: Audio, blocked: set[int],
     r = VALLEY_RANGE_S
     if edge == "out":
         t = span["t_out"]
-        lo = max(span["t_in"] + (span["t_out"] - span["t_in"]) / 2, t - r)
+        # never into the span's own last kept word (heli-01: "paying for it." runs into the next sentence with no gap,
+        # the old search went back 0.3 s and cut "it." off)
+        lo = max(span["t_in"] + (span["t_out"] - span["t_in"]) / 2, t - r,
+                 min(t, tw[span["word_to"]]["t_end"] - VALLEY_OWN_WORD_S))
         hi = t if span["word_to"] + 1 in blocked else t + r
         hi = max(t, min([hi] + [a for a, b in fenced or [] if a >= t - 0.005]))
     else:
         t = span["t_in"]
         lo = t if span["word_from"] - 1 in blocked else t - r
         lo = min(t, max([lo] + [b for a, b in fenced or [] if b <= t + 0.005]))
-        hi = min(span["t_out"] - (span["t_out"] - span["t_in"]) / 2, t + r)
+        hi = min(span["t_out"] - (span["t_out"] - span["t_in"]) / 2, t + r,
+                 max(t, tw[span["word_from"]]["t_start"] + VALLEY_OWN_WORD_S))
     x, db = audio.quietest(lo, hi, step=VALLEY_STEP_S)
     return x, db, audio.level(t - 0.02, t + 0.02)
+
+
+def pause_past(span: dict, words: Words, edge: str, audio: Audio, blocked: set[int],
+               fenced: list[tuple[float, float]] | None, now_db: float) -> tuple[int, float, float] | None:
+    """No pause at an edge (speech runs on across it): the nearest word outward after (out) or before (in) which the
+    source has a point 3 dB quieter than the edge, adding words no other span keeps and no other span's source time,
+    PAUSE_PAST_MAX_S at most. Returns (that word's index, the new edge time, its dB) or None."""
+    tw = words.turn(span["turn_id"])
+    out = edge == "out"
+    base = span["t_out" if out else "t_in"]
+    k = span["word_to" if out else "word_from"]
+    while True:
+        k += 1 if out else -1
+        if not 0 <= k < len(tw) or k in blocked:
+            return None
+        w = tw[k]
+        if abs((w["t_end"] if out else w["t_start"]) - base) > PAUSE_PAST_MAX_S:
+            return None
+        if any(a < w["t_end"] and w["t_start"] < b for a, b in fenced or []):
+            return None
+        trial = dict(span, word_to=k, t_out=w["t_end"]) if out else dict(span, word_from=k, t_in=w["t_start"])
+        x, db, _ = valley(trial, words, edge, audio, blocked, fenced)
+        if db <= now_db - 3.0:
+            return k, x, db
 
 
 def on_boundary(span: dict, words: Words, edge: str) -> bool:
@@ -1130,11 +1168,18 @@ def resolve(issue: dict, k: int, edl: dict, words: Words, cmap: list[CutSpan],
             return mk("move_cut", sp.span, edge=edge, mode="words", seconds=sec), ""
         if audio is None:
             return None, "edge on its word boundary and no audio.wav to find a quieter point"
-        x, db, now = valley(s, words, edge, audio, kept_elsewhere(edl, s), fence(edl, s))
+        blocked, fenced = kept_elsewhere(edl, s), fence(edl, s)
+        x, db, now = valley(s, words, edge, audio, blocked, fenced)
         cur = s["t_out" if edge == "out" else "t_in"]
-        if abs(x - cur) < 0.005 or db > now - 3.0:  # only a clearly quieter point (3 dB) is worth a re-cut
+        if abs(x - cur) >= 0.005 and db <= now - 3.0:  # only a clearly quieter point (3 dB) is worth a re-cut
+            return mk("move_cut", sp.span, edge=edge, mode="valley", to=x, db=db, was_db=now), ""
+        if now <= edge_loud_db(audio):
             return None, f"{edge} edge of {sp.span} is already at the quietest point ({now:.1f} dB, best {db:.1f} dB at {x:.2f})"
-        return mk("move_cut", sp.span, edge=edge, mode="valley", to=x, db=db, was_db=now), ""
+        if past := pause_past(s, words, edge, audio, blocked, fenced, now):
+            k_, x, db = past
+            return mk("move_cut", sp.span, edge=edge, mode="extend", word=k_, to=x, db=db, was_db=now), ""
+        return None, (f"no pause at this cut: speech runs on at the {edge} edge of {sp.span} ({now:.1f} dB, best "
+                      f"{db:.1f} dB without cutting its own words or reaching another clip's)")
 
     if op == "extend_span":
         edge = p.get("edge") if p.get("edge") in ("in", "out") else "out"
@@ -1307,6 +1352,15 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
                 n = shift_words(s, words, edge, f.args["seconds"], kept_elsewhere(new, s))
                 note = (f"{edge} edge moved by {n} words ({f.args['seconds']:+.2f} s asked)"
                         + settle(s, words, edge, audio, kept_elsewhere(new, s), fence(new, s)))
+            elif f.args["mode"] == "extend":
+                key = "t_out" if edge == "out" else "t_in"
+                before = s[key]
+                s["word_to" if edge == "out" else "word_from"] = f.args["word"]
+                s[key] = f.args["to"]
+                s.setdefault("edge_tuned", {})[edge] = f.args["to"]
+                w = words.turn(s["turn_id"])[f.args["word"]]["w"]
+                note = (f"no pause at the {edge} edge: extended to the pause past \"{w}\" {before:.3f} -> "
+                        f"{f.args['to']:.3f} ({f.args['was_db']:.1f} -> {f.args['db']:.1f} dB)")
             else:
                 key = "t_out" if edge == "out" else "t_in"
                 before = s[key]
