@@ -325,18 +325,21 @@ function Intro({ onNew }: { onNew: () => void }) {
 
 type Step = { v: Version; worst: string | null; worstWhat: string | null; sev: string | null; made: string | null; who: string | null };
 
-/** The versions that led to the one a project opens on, reviewed ones only, with each one's worst note and what made it. */
-function loopSteps(state: RunState, shown: number): Step[] {
+/** The versions that led to the one a project opens on, reviewed ones only, with each one's worst note and what made it;
+ *  the one it opens on last even when it has no review yet (a judge's edit on a sample), so the loop ends where the
+ *  card does. `human`: a person's edit is on that path. */
+function loopSteps(state: RunState, shown: number): { steps: Step[]; human: boolean } {
   const vs = state.versions.filter((v) => v.cut);
   const path: Version[] = [];
   for (let v = vs.find((x) => x.n === shown); v; v = parentOf(v, vs)) {
     if (path.some((p) => p.n === v!.n)) break; // a restore can point back: never loop
     path.unshift(v);
   }
-  const reviewed = path.filter((v) => v.review);
+  const reviewed = path.filter((v) => v.review || v.n === shown);
   const keep = reviewed.length > 3 ? [reviewed[0], reviewed[reviewed.length - 2], reviewed[reviewed.length - 1]] : reviewed;
-  return keep.map((v, k) => {
-    const issues = [...(v.review!.issues ?? []), ...(v.review!.gate?.issues ?? [])].sort((a, b) => sevRank(a.severity) - sevRank(b.severity) || a.t_s - b.t_s);
+  const human = path.some((v) => v.origin.source === "human");
+  const steps = keep.map((v, k) => {
+    const issues = [...(v.review?.issues ?? []), ...(v.review?.gate?.issues ?? [])].sort((a, b) => sevRank(a.severity) - sevRank(b.severity) || a.t_s - b.t_s);
     const top = issues[0] ?? null;
     // what made this version: every version between the previous step and this one
     const from = k ? path.indexOf(keep[k - 1]) + 1 : path.length;
@@ -348,10 +351,12 @@ function loopSteps(state: RunState, shown: number): Step[] {
       }
       return originLabel(x).replace(/^your edit · /, "");
     });
-    const agent = between.every((x) => x.origin.source === "review" || x.origin.source === "hook_ab");
+    const byAgent = (x: Version) => x.origin.source === "review" || x.origin.source === "hook_ab" || x.origin.source === "plan";
+    const agent = between.every(byAgent), you = between.every((x) => !byAgent(x));
     return { v, worst: top ? crit(top.criterion) : null, worstWhat: top?.what ?? null, sev: top?.severity ?? null,
-      made: made.length ? made.slice(0, 2).join(" · ") : null, who: made.length ? (agent ? "Agent" : "You") : null };
+      made: made.length ? made.slice(0, 2).join(" · ") : null, who: made.length ? (agent ? "Agent" : you ? "You" : "Agent + you") : null };
   });
+  return { steps, human };
 }
 
 /** The best cut, playing, with the loop that made it: every reviewed version's score and worst note, and between two
@@ -368,10 +373,11 @@ function Featured({ r, hosted, costs }: { r: RunCard; hosted: boolean; costs: Co
     return () => { live = false; };
   }, [r.id, card.shown]);
   useEffect(() => { const v = video.current; if (!v) return; if (paused) v.pause(); else v.play().catch(() => setPaused(true)); }, [paused]);
-  const steps = state ? loopSteps(state, card.shown) : [];
+  const { steps, human: edited } = state ? loopSteps(state, card.shown) : { steps: [], human: false };
   const first = steps[0]?.v.review?.overall ?? card.scores[0]?.overall;
   const last = card.score;
-  const human = steps.some((s) => s.who === "You");
+  const mine = card.score_is_shown; // the score is the shown version's own, not an earlier one's
+  const human = edited || r.kind === "copy"; // a copy exists because its judge edited the sample
   const open = `#/run/${r.id}`;
   return (
     <section className="hm-hero" data-monti="home.hero">
@@ -379,20 +385,23 @@ function Featured({ r, hosted, costs }: { r: RunCard; hosted: boolean; costs: Co
         <video ref={video} src={fileUrl(r.id, `cut_v${card.shown}.mp4`)} poster={frameUrl(r.id, card.shown, card.poster_t, true)}
           autoPlay={!paused} muted loop playsInline preload="metadata" aria-label={`${nameFor(r)}, version ${card.shown}`} />
         <span className="hm-feat-v">Version {card.shown}{card.duration_s != null ? ` · ${tc(card.duration_s, 0)}` : ""}</span>
-        {last && <Ring s={last} lg />}
+        {last && mine && <Ring s={last} lg />}
+        {last && !mine && <NotReviewed n={card.shown} best={last} lg />}
         <button className="hm-feat-pp icon-btn" onClick={() => setPaused(!paused)} aria-label={paused ? "Play" : "Pause"} title={paused ? "Play" : "Pause"}>
           <Icon name={paused ? "play" : "pause"} size={15} />
         </button>
       </div>
       <div className="hm-hero-r">
         <div>
-          <div className="hm-eyebrow">{hosted ? "Sample · open it and ask for a change" : "Best cut so far"}</div>
+          <div className="hm-eyebrow">{r.kind === "copy" ? `Your copy of the sample · Version ${card.shown}`
+            : hosted ? "Sample · open it and ask for a change" : mine ? "Best cut so far" : `Latest cut · Version ${card.shown}`}</div>
           <h1>Montivo checks its own cut, <em>then fixes it.</em></h1>
         </div>
         <p className="hm-sub">
           Muse Spark plans the edit from the footage, a blind reviewer scores the render against a rubric, and the agent
           re-cuts until the cut passes.{first != null && last && first !== last.overall
-            ? ` ${nameFor(r)} went from ${first} to ${last.overall}${state && !human ? " with no human edit" : ""}.` : ""}
+            ? ` ${nameFor(r)} went from ${first} to ${last.overall}${mine ? "" : ` by Version ${last.v}`}${state && !human ? " with no human edit" : ""}.` : ""}
+          {last && !mine ? ` Version ${card.shown} is ${r.kind === "copy" ? "your" : "a human"} edit with no blind review yet.` : ""}
         </p>
         {steps.length > 1 && (
           <ol className="hm-loop" aria-label="The agent loop">
@@ -404,17 +413,19 @@ function Featured({ r, hosted, costs }: { r: RunCard; hosted: boolean; costs: Co
                     {s.made && <span title={s.made}><b>{s.who}</b> {s.made}</span>}
                   </span>
                 )}
-                <div className={`hm-lv ${k === steps.length - 1 ? "last" : ""} ${s.v.review!.pass ? "pass" : ""}`}>
+                <div className={`hm-lv ${k === steps.length - 1 ? "last" : ""} ${s.v.review?.pass ? "pass" : ""} ${s.v.review ? "" : "unrev"}`}>
                   <div className="hm-lv-top">
                     <img src={frameUrl(r.id, s.v.n, Math.min((s.v.duration_s ?? s.v.runtime_s) - 0.2, s.v.title_s + 1.2), true)} alt="" loading="lazy" />
                     <div>
-                      <div className="hm-lv-v">v{s.v.n}{k === 0 ? " · first cut" : s.v.review!.pass ? " · passes" : ""}</div>
-                      <div className={`hm-lv-score ${s.v.review!.pass ? "pass" : "fail"}`}>{s.v.review!.overall}</div>
+                      <div className="hm-lv-v">v{s.v.n}{k === 0 ? " · first cut" : !s.v.review ? " · opens here" : s.v.review.pass ? " · passes" : ""}</div>
+                      {s.v.review ? <div className={`hm-lv-score ${s.v.review.pass ? "pass" : "fail"}`}>{s.v.review.overall}</div>
+                        : <div className="hm-lv-score none" title="No blind review of this version yet">–</div>}
                     </div>
                   </div>
                   <div className="hm-lv-note" title={s.worstWhat ?? undefined}>
-                    <span className={`hm-dot ${s.sev ?? "ok"}`} />
-                    {s.worst ? <span><b>{s.worst}</b> {s.worstWhat}</span> : <span>No open notes{s.v.review!.gate && !s.v.review!.gate.blocked ? ", gate clear" : ""}</span>}
+                    <span className={`hm-dot ${s.v.review ? s.sev ?? "ok" : "none"}`} />
+                    {!s.v.review ? <span>Not reviewed yet: open it and ask for a review</span>
+                      : s.worst ? <span><b>{s.worst}</b> {s.worstWhat}</span> : <span>No open notes{s.v.review.gate && !s.v.review.gate.blocked ? ", gate clear" : ""}</span>}
                   </div>
                 </div>
               </li>
@@ -424,7 +435,7 @@ function Featured({ r, hosted, costs }: { r: RunCard; hosted: boolean; costs: Co
         <div className="hm-acts">
           <a className="btn" href={open}>Open in the editor</a>
           <a className="btn quiet" href={`${open}/loop`}>Watch the loop</a>
-          {hosted && <span className="mute small">Your first edit makes your own copy. The sample stays as it is.</span>}
+          {hosted && <span className="mute small">{r.kind === "copy" ? "Your own copy: your edits never touch the sample." : "Your first edit makes your own copy. The sample stays as it is."}</span>}
         </div>
         {hosted && (
           <p className="hm-try mute small">
@@ -445,6 +456,16 @@ function Ring({ s, lg }: { s: CardScore; lg?: boolean }) {
     <span className={`hm-ring ${s.pass ? "pass" : "fail"} ${lg ? "lg" : ""}`} style={{ ["--p" as string]: s.overall }}
       title={`Blind review of version ${s.v}: ${s.overall}/100${s.pass ? ", passes" : ", does not pass"}`}>
       <b>{s.overall}</b>
+    </span>
+  );
+}
+
+/** The version a card opens on has no blind review: a dashed ring, and the earlier version's score in the tooltip. */
+function NotReviewed({ n, best, lg }: { n: number; best: CardScore; lg?: boolean }) {
+  return (
+    <span className={`hm-ring none ${lg ? "lg" : ""}`} title={`Version ${n} has no blind review yet. Version ${best.v} scored ${best.overall}/100${best.pass ? " and passed" : ""}.`}
+      aria-label={`Version ${n}: not reviewed`}>
+      <b>–</b>
     </span>
   );
 }
@@ -472,7 +493,7 @@ function Tile({ r, onArchive }: { r: RunCard; onArchive: () => void }) {
         {c ? <>
           <img src={frameUrl(r.id, c.shown, c.poster_t, true)} alt="" loading="lazy" />
           <video ref={video} src={hot ? fileUrl(r.id, `cut_v${c.shown}.mp4`) : undefined} muted loop playsInline preload="none" className={hot ? "on" : ""} />
-          {c.score && <Ring s={c.score} />}
+          {c.score && (c.score_is_shown ? <Ring s={c.score} /> : <NotReviewed n={c.shown} best={c.score} />)}
           {c.duration_s != null && <span className="hm-dur mono">{tc(c.duration_s, 0)}</span>}
         </> : (
           <div className="hm-working"><MarkLoader size={48} label="Working on the first cut" /></div>
