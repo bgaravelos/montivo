@@ -21,7 +21,7 @@ from .captions import build_overlays, fit_line, highlight_words, norm
 from .edges import Audio
 from .edl import title_card_on
 from .frame import frame_for
-from .graphics import FONTS, CaptionStyle, font, normalize_look, pill_rows
+from .graphics import DEFAULT_FONT, FONTS, CaptionStyle, font, normalize_look, pill_rows
 from .ingest import EDIT_MAX_FPS, EDIT_PROXY_SHORT, ffprobe, make_edit_proxy
 from .punch import plan_punches
 from .render import TITLE_FADE_S, TITLE_S, load_track, plan_paths, reframe_inputs
@@ -185,7 +185,9 @@ def preview_data(run_dir: Path, edl: dict, overlays: bool = True, laid: bool = F
     edl.update(fields)
     names = highlight_words(edl, look)
     data["look"] = _caption_style(look)
-    data["fonts"] = {look.font: FONTS[look.font][0]}
+    # Inter Tight always, as the browser's per-glyph fallback: the render draws a word the look's font has no glyphs
+    # for (Greek in Anton, Poppins, DM Serif, Montserrat) in it (graphics.font_key; audit, 31/10)
+    data["fonts"] = {look.font: FONTS[look.font][0], DEFAULT_FONT: FONTS[DEFAULT_FONT][0]}
     data["captions"] = []
     for c in fields["captions"]:  # a clip's own look (span_looks) rides on its lines and its callout
         if c.get("look"):

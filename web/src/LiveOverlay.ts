@@ -36,7 +36,8 @@ export class LiveOverlay {
   private build() {
     const d = this.data, look = d.look;
     loadFonts(d);
-    const familyOf = (lk?: LiveLook) => (lk ? `"montivo-${lk.font}", "Inter Tight", system-ui, sans-serif` : "system-ui");
+    // the bundled Inter Tight next: a glyph the look's font lacks (Greek in Anton, Poppins...) comes from it, as the render draws it
+    const familyOf = (lk?: LiveLook) => (lk ? `"montivo-${lk.font}", "montivo-inter-tight", system-ui, sans-serif` : "system-ui");
     const paint = (el: HTMLElement, lk?: LiveLook) => { // the active word and name colours, per element: a clip may have its own look (S4)
       el.style.setProperty("--hl", hex(lk?.highlight || lk?.text || "#FFFFFF"));
       el.style.setProperty("--act-bg", hex(lk?.active_bg ?? "#FFC629"));

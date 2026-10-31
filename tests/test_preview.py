@@ -262,3 +262,12 @@ def test_an_older_version_does_not_show_the_newer_title_card(tmp_path):
     assert P.title_seconds(tmp_path, new) == (1.5, png.as_posix())
     (tmp_path / "title" / "request.json").unlink()  # an older run folder without the request: the card there is
     assert P.title_seconds(tmp_path, old) == (1.5, png.as_posix())
+
+
+def test_live_falls_back_to_inter_tight_for_glyphs_the_look_font_lacks(tmp_path):
+    # full audit, 31/10: the render draws a Greek word of an Anton look in Inter Tight (graphics.font_key); the Live
+    # overlay needs that face loaded to fall back to it
+    d, edl = _talk_run(tmp_path)
+    edl["look"] = {"preset": "bold_pop", "font": "anton"}
+    data = P.preview_data(d, edl)
+    assert data["fonts"] == {"anton": "Anton", "inter-tight": "Inter Tight"}

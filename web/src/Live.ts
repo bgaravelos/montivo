@@ -369,7 +369,11 @@ export class LiveMedia {
   }
   private srcTime(k: number, t: number): number {
     const s = this.data.segments[k];
-    return s.t_in + Math.max(0, Math.min(s.frames / this.data.fps - 0.5 / this.data.fps, t - s.cut_t0));
+    const at = s.t_in + Math.max(0, Math.min(s.frames / this.data.fps - 0.5 / this.data.fps, t - s.cut_t0));
+    // past the proxy's last picture (the source's audio runs on, 015: 68.50 / 68.96 s) the last frame holds, as the
+    // render's tpad does; unclamped, the drift check seeked the clamped <video> on every frame (audit, 31/10)
+    const end = this.vids[0]?.duration;
+    return Number.isFinite(end) && end > 0 ? Math.min(at, end - 0.5 / this.data.fps) : at;
   }
   private cue(slot: number, k: number, t: number) {
     const v = this.vids[slot];
