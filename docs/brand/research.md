@@ -126,5 +126,5 @@ A and C combine well: the bracket as the mark, the version tag as a motion and c
   [Design Shack branding trends](https://designshack.net/articles/trends/top-branding-trends/),
   [DesignCrowd AI branding trends](https://blog.designcrowd.com/article/2265/top-ai-branding-trends-in-2026),
   [Ebaq on AI startup logos](https://www.ebaqdesign.com/blog/ai-startups-logos).
-- Internal: `docs/notes/hackathon-fresh-research-and-verdict_2026-10-26.md` (naming advice, demo structure),
-  `docs/notes/demo-script_2026-10-26.md`.
+- Internal: my own session notes of 26/10 (naming advice, the demo structure and its first script); they are private
+  working notes and not part of this repository.
