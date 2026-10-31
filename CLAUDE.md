@@ -937,6 +937,30 @@ Merged into main (fast-forward to 5e5428d), pushed and deployed 31/10 07:13 on B
 container was running before it, so no job and no old container to stop); /api/health 200, /api/runs 401, /s/nope 404,
 /api/monti 401 without the cookie, host spend $3.37 of $15; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render
 10.2 s. Monti not yet asked live with the sign-in.
+Fix batches (31/10, $0.06, Billy: every open bug, in batches, despite the freeze): the main session did the hosted
+hardening from the cloud checks of 31/10 (commit `ac77235`): Make Version from a Live draft on a sample follows the
+judge's copy (`Editor.tsx` commitDraft); POST / PUT / DELETE need the page's own origin (`hosted.same_origin`:
+Sec-Fetch-Site / Origin, modal.run is not on the Public Suffix List); the judge id comes with the sign-in only, plus
+`MONTIVO_MAX_UPLOADS_ALL` (30) and `MONTI_PER_HOUR_ALL` (120); on the host the server names a new run and claims it
+with an atomic mkdir (`claim_dir`); `copy_sample` uses an existing copy only when it is the judge's, drops other
+judges' drafts / labels and brings `ui/cache/edit`; cover, design, mask and post text on a sample go to the judge's
+copy (`own_paid`, Export reopens there with `?export=1`); login rate limit (`LoginLimit`), Secure cookies behind
+https, dot segments and a null byte answer 404, bad input 400 (`bad_input` handler for errors in a route's own
+frame), the share page escapes its base URL. Three side sessions on their own branches, merged on Billy's go:
+README (Live and Rendered, the build log after the freeze tag, music defaults, the audit's Should items); engine
+(valley clamp: a valley fix never cuts the clip's own words, extends to the next pause or says "no pause at this cut";
+letterbox crop from `cropdetect` at ingest, EDL `source.picture`; planner spans start and end on whole sentences, span
+`strength`, the weakest body span dropped when the plan runs over 10 %; cover.suggest keeps the design, settle off the
+title card, export --out anywhere; watch's first token limit grows with the shot count; Voice's duplicate words left
+out of what a model reads, `voice.shown_words`; caption pill centred on the line's glyphs, `graphics.pill_rows`);
+UI ("undo that" in Live undoes the chat's draft edits, Fix it after a failed free check; a refused queued message
+leaves the queue; Monti clear of Send and play at 375 px; Home names a copy and its version's score; Live keeps pitch
+at 1.5x / 2x, captions stroke matched to Pillow; callouts under full stills and stills in the Style preview). Follow-ups
+here (`177261b`): `agent.numbered` / `footage` through `shown_words`, LiveOverlay draws the pill from the preview's
+`pill` rows. 693 tests. Deployed 31/10 on Billy's go from a clean worktree at 177261b (no container was running);
+/api/health 200, /api/runs 401, /s/nope 404, /s/%2e%2e/ 404, a POST with another origin 403, host spend $3.39 of $15;
+smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 9.1 s. Every browser without a server-signed judge cookie
+signs in again. The pill changes every new render with the pill look; existing cuts change only when re-rendered.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
