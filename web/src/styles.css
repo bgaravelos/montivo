@@ -1193,6 +1193,8 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .queued .q-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .queued .ib { width: 22px; height: 22px; }
 .q-foot { grid-column: 2 / -1; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.queued.refused { border-style: solid; border-color: color-mix(in srgb, var(--major) 55%, transparent); }
+.queued.refused .q-foot > span { color: var(--major); }
 .share-menu { position: relative; display: flex; }
 .share-menu .share-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .share-caret { padding: 6px 6px; border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 0; }

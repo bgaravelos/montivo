@@ -245,6 +245,7 @@ export function Editor({ id, replay, go }: Props) {
     setToast({ text, tone, action }); window.setTimeout(() => setToast(null), action ? 6000 : 4500);
   }, []);
   const forkFrom = v && newest != null && v.n < newest && !replay ? v.n : null;
+  const refusal = useRef(""); // why the server refused the last action: the chat queue shows it on the message
   const act = useCallback(async (path: string, body: unknown) => {
     if (["ask", "review", "hook"].includes(path)) askToNotify(); // the jobs that take a minute or more
     if (forkFrom != null && MAKES_VERSION.includes(path) && state)
@@ -253,7 +254,7 @@ export function Editor({ id, replay, go }: Props) {
       const r = await api<{ job?: { run?: string } }>(`/api/runs/${id}/${path}`, body);
       if (r.job?.run && r.job.run !== id) go(`#/run/${r.job.run}`); // the hosted demo edits the judge's own copy of a sample
       return true;
-    } catch (e) { flash(String((e as Error).message), "error"); return false; }
+    } catch (e) { refusal.current = String((e as Error).message); flash(refusal.current, "error"); return false; }
   }, [id, flash, go, forkFrom, newest, state]);
   /** The open draft: GET /draft settles a commit that has ended (its version exists now: no draft), then its preview. */
   const loadDraft = useCallback(async (settle = true) => {
@@ -283,7 +284,7 @@ export function Editor({ id, replay, go }: Props) {
     const to = live0 ? DRAFT_OPS[path] : undefined;
     if (to) return draftOp(to.op, to.args(body));
     if (draftV && MAKES_VERSION.includes(path) && !(path === "ask" && live0)) // the chat edits the draft in Live (A5)
-      return (flash(`Make Version ${draftData?.draft?.n ?? ""} first: the draft's ${edits(draftSum?.ops.length ?? 0)} are not a version yet.`), false);
+      return (refusal.current = `Make Version ${draftData?.draft?.n ?? ""} first: the draft's ${edits(draftSum?.ops.length ?? 0)} are not a version yet.`, flash(refusal.current), false);
     const gen = OP_ROUTE[path]; // a newer panel edit with no route of its own: POST /op runs its pure op as a version
     if (gen) return act("op", { op: gen.op, args: gen.args(body), from: body.from, review: body.review });
     return act(path, body);
@@ -670,7 +671,11 @@ export function Editor({ id, replay, go }: Props) {
         {panel === "assistant" && (
           <Assistant state={state} versions={visible} lines={lines} job={job} seen={seen} progress={progress} replay={replay} v={v}
             selection={selection} getTime={getTime} focusNonce={askNonce} prefill={prefill}
-            onSend={(text, chips, review, planner, scope, latest) => edit("ask", { message: text, chips, scope, from: latest ? undefined : v?.n, review, planner, preview: true, live: live0 && !replay })}
+            onSend={async (text, chips, review, planner, scope, latest) => {
+              refusal.current = "";
+              const ok = await edit("ask", { message: text, chips, scope, from: latest ? undefined : v?.n, review, planner, preview: true, live: live0 && !replay });
+              return ok ? true : refusal.current || "the server refused it";
+            }}
             onApply={(pending, review) => act("ask/apply", { pending, review })} onRetry={(pending) => act("ask/retry", { pending })}
             onRetryJob={() => act("retry", {})}
             onStop={() => act("stop", {})} onPick={pick} onSeek={(x) => { player.current?.pause(); seek(x); }}

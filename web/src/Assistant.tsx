@@ -460,15 +460,19 @@ export function wordScope(flat: FlatWord[], sel: WordSel | null): Selection["wor
   return out;
 }
 
-/** A message typed while a job runs: it waits here and is sent when the job ends (never dropped, never sent over it). */
-type Queued = { text: string; review: number; planner: Planner; scope: AskScope; chips: string[]; failed?: boolean };
+/** A message typed while a job runs: it waits here and is sent when the job ends (never dropped, never sent over it).
+ *  `retried`: the server said busy once (a job started a moment before): it waits for that one too, then it is refused. */
+type Queued = { text: string; review: number; planner: Planner; scope: AskScope; chips: string[]; retried?: boolean };
+/** A message the server refused: out of the queue (the next one goes), shown with why until it is taken back. */
+type Refused = { text: string; why: string };
+const BUSY = /is (still )?running|try again|rendering|being made/i;
 const queueKey = (id: string) => `montivo.queue.${id}`;
 
 export function Assistant({ state, versions, lines, job, seen, progress, replay, v, selection, getTime, focusNonce, prefill, onSend, onStop, onPick, onSeek, onCompare, onRestore, onApply, onRetry, onRetryJob, onGlossary }: {
   state: RunState; versions: Version[]; lines: LogLine[]; job: Job | null; seen: Seen; progress: Progress | null; replay: number; v: Version | null;
   selection: Selection; getTime: () => number; focusNonce: number;
   prefill?: { text: string; nonce: number } | null; // Monti's hand-off: an edit request put in the box, not sent
-  onSend: (text: string, chips: string[], review: number, planner: Planner, scope: AskScope, latest: boolean) => Promise<boolean>; onStop: () => void;
+  onSend: (text: string, chips: string[], review: number, planner: Planner, scope: AskScope, latest: boolean) => Promise<true | string>; onStop: () => void; // a string: why it was refused
   onPick: (n: number) => void; onSeek: (t: number) => void; onCompare: (a: number, b: number) => void;
   onRestore: ((n: number) => void) | null; // null while an edit runs or in replay
   onApply: (pending: string, review: number) => void; onRetry: (pending: string) => void; onRetryJob: () => void;
@@ -480,7 +484,10 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
   const [time, setTime] = useState<number | null>(null);
   const [review, setReview] = useState(true);
   const [planner, setPlanner] = useState<Planner>("spark");
-  const [queue, setQueue] = useState<Queued[]>(() => { try { return JSON.parse(localStorage.getItem(queueKey(state.id)) ?? "[]"); } catch { return []; } });
+  const [queue, setQueue] = useState<Queued[]>(() => {
+    try { return (JSON.parse(localStorage.getItem(queueKey(state.id)) ?? "[]") as (Queued & { failed?: boolean })[]).map(({ failed: _, ...q }) => q); } catch { return []; }
+  });
+  const [refused, setRefused] = useState<Refused[]>([]);
   const items = story(state, versions, lines, job, replay);
   const end = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
@@ -512,21 +519,24 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
   // a queued message goes once the job has ended; `waiting` holds the next one until the job it started is seen
   const waiting = useRef(0);
   useEffect(() => { if (running) waiting.current = 0; }, [running]);
-  // a send the server refused (a job started a moment before, say) comes back to the queue, never lost; refused twice,
-  // it stays there with Send for the editor to try
+  // a send the server refused leaves the queue with why (the next one goes, nothing waits behind it); only "busy" (a job
+  // started a moment before) puts it back first, once, to go when that job ends
   const post = (q: Queued, queued: boolean) => {
     waiting.current = Date.now();
     // a queued message edits the newest version (the job it waited for made one), not the one on screen when it was typed
-    onSend(q.text, q.chips, q.review, q.planner, q.scope, queued).then((ok) => {
-      if (!ok) { waiting.current = 0; setQueue((x) => [{ ...q, failed: queued }, ...x]); }
+    onSend(q.text, q.chips, q.review, q.planner, q.scope, queued).then((r) => {
+      if (r === true) return;
+      waiting.current = 0;
+      if (BUSY.test(r) && !q.retried) setQueue((x) => [{ ...q, retried: true }, ...x]);
+      else setRefused((x) => [...x, { text: q.text, why: r }]);
     });
   };
   useEffect(() => {
     const q = queue[0];
-    if (running || replay || !q || q.failed || Date.now() - waiting.current < 8000) return;
+    if (running || replay || !q || Date.now() - waiting.current < 8000) return;
     setQueue(queue.slice(1));
     post(q, true);
-  }, [running, replay, queue]); // eslint-disable-line
+  }, [running, replay, queue, refused.length]); // eslint-disable-line -- a refusal lets the next one go at once
   const send = () => {
     if (!text.trim() || blocked) return;
     enqueue({ text: text.trim(), chips, review: review && state.has_key ? 1 : 0, planner, scope });
@@ -602,15 +612,26 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
       {tips.length > 0 && <div className="sugg">{tips.map((s) => <button key={s} onClick={() => { setText(s); box.current?.focus(); }}>{s}</button>)}</div>}
       <div className="composer" data-monti="chat.composer">
         <Tray state={state} lines={lines} job={job} seen={seen} progress={progress} replay={replay} onStop={onStop} />
+        {refused.map((r, k) => (
+          <div key={`r${k}`} className="queued refused" role="status">
+            <Icon name="flag" size={12} />
+            <span className="q-text" title={r.text}>{r.text}</span>
+            <button className="ib" onClick={() => setRefused((x) => x.filter((_, i) => i !== k))} title="Dismiss" aria-label="Dismiss the refused message"><Icon name="close" size={11} /></button>
+            <div className="q-foot">
+              <span className="small">Not sent: {r.why}</span>
+              <button className="btn quiet small" onClick={() => { setRefused((x) => x.filter((_, i) => i !== k)); setText(r.text); box.current?.focus(); }}
+                title="Put the message back in the box to change it or send it again">Edit</button>
+            </div>
+          </div>
+        ))}
         {queue.map((q, k) => (
           <div key={k} className="queued">
             <Icon name="clock" size={12} />
             <span className="q-text" title={q.text}>{q.text}</span>
             <button className="ib" onClick={() => setQueue((x) => x.filter((_, i) => i !== k))} title="Take this message back" aria-label="Remove the queued message"><Icon name="close" size={11} /></button>
             <div className="q-foot">
-              <span className="mute small">{q.failed ? "Not sent: the server refused it." : running ? `Waiting: it goes when ${job!.label} ends.` : "Sending…"}</span>
-              {q.failed ? <button className="btn quiet small" disabled={running} onClick={() => { setQueue((x) => x.filter((_, i) => i !== k)); post({ ...q, failed: false }, true); }}>Send</button>
-                : running && k === 0 ? <button className="btn quiet small" onClick={onStop} title="Stop the running job; this message goes as soon as it has stopped">Send now (stops the current job)</button> : null}
+              <span className="mute small">{running ? `Waiting: it goes when ${job!.label} ends.` : k ? "Next after the one above." : "Sending…"}</span>
+              {running && k === 0 ? <button className="btn quiet small" onClick={onStop} title="Stop the running job; this message goes as soon as it has stopped">Send now (stops the current job)</button> : null}
             </div>
           </div>
         ))}
