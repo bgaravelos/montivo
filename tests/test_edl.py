@@ -20,6 +20,58 @@ def test_fuzzy_match_when_model_cleaned_the_quote():
     assert exact is False and a == 2 and b >= 12 and ratio > 0.8
 
 
+def test_a_fuzzy_match_without_most_of_the_quote_is_unplaced():
+    # audit 31/10 (run 013): difflib over the whole turn had no floor and no window, a slightly-off quote became an
+    # 88-word span at ratio 0.108; under LOCATE_SHARE of the quote's words it is unplaced, the window stays near the
+    # quote's length and a stray common word further on does not stretch it
+    tw = words("there was a time when I was at University of Michigan studying arsenic in aquifers and and so "
+               "the work went on for years and then we moved to Washington where the rest of it happened and it")
+    a, b, exact, ratio = locate("there was a time when I was at and that's it", tw)
+    assert (a, exact) == (0, False) and b - a + 1 <= 11 and ratio > 0.6
+    assert locate("we moved our whole office to a new building last spring", tw) is None
+    tw = words("so I always say to people go out and try it the result is never what you expect")
+    assert locate("go out and really try it the result is never what you'd expect", tw)[:2] == (6, 17)
+
+
+def test_a_retake_resolves_to_the_last_take():
+    # audit 31/10: the first exact hit was the flubbed take
+    tw = words("and this is the part that matters uh no wait let me say that again this is the part that matters")
+    assert locate("this is the part that matters", tw) == (15, 20, True, 1.0)
+    # after the plan's previous span in the turn: the take that follows it; never a take another span holds
+    assert locate("this is the part that matters", tw, after=-1, taken=[(15, 20)]) == (1, 6, True, 1.0)
+    assert locate("let me say that again", tw, after=6) == (10, 14, True, 1.0)
+
+
+def test_build_edl_places_a_retake_after_the_previous_span():
+    tw = words("hi I'm Billy this is the part that matters uh no wait let me say that again this is the part "
+               "that matters thanks")
+    v = VoiceResult(turns=[Turn(turnId=1, startMs=10000, endMs=17000, speaker="B", transcript="")], words=tw,
+                    audio_s=20.0, chunks=[])
+    plan = {"paper_edit": [{"turn_id": 1, "words": "hi I'm Billy", "role": "hook"},
+                           {"turn_id": 1, "words": "this is the part that matters", "role": "body"},
+                           {"turn_id": 1, "words": "matters thanks", "role": "payoff"},
+                           {"turn_id": 1, "words": "a line nobody said in this turn at all", "role": "cta"}]}
+    edl = build_edl(plan, v, {}, {"fps": 30.0}, "b", {})
+    assert [(s["word_from"], s["word_to"]) for s in edl["spans"]] == [(0, 2), (17, 22), (22, 23)]
+    assert edl["unplaced"][0]["reason"] == "quote not found in the turn"
+
+
+def test_locate_stays_fast_on_a_long_turn():
+    # audit 31/10: artefact_doubles ran once per candidate word, 3 s a span on a 1500-word turn
+    import random
+    import time
+    rnd = random.Random(0)
+    vocab = "the a and we it is to of in that this for with you on".split() + [f"w{k}" for k in range(300)]
+    tw = [Word(w=rnd.choice(vocab), t_start=k * .4, t_end=(k + 1) * .4, turn_id=0, speaker="A", i=k)
+          for k in range(1500)]
+    t = time.perf_counter()
+    for k in range(10):
+        q = [w.w for w in tw[700 + k:720 + k]]
+        q[5] = "zzz"
+        assert locate(" ".join(q), tw)[0] == 700 + k
+    assert time.perf_counter() - t < 1.0
+
+
 def test_norm_tokens():
     assert norm_tokens("Hi, Robert. Can you hear me?") == ["hi", "robert", "can", "you", "hear", "me"]
 

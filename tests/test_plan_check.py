@@ -61,3 +61,13 @@ def test_a_kept_second_take_does_not_count_as_the_dropped_first():
            "brief_checks": [{"item": "Drop the repeated take", "kind": "drop", "quote": "this is the part I care about",
                              "min_s": -1, "max_s": -1}], "runtime_s": 40.0}
     assert E.check_brief(edl)[0]["status"] == "met"  # run 012: the 0.6 line asked for a repair plan for nothing
+
+
+def test_a_one_sided_length_reads_as_one_bound():
+    # audit 31/10: "at most 45 s" came out as "the brief allows -1 to 45 s"
+    most = [{"item": "45 s at most", "kind": "length", "quote": "", "min_s": -1, "max_s": 45}]
+    least = [{"item": "30 s at least", "kind": "length", "quote": "", "min_s": 30, "max_s": -1}]
+    assert E.plan_check({"spans": SPANS, "brief_checks": most, "runtime_s": 50.0, "unplaced": []}, 0) == [
+        "length: the cut runs 50.0 s, the brief allows at most 45 s (45 s at most)"]
+    assert E.plan_check({"spans": SPANS, "brief_checks": least, "runtime_s": 20.0, "unplaced": []}, 0) == [
+        "length: the cut runs 20.0 s, the brief allows at least 30 s (30 s at least)"]

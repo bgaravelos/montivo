@@ -146,6 +146,23 @@ def test_an_edge_never_moves_past_the_middle_of_its_segment():
     assert edl["spans"][0]["t_in"] == 10.0
 
 
+def test_a_short_span_inside_a_joined_group_never_inverts():
+    # audit 31/10: the bound is the middle of the joined group, so a one-word first span whose speech Voice placed
+    # early ("Hi." 10.0-10.5 s, the audio speaks from 10.9 s) had its in edge moved to 10.8, past its own out edge
+    audio = SynthAudio([(10.9, 13.4)])
+    edl = edl_of(span("s1", 0, 0, 0), span("s2", 0, 1, 7, contiguous=True))
+    E.tighten_edges(edl, WORDS, audio)
+    s1 = edl["spans"][0]
+    assert s1["t_in"] == 10.0 and s1["t_in"] <= s1["t_out"] - E.MIN_SPAN_S
+    # the mirror case: a one-word last span after a long one, the speech ended before it
+    audio = SynthAudio([(10.1, 13.1)])
+    edl = edl_of(span("s1", 0, 0, 6), span("s2", 0, 7, 7, contiguous=True))
+    E.tighten_edges(edl, WORDS, audio)
+    s2 = edl["spans"][1]
+    assert s2["t_out"] == 14.0 and s2["t_out"] >= s2["t_in"] + E.MIN_SPAN_S
+    assert all(s["duration"] > 0 for s in edl["spans"] if "duration" in s)
+
+
 def test_build_edl_tightens_v1_when_the_audio_is_given():
     words = [Word(w=w["w"], t_start=w["t_start"], t_end=w["t_end"], turn_id=w["turn_id"], speaker="A", i=w["i"])
              for w in voice_words()]
