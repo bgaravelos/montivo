@@ -783,7 +783,7 @@ export function SpeakersPanel({ id, v, next, canEdit, onApply, onSpeakers, rev, 
           <p className="mute small">One voice: the 9:16 crop follows the head SAM tracked, smoothed so it pans without jumps. Pause on the video to see the head on the frame.</p>
           <div className="spk-heads">
             {info.heads.map((h) => <span key={h.id} className="head on solo" title={`Head ${h.id}: tracked on ${h.frames} frames`}>
-              <img src={thumb(h.id)} alt="" loading="lazy" /><span>head {h.id} · {h.frames} frames</span></span>)}
+              {info.video && <img src={thumb(h.id)} alt="" loading="lazy" />}<span>head {h.id} · {h.frames} frames</span></span>)}
           </div>
         </>}
         {info && info.speakers.length >= 1 && (
@@ -821,7 +821,7 @@ export function SpeakersPanel({ id, v, next, canEdit, onApply, onSpeakers, rev, 
                       <button key={h.id} className={`head ${on ? "on" : ""}`} disabled={!!canEdit}
                         title={canEdit ?? `Head ${h.id}${h.speaker ? ` (mapped to ${h.speaker})` : ""}: follow it when ${s.id} talks`}
                         onClick={() => pinStage(cur.includes(h.id) && !pins[s.id] ? null : pins[s.id] === h.id ? null : { speaker: s.id, head: h.id })}>
-                        <img src={thumb(h.id)} alt="" loading="lazy" />
+                        {info.video && <img src={thumb(h.id)} alt="" loading="lazy" />}
                         <span>{h.id}</span>
                       </button>
                     );

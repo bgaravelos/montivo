@@ -131,3 +131,20 @@ def test_live_ask_on_a_sample_takes_the_judges_draft_to_their_copy(tmp_path, hos
     mine = draft.folder(tmp_path / "runs" / "r1-cc33", "cc33")
     assert draft.load(mine)["id"] == "dr1" and not fd.exists()
     assert seen[-1][seen[-1].index("--draft-edl") + 1] == str(mine / "edl.json")
+
+
+def test_live_ask_with_a_draft_open_reads_the_drafts_base_not_its_number(tmp_path, hosted_env):
+    """Live check 31/10: with a draft open the editor sends "from" = the draft's number (v3 of a v1-v2 sample), and
+    montivo.agent read runs/<copy>/edl_v3.json before the draft: FileNotFoundError, the ask failed."""
+    import json
+    from montivo.server import draft
+    d, c = sample_client(tmp_path, hosted_env, "dd44")
+    seen = fake_jobs(hosted_env)
+    fd = draft.folder(d, "dd44")
+    fd.mkdir(parents=True)
+    (fd / "state.json").write_text(json.dumps({"id": "dr2", "base": 2, "ops": [{"op": "drop", "args": {"span": "s1"}}]}))
+    (fd / "edl.json").write_text(json.dumps({"spans": []}))
+    r = c.post("/api/runs/r1/ask", json={"message": "put some chill music under it", "live": True, "from": 3})
+    assert r.status_code == 200
+    args = seen[-1]
+    assert args[args.index("--from") + 1] == "2" and "--draft-edl" in args

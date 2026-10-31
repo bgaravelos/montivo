@@ -2415,6 +2415,11 @@ def create_app(root: Path) -> FastAPI:
             from . import draft as draft_mod
             fd = draft_mod.folder(d, judge_of(request) if budget is not None else None)
             dstate = draft_mod.load(fd)
+            if dstate and not dstate.get("commit"):
+                # the editor sends the draft's own number (not a version yet): the router starts from its base and
+                # reads the draft (live check 31/10: edl_v3.json of a v1-v2 copy, FileNotFoundError)
+                frm = int(dstate.get("base") or frm)
+                args[args.index("--from") + 1] = str(frm)
             args += ["--draft", *(["--draft-edl", str(fd / "edl.json")] if dstate and not dstate.get("commit") else [])]
         job = start_job(st, run_id, "ask", "Ask Montivo", args,
                         chat={"role": "user", "text": text, "chips": chips + [f"v{frm}"], "kind": "ask"})
