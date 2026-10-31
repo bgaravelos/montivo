@@ -961,7 +961,7 @@ here (`177261b`): `agent.numbered` / `footage` through `shown_words`, LiveOverla
 /api/health 200, /api/runs 401, /s/nope 404, /s/%2e%2e/ 404, a POST with another origin 403, host spend $3.39 of $15;
 smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 9.1 s. Every browser without a server-signed judge cookie
 signs in again. The pill changes every new render with the pill look; existing cuts change only when re-rendered.
-Audit fixes (31/10, $0, commit `969e877`, pushed, NOT deployed): a full read-only audit (two subagents, Python and
+Audit fixes (31/10, $0, commit `969e877`, pushed and deployed): a full read-only audit (two subagents, Python and
 UI) found one demo-breaking bug and a few minor ones, all fixed with tests (693 -> 701): Ask Montivo in Live on a hosted
 sample moves the judge's open draft into the copy it makes (`draft.move`; the router read the sample's version and the
 copy showed only the chat's edits); `draft.cost(ops, run_dir, edl, base)` prices a title card the base did not show
@@ -974,6 +974,9 @@ Make Version ignores a double click, Home says when the list fails (401 -> sign 
 an older version, a held chat message is re-checked. Checked keyless in the browser pane on a throwaway clone of 015
 (removed). Not a bug: paid export calls on a sample wait for any job (the host's one-slot rule). Disk was 94 % full:
 the cleanup session moved 5.4 GB of runs and the 9 merged worktrees to `~/.Trash/montivo-cleanup-2026-10-31/`.
+Deployed 31/10 on Billy's go from a clean worktree of main at 42112a2 (no container was running, so no job and no old
+container to stop); /api/health 200, /api/runs 401, /s/nope 404, /api/monti 401 without the cookie, host spend $3.39
+of $15; smoke drop on 015: 34.3 s, -14.0 LUFS / -1.7 dBTP, render 10.5 s.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
