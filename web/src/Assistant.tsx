@@ -4,7 +4,7 @@ import { selRange, sevRank, speakerName, type FlatWord, type WordSel } from "./e
 import { Icon, MarkLoader } from "./icons";
 import { MishearList, openSuggestions, useHiddenSuggestions } from "./Panels";
 import { Bar, expTip, measure, useTick } from "./Progress";
-import type { AgentUi, AskScope, ChatLine, Job, LogLine, PendingCard, PlanSide, Planner, Progress, RunState, Stage, Version } from "./types";
+import type { AgentChecks, AgentUi, AskScope, ChatLine, Job, LogLine, PendingCard, PlanSide, Planner, Progress, RunState, Stage, Version } from "./types";
 
 // ------------------------------------------------------------------- pipeline checklist
 
@@ -108,13 +108,20 @@ type Item =
   | { kind: "review"; v: Version }
   | { kind: "mishear"; v: Version } // C3: "Did you say ...?" under a planned version
   | { kind: "preview"; card: PendingCard; status: "open" | "applying" | "applied" | "retried" }
-  | { kind: "error"; text: string; charged?: number | null; retry?: boolean };
+  | { kind: "error"; text: string; charged?: number | null; retry?: boolean }
+  | { kind: "checks"; v: Version; checks: AgentChecks }; // B1: the $0 checks on a version the chat made, with Fix it
 
 /** The message as typed: the server adds the chips for the router as " (about s3, @00:12.00)". */
 const typed = (m: string | null | undefined) => (m ?? "").replace(/ \(about [^()]*\)$/, "");
 const vName = (n: number | undefined) => (n == null ? "the cut" : `Version ${n}`);
 /** The cut seconds an ask's reply points at (seek ops): a link under the reply plays from there again. */
 const seeks = (ui: AgentUi[] | null | undefined) => (ui ?? []).filter((o) => o.op === "seek" && o.at_s != null).map((o) => o.at_s!);
+/** The checks in one sentence (agent.py checked_text). */
+const checkedText = (c: AgentChecks) => c.ok
+  ? `Checked the new cut: ${c.audio ? "no cut lands in speech, " : ""}captions clear of the face, the head in frame.`
+  : `Checked the new cut: ${c.reasons.join("; ")}${c.more ? ` (and ${c.more} more)` : ""}.`;
+/** Fix it: the next ask, made of what the checks measured (agent.py PROMPT reads it). */
+const fixText = (c: AgentChecks) => `Fix what the checks found on this version: ${c.reasons.join("; ")}.`;
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : /(s|x|ch|sh)$/.test(w) ? "es" : "s"}`;
 
 /** The selection an ask was about, as chips: "s3", "s3, s5 · 2 clips", "s3 · 4 words", "caption 00:12.0". */
@@ -195,6 +202,7 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
     const by = v.planner && (o.source === "plan" || o.action === "replan")
       ? `Planned by ${v.planner.name}${side?.plan_cost_usd != null ? ` in ${side.plan_seconds?.toFixed(1)} s for ${usd(side.plan_cost_usd, 3)}` : ""}` : "";
     out.push({ kind: "version", v, by });
+    if (o.source === "human" && o.agent?.checks) out.push({ kind: "checks", v, checks: o.agent.checks });
     const missing = o.source === "plan" || o.action === "replan" ? v.brief_missing ?? [] : [];
     if ((o.source === "plan" || o.action === "replan") && v.glossary_suggestions?.length) out.push({ kind: "mishear", v });
     if (missing.length) out.push({ kind: "text", who: "montivo", text: `Your brief asks for ${missing.map((x) => `“${x}”`).join(", ")}, but ${missing.length === 1 ? "it is" : "they are"} not in the footage, so the cut goes without ${missing.length === 1 ? "it" : "them"}. The reviewer is told the same.` });
@@ -521,11 +529,16 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
   }, [running, replay, queue]); // eslint-disable-line
   const send = () => {
     if (!text.trim() || blocked) return;
-    const msg: Queued = { text: text.trim(), chips, review: review && state.has_key ? 1 : 0, planner, scope };
-    if (running || queue.length) setQueue((q) => [...q, msg]);
-    else post(msg, false);
+    enqueue({ text: text.trim(), chips, review: review && state.has_key ? 1 : 0, planner, scope });
     setText(""); setTime(null);
   };
+  const enqueue = (msg: Queued) => {
+    if (running || queue.length) setQueue((q) => [...q, msg]);
+    else post(msg, false);
+  };
+  // Fix it: the checks' faults as the next message on the newest version, no review (the router call is the cost)
+  const fixIt = (c: AgentChecks) => enqueue({ text: fixText(c), chips: [], review: 0, planner, scope: {} });
+  const askCost = state.costs.ask ?? 0.006;
   const tips = !blocked && !text && !queue.length ? suggestions(state, v) : [];
   const busyNote = running ? `${job!.label} is running` : blocked;
   const nWords = selection.words?.reduce((a, w) => a + w.to - w.from + 1, 0) ?? 0;
@@ -548,6 +561,17 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
                   {it.seek?.map((t) => <button key={t} className="seek-at" onClick={() => onSeek(t)} title="Play from here"><Icon name="play" size={10} /> {tc(t)}</button>)}</p>
                 : it.kind === "steps" ? <Steps key={j} title={it.title} lines={it.lines} live={it.live} />
                 : it.kind === "version" ? <VersionCard key={j} id={state.id} v={it.v} by={it.by} current={it.v.n === v?.n} newest={it.v.n === versions.at(-1)?.n} onPick={onPick} onCompare={onCompare} onRestore={onRestore} />
+                : it.kind === "checks" ? (
+                  <div key={j} className={`say checks ${it.checks.ok ? "ok" : "warn"}`}>
+                    <p>{checkedText(it.checks)}</p>
+                    {!it.checks.ok && it.v.n === versions.at(-1)?.n && state.has_key && !blocked && (
+                      <div className="err-acts">
+                        <button className="btn small" onClick={() => fixIt(it.checks)}
+                          title={`Sends “${fixText(it.checks)}” as your next message: one Muse Spark call picks the edits (about ${usd(askCost, 3)}), the render is $0, no review`}>
+                          <Icon name="spark" size={12} />Fix it</button>
+                        <span className="mute small">about {usd(askCost, 3)}, render $0</span>
+                      </div>)}
+                  </div>)
                 : it.kind === "review" ? <ReviewCard key={j} v={it.v} current={it.v.n === v?.n} onPick={onPick} onSeek={onSeek} />
                 : it.kind === "mishear" ? (() => {
                     const items = openSuggestions(it.v, versions.at(-1), hiddenSugg);

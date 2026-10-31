@@ -1186,6 +1186,8 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .pc-acts { display: flex; gap: 6px; }
 .say.error p { margin: 0; white-space: pre-wrap; }
 .err-acts { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-family: var(--sans); }
+.say.checks p { margin: 0; white-space: pre-wrap; font-size: 12px; color: var(--text-2, var(--text)); }
+.say.checks.warn p { color: var(--major, var(--text)); }
 .queued { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 4px 7px; align-items: center; padding: 6px 8px; margin: 0 0 6px;
   border: 1px dashed var(--line-2); border-radius: 8px; font-size: 12px; color: var(--text-2); }
 .queued .q-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }

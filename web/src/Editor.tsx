@@ -187,7 +187,8 @@ export function Editor({ id, replay, go }: Props) {
     seenAgent.current = t;
     if (lastAgent?.kind === "draft" && live0) loadDraft(); // A5: the chat's edits went into the Live draft (its ops and preview)
     for (const o of lastAgent?.ui ?? []) {
-      if (o.op === "seek" && o.at_s != null) { // again once a version or review that landed with it has reloaded the player
+      if (o.op === "undo") void undoDraft(o.steps ?? 1); // "undo that" with a draft open: the draft's own undo
+      else if (o.op === "seek" && o.at_s != null) { // again once a version or review that landed with it has reloaded the player
         const at = o.at_s, go = () => { player.current?.pause(); player.current?.seek(at); };
         window.setTimeout(go, 120);
         window.setTimeout(() => { if (Math.abs(tRef.current - at) > 0.3) go(); }, 1500);
@@ -459,6 +460,20 @@ export function Editor({ id, replay, go }: Props) {
       const r = await api<{ draft: DraftSum | null }>(`/api/runs/${id}/draft/${dir < 0 ? "undo" : "redo"}`, {});
       if (r.draft && !r.draft.ops.length && !r.draft.can_redo) return void discardDraft();
       setDraftSum(r.draft);
+      await loadDraft(false);
+    } catch (e) { flash(String((e as Error).message), "error"); }
+  };
+
+  /** The chat's "undo that" in Live: the draft's last `n` edits off in one go (the ones its message put in). */
+  const undoDraft = async (n: number) => {
+    try {
+      let r: { draft: DraftSum | null } | null = null;
+      for (let k = 0; k < n; k++) {
+        r = await api<{ draft: DraftSum | null }>(`/api/runs/${id}/draft/undo`, {});
+        if (!r.draft?.can_undo) break;
+      }
+      if (r?.draft && !r.draft.ops.length && !r.draft.can_redo) return void discardDraft();
+      setDraftSum(r?.draft ?? null);
       await loadDraft(false);
     } catch (e) { flash(String((e as Error).message), "error"); }
   };

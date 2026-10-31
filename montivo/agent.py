@@ -55,6 +55,8 @@ OPS = ["music_on", "music_off", "style", "punch", "caption", "callout", "title_t
 SPAN_OPS = {"caption", "callout", "drop", "reorder", "cut", "trim", "split", "insert", "overlay", "select"}  # they name clips or lines of this version: a re-plan makes new ones
 STRUCTURAL = {"replan", "drop", "reorder", "cut", "trim", "insert", "pauses", "restore"}  # what is said or in which order: previewed before it runs
 UI_OPS = {"seek", "select", "open"}  # the editor does these (the playhead, a selection, a panel): no version
+# and "undo" {"steps"}: in Live, "undo that" takes the draft's last edits off (the editor's draft undo); never routed
+NAMES_VERSION = re.compile(r"\bv\s?\d+\b|\bversion\s+\d+|έκδοση\s+\d+", re.I)
 PANELS = ["media", "captions", "style", "text", "music", "speakers", "versions", "export", "loop"]
 HISTORY_TURNS = 8  # chat lines the router reads before the message
 UNUSED_WORDS = 900  # words of the recording outside the cut the router reads (about 95 s of speech)
@@ -159,6 +161,7 @@ say so in the reply instead.
 answer in reply from the facts below and no edit op. "Where do I say X" / "show me X": seek to the clip's cut second \
 and select those words, and say the time in the reply as m:ss (0:22). A passage that is not in the cut has no cut second: say so \
 and offer to insert it.
+- "Fix what the checks found" lists measured faults of this version: a cut inside speech or a kept word not heard at a cut second -> trim an edge at that cut second to a whole word (the clip before it ends a word earlier, or the clip after starts a word later); a caption over the head -> style with look_prompt "captions placed automatically, clear of the face"; the head out of frame -> pin the speaker who talks there to the head they are.
 - Read the chat so far: "no", "another one", "the same for", "undo that", "more", "less" refer to what was just asked \
 or done there.
 - Prefer doing a sensible default over asking. Ask (question, no ops) only when the message cannot be done safely.
@@ -421,6 +424,7 @@ OFF = re.compile(r"\b(off|no|without|remove|stop|kill|mute)\b|βγάλ|χωρί�
 GREEK_PRESETS = {"καραόκε": "karaoke", "κουτί": "box", "μίνιμαλ": "minimal"}
 DELETE = re.compile(r"\b(delete|drop|remove|cut)\b|σβήσ|διάγραψ|κόψ|βγάλ", re.I)
 THIS = re.compile(r"\b(this|these|that|those|it|them|selected|selection)\b|αυτ|επιλεγμέν", re.I)
+UNDO = re.compile(r"\bundo\b|\bgo back\b|αναίρε|γύρνα πίσω", re.I)
 MOVE = re.compile(r"\bmove\s+(s\d+)\s+(?:before|in front of)\s+(s\d+)|\bmove\s+(s\d+)\s+to the end", re.I)
 
 
@@ -718,6 +722,43 @@ def draft_ops(ops: list[dict]) -> list[dict] | None:
     return out
 
 
+def draft_undo(run_dir: Path, draft_edl: Path, message: str, ops: list[dict], base: int) -> dict | None:
+    """In Live with a draft open, "undo that" is the draft's own undo, not a restore (a restore makes a version, and
+    the draft's edits are not one). The router reads "undo" as restore (its prompt says so): a restore of the draft's
+    base or the version before it, in a message that names no version, becomes {"op": "undo", "steps": n}. n is the
+    number of edits the chat's last draft line put in, when they are still the draft's last ones; else 1, the last
+    edit whoever made it."""
+    r = next((o for o in ops if o["op"] == "restore"), None)
+    if r is None or NAMES_VERSION.search(message) or int(r.get("version", -1)) not in (-1, base, base - 1):
+        return None
+    try:
+        state = json.loads((draft_edl.parent / "state.json").read_text())
+    except (OSError, ValueError):
+        return None
+    says = [str(o.get("say") or "") for o in state.get("ops") or []]
+    if not says:
+        return None
+    steps = 1
+    try:
+        chat = [json.loads(x) for x in (run_dir / "ui" / "chat.jsonl").read_text().splitlines() if x.strip()]
+    except (OSError, ValueError):
+        chat = []
+    last = next((c for c in reversed(chat) if c.get("role") == "agent"), None)
+    n = int((last or {}).get("draft_edits") or 0)
+    if last and last.get("kind") == "draft" and 0 < n <= len(says) and all(x and x in (last.get("text") or "")
+                                                                         for x in says[-n:]):
+        steps = n
+    return {"op": "undo", "steps": steps, "says": says[-steps:]}
+
+
+def undo_reply(message: str, undo: dict) -> str:
+    """The reply for a draft undo, in the message's language (Greek or English)."""
+    what, n = "; ".join(undo["says"]), undo["steps"]
+    if re.search(r"[\u0370-\u03ff]", message):
+        return f"Αναιρώ {'την τελευταία αλλαγή' if n == 1 else f'τις {n} τελευταίες αλλαγές'} του draft: {what}."
+    return f"Undoing the draft's last {'edit' if n == 1 else f'{n} edits'}: {what}."
+
+
 AGENT_KEYS = ("message", "reply", "router", "ops", "done", "skipped", "pending", "scope", "retry_of", "ui", "draft")
 
 
@@ -895,6 +936,7 @@ def execute(run_dir: Path, from_v: int, ops: list[dict], record: dict, passes: i
             human._finish(run_dir, run_dir / f"edl_v{n}.json", n, passes, budget, Ledger.resume(run_dir / "ledger.json"), log)
             if (run_dir / f"cut_v{n}.mp4").is_file():
                 record["checks"] = measured(run_dir, n, log)
+                keep_checks(run_dir, n, record["checks"])
     elif passes:  # "review it" with nothing to change: the review loop on this version
         from .engine.review import review_loop
         review_loop(run_dir, run_dir / f"edl_v{from_v}.json", passes=passes, budget_usd=budget,
@@ -920,6 +962,18 @@ def measured(run_dir: Path, n: int, log) -> dict | None:
            "audio": audio is not None}
     log(f"agent: checks on v{n}: " + ("clear" if out["ok"] else "; ".join(gate["reasons"])))
     return out
+
+
+def keep_checks(run_dir: Path, n: int, checks: dict | None) -> None:
+    """The checks go into the version's patch too (`agent.checks`): the chat shows them under the version it made and
+    offers Fix it, which sends them as the next message ("Fix what the checks found ...": PROMPT says how)."""
+    if not checks:
+        return
+    p = run_dir / f"edl_v{n}.json"
+    edl = json.loads(p.read_text())
+    if edl.get("patches") and isinstance(edl["patches"][-1].get("agent"), dict):
+        edl["patches"][-1]["agent"]["checks"] = checks
+        dump_json(p, edl)
 
 
 def checked_text(c: dict | None) -> str:
@@ -972,6 +1026,12 @@ def ask(run_dir: Path, message: str | None, from_v: int | None = None, passes: i
             log(f"agent: the router call failed ({e}); reading keywords")
     if answer is None:
         answer = keywords(edl, message, scope)
+        if draft_open and not answer["ops"] and UNDO.search(message):  # the draft's undo needs no model
+            answer = {"reply": "", "question": "", "ops": [{"op": "restore", "version": from_v}]}
+    undo = draft_undo(run_dir, draft_edl, message, answer.get("ops") or [], from_v) if draft_open else None
+    if undo:  # Live: the draft's own undo, no version (only what shows something stays)
+        answer = {"reply": undo_reply(message, undo), "question": "",
+                  "ops": [o for o in answer.get("ops") or [] if o.get("op") in UI_OPS]}
     ops, skipped = check(edl, answer.get("ops") or [], scope)
     asked_review = any(o["op"] == "review" for o in ops)
     ops = [o for o in ops if o["op"] != "review"]
@@ -986,8 +1046,8 @@ def ask(run_dir: Path, message: str | None, from_v: int | None = None, passes: i
               "done": [], "skipped": skipped, "version": None}
     if scope:
         record["scope"] = scope
-    if ui:  # the playhead, a selection, a panel: the editor does them when the reply lands
-        record["ui"] = compact(ui)
+    if ui or undo:  # the playhead, a selection, a panel, the draft's undo: the editor does them when the reply lands
+        record["ui"] = compact(ui) + ([{"op": "undo", "steps": undo["steps"]}] if undo else [])
     if retry_of:
         record["retry_of"] = retry_of
     if draft and ops and not asked_review and (dops := draft_ops(ops)) is not None:  # the Review toggle reviews the

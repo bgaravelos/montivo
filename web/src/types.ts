@@ -39,10 +39,13 @@ export type Origin = {
 
 /** What Ask Montivo did with one message (the version's patch `agent`, montivo/agent.py). */
 export type AgentRecord = { message: string; reply: string; router: string; ops: { op: string }[]; done: string[]; skipped: string[];
-  pending?: string; scope?: AskScope; retry_of?: string; ui?: AgentUi[] | null }; // pending: the proposal this version applied
+  pending?: string; scope?: AskScope; retry_of?: string; ui?: AgentUi[] | null; // pending: the proposal this version applied
+  checks?: AgentChecks | null };
+/** The gate's $0 checks on a version the chat made (agent.py measured): what Fix it sends back as the next ask. */
+export type AgentChecks = { ok: boolean; reasons: string[]; more: number; audio: boolean };
 /** What the chat does in the editor to show something (agent.py UI_OPS): the playhead, a selection, a panel. */
-export type AgentUi = { op: "seek" | "select" | "open"; at_s?: number; span?: string; word_from?: number; word_to?: number;
-  panel?: string };
+export type AgentUi = { op: "seek" | "select" | "open" | "undo"; at_s?: number; span?: string; word_from?: number; word_to?: number;
+  panel?: string; steps?: number }; // undo: the Live draft's last `steps` edits off ("undo that" while a draft is open)
 
 /** What the editor selected when they asked: the agent reads it as "this" (montivo/agent.py norm_scope). */
 export type AskScope = { clips?: string[]; words?: { span: string; from: number; to: number; text: string }[];
