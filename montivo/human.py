@@ -1809,7 +1809,7 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
                 shutil.copy2(v1, p)
     dump_json(run_dir / f"plan_v{n}.json", planned.parsed)
     new = build_edl(planned.parsed, voice, watch, prev["source"], brief, prev.get("tracks") or {},
-                    reframe_concept=prev.get("reframe_concept") or "person", audio=Audio.load(run_dir))
+                    reframe_concept=prev.get("reframe_concept") or "person", audio=Audio.load(run_dir), target_s=target)
     if not new["spans"]:
         raise SystemExit("the new plan placed no span on the transcript")
     if new_brief or prev.get("brief_edited"):  # ME2: the brief this line of versions plans from

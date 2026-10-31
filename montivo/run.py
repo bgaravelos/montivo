@@ -323,7 +323,7 @@ def run(opts: RunOptions) -> dict:
     else:
         prev_v1 = json.loads((out / "edl_v1.json").read_text()) if (out / "edl_v1.json").is_file() else None
         edl = build_edl(planned.parsed, voice, watch.parsed, source, opts.brief, track_summary,
-                        reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out))
+                        reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out), target_s=opts.target_s)
         if prev_v1:  # a new plan on a resumed run keeps the run's caption words (an old v1's demo words too)
             carry_run_words(prev_v1, edl)
         # A4: the paper edit checked word by word against the brief's checklist (C1), the target, repeated takes and
@@ -339,7 +339,8 @@ def run(opts: RunOptions) -> dict:
                                      reasoning_effort=opts.plan_effort, words_per_s=wps, name="plan_repair",
                                      repair="\n".join(f"- {p}" for p in problems))
                 edl2 = build_edl(again.parsed, voice, watch.parsed, source, opts.brief, track_summary,
-                                 reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out))
+                                 reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out),
+                                 target_s=opts.target_s)
                 if prev_v1:
                     carry_run_words(prev_v1, edl2)
                 left = plan_check(edl2, opts.target_s)
@@ -356,6 +357,11 @@ def run(opts: RunOptions) -> dict:
         else:
             log("plan check: the paper edit meets the brief's checks")
         edl["plan_check"] = record
+        if edl.get("length_fit"):
+            lf = edl["length_fit"]
+            log(f"plan: {lf['before_s']} s over the {lf['limit_s']} s limit, dropped "
+                + ", ".join(f"{d['id']} ({d['duration']} s, strength {d.get('strength', '?')})" for d in lf["dropped"])
+                + f" -> {lf['after_s']} s")
         if edl["role_fixes"]:
             log(f"roles set by position (one hook first, the payoff last): {', '.join(edl['role_fixes'])}")
         if edl.get("brief_missing"):

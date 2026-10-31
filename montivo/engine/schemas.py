@@ -46,8 +46,10 @@ PLAN = {
                            "role": {"type": "string", "enum": ["hook", "body", "payoff", "cta"],
                                     "description": "hook = first span only, payoff = last span only (the ending), cta = a closing call to action after it, body = every other span"},
                            "why": {"type": "string"},
-                           "callout": {"type": "string", "description": "optional 2 to 4 word on-screen callout for this span, empty if none"}},
-                           "required": ["turn_id", "words", "role", "why", "callout"]}},
+                           "callout": {"type": "string", "description": "optional 2 to 4 word on-screen callout for this span, empty if none"},
+                           "strength": {"type": "integer", "description": "1 to 5: how much the edit needs this span, "
+                                        "5 = it cannot do without it, 1 = the first span to cut when the edit runs long"}},
+                           "required": ["turn_id", "words", "role", "why", "callout", "strength"]}},
         "estimated_runtime_s": {"type": "number"},
         "title_card_text": {"type": "string"},
         "caption_style_note": {"type": "string"},
