@@ -78,6 +78,8 @@ def test_the_web_build_carries_every_target():
     ("where is undo", "Versions, undo and redo", "top.undo"),
     ("how do I split a clip", "Split a clip", "tl.tools"),
     ("which model plans the cut?", "Models per stage", "top.more"),
+    ("how do I hide Monti?", "Move or hide Monti", "top.more"),
+    ("ο Monti κρύβει το timeline, πώς τον μετακινώ;", "Move or hide Monti", "top.more"),
 ])
 def test_the_fallback_finds_the_section(q, section, target):
     a = monti.fallback(q, "editor")

@@ -923,7 +923,12 @@ chip), panel option A (in / out brackets, context chips, steps with keycaps, Sho
 and cost), Show me = the climb drawing runs the bottom edge and up to the `data-monti` element (opening its panel or
 Export first), then the point pose (mirrored near the right edge) beside it, framed and the rest dimmed; an edit
 request fills Ask Montivo's composer unsent (Assistant `prefill`); under 900 px a bottom sheet, Show me hidden for
-targets the layout hides. Drawings: ChatGPT's character sheet cut out (`web/public/monti/*.webp`, 256 + 512 px); README credits them in Billy's
+targets the layout hides. Placement (31/10, $0, Billy: Monti covered the timeline's right end; research in
+`docs/notes/monti-placement-research_2026-10-31.md`): the editor's default spot is the empty foot of the rail (panel
+opens beside it), drag with snap (rail / bottom right in the editor, bottom right / left on Home) or a free drop kept
+per page, dropped on an edge he tucks into a tab (the peek drawing turned to the edge) that brings him back, as do ? and
+More > Show Monti; the ⋯ menu repeats the spots and Hide; he steps aside while a drag passes under him or the focus lands
+under him; phones keep the corner. Checked headless (Playwright) at 1440 and 375 px. Drawings: ChatGPT's character sheet cut out (`web/public/monti/*.webp`, 256 + 512 px); README credits them in Billy's
 wording ("made with ChatGPT's image model at design time").
 `tools/monti_bench.py`: Spark 1.3 20/20 of the 24 (4 left unrun for the cap), keywords 21/24. 661 tests pass.
 Merged into main (fast-forward to 5e5428d), pushed and deployed 31/10 07:13 on Billy's go from a clean worktree (no

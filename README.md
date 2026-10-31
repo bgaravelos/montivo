@@ -294,7 +294,8 @@ numbered contact sheet, writes the headline, checks the cover and its grid tile 
 The Voice and Music tracks of a version with music have a fader each that plays live in the browser before "Make
 Version" renders the mix. Under 900 px the editor is a review mode (player, review, chat, export).
 
-Monti, the gecko in the corner of the editor and the project list (key ?), is the app's help: ask "where do I add
+Monti, the gecko under the editor's panel icons and in the corner of the project list (key ?; drag him anywhere or
+tuck him into a window edge), is the app's help: ask "where do I add
 music?" or "πώς διορθώνω έναν υπότιτλο;" and it answers from one guide file (`montivo/monti_guide.md`, every panel,
 key, op, price and model per stage), with steps and a Show me that runs along the window's edges to the place and frames
 it between an in and an out bracket. It never edits: an edit request goes into Ask Montivo's box, unsent. One Muse

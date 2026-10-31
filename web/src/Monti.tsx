@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent as RMouseEvent, type PointerEvent as RPointerEvent, type ReactNode } from "react";
 import { api, usd } from "./api";
 import { Icon, MarkLoader } from "./icons";
 import type { Budget } from "./types";
@@ -31,6 +31,63 @@ const SUGGEST: Record<MontiPage, string[]> = {
 };
 const HI_KEY = "montivo.monti.hi";
 const TURNS_KEY = "montivo.monti.turns";
+
+// Where Monti sits (docs/notes/monti-placement-research_2026-10-31.md): a named spot or wherever he was dropped, per
+// page; tucked into a window edge he is a tab there. Under 900 px he keeps the corner (the panel is a bottom sheet).
+type SpotKind = "rail" | "br" | "bl";
+type Spot = { kind: SpotKind } | { kind: "free"; x: number; y: number }; // free: the badge centre, fractions of the window
+type Stash = { side: "left" | "right"; y: number };
+type Geo = { cx: number; cy: number; h: number; kind: Spot["kind"] };
+const SPOT_KEY = (place: string) => `montivo.monti.spot.${place}`;
+const STASH_KEY = "montivo.monti.stash";
+const NARROW = "(max-width: 900px)";
+const RATIO = 256 / 133; // the peek drawing
+const BADGE_H = 46, RAIL_H = 32, EDGE = 22, SNAP = 90;
+const SPOT_NAME: Record<SpotKind, string> = { rail: "Under the panel icons", br: "Bottom right", bl: "Bottom left" };
+const load = <T,>(key: string): T | null => { try { return JSON.parse(localStorage.getItem(key) ?? "null"); } catch { return null; } };
+const save = (key: string, v: unknown) => { try { if (v == null) localStorage.removeItem(key); else localStorage.setItem(key, JSON.stringify(v)); } catch { /* this tab only */ } };
+const clamp = (x: number, a: number, b: number) => Math.min(b, Math.max(a, x));
+
+let STASH: Stash | null = load<Stash>(STASH_KEY);
+let LAST: Geo | null = null; // where the badge was last drawn: More > Hide Monti tucks him into the nearer edge
+const stashers = new Set<() => void>();
+const setStash = (s: Stash | null) => { STASH = s; save(STASH_KEY, s); stashers.forEach((f) => f()); };
+/** Tucked away or not; the editor's More menu and the palette show or hide him with `tuckMonti`. */
+export function useMontiTucked() {
+  const [, tick] = useState(0);
+  useEffect(() => { const f = () => tick((n) => n + 1); stashers.add(f); return () => { stashers.delete(f); }; }, []);
+  return !!STASH;
+}
+export const tuckMonti = (on: boolean) => setStash(on
+  ? { side: LAST && LAST.cx < window.innerWidth / 2 ? "left" : "right", y: LAST ? LAST.cy / window.innerHeight : 0.7 } : null);
+
+/** The empty foot of the editor's rail, if there is room for him under the panel icons. */
+function railFoot(): { cx: number; cy: number } | null {
+  const rail = document.querySelector<HTMLElement>(".rail");
+  const last = rail?.lastElementChild?.getBoundingClientRect();
+  if (!rail || !last) return null;
+  const r = rail.getBoundingClientRect();
+  if (!r.width || r.bottom - last.bottom < RAIL_H + 18) return null;
+  return { cx: r.left + r.width / 2, cy: r.bottom - 10 - RAIL_H / 2 };
+}
+function where(spot: Spot, place: string): Geo {
+  const W = window.innerWidth, H = window.innerHeight, pad = place === "home" ? [18, 16] : [14, 10];
+  const bw = BADGE_H * RATIO;
+  if (spot.kind === "rail") { const f = railFoot(); if (f) return { ...f, h: RAIL_H, kind: "rail" }; }
+  if (spot.kind === "free") return { cx: clamp(spot.x * W, bw / 2 + 6, W - bw / 2 - 6), cy: clamp(spot.y * H, BADGE_H / 2 + 6, H - BADGE_H / 2 - 6), h: BADGE_H, kind: "free" };
+  const left = spot.kind === "bl";
+  return { cx: left ? pad[0] + bw / 2 : W - pad[0] - bw / 2, cy: H - pad[1] - BADGE_H / 2, h: BADGE_H, kind: left ? "bl" : "br" };
+}
+/** The container's corner and how the panel opens from the badge: beside it at the rail, else above or below. */
+function anchor(g: Geo): { style: CSSProperties; cls: string } {
+  const W = window.innerWidth, H = window.innerHeight, bw = g.h * RATIO;
+  const east = g.cx > W / 2 && g.kind !== "rail", lower = g.cy > H / 2 || g.kind === "rail";
+  const x = east ? { right: W - (g.cx + bw / 2), left: "auto" } : { left: g.cx - bw / 2, right: "auto" };
+  const y = lower ? { bottom: H - (g.cy + g.h / 2), top: "auto" } : { top: g.cy - g.h / 2, bottom: "auto" };
+  const room = g.kind === "rail" ? g.cy + g.h / 2 - 64 : lower ? g.cy - g.h / 2 - 72 : H - (g.cy + g.h / 2) - 24;
+  return { style: { ...x, ...y, ["--mh" as string]: `${Math.max(260, room)}px` },
+    cls: `${east ? "east" : "west"} ${lower ? "lower" : "upper"} ${g.kind === "rail" ? "at-rail" : ""}` };
+}
 let TURNS: Turn[] = (() => { try { return JSON.parse(sessionStorage.getItem(TURNS_KEY) ?? "[]"); } catch { return []; } })(); // this tab's conversation, across pages and reloads
 
 const greek = (s: string) => /[α-ωά-ώ]/i.test(s);
@@ -77,7 +134,93 @@ export function Monti({ ctx, budget, hasKey, place, nonce, prepare, onOpen, onHa
     return () => { window.clearTimeout(a); window.clearTimeout(b); };
   }, []);
   const greeted = () => { setHi(false); try { localStorage.setItem(HI_KEY, "1"); } catch { /* this tab only */ } };
-  const toggle = (to = !open) => { greeted(); setOpen(to); setNote(null); };
+  const toggle = (to = !open) => { greeted(); if (to && STASH) setStash(null); setOpen(to); setNote(null); setMenu(false); };
+
+  // ---- where he sits: a spot per page, dragged with snap, tucked into an edge, aside while you work under him
+  const tucked = useMontiTucked();
+  const [narrow, setNarrow] = useState(() => window.matchMedia?.(NARROW).matches ?? false);
+  const [spot, setSpot] = useState<Spot>(() => load<Spot>(SPOT_KEY(place)) ?? { kind: place === "editor" ? "rail" : "br" });
+  const [dragAt, setDragAt] = useState<{ cx: number; cy: number } | null>(null);
+  const [menu, setMenu] = useState(false);
+  const [aside, setAside] = useState(false);
+  const [, relayout] = useState(0);
+  const drag = useRef<{ x0: number; y0: number; dx: number; dy: number; moved: boolean; at?: { cx: number; cy: number } } | null>(null);
+  const dragged = useRef(false);
+  useLayoutEffect(() => { // the rail is laid out in the same commit: measure again once it is there, and on every resize
+    const mq = window.matchMedia?.(NARROW);
+    const on = () => { setNarrow(mq?.matches ?? false); relayout((n) => n + 1); };
+    on();
+    window.addEventListener("resize", on); mq?.addEventListener?.("change", on);
+    const rail = document.querySelector(".rail"), ro = rail && "ResizeObserver" in window ? new ResizeObserver(on) : null;
+    if (rail) ro?.observe(rail);
+    return () => { window.removeEventListener("resize", on); mq?.removeEventListener?.("change", on); ro?.disconnect(); };
+  }, []);
+  const geo: Geo = dragAt ? { ...dragAt, h: BADGE_H, kind: "free" } : where(spot, place);
+  if (!narrow && !tucked) LAST = geo;
+  const at = anchor(geo);
+  const spots = (place === "editor" ? ["rail", "br"] as SpotKind[] : ["br", "bl"] as SpotKind[]) // the editor's bottom left is the rail foot
+    .map((k) => ({ k, g: where({ kind: k }, place) })).filter((c) => c.g.kind === c.k);
+  const putAt = (s: Spot) => { setSpot(s); save(SPOT_KEY(place), s); setMenu(false); };
+  const nearEdge = (cx: number) => cx < EDGE || cx > window.innerWidth - EDGE;
+  const drop = (p: { cx: number; cy: number }) => {
+    if (nearEdge(p.cx)) { setOpen(false); setStash({ side: p.cx < window.innerWidth / 2 ? "left" : "right", y: p.cy / window.innerHeight }); return; }
+    const near = spots.map((c) => ({ ...c, d: Math.hypot(c.g.cx - p.cx, c.g.cy - p.cy) })).sort((a, b) => a.d - b.d)[0];
+    putAt(near && near.d < SNAP ? { kind: near.k } : { kind: "free", x: p.cx / window.innerWidth, y: p.cy / window.innerHeight });
+  };
+  const grab = {
+    onPointerDown: (e: RPointerEvent<HTMLButtonElement>) => {
+      if (narrow || e.button !== 0) return;
+      const r = e.currentTarget.getBoundingClientRect();
+      drag.current = { x0: e.clientX, y0: e.clientY, dx: e.clientX - (r.left + r.width / 2), dy: e.clientY - (r.top + r.height / 2), moved: false };
+      e.currentTarget.setPointerCapture(e.pointerId);
+    },
+    onPointerMove: (e: RPointerEvent<HTMLButtonElement>) => {
+      const d = drag.current;
+      if (!d || (!d.moved && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < 5)) return;
+      if (!d.moved) { d.moved = true; setHi(false); setMenu(false); }
+      d.at = { cx: clamp(e.clientX - d.dx, 0, window.innerWidth), cy: clamp(e.clientY - d.dy, BADGE_H / 2, window.innerHeight - BADGE_H / 2) };
+      setDragAt(d.at);
+    },
+    onPointerUp: () => {
+      const d = drag.current;
+      drag.current = null;
+      if (!d?.moved || !d.at) return;
+      dragged.current = true; // the click that follows a drag does not open him
+      setDragAt(null);
+      drop(d.at);
+    },
+    onPointerCancel: () => { drag.current = null; setDragAt(null); },
+    onContextMenu: (e: RMouseEvent) => { if (narrow) return; e.preventDefault(); setMenu(true); },
+  };
+  useEffect(() => { // WCAG 2.4.11: a drag that passes under him, or the focus landing under him, moves him out of the way
+    if (narrow || tucked) return;
+    let pressed = false;
+    const under = (l: number, t: number, r: number, b: number, pad = 0) => {
+      const g = badge.current?.getBoundingClientRect();
+      return !!g && r > g.left - pad && l < g.right + pad && b > g.top - pad && t < g.bottom + pad;
+    };
+    const down = (e: PointerEvent) => { pressed = !(e.target as Element | null)?.closest?.(".monti"); };
+    const move = (e: PointerEvent) => { if (pressed && under(e.clientX, e.clientY, e.clientX, e.clientY, 60)) setAside(true); };
+    const up = () => { pressed = false; setAside(false); };
+    const focus = (e: FocusEvent) => {
+      const el = e.target instanceof HTMLElement ? e.target : null;
+      if (!el || el.closest(".monti")) { setAside(false); return; }
+      const f = el.getBoundingClientRect();
+      setAside(f.width > 0 && under(f.left, f.top, f.right, f.bottom));
+    };
+    window.addEventListener("pointerdown", down, true); window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", up, true); window.addEventListener("focusin", focus);
+    return () => {
+      window.removeEventListener("pointerdown", down, true); window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", up, true); window.removeEventListener("focusin", focus);
+    };
+  }, [narrow, tucked]);
+  useEffect(() => { // the menu closes on a click elsewhere
+    if (!menu) return;
+    const off = (e: PointerEvent) => { if (!(e.target as Element | null)?.closest?.(".monti-dock")) setMenu(false); };
+    window.addEventListener("pointerdown", off, true);
+    return () => window.removeEventListener("pointerdown", off, true);
+  }, [menu]);
   useEffect(() => { if (open) window.setTimeout(() => input.current?.focus(), 40); }, [open]);
   useEffect(() => { if (nonce) toggle(true); }, [nonce]); // eslint-disable-line
   useLayoutEffect(() => { const el = body.current; if (el) el.scrollTop = el.scrollHeight; }, [turns, busy, open]);
@@ -85,6 +228,7 @@ export function Monti({ ctx, budget, hasKey, place, nonce, prepare, onOpen, onHa
   // ? opens Monti anywhere (not while typing); Esc closes it
   const keys = useRef<(e: KeyboardEvent) => void>(() => {});
   keys.current = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && menu) { setMenu(false); return; }
     if (e.key === "Escape" && (open || showing)) { if (showing) endShow(); else toggle(false); return; }
     if (e.key === "?" && !typing(e.target) && !e.metaKey && !e.ctrlKey) { e.preventDefault(); toggle(); }
   };
@@ -137,8 +281,18 @@ export function Monti({ ctx, budget, hasKey, place, nonce, prepare, onOpen, onHa
   const chips = [ctx.page === "home" ? "Projects" : ctx.page === "export" ? "Export" : "Editor",
     ...(ctx.version ? [`v${ctx.version}`] : []), ...(ctx.panel && ctx.page === "editor" ? [`${PANEL_NAME[ctx.panel] ?? ctx.panel} panel`] : [])];
 
-  return (
-    <div className={`monti monti-${place}`}>
+  const W = window.innerWidth, H = window.innerHeight;
+  return (<>
+    {dragAt && <div className="monti-guides" aria-hidden>
+      {spots.map((c) => <i key={c.k} className="monti-snap" style={{ left: c.g.cx - (c.g.h * RATIO) / 2, top: c.g.cy - c.g.h / 2, width: c.g.h * RATIO, height: c.g.h }} />)}
+      <i className={`monti-edge left ${dragAt.cx < EDGE ? "on" : ""}`} /><i className={`monti-edge right ${dragAt.cx > W - EDGE ? "on" : ""}`} />
+      {nearEdge(dragAt.cx) && <span className="monti-tuck-say" style={dragAt.cx < W / 2 ? { left: 34, top: dragAt.cy - 14 } : { right: 34, top: dragAt.cy - 14 }}>Let go to tuck Monti away</span>}
+    </div>}
+    {tucked && STASH && (
+      <button className={`monti-tuck ${STASH.side}`} style={{ top: clamp(STASH.y * H - 33, 56, H - 76) }} onClick={() => tuckMonti(false)}
+        aria-label="Bring Monti back (? opens him)" title="Bring Monti back (? opens him)"><img src="/monti/peek.webp" alt="" /></button>
+    )}
+    <div className={`monti monti-${place} ${narrow ? "" : at.cls} ${dragAt ? "dragging" : ""}`} style={narrow ? undefined : at.style}>
       {showing && <ShowMe s={showing} onDone={endShow} />}
       {open && (
         <div className="monti-panel" role="dialog" aria-label="Monti, help">
@@ -185,16 +339,39 @@ export function Monti({ ctx, budget, hasKey, place, nonce, prepare, onOpen, onHa
           </div>
         </div>
       )}
-      {hi && !open && !showing && (
+      {hi && !open && !showing && !tucked && (
         <button className="monti-hi" onClick={() => toggle(true)}>Hi, I'm <b>Monti</b>. <span className="mute">Ask me where anything is, or how to do it.</span></button>
       )}
-      <button ref={badge} className={`monti-badge ${open ? "on" : ""} ${showing ? "away" : ""}`} onClick={() => toggle()}
-        aria-label="Monti: where is it, how do I (?)" aria-expanded={open} title="Monti: where is it, how do I… (?)">
-        <img src="/monti/peek.webp" alt="" />
-        <span className="monti-tag">Monti <kbd>?</kbd></span>
-      </button>
+      {!tucked && (
+        <div className={`monti-dock ${aside && !open ? "aside" : ""}`}>
+          <button ref={badge} className={`monti-badge ${open ? "on" : ""} ${showing ? "away" : ""}`} {...grab}
+            onClick={() => { if (dragged.current) { dragged.current = false; return; } toggle(); }}
+            aria-label="Monti: where is it, how do I (?)" aria-expanded={open}
+            title={narrow ? "Monti: where is it, how do I…" : "Monti: where is it, how do I… (?) · drag to move him"}>
+            <img src="/monti/peek.webp" alt="" draggable={false} />
+            <span className="monti-tag">Monti <kbd>?</kbd></span>
+          </button>
+          {!narrow && !open && (
+            <button className={`monti-grip ${menu ? "on" : ""}`} onClick={() => setMenu(!menu)} aria-label="Move or hide Monti" aria-expanded={menu}
+              title="Move or hide Monti"><Icon name="more" size={12} /></button>
+          )}
+          {menu && (
+            <div className="monti-menu menu" role="menu">
+              <div className="menu-label">Drag Monti anywhere, or put him</div>
+              {spots.map((c) => (
+                <button key={c.k} role="menuitem" className="menu-item" onClick={() => putAt({ kind: c.k })}>
+                  <span>{SPOT_NAME[c.k]}</span>{geo.kind === c.k && <Icon name="check" size={13} />}
+                </button>
+              ))}
+              <div className="menu-sep" />
+              <button role="menuitem" className="menu-item" onClick={() => { setMenu(false); setOpen(false); tuckMonti(true); }}><span>Tuck him away</span></button>
+              <div className="monti-menu-note">A tab stays on the edge; it or <kbd>?</kbd> brings him back.</div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
-  );
+  </>);
 }
 
 function Reply({ a, q, here, onShow, onOpen, onHandoff }: {

@@ -228,7 +228,7 @@ title card kept as it was, then the edge pass and the render. For a word Voice m
 runs/015 --at 18.5 --text "Four Meta models do all" [--at ... --text ...]` gives the caption line on screen at that cut
 second the words actually spoken (the reviewer's `caption_text` patch, timing kept, $0); in the editor, the Captions panel does the same (double-click a line or the pencil, then Make Version N).
 
-Monti, the help gecko in the corner of the editor and the project list (key ?), answers "where is X?" and "how do I Y?"
+Monti, the help gecko under the editor's rail and in the corner of the project list (key ?), answers "where is X?" and "how do I Y?"
 from `montivo/monti_guide.md` only: `POST /api/monti {message, context}` -> one muse-spark-1.3 call (strict schema,
 reasoning effort low, about 9K tokens in, $0.013-0.014) that picks the answer's place on screen from a closed list
 (`montivo/monti.py` TARGETS, each a `data-monti` attribute in `web/src`), the panel to open, and for an edit request
@@ -237,6 +237,11 @@ hosted budget counts, and the questions in `<root>/monti/questions.jsonl`. Witho
 past 40 model answers per judge and hour, the guide's keywords answer for $0. `python -m montivo.monti "where is
 music?" [--page home] [--no-model]` asks from the shell; `tools/monti_bench.py` scores it (24 questions, English and
 Greek). When a button, key or price changes, change the guide.
+Where he sits (`web/src/Monti.tsx`, $0): per page in localStorage `montivo.monti.spot.<page>` (the editor's default is the
+empty foot of the rail, Home's the bottom right); a drag snaps within 90 px of a spot, else stays where dropped; dropped
+on a window edge he is tucked as a tab there (`montivo.monti.stash`, also More > Hide Monti and the palette), and the
+tab, ? or More > Show Monti bring him back. A drag passing under him or the focus landing under him moves him aside
+(WCAG 2.4.11); the spots are also in his ⋯ menu (2.5.7). Under 900 px he keeps the corner.
 
 ## Run folder
 

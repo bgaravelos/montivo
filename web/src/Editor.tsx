@@ -8,7 +8,7 @@ import { Icon, MarkLoader } from "./icons";
 import { Inspector, type PunchAsk } from "./Inspector";
 import { Palette, type Command } from "./Palette";
 import { mixOf, sameMix, useLiveMix, type Mix } from "./Mix";
-import { Monti } from "./Monti";
+import { Monti, tuckMonti, useMontiTucked } from "./Monti";
 import { MusicPanel, type MusicDraft } from "./Music";
 import { askToNotify, ProgressInline, useJobSignals } from "./Progress";
 import { GUIDE_NAME, GUIDES, SafeArea, type Guide } from "./SafeArea";
@@ -83,6 +83,7 @@ export function Editor({ id, replay, go }: Props) {
   const [askNonce, setAskNonce] = useState(0);
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null); // Monti hands an edit to the chat
   const [montiNonce, setMontiNonce] = useState(0);
+  const montiTucked = useMontiTucked();
   const [toast, setToast] = useState<Toast | null>(null);
   const [guide, setGuideState] = useState<Guide>(() => {
     try { const g = localStorage.getItem("montivo.viewer.guide") as Guide | null; return g && GUIDES.includes(g) ? g : "off"; } catch { return "off"; }
@@ -627,7 +628,8 @@ export function Editor({ id, replay, go }: Props) {
                 <span>Cost and time</span>
                 <span className="mono mute">{spent ? `${usd(spent.usd)} · ${dur(spent.s)}` : `${usd(state.ledger.total_cost_usd)} · ${dur(state.ledger.wall_seconds)}`}</span>
               </button>
-              <button className="menu-item" onClick={() => { setMenu(false); setDialog({ kind: "keys" }); }}><span>Keyboard shortcuts</span><kbd>?</kbd></button>
+              <button className="menu-item" onClick={() => { setMenu(false); setDialog({ kind: "keys" }); }}><span>Keyboard shortcuts</span></button>
+              <button className="menu-item" onClick={() => { setMenu(false); tuckMonti(!montiTucked); }}><span>{montiTucked ? "Show Monti" : "Hide Monti"}</span>{montiTucked && <kbd>?</kbd>}</button>
               <div className="menu-sep" />
               <div className="menu-models">Muse Spark 1.3 · Muse Voice · SAM 3.1 · Muse Image</div>
             </div>
@@ -869,6 +871,7 @@ export function Editor({ id, replay, go }: Props) {
         { id: "cost", label: "Cost and time", group: "Project", run: () => setDialog({ kind: "ledger" }) },
         { id: "monti", label: "Ask Monti: where is it, how do I…", group: "Help", key: "?", run: () => setMontiNonce(Date.now()) },
         { id: "keys", label: "Keyboard shortcuts", group: "Help", run: () => setDialog({ kind: "keys" }) },
+        { id: "monti-tuck", label: montiTucked ? "Show Monti" : "Hide Monti (tuck him into the edge)", group: "Help", run: () => tuckMonti(!montiTucked) },
         { id: "home", label: "All projects", group: "Project", icon: "back", run: () => go("#/") },
       ]} />}
       <Monti place="editor" hasKey={state.has_key} budget={state.budget} nonce={montiNonce}

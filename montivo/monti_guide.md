@@ -1,6 +1,6 @@
 # Montivo guide (what Monti answers from)
 
-Monti, the gecko in the corner, answers "where is X?" and "how do I do Y?" from this file only (montivo/monti.py reads
+Monti, the help gecko, answers "where is X?" and "how do I do Y?" from this file only (montivo/monti.py reads
 it). Each section starts with a `monti:` line: `target` is the place on screen Show me points at (one of
 montivo/monti.py TARGETS), `panel` the rail panel it opens, `words` the keywords the $0 fallback matches without the
 model. The first paragraph of a section is its short answer and the numbered lines are its steps. UI names are written
@@ -332,3 +332,11 @@ A running job shows its step, a clock against the expected time and a bar in the
 ## Monti
 <!-- monti: target=none words=monti,gecko,help,who are you,ποιος είσαι,βοήθεια,σαύρα -->
 I'm Monti: I know every corner of Montivo and point to it. Ask "where is ..." or "how do I ..."; Show me runs to the place on screen. For edits to your cut, Ask Montivo (the chat in the Assistant panel) does them.
+
+## Move or hide Monti
+<!-- monti: target=top.more words=move monti,hide monti,drag monti,in the way,covers,blocks,tuck,bring monti back,show monti,μετακιν,κρύψ,κρύβ,σέρν,εμποδίζ,φέρε πίσω,επανέφερε,επαναφορ -->
+Drag me anywhere: I snap to a spot when you drop me near one (under the panel icons in the editor, bottom right, bottom left on Home) and stay where you drop me otherwise. Drop me on the window's left or right edge and I tuck into it as a small tab.
+1. The ⋯ dot on me (or a right-click) has the spots and "Tuck him away".
+2. The tab on the edge, ?, or More > Show Monti bring me back. More > Hide Monti tucks me away.
+3. When you drag or tab to something under me, I step aside until you are done.
+4. On a phone I stay in the corner.

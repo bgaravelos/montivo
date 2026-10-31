@@ -1301,11 +1301,54 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .src-apply .sa-what { flex-basis: 100%; font-size: 12px; }
 
 /* ------------------------------------------------------------- Monti, the help gecko (Monti.tsx) */
-/* The corner sits over the right end of the timeline (empty past the cut's end); the panel opens above it between an
-   in and an out bracket (docs/notes/monti-options_2026-10-30.html, option A). Motion: transforms only. */
+/* In the editor he sits under the rail's panel icons (nothing there to cover); dragged, he snaps to a spot or stays
+   where he was dropped, and the panel opens beside the rail, else above or below him between an in and an out
+   bracket (docs/notes/monti-options_2026-10-30.html option A, monti-placement-research_2026-10-31.md). The inline
+   style from Monti.tsx `anchor` places the container on desktop. Motion: transforms only. */
 .monti { position: fixed; right: 14px; bottom: 10px; z-index: 70; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; pointer-events: none; }
 .monti > * { pointer-events: auto; }
 .monti-home { right: 18px; bottom: 16px; }
+.monti.west { align-items: flex-start; }
+.monti.upper { flex-direction: column-reverse; }
+.monti.at-rail { flex-direction: row-reverse; align-items: flex-end; gap: 10px; }
+.monti.at-rail .monti-badge img { height: 32px; }
+.monti.west .monti-tag { right: auto; left: 100%; margin: 0 0 0 6px; transform: translateX(-4px); }
+.monti.west .monti-hi { border-radius: 12px 12px 12px 3px; }
+.monti.upper .monti-hi { border-radius: 3px 12px 12px 12px; }
+.monti.west.upper .monti-hi { border-radius: 12px 3px 12px 12px; }
+.monti-dock { position: relative; transition: opacity .15s, transform .2s ease-out; }
+.monti-dock.aside { opacity: 0; transform: translateY(14px); pointer-events: none; }
+.monti.west .monti-dock.aside { transform: translateX(-14px); }
+.monti.dragging { z-index: 90; }
+.monti.dragging .monti-badge { cursor: grabbing; animation: none; transform: scale(1.06); }
+.monti.dragging .monti-tag, .monti.dragging .monti-grip { display: none; }
+.monti-badge img { -webkit-user-drag: none; user-select: none; }
+.monti-grip { position: absolute; top: -8px; left: -8px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 99px;
+  background: var(--panel-3); border: 1px solid var(--line-2); color: var(--text-2); opacity: 0; transition: opacity .15s; }
+.monti.west .monti-grip { left: auto; right: -8px; }
+.monti-dock:hover .monti-grip, .monti-grip:focus-visible, .monti-grip.on { opacity: 1; }
+.monti-grip:hover { color: var(--text); }
+.monti-menu { position: absolute; top: auto; bottom: calc(100% + 8px); right: 0; min-width: 226px; z-index: 2; }
+.monti.west .monti-menu { right: auto; left: 0; }
+.monti.upper .monti-menu { bottom: auto; top: calc(100% + 8px); }
+.monti.at-rail .monti-menu { left: calc(100% + 10px); bottom: 0; }
+.monti-menu-note { padding: 4px 8px 2px; color: var(--mute); font-size: 11px; line-height: 1.4; }
+.monti-guides { position: fixed; inset: 0; z-index: 85; pointer-events: none; }
+.monti-snap { position: absolute; border: 1.5px dashed #ffc62999; border-radius: 10px; background: #ffc6290f; }
+.monti-edge { position: absolute; top: 0; bottom: 0; width: 6px; background: #ffc62922; transition: background .12s, width .12s; }
+.monti-edge.left { left: 0; } .monti-edge.right { right: 0; }
+.monti-edge.on { width: 10px; background: var(--accent); }
+.monti-tuck-say { position: absolute; white-space: nowrap; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 8px; padding: 4px 9px;
+  font-size: 12px; font-weight: 600; box-shadow: 0 8px 24px #000a; }
+/* tucked away: the peek drawing turned to look out of the window edge; a click brings him back */
+.monti-tuck { position: fixed; z-index: 70; width: 32px; height: 70px; padding: 0; border: 0; background: none; overflow: hidden; cursor: pointer;
+  transition: width .15s ease-out; }
+.monti-tuck.right { right: 0; } .monti-tuck.left { left: 0; }
+.monti-tuck:hover, .monti-tuck:focus-visible { width: 40px; }
+.monti-tuck:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
+.monti-tuck img { position: absolute; top: 50%; width: 70px; height: auto; filter: drop-shadow(0 4px 10px #000a); }
+.monti-tuck.right img { left: 0; transform: translate(-14px, -50%) rotate(-90deg); }
+.monti-tuck.left img { right: 0; transform: translate(14px, -50%) rotate(90deg); }
 .monti-badge { position: relative; display: block; padding: 0; background: none; border: 0; cursor: pointer; transform-origin: 50% 100%; animation: monti-peek 4s ease-in-out infinite; }
 .monti-badge img { display: block; height: 46px; width: auto; filter: drop-shadow(0 6px 12px #000a); }
 .monti-badge.away { opacity: 0; transition: opacity .15s; }
@@ -1318,7 +1361,7 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .monti-hi { max-width: 240px; text-align: left; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 12px 12px 3px 12px; padding: 8px 11px;
   font-size: 12.5px; color: var(--text); box-shadow: 0 10px 30px #000a; animation: rise .2s ease-out; }
 
-.monti-panel { position: relative; width: 372px; max-height: min(640px, calc(100vh - 110px)); display: flex; flex-direction: column; background: var(--panel-2);
+.monti-panel { position: relative; width: 372px; max-height: min(640px, var(--mh, calc(100vh - 110px))); display: flex; flex-direction: column; background: var(--panel-2);
   border-radius: 4px; box-shadow: 0 18px 50px #000c; animation: monti-open .45s ease-out both; }
 .monti-panel::before, .monti-panel::after { content: ""; position: absolute; top: -2px; bottom: -2px; width: 16px; border: 3px solid var(--text); pointer-events: none; }
 .monti-panel::before { left: -2px; border-right: 0; } .monti-panel::after { right: -2px; border-left: 0; }
@@ -1397,8 +1440,10 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
   .monti-panel::before, .monti-panel::after { display: none; }
   .monti-tag { display: none; }
   .monti-badge.on { display: none; } /* the sheet has its own close; the badge sat on the send button */
+  .monti-grip, .monti-menu { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .monti-badge, .monti-pose, .monti-panel, .sm-point, .sm-hole, .sm-hole i, .sm-say, .monti-hi { animation: none !important; }
+  .monti-dock, .monti-tuck { transition: none; }
   .monti-pose.idle { animation: none !important; }
 }
