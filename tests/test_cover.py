@@ -68,3 +68,39 @@ def test_cover_cli_prints_only_the_record_on_stdout(tmp_path, monkeypatch, capsy
         out = capsys.readouterr()
         assert json.loads(out.out) == want
     assert "cover: design for v1" in (d / "run.log").read_text()
+
+
+def test_suggest_keeps_the_design_record_and_never_settles_on_the_title(tmp_path, monkeypatch):
+    d = run_folder(tmp_path)
+    (d / "cover_v1.json").write_text(json.dumps({"version": 1, "moments": [], "design": {"template": "headline"}}))
+
+    class FakeSpark:
+        def __init__(self, *a, **k): pass
+
+        def call(self, name, prompt, schema, file_id=None, **k):  # 1.05 s: just past the 1.0 s title card
+            return SimpleNamespace(parsed={"moments": [{"t_s": 1.05, "why": "first words"}]}, cost_usd=0.02, seconds=3.0)
+    monkeypatch.setattr("montivo.engine.spark.Spark", FakeSpark)
+    # the sharpest frame is the earliest one, on the card: the old settle went back there
+    monkeypatch.setattr(C, "frame", lambda cut, t, w=360: t)
+    monkeypatch.setattr(C, "sharpness", lambda t: 10.0 - t)
+    rec = C.suggest(d, 1, ledger=None, log=lambda *a: None)
+    assert rec["moments"][0]["t_s"] >= 1.0 + C.TITLE_CLEAR_S - 1e-6
+    saved = json.loads((d / "cover_v1.json").read_text())
+    assert saved["design"] == {"template": "headline"} and saved["moments"][0]["why"] == "first words"
+
+
+def test_export_out_outside_the_run_folder(tmp_path, monkeypatch):
+    from montivo import export
+    run = tmp_path / "runs" / "r1"
+    run.mkdir(parents=True)
+    seen = {}
+    monkeypatch.setattr(export, "render_run", lambda run_dir, out_name, **k: seen.setdefault("out", out_name))
+    out = tmp_path / "Desktop" / "exports" / "x-clean.mp4"
+    out.parent.mkdir(parents=True)
+    assert export.render_copy(run, {"spans": []}, out, captions=False) == out
+    assert seen["out"] == str(out.resolve())
+    seen.clear()
+    inside = run / "exports" / "y.mp4"
+    inside.parent.mkdir()
+    export.render_copy(run, {"spans": []}, inside)
+    assert seen["out"] == "exports/y.mp4"
