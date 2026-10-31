@@ -923,7 +923,8 @@ chip), panel option A (in / out brackets, context chips, steps with keycaps, Sho
 and cost), Show me = the climb drawing runs the bottom edge and up to the `data-monti` element (opening its panel or
 Export first), then the point pose (mirrored near the right edge) beside it, framed and the rest dimmed; an edit
 request fills Ask Montivo's composer unsent (Assistant `prefill`); under 900 px a bottom sheet, Show me hidden for
-targets the layout hides. Drawings: ChatGPT's character sheet cut out (`web/public/monti/*.webp`, 256 + 512 px).
+targets the layout hides. Drawings: ChatGPT's character sheet cut out (`web/public/monti/*.webp`, 256 + 512 px); README credits them in Billy's
+wording ("made with ChatGPT's image model at design time").
 `tools/monti_bench.py`: Spark 1.3 20/20 of the 24 (4 left unrun for the cap), keywords 21/24. 661 tests pass.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.

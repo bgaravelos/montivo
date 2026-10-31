@@ -318,6 +318,8 @@ and the name come from an earlier personal project of Vasileios (Billy) Gkaravel
 The demo video is narrated off camera by an AI voice cloned from Billy's own recording (an ElevenLabs instant clone,
 made through Magnific). The clone is used only for the video; Montivo itself calls Meta models only.
 
+Monti's drawings were made with ChatGPT's image model at design time; Montivo calls Meta models only.
+
 ## Setup
 
 Requirements: Python 3.12, ffmpeg and ffprobe on the PATH, a Meta developer API key.
