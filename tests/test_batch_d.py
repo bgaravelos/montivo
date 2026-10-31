@@ -291,7 +291,7 @@ def test_overlay_graph_fades_only_the_sides_it_is_told_and_is_unchanged_otherwis
     png = tmp_path / "x.png"
     plain = R._overlay_graph("[base]", [Overlay(png, 0, 0, 1.0, 2.0, fade_s=0.2)], 1)[1]
     assert plain.count("fade=t=") == 2
-    assert plain == ("[1:v]format=rgba,fade=t=in:st=1.0000:d=0.2:alpha=1,fade=t=out:st=1.8000:d=0.2:alpha=1,"
+    assert plain == ("[1:v]setpts=PTS+29/(FRAME_RATE*TB),format=rgba,fade=t=in:st=1.0000:d=0.2:alpha=1,fade=t=out:st=1.8000:d=0.2:alpha=1,"
                      f"{R.TO_709},format=yuva420p[o0];[base][o0]overlay=x=0:y=0:format=yuv420:eof_action=repeat:"
                      f"enable='gte(t,1.0000)*lt(t,2.0000)'[m0];[m0]format=yuv420p,{R.TAG_709}[v]")
     tail = R._overlay_graph("[base]", [Overlay(png, 0, 0, 1.0, 2.0, fade_s=0.2, fade_in=False)], 1)[1]

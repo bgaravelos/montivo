@@ -43,3 +43,20 @@ def test_the_upright_copy_is_made_fast_and_no_taller_than_the_cut(tmp_path, monk
     monkeypatch.setattr(I, "UPRIGHT_MAX_H", 1920)
     p = make_upright(rotated(tmp_path, 180), tmp_path / "small.mp4")  # under the cap: the size is kept
     assert (p.width, p.height) == (320, 240)
+
+
+def test_the_wav_is_the_first_audio_stream_as_the_render_reads_it(tmp_path):
+    """A clip whose second audio stream is the default: ffmpeg's own pick is that one, the render's [i:a] the first;
+    Voice must hear what the cut plays (audit 31/10)."""
+    from array import array
+    from montivo.engine.ingest import make_wav
+    src = tmp_path / "two.mp4"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x240:r=30:d=1",
+                    "-f", "lavfi", "-i", "sine=f=440:r=48000:d=1", "-f", "lavfi", "-i", "sine=f=1500:r=48000:d=1",
+                    "-filter_complex", "[2:a]pan=stereo|c0=c0|c1=c0[st]", "-map", "0:v", "-map", "1:a", "-map", "[st]",
+                    "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-disposition:a:0", "0",
+                    "-disposition:a:1", "default", str(src)], check=True)  # a phone's second track marked default
+    wav = make_wav(src, tmp_path / "a.wav")
+    pcm = array("h", wav.read_bytes()[44:])
+    crossings = sum(1 for a, b in zip(pcm, pcm[1:]) if (a < 0) != (b < 0))  # two a cycle: 440 Hz ~880, 1500 Hz ~3000
+    assert 800 < crossings < 960

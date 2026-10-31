@@ -63,24 +63,34 @@ def edit_media(run_dir: Path, edl: dict, log=None) -> dict:
         return rec
 
 
+def _card_says(run_dir: Path, text: str | None) -> bool:
+    """Whether title/title_card.png is the card for `text`: the run keeps one card, made again for new words, so an
+    older version's or a draft's words may not be the ones on it (title/request.json names them)."""
+    try:
+        return f'"{text or ""}"' in json.loads((run_dir / "title" / "request.json").read_text()).get("prompt", "")
+    except (OSError, ValueError, AttributeError):
+        return True  # an older run folder without the request: its card is the one there is
+
+
 def title_seconds(run_dir: Path, edl: dict) -> tuple[float, str | None]:
     """(seconds, png) of the opening card: what the render recorded, else what a render of this EDL would put there
-    (the card only when the EDL wants it and title/title_card.png exists: a draft never generates one)."""
+    (the card only when the EDL wants it and title/title_card.png exists: a draft never generates one). The png is
+    None when the card on disk was made for other words since (a later version's new title, a draft's new words):
+    the browser shows this version's words instead of another version's card."""
     rec = edl.get("render")
     if rec is not None and "title" in rec:
         t = rec["title"] or {}
-        return float(t.get("seconds") or 0.0), t.get("png")
+        png = t.get("png")
+        if png and "text" in t and not _card_says(run_dir, t["text"]):
+            png = None
+        return float(t.get("seconds") or 0.0), png
     if not title_card_on(edl):
         return 0.0, None
     png = run_dir / "title" / "title_card.png"
     if not png.is_file():
         return 0.0, None
     fps = float(edl["source"]["fps"])
-    req = run_dir / "title" / "request.json"
-    try:  # new words in a draft: the card made at "Make Version N" is not there yet, the browser shows the words
-        same = f'"{edl["title_card_text"]}"' in json.loads(req.read_text()).get("prompt", "")
-    except (OSError, ValueError):
-        same = True  # an older run folder without the request: its card is the one there is
+    same = _card_says(run_dir, edl.get("title_card_text"))
     return round(round(TITLE_S * fps) / fps, 4), png.as_posix() if same else None
 
 

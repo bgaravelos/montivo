@@ -294,13 +294,15 @@ def detect_picture(proxy: Path, proxy_w: int, proxy_h: int, src_w: int, src_h: i
 
 def make_wav(src: Path, dst: Path, rate: int = 24000, start: float | None = None, seconds: float | None = None,
              log=None) -> Path:
-    """24 kHz mono 16-bit PCM wav, the format the Voice endpoint measures best on."""
+    """24 kHz mono 16-bit PCM wav, the format the Voice endpoint measures best on, from the first audio stream: the
+    one the render cuts ([i:a]), not ffmpeg's own pick (the stream with the most channels)."""
     cmd = ["ffmpeg", "-y", "-loglevel", "error"]
     if start is not None:
         cmd += ["-ss", f"{start:.3f}"]
     if seconds is not None:
         cmd += ["-t", f"{seconds:.3f}"]
-    cmd += ["-i", str(src), "-vn", "-ac", "1", "-ar", str(rate), "-c:a", "pcm_s16le", "-map_metadata", "-1", str(dst)]
+    cmd += ["-i", str(src), "-map", "0:a:0", "-vn", "-ac", "1", "-ar", str(rate), "-c:a", "pcm_s16le", "-map_metadata", "-1",
+            str(dst)]
     run_ffmpeg(cmd, "wav", log)
     return dst
 
