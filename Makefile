@@ -40,7 +40,7 @@ sample: dev
 	$(VENV)/bin/python -m montivo.server.sample fetch $(if $(SAMPLE),--sample $(SAMPLE)) $(if $(FROM),--from "$(FROM)")
 
 ui: dev
-	@$(ENV) $(VENV)/bin/montivo serve
+	@$(ENV) $(VENV)/bin/montivo serve $(if $(PORT),--port $(PORT))
 
 # rebuild the committed UI bundle (montivo/server/static) after editing web/src; needs Node 18+
 web:
