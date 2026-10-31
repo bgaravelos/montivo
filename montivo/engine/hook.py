@@ -6,8 +6,9 @@ The first 1.5 s decide whether a viewer stays, and the planner's opener is not a
     A = edl_vN as it is (its review is reused when cut_vN was already reviewed, else it is reviewed now)
     B = edl_vM, M the next free version: A with one swap_hook patch, the challenger span moved to the front and every
         other span in A's order (the reviewer's own op and patch path, so the edge pass, the title card and the
-        captions behave exactly as after a review fix)
-    render cut_vM, review it, then the pairwise judge (review.pairwise, C2) sees both cuts in one call, twice with
+        captions behave exactly as after a review fix), preflighted like a loop patch (review.preflight, $0)
+    render cut_vM, review it; when A and B differ in the gated pass or in a measured check, that decides (review.rank,
+    as the loop ranks versions); else the pairwise judge (review.pairwise, C2) sees both cuts in one call, twice with
     the two swapped: B is kept only when both calls pick it, a split or a tie keeps A, a change needs evidence
 
 The challenger is picked deterministically, first match wins:
@@ -43,7 +44,7 @@ from .api import dump_json
 from .edges import Audio, Words
 from .music import follow_cut
 from .review import (Fix, apply_fixes, cut_map, estimate_compare_cost, estimate_cost, pairwise, plan_fixes,
-                     review_render, span_at)
+                     preflight, rank, review_render, span_at)
 
 NOISE_POINTS = 10  # the same cut reviewed twice scored 72 and 83 (README, kill test (b))
 REVIEWED = re.compile(r"review_v(\d+)\.json")
@@ -104,6 +105,27 @@ def winner(ra: dict, rb: dict) -> tuple[str, str]:
     if ka > kb:
         return "a", "A passes and B does not" if ka[0] and not kb[0] else f"A scores {ka[1]} against B's {kb[1]}"
     return "a", f"a tie at {ka[1]}: the opener stays unless the challenger does better"
+
+
+def ranked(rv: dict) -> tuple[bool, bool, float]:
+    """review.rank of a review: its gated pass, no measured check blocking it, its score."""
+    gate = rv.get("pass_gate") or {}
+    return rank({"pass": rv["review"]["pass"], "checks": gate.get("checks", gate.get("reasons")) or [],
+                 "overall": rv["review"]["overall"]})
+
+
+def gate_winner(rv_a: dict, rv_b: dict) -> tuple[str, str] | None:
+    """'a' or 'b' and why when the two differ in (pass, measured checks clear), as the loop ranks them; None when only
+    the score differs (the judge's turn). A gate-blocked B used to beat a passing A on the judge's word (audit, 31/10)."""
+    ka, kb = ranked(rv_a)[:2], ranked(rv_b)[:2]
+    if ka == kb:
+        return None
+    side = "b" if kb > ka else "a"
+    win, lose = (kb, ka) if side == "b" else (ka, kb)
+    w, other = side.upper(), "A" if side == "b" else "B"
+    if win[0] != lose[0]:
+        return side, f"{w} passes and {other} does not"
+    return side, f"no measured check blocks {w}, one blocks {other}"
 
 
 def hook_ab(run_dir: Path, edl_path: Path | None = None, budget_usd: float = 0.20, ledger: Ledger | None = None,
@@ -172,10 +194,14 @@ def hook_ab(run_dir: Path, edl_path: Path | None = None, budget_usd: float = 0.2
     b = next_version(run_dir)
     fix = Fix(op="swap_hook", target=cand, issue=-1, severity="hook_ab", t_s=0.0)
     edl_b, plog = apply_fixes(edl_a, [fix], words, audio)
+    # B's measured faults are fixed before its render and review ($0), as the loop does for a patched version: B moves
+    # other clips next to each other, and an unfixed cut in speech would decide the A/B, not the opener (audit, 31/10)
+    edl_b, pf = preflight(run_dir, edl_b, words, audio, log=log)
+    plog += [{**p, "preflight": True} for p in pf["fixes"]]
     plog += follow_cut(edl_a, edl_b, severity="hook_ab")
     edl_b["version"] = b
     entry = {"from": a, "review": None, "source": "hook_ab", "action": "hook_ab", "challenger": cand, "why": why,
-             "fixes": plog}
+             "fixes": plog, "preflight": {k: pf[k] for k in ("clear", "left", "stop")}}
     edl_b.setdefault("patches", []).append(entry)
     path_b = run_dir / f"edl_v{b}.json"
     dump_json(path_b, edl_b)
@@ -197,7 +223,10 @@ def hook_ab(run_dir: Path, edl_path: Path | None = None, budget_usd: float = 0.2
     margin = abs(rb["overall"] - ra["overall"])
     decisive = margin >= NOISE_POINTS
     judged = None
-    if compare_fn:
+    if gated := gate_winner(rv_a, rv_b):
+        side, reason = gated  # a pass or a clear gate outranks any score, the judge is not asked (review.rank)
+        decisive = True
+    elif compare_fn:
         judged = compare_fn(rv_a, rv_b)
         spent += judged["cost_usd"]
         side = judged["winner"]

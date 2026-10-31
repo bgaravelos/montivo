@@ -179,14 +179,14 @@ def test_a_review_trim_is_tightened_and_not_snapped_back():
     new, log = R.apply_fixes(edl, [fix], WORDS, audio)
     s = new["spans"][0]
     assert s["word_to"] == 3 and s["t_out"] == at(11.7) and "tightened to the speech" in log[0]["note"]
-    assert s["t_in"] == at(10.5)  # the trim re-snapped the in edge too: tightened again
+    assert s["t_in"] == 10.0  # a trim at the out end leaves the in edge where it was (audit, 31/10)
     assert s["duration"] == round(s["t_out"] - s["t_in"], 3) and R.on_boundary(s, WORDS, "out")
     edges = R.cut_edge_levels(new, audio)
     assert edges[-1]["end"] and not edges[-1]["loud"]
 
 
 def test_a_trim_at_one_end_keeps_the_other_end_tight():
-    # trim_at re-snaps both edges to Voice boundaries; the end tightened out of the next word must stay tight
+    # a trim at one end leaves the other end where it was: the end tightened out of the next word stays tight
     audio = SynthAudio([(10.1, 10.4), (11.1, 12.3), (12.75, 13.4)])
     edl = edl_of(span("s1", 0, 0, 5), span("s2", 1, 2, 5))
     for s in edl["spans"]:
