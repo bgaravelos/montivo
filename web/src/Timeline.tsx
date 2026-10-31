@@ -179,9 +179,11 @@ function Canvas(p: Props & { v: Version; pps: number; dur: number; scroller: Rea
     e.preventDefault();
     onScrub(timeAt(e.clientX));
     const move = (ev: PointerEvent) => onScrub(timeAt(ev.clientX));
-    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+    // a touch the browser takes over for a pan ends in pointercancel, not pointerup: both end the drag (audit 31/10)
+    const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up); };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   };
   useEffect(() => { // follow the playhead while playing
     const el = scroller.current;
@@ -342,10 +344,14 @@ const Tracks = memo(function Tracks(p: TrackProps) {
       d = { ...d, snap: best, target };
       setDrag(d);
     };
-    const up = () => {
+    const end = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", end);
       setDrag(null);
+    };
+    const up = () => { // a cancelled touch (pointercancel) only ends the drag: the stale snap used to trim on the next tap
+      end();
       const s = d.snap;
       if (!s || s.word === cur) return;
       const tw = words[String(b.span!.turn_id)] ?? [];
@@ -356,6 +362,7 @@ const Tracks = memo(function Tracks(p: TrackProps) {
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", end);
   };
 
   const startMove = (e: React.PointerEvent, b: Block) => { // press on a clip body: a click selects, a drag moves it
@@ -376,16 +383,21 @@ const Tracks = memo(function Tracks(p: TrackProps) {
       m = { key: b.key, ...slotAt(ev.clientX, ev.shiftKey) };
       setMove(m);
     };
-    const up = () => {
+    const end = () => {
       window.removeEventListener("pointermove", mv);
       window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", end);
       setMove(null);
+    };
+    const up = () => {
+      end();
       if (!m || m.slot === from) return;
       const before = others[m.slot]?.span!.id ?? null;
       onMove({ span: b.span!.id, before, label: before ? `before ${before}` : "to the end" });
     };
     window.addEventListener("pointermove", mv);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", end);
   };
 
   // a clip's video and its audio piece answer the same way: a click selects (⇧ / ⌘ more), a drag moves it

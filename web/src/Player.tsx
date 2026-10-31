@@ -65,6 +65,8 @@ export const Player = forwardRef<PlayerHandle, {
     try { return localStorage.getItem("montivo.viewer.tc") === "frames" ? "frames" : "sec"; } catch { return "sec"; }
   });
   const frame = useRef<HTMLDivElement>(null);
+  // element full screen (desktops, iPad), else the iPhone's video-only full screen, which Live (two swapped videos) cannot use
+  const canFullscreen = !!document.documentElement.requestFullscreen || (!live && "webkitEnterFullscreen" in HTMLVideoElement.prototype);
 
   const calm = () => { // a shuttle speed (J/L) ends with the play or pause; a speed picked on the transport stays
     if (rate > 0 && RATES.includes(rate)) return;
@@ -117,11 +119,12 @@ export const Player = forwardRef<PlayerHandle, {
     time: () => media()?.currentTime ?? 0,
     skip: (dir) => skip(dir),
     toggleMute: () => setMute((m) => !m),
-    fullscreen() {
-      const f = frame.current;
+    fullscreen() { // iPhone Safari has no element full screen: only a <video> can go full screen there (Rendered)
+      const f = frame.current, el = video.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
       if (!f) return;
-      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-      else f.requestFullscreen().catch(() => {});
+      if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
+      else if (f.requestFullscreen) f.requestFullscreen().catch(() => {});
+      else if (el?.webkitEnterFullscreen) el.webkitEnterFullscreen();
     },
   };
   useImperativeHandle(ref, () => api);
@@ -281,7 +284,7 @@ export const Player = forwardRef<PlayerHandle, {
             <button className={`tp-tool ${looping || whole ? "on" : ""}`} onClick={loopBtn} title={looping ? "Stop looping the clip" : whole ? "Stop looping the cut" : "Loop the cut"}><Icon name="repeat" /></button>
             <button className={`tp-tool ${mute ? "on" : ""}`} onClick={() => setMute(!mute)} title={mute ? "Unmute (⇧M)" : "Mute (⇧M)"}><Icon name={mute ? "mute" : "volume"} /></button>
             {safe && <button data-monti="viewer.safe" className={`tp-tool ${safe.on ? "on" : ""}`} onClick={safe.next} title={`Safe-area guides: ${safe.label} (G cycles Reels, TikTok, Shorts, off)`}><Icon name="safe" /></button>}
-            <button className="tp-tool" onClick={api.fullscreen} title="Full screen (F)"><Icon name="fit" /></button>
+            {canFullscreen && <button className="tp-tool" onClick={api.fullscreen} title="Full screen (F)"><Icon name="fit" /></button>}
           </span>
         </div>
       )}

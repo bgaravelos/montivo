@@ -30,7 +30,17 @@ export function liveGains(base: Mix, mix: Mix, margin_db: number | null): { voic
 }
 
 let shared: AudioContext | null = null;
-export const audioCtx = () => (shared ??= new AudioContext());
+/** One AudioContext for the page. On iOS, Web Audio follows the ring / silent switch unless the page's audio session is
+ *  "playback" (Safari 16.4+): Live mutes its videos and plays every sound through here, so without it a phone on silent
+ *  heard nothing in Live while Rendered played (audit 31/10). */
+export const audioCtx = () => {
+  if (!shared) {
+    const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+    if (session) try { session.type = "playback"; } catch { /* older Safari: the switch rules */ }
+    shared = new AudioContext();
+  }
+  return shared;
+};
 
 type Stems = { n: number; voice: AudioBuffer; music: AudioBuffer };
 

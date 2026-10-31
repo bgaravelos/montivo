@@ -47,9 +47,10 @@ const SPOT_NAME: Record<SpotKind, string> = { rail: "Under the panel icons", br:
 const load = <T,>(key: string): T | null => { try { return JSON.parse(localStorage.getItem(key) ?? "null"); } catch { return null; } };
 const save = (key: string, v: unknown) => { try { if (v == null) localStorage.removeItem(key); else localStorage.setItem(key, JSON.stringify(v)); } catch { /* this tab only */ } };
 const clamp = (x: number, a: number, b: number) => Math.min(b, Math.max(a, x));
-// Under 900 px in the editor he stays in the corner, but never on a control: he climbs above whatever button, link or
-// field he would cover there (the chat's Send, the player's play), and steps aside when there is no free room
-const CONTROLS = "button, a[href], input, textarea, select, [role=button], [role=slider], [tabindex='0']";
+// Under 900 px in the editor he stays in the corner, but never on a control, the picture or a chat bubble: he climbs
+// above whatever button, link, field, video frame or message he would cover there (the chat's Send, the player's play,
+// the cut itself), and steps aside when there is no free room
+const CONTROLS = "button, a[href], input, textarea, select, [role=button], [role=slider], [tabindex='0'], .frame916, .bub";
 const NARROW_PAD = 12, NARROW_TOP = 56; // the corner's margin; never higher than under the top bar
 /** The lowest bottom offset (px) at which a box w x h at the right edge covers no control, or null when none fits. */
 function freeLift(w: number, h: number): number | null {
@@ -148,7 +149,11 @@ export function Monti({ ctx, budget, hasKey, place, nonce, prepare, onOpen, onHa
     let seen = true;
     try { seen = !!localStorage.getItem(HI_KEY); } catch { /* private window */ }
     if (seen) return;
-    const a = window.setTimeout(() => setHi(true), 1200), b = window.setTimeout(() => setHi(false), 11000);
+    // once shown it counts as seen: it used to come back on every page load until Monti was opened, and over the
+    // editor's track heads it hid "Add music" and the faders for 10 s each time (audit 31/10)
+    const a = window.setTimeout(() => setHi(true), 1200), b = window.setTimeout(() => {
+      setHi(false); try { localStorage.setItem(HI_KEY, "1"); } catch { /* this tab only */ }
+    }, 7500);
     return () => { window.clearTimeout(a); window.clearTimeout(b); };
   }, []);
   const greeted = () => { setHi(false); try { localStorage.setItem(HI_KEY, "1"); } catch { /* this tab only */ } };

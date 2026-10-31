@@ -358,13 +358,18 @@ export function Editor({ id, replay, go }: Props) {
     flash(`Making Version ${nextN(state)}…`, undefined, { label: "Open chat", run: () => setPanel("assistant") });
   };
   const shareLink = async (n: number) => {
+    // the clipboard write starts inside the click with the link still on its way: Safari refuses a write made after an
+    // await, so "Link copied" never happened there (audit 31/10); a browser without ClipboardItem writes after the call
+    const made = api<{ path: string }>(`/api/runs/${id}/share`, { version: n }).then((r) => `${window.location.origin}${r.path}`);
+    let copying: Promise<void> | null = null;
+    if (typeof ClipboardItem !== "undefined" && navigator.clipboard?.write)
+      copying = navigator.clipboard.write([new ClipboardItem({ "text/plain": made.then((u) => new Blob([u], { type: "text/plain" })) })]);
     try {
-      const r = await api<{ path: string }>(`/api/runs/${id}/share`, { version: n });
-      const url = `${window.location.origin}${r.path}`;
+      const url = await made;
       let copied = false;
-      try { await navigator.clipboard.writeText(url); copied = true; } catch { /* no clipboard permission */ }
+      try { await (copying ?? navigator.clipboard.writeText(url)); copied = true; } catch { /* no clipboard permission */ }
       flash(`${copied ? "Link copied" : "Share link"}: ${url}`);
-    } catch (e) { flash(String((e as Error).message), "error"); }
+    } catch (e) { copying?.catch(() => {}); flash(String((e as Error).message), "error"); }
   };
   const seek = useCallback((a: number, b?: number) => player.current?.seek(a, b), []);
   const scrub = useCallback((x: number) => { player.current?.pause(); player.current?.seek(x); }, []);
@@ -645,9 +650,9 @@ export function Editor({ id, replay, go }: Props) {
           onClick={() => { if (top) { setSel(top.n); setSelKey(null); } }}>
           {top ? <>{top.review!.pass && <Icon name="check" size={13} />}<b>{top.review!.overall}</b><span>review</span></> : <span>not reviewed</span>}
         </button>
-        <button className="btn quiet loop-btn" data-monti="top.loop" onClick={() => go(`${base}/loop${replay ? `?replay=${replay}` : ""}`)}
+        <button className="btn quiet loop-btn" aria-label="Loop" data-monti="top.loop" onClick={() => go(`${base}/loop${replay ? `?replay=${replay}` : ""}`)}
           title="Every version side by side: the blind scores, the reviewer's notes and the fixes between them">
-          <Icon name="loop" /> Loop
+          <Icon name="loop" /> <span className="btn-label">Loop</span>
         </button>
         <div className="menu-wrap" onPointerDown={(e) => e.stopPropagation()}>
           <button className={`icon-btn ${menu ? "on" : ""}`} data-monti="top.more" onClick={() => setMenu(!menu)} title="More"><Icon name="more" /></button>

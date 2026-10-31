@@ -708,7 +708,7 @@ export function VersionsPanel({ id, state, versions, sel, onPick, go, replay, op
                       : <span className="ver-score none" title="not reviewed">–</span>}
                   </span>
                   <span className="ver-change" title={change.lines.join("\n")}>
-                    <span className={`ver-by ${by(x)}`}>{by(x) === "you" ? "You" : "Montivo"}</span>
+                    <span className={`ver-by by-${by(x)}`}>{by(x) === "you" ? "You" : "Montivo"}</span>
                     {change.lines[0] ?? originLabel(x)}{change.lines.length > 1 ? ` +${change.lines.length - 1}` : ""}
                   </span>
                   <span className="ver-meta mute">{p ? `from v${p.n} · ` : ""}{x.spans.length} clips · {tc(x.duration_s ?? x.runtime_s)}{x.planner ? ` · ${x.planner.name}` : ""}</span>

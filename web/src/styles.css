@@ -103,7 +103,7 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 
 /* ------------------------------------------------------------- the editor grid */
 .editor {
-  display: grid; height: 100vh; min-width: 1100px;
+  display: grid; height: 100vh; min-width: 901px;
   grid-template-columns: 64px 330px minmax(300px, 1fr) 360px;
   /* the timeline row fits the bar, the ruler and all six lanes (about 300 px) on a tall window; on a short one it keeps
      262 px and the lanes scroll (.tl-body) so the Music lane and its fader stay reachable */
@@ -222,10 +222,10 @@ kbd { font-family: var(--sans); font-size: 11px; color: var(--text-2); backgroun
 .ver { display: flex; flex-direction: row; gap: 10px; cursor: pointer; text-align: left; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); }
 .ver:hover { border-color: var(--line-2); }
 .ver.on { border-color: var(--accent); background: var(--panel-3); }
-.ver-top { display: flex; align-items: center; gap: 8px; }
-.ver-name { font-weight: 650; }
-.ver-best { font-size: 10.5px; color: var(--pass); border: 1px solid #2f6b47; border-radius: 99px; padding: 0 6px; }
-.ver-kept { font-size: 10.5px; color: var(--accent); border: 1px solid #6b5517; border-radius: 99px; padding: 0 6px; }
+.ver-top { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; } /* a narrow panel puts the score under the chips, not the name on two lines */
+.ver-name { font-weight: 650; white-space: nowrap; }
+.ver-best { white-space: nowrap; font-size: 10.5px; color: var(--pass); border: 1px solid #2f6b47; border-radius: 99px; padding: 0 6px; }
+.ver-kept { white-space: nowrap; font-size: 10.5px; color: var(--accent); border: 1px solid #6b5517; border-radius: 99px; padding: 0 6px; }
 .ver-score { display: inline-flex; align-items: center; gap: 3px; font-weight: 750; font-size: 16px; }
 .ver-score.pass { color: var(--pass); }
 .ver-score.none { color: var(--mute); font-weight: 500; }
@@ -321,8 +321,8 @@ button.chip.on { background: var(--accent); color: var(--ink, #141414); border-c
 .cbox textarea::placeholder { color: var(--mute); }
 .cbox.off textarea { cursor: not-allowed; }
 .cb-ctx { padding: 0 10px; }
-.cb-row { display: flex; align-items: center; gap: 2px; padding: 0 6px; }
-.cb-btn { font-size: 11.5px; color: var(--mute); display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border-radius: 6px; }
+.cb-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; padding: 0 6px; } /* a 256 px panel (901-1180) puts the cost and Send on a second line */
+.cb-btn { white-space: nowrap; font-size: 11.5px; color: var(--mute); display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border-radius: 6px; }
 .cb-btn:hover { background: var(--panel-3); color: var(--text); }
 .cb-btn.on { color: var(--pass); }
 .check.small { font-size: 12px; }
@@ -342,7 +342,7 @@ button.chip.on { background: var(--accent); color: var(--ink, #141414); border-c
 .pm-foot { font-size: 11px; color: var(--mute); padding: 6px 8px 4px; border-top: 1px solid var(--line); margin-top: 4px; }
 .pipeline { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 4px; }
 .pl-head { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 6px; color: var(--text); font-weight: 600; text-align: left; }
-.pl-title { flex: 1; }
+.pl-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pl-count { font-size: 11.5px; color: var(--mute); font-weight: 500; }
 .pl-row { padding: 0 2px; }
 .pl-line { display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; align-items: center; width: 100%; text-align: left; padding: 4px 6px; border-radius: 5px; }
@@ -363,7 +363,7 @@ button.chip.on { background: var(--accent); color: var(--ink, #141414); border-c
 .pl-log .lt { color: var(--mute); margin-right: 8px; }
 
 /* ------------------------------------------------------------- viewer + player */
-.viewer { position: relative; grid-area: viewer; display: flex; flex-direction: column; min-height: 0; min-width: 0; padding: 14px 16px 8px; background: radial-gradient(ellipse at 50% 40%, #16191e 0%, var(--bg) 70%); }
+.viewer { container: viewer / inline-size; position: relative; grid-area: viewer; display: flex; flex-direction: column; min-height: 0; min-width: 0; padding: 14px 16px 8px; background: radial-gradient(ellipse at 50% 40%, #16191e 0%, var(--bg) 70%); }
 .player { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .frame916 {
   position: relative; flex: 1; min-height: 0; aspect-ratio: 9 / 16; max-width: 100%; background: #000; border-radius: 6px; overflow: hidden;
@@ -510,7 +510,7 @@ button.chip.on { background: var(--accent); color: var(--ink, #141414); border-c
 .tl-wrap { grid-area: tl; min-width: 0; min-height: 0; border-top: 1px solid var(--line); background: var(--panel); }
 .timeline { height: 100%; display: flex; flex-direction: column; }
 .tl-bar { display: flex; align-items: center; gap: 12px; height: 38px; padding: 0 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
-.tl-info { font-size: 12px; color: var(--mute); }
+.tl-info { font-size: 12px; color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .tl-bar .seg { display: inline-flex; align-items: center; gap: 5px; }
 .tl-tools { display: flex; align-items: center; gap: 2px; padding-left: 10px; border-left: 1px solid var(--line-2); }
 .tl-tools .icon-btn:disabled { opacity: 0.35; }
@@ -742,7 +742,8 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
   background: radial-gradient(ellipse at 50% 30%, #16191e 0%, var(--bg) 70%); }
 .cmp-side { display: flex; flex-direction: column; gap: 10px; min-height: 0; align-items: center; }
 .cmp-side .player { width: 100%; }
-.cmp-side .frame916 { flex: none; height: calc(100vh - 52px - 230px); }
+.cmp-side .frame916 { flex: none; height: min(calc(100vh - 52px - 230px), calc((100vw - 326px) / 2 * 16 / 9)); } /* both 9:16 frames and the
+   middle column fit the window's width too: under ~1000 px the frames grew wider than their columns (audit 31/10) */
 .note-card { width: min(100%, 440px); background: var(--panel-2); border: 1px solid var(--line-2); border-left: 3px solid var(--blocker); border-radius: var(--r); padding: 10px 12px; min-height: 104px; }
 .note-card.after { border-left-color: var(--pass); }
 .nc-v { color: var(--text-2); font-weight: 600; }
@@ -924,6 +925,16 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
   .editor { grid-template-columns: 64px 300px minmax(280px, 1fr) 330px; }
   .proj { max-width: 260px; }
 }
+/* 901-1180 px (iPad landscape, half a Mac screen, Split View): the editor used to keep 1100 px under body's hidden
+   overflow, so Share, Export and the inspector sat off screen with no scroll (audit 31/10). The columns narrow instead
+   and the top bar drops what the rail and the inspector already offer. */
+@media (max-width: 1180px) and (min-width: 901px) {
+  .editor { min-width: 0; grid-template-columns: 64px 248px minmax(232px, 1fr) 286px; } /* the rail keeps 64 px: Monti sits at its foot */
+  .editor .top { gap: 6px; }
+  .editor .chip-aspect, .editor .top .divider, .editor .score-chip span { display: none; }
+  .editor .proj { max-width: 200px; }
+  .editor .top .share-btn .btn-label, .editor .loop-btn .btn-label { display: none; }
+}
 
 /* planner choice (the new project sheet, Assistant): Muse Spark 1.3 or Muse Spark Open */
 .planner-pick { display: flex; flex-direction: column; gap: 5px; align-items: flex-start; }
@@ -931,8 +942,9 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .open-tag { font-size: 10px; font-weight: 600; color: var(--pass); border: 1px solid #2f6b47; border-radius: 99px; padding: 0 5px; margin-left: 4px; }
 
 /* hook A/B in the cut inspector */
-.hook-try { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin-top: 8px; border: 1px solid var(--line-2); border-radius: var(--r); background: var(--panel-2); }
-.ht-text { display: flex; flex-direction: column; flex: 1; min-width: 0; gap: 2px; }
+.hook-try { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 8px 10px; margin-top: 8px; border: 1px solid var(--line-2); border-radius: var(--r); background: var(--panel-2); }
+.ht-text { display: flex; flex-direction: column; flex: 1 1 150px; min-width: 0; gap: 2px; }
+.hook-try > .btn { white-space: nowrap; }
 .ht-opener { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ht-tried { text-align: left; font-size: 11.5px; color: var(--mute); }
 .ht-tried:hover { color: var(--text); }
@@ -1153,8 +1165,6 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
   .editor .score-chip.none { display: none; }
   .mobile-note { display: block; grid-area: note; padding: 8px 14px; font-size: 12px; color: var(--text-2); background: var(--panel-2); border-bottom: 1px solid var(--line); }
   .editor .viewer { height: min(78vh, 720px); padding: 10px 8px 4px; }
-  .editor .transport { grid-template-columns: auto 1fr; height: auto; gap: 4px 8px; }
-  .editor .tp-right { grid-column: 1 / -1; justify-content: center; }
   .editor .insp { border-left: 0; border-top: 1px solid var(--line); }
   .editor .panel { height: 80vh; border-right: 0; border-top: 1px solid var(--line); }
   .home { height: auto; min-height: 100vh; grid-template-rows: 56px auto; }
@@ -1175,7 +1185,36 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
   .hm-sheet-b { padding: 16px; } .hm-sheet-f { padding: 12px 16px; flex-wrap: wrap; }
   .hm-sheet-f .grow, .hm-sheet-f kbd { display: none; }
   .hm-clips { max-height: 260px; }
-  .cmp-body { grid-template-columns: minmax(0, 1fr); }
+  .cmp-body { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+  .compare { height: auto; min-height: 100vh; grid-template-rows: auto 1fr; }
+  .compare > .top { flex-wrap: wrap; height: auto; min-height: 52px; padding: 8px 12px; gap: 8px; }
+  .compare .brief { display: none; }
+  .cmp-side .frame916 { height: min(70vh, calc((100vw - 24px) * 16 / 9)); }
+  /* the loop film reads top to bottom: each version under the step that made it */
+  .loop-film { height: auto; min-height: 100vh; grid-template-rows: auto auto 1fr; }
+  .loop-film > .top { flex-wrap: wrap; height: auto; min-height: 52px; padding: 8px 12px; row-gap: 8px; }
+  .loop-film .top .divider { display: none; }
+  .loop-film .proj { max-width: none; }
+  .lf-sum { padding: 10px 14px; }
+  .lf-strip { flex-direction: column; align-items: center; overflow-x: visible; padding: 14px; }
+  .lf-step { flex-direction: column; align-items: center; }
+  .lf-card { width: min(100%, 300px); }
+  .lf-link { width: min(100%, 300px); padding: 10px 4px; }
+  .lfl-arrow { transform: rotate(90deg); align-self: flex-start; }
+}
+
+@container viewer (max-width: 540px) { /* the transport in two rows only where one row does not fit the viewer (a 660 px
+   window kept the desktop row; the stretched 1fr cell used to leave the buttons at the left of an empty pill, Safari
+   31/10; at 901-1180 px the viewer column is narrower than the window and the row ran into the inspector) */
+  .transport { grid-template-columns: auto 1fr; grid-template-areas: "mid mid" "tc right"; height: auto; gap: 2px 8px; }
+  .tp-mid { grid-area: mid; justify-self: center; }
+  .tp-tc { grid-area: tc; }
+  .tp-right { grid-area: right; }
+}
+@container viewer (max-width: 330px) { /* too narrow for the timecode and the tools side by side: each gets its row */
+  .transport { grid-template-columns: 1fr; grid-template-areas: "mid" "tc" "right"; }
+  .tp-tc { justify-self: center; margin-left: 0; }
+  .tp-right { justify-content: center; }
 }
 
 @media (max-width: 480px) { /* a phone's top bar: Share and Export keep their icon (and aria-label), the name gets the room */
@@ -1236,7 +1275,7 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .lo-w.act-pill::before { content: ""; position: absolute; z-index: -1; left: calc(-1 * var(--px)); right: calc(-1 * var(--px)); top: var(--pt); height: var(--ph); background: var(--act-bg); border-radius: var(--r); }
 .lo-w.act-color, .lo-w.act-karaoke { color: var(--act-bg); }
 .lo-callout { position: absolute; box-sizing: border-box; display: flex; align-items: center; justify-content: center; white-space: nowrap; font-weight: normal; font-synthesis: none; }
-.lo-title { position: absolute; inset: 0; background: #000; }
+.lo-title { position: absolute; inset: 0; background: #000; container-type: inline-size; } /* cqw below = the frame's width, not the window's */
 .lo-title img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .lo-title-words { display: grid; place-items: center; background: #141414; }
 .lo-title-words img { display: none; }
@@ -1286,8 +1325,8 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .ver-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
 .ver-change { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ver-by { font-size: 10.5px; font-weight: 650; border-radius: 99px; padding: 0 6px; margin-right: 6px; border: 1px solid var(--line-2); }
-.ver-by.agent { color: var(--accent); border-color: #6b5517; }
-.ver-by.you { color: var(--text); }
+.ver-by.by-agent { color: var(--accent); border-color: #6b5517; }
+.ver-by.by-you { color: var(--text); }
 .ver-star { width: 20px; height: 20px; color: var(--mute); }
 .ver-star.on { color: var(--accent); }
 .ver-star.on svg path { fill: var(--accent); }
@@ -1467,3 +1506,21 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
   .monti-dock, .monti-tuck { transition: none; }
   .monti-pose.idle { animation: none !important; }
 }
+
+/* touch screens (audit 31/10): iOS zooms the page into any field under 16 px and stays zoomed, and a control that only
+   shows on hover never shows */
+@media (pointer: coarse) {
+  input, textarea, select { font-size: 16px; }
+}
+@media (hover: none) {
+  .hm-archive, .pc-del, .lr-edit { opacity: 1; }
+}
+
+/* Monti over the page's own layers (audit 31/10): z-index 70 put his badge and greeting on top of Export, the palette,
+   the dialogs and the New project sheet (40-60). While one of them is open he waits out of sight, unless his own panel
+   is open (? still opens it, and Show me can still point into Export). */
+body:has(.modal-bg, .hm-sheet-wrap) .monti-hi,
+body:has(.modal-bg, .hm-sheet-wrap) .monti-dock:not(:has(.monti-badge.on)) { visibility: hidden; }
+/* touch (audit 31/10): the ruler, the playhead, the trim handles and Monti's badge drag with a finger instead of panning the
+   page; a clip body keeps the pan, so a finger scrolls the timeline and a mouse moves clips */
+.ruler, .playhead, .trim-h, .monti-badge { touch-action: none; }
