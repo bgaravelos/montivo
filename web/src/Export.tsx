@@ -44,16 +44,20 @@ const KINDS: { k: Kind; label: string; note: string }[] = [
 ];
 
 /** The publish pack: one Spark call writes a post per platform from the brief, the words the cut keeps and the review. */
-function PostText({ id, n, post, setPost, hasKey, keyNote, onErr }: {
+function PostText({ id, n, post, setPost, hasKey, keyNote, onErr, onMoved }: {
   id: string; n: number; post: PostRecord | null; setPost: (p: PostRecord) => void; hasKey: boolean; keyNote: string | null;
-  onErr: (e: string | null) => void;
+  onErr: (e: string | null) => void; onMoved?: (run: string) => void;
 }) {
   const [tab, setTab] = useState("reels");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const write = async () => {
     setBusy(true); onErr(null);
-    try { setPost(await api<PostRecord>(`/api/runs/${id}/export/post`, { v: n })); } catch (e) { onErr(String((e as Error).message)); } finally { setBusy(false); }
+    try {
+      const r = await api<PostRecord & { run?: string }>(`/api/runs/${id}/export/post`, { v: n });
+      setPost(r);
+      if (r.run && r.run !== id) onMoved?.(r.run); // on a sample it went into the judge's own copy
+    } catch (e) { onErr(String((e as Error).message)); } finally { setBusy(false); }
   };
   const one = post?.platforms?.[tab];
   const copy = async () => {
@@ -99,9 +103,11 @@ function download(url: string, name: string) {
   a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
 }
 
-export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, keyNote, costs }: {
+export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, keyNote, costs, onMoved }: {
   id: string; versions: Version[]; initial: number | null; onClose: () => void; onStyle: () => void;
   hasKey: boolean; keyNote: string | null; costs: Costs | undefined;
+  /** A paid call on a hosted sample went into the judge's own copy: open the copy's Export page. */
+  onMoved?: (run: string) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   useModal(box, onClose); // Esc closes it from anywhere, focus moves in and stays in, and goes back to Export after
@@ -165,7 +171,7 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
         <div className="modal-head"><span className="mh-title">Export</span><button className="icon-btn" onClick={onClose} aria-label="close"><Icon name="close" size={14} /></button></div>
         <div className="ex-grid">
           <div className="ex-left" data-monti="export.cover">
-            <CoverMaker id={id} v={v} total={total} aspect={aspect} W={W} H={H} grid={saved.grid} bands={bands}
+            <CoverMaker id={id} onMoved={onMoved} v={v} total={total} aspect={aspect} W={W} H={H} grid={saved.grid} bands={bands}
               cover={cover} setCover={setCover} record={record} setRecord={setRecord}
               hasKey={hasKey} keyNote={keyNote} costs={costs} onErr={setErr} />
             <label className="st-check"><input type="checkbox" checked={saved.grid} onChange={(e) => setSaved({ ...saved, grid: e.target.checked })} /> Show the Instagram grid crop</label>
@@ -204,7 +210,7 @@ export function ExportPage({ id, versions, initial, onClose, onStyle, hasKey, ke
               ))}
             </div>
             <div className="pn-k" data-monti="export.post">Post text</div>
-            <PostText id={id} n={n} post={post} setPost={setPost} hasKey={hasKey} keyNote={keyNote} onErr={setErr} />
+            <PostText id={id} n={n} post={post} setPost={setPost} hasKey={hasKey} keyNote={keyNote} onErr={setErr} onMoved={onMoved} />
             <div className="pn-k">Pre-flight {checks && <span className={`ex-sum s-${worst}`}>{worst === "ok" ? "ready" : worst === "fail" ? "fix first" : worst === "info" ? "–" : "check these"}</span>}</div>
             <div className="ex-checks" data-monti="export.checks">
               {!checks && <span className="mute small"><MarkLoader /> checking…</span>}

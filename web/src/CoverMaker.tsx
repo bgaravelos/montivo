@@ -28,11 +28,12 @@ const TEMPLATES: { k: Template; label: string; note: string }[] = [
   { k: "cutout", label: "Cutout", note: "giant headline behind the head (SAM 3.1 cut-out)" },
 ];
 
-export function CoverMaker({ id, v, total, aspect, W, H, grid, bands, cover, setCover, record, setRecord, hasKey, keyNote, costs, onErr }: {
+export function CoverMaker({ id, v, total, aspect, W, H, grid, bands, cover, setCover, record, setRecord, hasKey, keyNote, costs, onErr, onMoved }: {
   id: string; v: Version | null; total: number; aspect: string; W: number; H: number; grid: boolean;
   bands: { side: boolean; pct: number }; cover: CoverState; setCover: (c: CoverState) => void;
   record: CoverRecord | null; setRecord: (r: CoverRecord) => void;
   hasKey: boolean; keyNote: string | null; costs: Costs | undefined; onErr: (e: string | null) => void;
+  onMoved?: (run: string) => void;
 }) {
   const [shown, setShown] = useState<Rendered | null>(null);
   const [rendering, setRendering] = useState(false);
@@ -56,8 +57,9 @@ export function CoverMaker({ id, v, total, aspect, W, H, grid, bands, cover, set
     if (!v) return;
     setDesigning(true); onErr(null);
     try {
-      const r = await api<CoverRecord>(`/api/runs/${id}/cover/design`, { v: v.n, aspect });
+      const r = await api<CoverRecord & { run?: string }>(`/api/runs/${id}/cover/design`, { v: v.n, aspect });
       setRecord(r);
+      if (r.run && r.run !== id) onMoved?.(r.run); // on a sample it went into the judge's own copy
       const f = r.design?.final;
       if (f) setCover({ t: f.t_s, template: f.template, text: f.text, highlight: f.highlight });
     } catch (e) { onErr(String((e as Error).message)); } finally { setDesigning(false); }
@@ -66,7 +68,8 @@ export function CoverMaker({ id, v, total, aspect, W, H, grid, bands, cover, set
     if (!v) return;
     setMasking(true); onErr(null);
     try {
-      await api(`/api/runs/${id}/cover/mask`, { v: v.n, t: cover.t, aspect });
+      const r = await api<{ run?: string }>(`/api/runs/${id}/cover/mask`, { v: v.n, t: cover.t, aspect });
+      if (r.run && r.run !== id) return onMoved?.(r.run); // the judge's own copy has the mask
       setCover({ ...cover }); // render again, now with the mask
     } catch (e) { onErr(String((e as Error).message)); } finally { setMasking(false); }
   };

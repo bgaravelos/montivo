@@ -8,13 +8,14 @@ Both switch on from the environment only, so `montivo serve` on a laptop is unch
     MONTIVO_MAX_FOOTAGE_S=95    a new run's clip may be at most this long
     MONTIVO_MAX_UPLOAD_MB=1000  an upload stops past this size (95 s of iPhone 4K HDR is about 600 MB)
     MONTIVO_MAX_UPLOADS=5       clips one judge may upload (with the budget on)
+    MONTIVO_MAX_UPLOADS_ALL=30  clips all judges together may upload (a new sign-in is a new judge)
     MONTIVO_JUDGE_SECRET=...    signs the judge cookies (else <root>/judge.key, made once; never the password)
 
 The budget is read from the ledgers every run writes (runs/<id>/ledger.json `total_cost_usd`), counted from a baseline
 taken the first time the host saw each run (budget.json next to runs/): the seeded sample runs bring their own Mac
 spend with them, and only what was spent on the host counts. A paid action is refused when what is left does not cover
 its expected cost, so the cap holds within one action's estimate; the $0 edits never touch it. Every browser gets a
-judge id at sign-in (JUDGE): its first edit on a sample copies the sample to runs/<id>-<judge> (app.own), and the project
+judge id at sign-in (JUDGE), and only there: its first edit on a sample copies the sample to runs/<id>-<judge> (app.own), and the project
 list shows each judge the samples (or their copy) and their own runs. A run copied onto the
 host later is adopted the same way: `python -m montivo.server.hosted adopt --root /data 015`.
 """
@@ -29,8 +30,9 @@ import os
 import re
 import secrets
 import time
+from collections import deque
 from pathlib import Path
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -43,6 +45,9 @@ OPEN_PATHS = ("/login", "/api/login", "/api/health", "/favicon", "/apple-touch-i
 MIN_PAID_USD = 0.01  # the cheapest paid action (a Muse Image title card)
 MONTI = "_monti"  # the budget key of Monti's ledger (no run has a name starting with _)
 ARCHIVED = "_archive"  # runs/_archive/<id> (app.ARCHIVE)
+UNSAFE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+LOGIN_FAILS_PER_MIN = 10  # wrong passwords one address may send in a minute; past it 429 without a check
+LOGIN_FAILS_ALL_PER_MIN = 100  # and all addresses together (an address is only the proxy's X-Forwarded-For)
 
 
 def usd(x: float) -> str:
@@ -187,8 +192,57 @@ def judge_id(request: Request, key: str | None) -> str | None:
     return jid if JUDGE_ID.fullmatch(jid) and hmac.compare_digest(raw, judge_cookie(key, jid)) else None
 
 
-def set_judge(resp, key: str, jid: str) -> None:
-    resp.set_cookie(JUDGE, judge_cookie(key, jid), max_age=60 * 86400, httponly=True, samesite="lax")
+def https(request: Request) -> bool:
+    return request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+
+
+def set_judge(resp, key: str, jid: str, secure: bool = False) -> None:
+    resp.set_cookie(JUDGE, judge_cookie(key, jid), max_age=60 * 86400, httponly=True, samesite="lax", secure=secure)
+
+
+def same_origin(request: Request) -> bool:
+    """A request that changes something came from this site's own pages. SameSite=Lax does not cover it here:
+    modal.run is not on the Public Suffix List, so every other app on *.modal.run is the same site and its pages could
+    POST here with the judge's cookies (cloud security check, 31/10). Browsers send Sec-Fetch-Site and Origin on every
+    such request; one with neither is not a browser, and a cookie-less client cannot be tricked into anything."""
+    site = request.headers.get("sec-fetch-site")
+    if site is not None:
+        return site in ("same-origin", "none")  # none: typed in the address bar, a bookmark
+    origin = request.headers.get("origin")
+    if origin is None:
+        return True
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    return urlsplit(origin).netloc == host
+
+
+def dot_segments(path: str) -> bool:
+    """/s/../index.html: an open prefix with a way out of it (StaticFiles resolves the dots after the gate)."""
+    return any(part in ("..", ".") for part in path.split("/"))
+
+
+class LoginLimit:
+    """Wrong passwords per address and in all per minute: the 1 s sleep after each one did not hold back a guesser
+    who sends many at once (1000 tries in 8.9 s, cloud security check 31/10)."""
+
+    def __init__(self):
+        self.fails: deque[tuple[float, str]] = deque()
+
+    def _trim(self, now: float) -> None:
+        while self.fails and now - self.fails[0][0] > 60:
+            self.fails.popleft()
+
+    def blocked(self, who: str) -> bool:
+        self._trim(time.time())
+        mine = sum(w == who for _, w in self.fails)
+        return mine >= LOGIN_FAILS_PER_MIN or len(self.fails) >= LOGIN_FAILS_ALL_PER_MIN
+
+    def failed(self, who: str) -> None:
+        self.fails.append((time.time(), who))
+
+
+def client(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    return fwd.split(",")[0].strip() or (request.client.host if request.client else "?")
 
 
 LOGIN_HTML = """<!doctype html>
@@ -224,20 +278,23 @@ def install(app, password: str | None, root: Path) -> None:
     if not password:
         return
     key = judge_key(root)
+    limit = LoginLimit()
 
     @app.middleware("http")
     async def gate(request: Request, call_next):
         path = request.url.path
+        if dot_segments(path):
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if request.method in UNSAFE_METHODS and not same_origin(request):
+            return JSONResponse({"error": "this request did not come from the Montivo page"}, status_code=403)
         if path.startswith(OPEN_PATHS):
             return await call_next(request)
         if signed_in(request, password):
-            jid = judge_id(request, key)
-            request.scope[JUDGE_SCOPE] = jid or secrets.token_hex(4)
-            if jid:
+            # the judge id comes with the sign-in only: minting one for every request without the cookie let one
+            # client be a new judge each time and step past every per-judge limit (cloud security check, 31/10)
+            if jid := judge_id(request, key):
+                request.scope[JUDGE_SCOPE] = jid
                 return await call_next(request)
-            resp = await call_next(request)  # no judge cookie yet, or one the server did not sign: a new id
-            set_judge(resp, key, request.scope[JUDGE_SCOPE])
-            return resp
         if path.startswith("/api/"):
             return JSONResponse({"error": "sign in first"}, status_code=401)
         return RedirectResponse("/login", status_code=303)
@@ -249,6 +306,9 @@ def install(app, password: str | None, root: Path) -> None:
 
     @app.post("/api/login")
     async def login(request: Request):
+        who = client(request)
+        if limit.blocked(who):
+            return JSONResponse({"error": "too many wrong passwords: wait a minute"}, status_code=429)
         body = (await request.body())[:2048].decode(errors="replace")
         if request.headers.get("content-type", "").startswith("application/json"):
             try:
@@ -258,13 +318,13 @@ def install(app, password: str | None, root: Path) -> None:
         else:
             given = (parse_qs(body).get("password") or [""])[0]
         if not hmac.compare_digest(token(given), token(password)):
+            limit.failed(who)
             await asyncio.sleep(1.0)  # slows a guesser down without holding the other requests
             return RedirectResponse("/login?error=1", status_code=303)
         resp = RedirectResponse("/", status_code=303)
-        if not judge_id(request, key):
-            set_judge(resp, key, secrets.token_hex(4))
-        resp.set_cookie(COOKIE, token(password), max_age=14 * 86400, httponly=True, samesite="lax",
-                        secure=request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https")
+        jid = judge_id(request, key) or secrets.token_hex(4)
+        set_judge(resp, key, jid, https(request))  # the same id again, now with Secure on the host
+        resp.set_cookie(COOKIE, token(password), max_age=14 * 86400, httponly=True, samesite="lax", secure=https(request))
         return resp
 
     @app.post("/api/logout")

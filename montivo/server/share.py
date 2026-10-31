@@ -7,6 +7,7 @@ new token, so an old link never comes back."""
 from __future__ import annotations
 
 import html
+import math
 import secrets
 import subprocess
 import threading
@@ -81,8 +82,25 @@ def poster_time(v: dict) -> float:
     return round(title + max(dur - title, 0) / 3, 2)
 
 
+def _secs(x) -> float:
+    try:
+        return max(0.0, float(x)) if math.isfinite(float(x)) else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def base_url(request) -> str:
+    """https behind Modal's proxy (it talks plain http to the container): the Open Graph image and video a post
+    preview loads must be https (cloud UI check, 31/10)."""
+    base = str(request.base_url)
+    if request.headers.get("x-forwarded-proto") == "https" and base.startswith("http://"):
+        base = "https://" + base[len("http://"):]
+    return base
+
+
 def page(tok: str, run: dict, v: dict, history: list[dict], base: str) -> str:
     e = html.escape
+    base = e(base)  # from the request's Host header: never raw into the page
     r = v.get("review")
     name = v.get("title_card_text") or (run.get("brief") or "").split(".")[0][:60] or "A Montivo cut"
     dur = v.get("duration_s") or v.get("runtime_s") or 0
@@ -93,7 +111,7 @@ def page(tok: str, run: dict, v: dict, history: list[dict], base: str) -> str:
     bars = "".join(f'<div class="bar"><span>{e(CRITERIA.get(k, k))}</span><i><u style="width:{s * 10}%"></u></i><em>{s}</em></div>'
                    for k, s in (r or {}).get("scores", {}).items())
     issues = sorted((r or {}).get("issues", []), key=lambda i: (SEV.get(i.get("severity"), 3), i.get("t_s", 0)))[:3]
-    notes = "".join(f'<li><button data-t="{i["t_s"]}">{_clock(i["t_s"])}</button> <span class="sev {e(i["severity"])}">'
+    notes = "".join(f'<li><button data-t="{_secs(i["t_s"]):.2f}">{_clock(_secs(i["t_s"]))}</button> <span class="sev {e(i["severity"])}">'
                     f'{e(i["severity"])}</span> {e(i["what"])}</li>' for i in issues)
     desc = (f"{r['overall']}/100 from a blind AI review. " if r else "") + \
         f"Cut by Montivo: Muse Spark planned the edit, then reviewed its own render and re-cut it."
@@ -193,7 +211,7 @@ def install(app, st, protected=lambda d: False) -> None:
     @app.get("/s/{tok}")
     def share_page(tok: str, request: Request):
         d, v, run, history = resolve(tok)
-        return HTMLResponse(page(tok, run, v, history, str(request.base_url)), headers={"Cache-Control": "no-cache"})
+        return HTMLResponse(page(tok, run, v, history, base_url(request)), headers={"Cache-Control": "no-cache"})
 
     @app.get("/s/{tok}/video.mp4")
     def share_video(tok: str):

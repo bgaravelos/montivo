@@ -77,7 +77,11 @@ export function Editor({ id, replay, go }: Props) {
   const [panel, setPanel] = useState<PanelId>("assistant");
   const [tlMode, setTlMode] = useState<"timeline" | "transcript">("timeline");
   const [zoom, setZoom] = useState<number | null>(null);
-  const [dialog, setDialog] = useState<Dialog | null>(null);
+  // ?export=1: a paid Export call on a hosted sample moved to the judge's copy, and Export opens again there
+  const [dialog, setDialog] = useState<Dialog | null>(() => (window.location.hash.includes("export=1") ? { kind: "export" } : null));
+  useEffect(() => {
+    if (window.location.hash.includes("export=1")) history.replaceState(null, "", window.location.hash.replace(/[?&]export=1/, ""));
+  }, []);
   const [menu, setMenu] = useState(false);
   const [ctx, setCtx] = useState<ClipMenu | null>(null);
   const [askNonce, setAskNonce] = useState(0);
@@ -289,8 +293,10 @@ export function Editor({ id, replay, go }: Props) {
   }, [live0, draftOp, draftV, draftData, draftSum, flash, act]);
   const commitDraft = async () => {
     try {
-      await api(`/api/runs/${id}/draft/commit`, { review: 0 });
+      const r = await api<{ run?: string; job?: { run?: string } }>(`/api/runs/${id}/draft/commit`, { review: 0 });
       flash(`Making Version ${draftData?.draft?.n ?? ""}: one render of the draft's ${edits(draftSum?.ops.length ?? 0)} ($0).`);
+      const to = r.job?.run ?? r.run;
+      if (to && to !== id) go(`#/run/${to}`); // the first commit on a sample makes the judge's own copy: follow it
     } catch (e) { flash(String((e as Error).message), "error"); }
   };
   /** A look from words: in Live, Muse Spark suggests it (one call, no version) and it goes into the draft (A3). */
@@ -849,7 +855,8 @@ export function Editor({ id, replay, go }: Props) {
       )}
       {dialog?.kind === "export" && <ExportPage id={id} versions={visible} initial={sel} onClose={() => setDialog(null)}
         onStyle={() => { setDialog(null); setPanel("style"); }}
-        hasKey={state.has_key} keyNote={state.key_note ?? null} costs={state.costs} />}
+        hasKey={state.has_key} keyNote={state.key_note ?? null} costs={state.costs}
+        onMoved={(run) => go(`#/run/${run}?export=1`)} />}
       {dialog?.kind === "ledger" && <LedgerDialog state={state} onClose={() => setDialog(null)} />}
       {dialog?.kind === "keys" && <ShortcutsDialog onClose={() => setDialog(null)} />}
       {dialog?.kind === "palette" && <Palette onClose={() => setDialog(null)} commands={[

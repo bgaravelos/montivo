@@ -179,9 +179,12 @@ def test_sign_in_gives_each_browser_a_judge_id(tmp_path, hosted_env):
     r = c.post("/api/login", data={"password": "pw"}, follow_redirects=False)
     jid, _, sig = (r.cookies.get(H.JUDGE) or "").partition(".")
     assert len(jid) == 8 and r.cookies.get(H.JUDGE) == H.judge_cookie(H.judge_key(tmp_path), jid)
-    old = TestClient(A.create_app(tmp_path))  # signed in before the judge cookie existed
+    old = TestClient(A.create_app(tmp_path))  # signed in, but no judge cookie: the id comes with a sign-in only
     old.cookies.set(H.COOKIE, H.token("pw"))
-    assert old.get("/api/runs").cookies.get(H.JUDGE)
+    r = old.get("/api/runs")
+    assert r.status_code == 401 and not r.cookies.get(H.JUDGE)  # (a new id per request stepped past every limit)
+    assert old.post("/api/login", data={"password": "pw"}, follow_redirects=False).cookies.get(H.JUDGE)
+    assert old.get("/api/runs").status_code == 200
 
 
 def test_an_upload_never_replaces_a_clip(tmp_path, hosted_env):
@@ -308,11 +311,13 @@ def test_a_judge_cookie_the_server_did_not_sign_is_another_judge(tmp_path, hoste
                    H.judge_cookie("pw", "6fa922fb")):
         thief.cookies.set(H.JUDGE, forged)
         r = thief.get("/api/runs/r1-6fa922fb")
-        assert r.status_code == 404, forged
+        assert r.status_code == 401, forged  # not a judge the server made: sign in again
+        assert thief.post("/api/runs/r1/drop", json={"span": "s1"}).status_code == 401, forged
+        r = thief.post("/api/login", data={"password": "pw"}, follow_redirects=False)
         new = r.cookies.get(H.JUDGE)  # a fresh signed id instead
         assert new and new.partition(".")[0] != "6fa922fb" and new == H.judge_cookie(H.judge_key(tmp_path), new.partition(".")[0])
-    thief.cookies.set(H.JUDGE, "a b")
-    assert thief.post("/api/runs/r1/drop", json={"span": "s1"}).json()["job"]["run"] != "r1-a b"
+        thief.cookies.set(H.JUDGE, new)
+        assert thief.get("/api/runs/r1-6fa922fb").status_code == 404, forged
     assert not (tmp_path / "runs" / "r1-a b").exists()
 
 

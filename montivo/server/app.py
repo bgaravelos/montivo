@@ -81,6 +81,8 @@ COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 13, "plan_open_s": 7, "revie
         "hook_ab": 0.04, "compare": 0.075, "ask": 0.006, "look": 0.008, "titles": 0.009, "cover": 0.025, "cover_design": 0.05, "cover_mask": 0.01,
         "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175, "monti": 0.014}
 MONTI_PER_HOUR = 40  # Monti answers from the model per judge and hour on the hosted demo; past it, from the guide ($0)
+MONTI_PER_HOUR_ALL = 120  # and for all judges together (a new sign-in is a new judge): about $1.70 an hour at most
+MAX_UPLOADS_ALL = 30  # uploads all judges together may make on the hosted demo (MONTIVO_MAX_UPLOADS_ALL)
 
 
 class WebFiles(StaticFiles):
@@ -246,6 +248,38 @@ def chat_append(run_dir: Path, entry: dict) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a") as fh:
         fh.write(json.dumps({"t": time.time(), **entry}) + "\n")
+
+
+def link_or_copy(src: str, dst: str) -> None:
+    try:
+        os.link(src, dst)
+    except OSError:
+        shutil.copy2(src, dst)
+
+
+def claim_dir(folder: Path, name: str) -> str:
+    """Make folder/name, or name-2, name-3, ...: the first that did not exist, made atomically, so two requests
+    can never both take one (the run id of a new project on the hosted demo, cloud security check 31/10)."""
+    k = 1
+    while True:
+        cand = name if k == 1 else f"{name}-{k}"
+        try:
+            (folder / cand).mkdir(parents=True)
+            return cand
+        except FileExistsError:
+            k += 1
+
+
+async def body(request: Request) -> dict:
+    """The request's JSON object; anything else is the client's mistake (400), not the server's (500)."""
+    raw = await request.body()
+    try:
+        b = json.loads(raw) if raw.strip() else {}
+    except ValueError:
+        raise HTTPException(400, "the body is not JSON")
+    if not isinstance(b, dict):
+        raise HTTPException(400, "the body is not a JSON object")
+    return b
 
 
 def free_name(folder: Path, name: str) -> Path:
@@ -460,6 +494,7 @@ def create_app(root: Path) -> FastAPI:
     max_footage_s = hosted.env_float("MONTIVO_MAX_FOOTAGE_S")
     max_upload_mb = hosted.env_float("MONTIVO_MAX_UPLOAD_MB")
     max_uploads = hosted.env_float("MONTIVO_MAX_UPLOADS")
+    max_uploads_all = hosted.env_float("MONTIVO_MAX_UPLOADS_ALL") or MAX_UPLOADS_ALL
 
     @app.middleware("http")
     async def only_their_runs(request: Request, call_next):
@@ -474,6 +509,21 @@ def create_app(root: Path) -> FastAPI:
         return await call_next(request)
 
     hosted.install(app, os.environ.get("MONTIVO_PASSWORD"), st.root)
+
+    @app.exception_handler(ValueError)
+    @app.exception_handler(TypeError)
+    @app.exception_handler(AttributeError)
+    async def bad_input(request: Request, e: Exception):
+        """A route reading the request ("from": "x", t=nan, a body that is not JSON or not an object) answered 500;
+        that is the client's mistake: 400. Only for errors raised in a route's own frame (int(), float(), b.get on a
+        list): one raised deeper, in the engine, is still the server's and still a 500."""
+        tb = e.__traceback__
+        while tb is not None and tb.tb_next is not None:
+            tb = tb.tb_next
+        here = tb is not None and Path(tb.tb_frame.f_code.co_filename).parent == Path(__file__).parent
+        if isinstance(e, json.JSONDecodeError) or (here and (not isinstance(e, AttributeError) or "has no attribute 'get'" in str(e))):
+            return JSONResponse({"detail": f"bad request: {str(e)[:200]}"}, status_code=400)
+        raise e
     if budget is not None:
         st.on_stopped = lambda job: budget.hold(stop_hold(st.root, job), job.run)
         # a container that stopped mid-job (scale to zero, a redeploy) never ran the job's clean-up: its unrendered
@@ -503,15 +553,28 @@ def create_app(root: Path) -> FastAPI:
 
     def copy_sample(run_id: str, d: Path, judge: str) -> str:
         mine = f"{run_id}-{judge}"
+        dest = st.runs / mine
         with copying:
-            if not (st.runs / mine / "run.json").is_file():
+            if dest.exists() and owner(dest) != judge:  # a folder of that name someone else made: never theirs to use
+                raise HTTPException(409, f"runs/{mine} exists and is not your copy of {run_id}")
+            if not (dest / "run.json").is_file():
+                shutil.rmtree(dest, ignore_errors=True)  # this judge's own half copy, if any
                 tmp = st.root / ".copying" / mine  # outside runs/: the budget and the list never see a half copy
                 shutil.rmtree(tmp, ignore_errors=True)
                 tmp.parent.mkdir(exist_ok=True)
                 shutil.copytree(d, tmp, ignore=shutil.ignore_patterns("job-*.out", "cache", "frames", "heard"))
+                # the other judges' drafts and version names on the sample are theirs, not this copy's
+                shutil.rmtree(tmp / "ui" / "draft", ignore_errors=True)
+                for lab in (tmp / "ui" / "labels").glob("*.json"):
+                    if lab.stem != judge:
+                        lab.unlink()
+                # the edit media (Live's proxy, filmstrip, peaks): the copy's first Live open used to make them again,
+                # 6-8 s of "Preparing the live preview" (cloud UI check, 31/10); hard links where the disk allows
+                if (d / "ui" / "cache" / "edit").is_dir():
+                    shutil.copytree(d / "ui" / "cache" / "edit", tmp / "ui" / "cache" / "edit", copy_function=link_or_copy)
                 (tmp / "ui").mkdir(exist_ok=True)
                 (tmp / "ui" / "owner").write_text(judge)
-                tmp.rename(st.runs / mine)
+                tmp.rename(dest)
                 budget.adopt([mine])  # the copy's ledger so far is the sample's, not the judge's spend
                 chat_append(st.runs / mine, {"role": "agent", "kind": "result", "text": f"Your own copy of the "
                              f"sample {run_id}: your edits go here and the sample stays as it was for the next judge."})
@@ -569,9 +632,11 @@ def create_app(root: Path) -> FastAPI:
         who = judge_of(request) if budget is not None else "local"
         now = time.time()
         recent = [x for x in monti_seen.get(who, []) if now - x < 3600]
+        everyone = sum(1 for xs in monti_seen.values() for x in xs if now - x < 3600)
         why = ("no MODEL_API_KEY on this server" if not has_key()
                else "the demo's model budget is spent" if budget is not None and budget.left() < monti.COST_USD
                else f"more than {MONTI_PER_HOUR} questions this hour" if budget is not None and len(recent) >= MONTI_PER_HOUR
+               else "the demo's questions this hour are used up" if budget is not None and everyone >= MONTI_PER_HOUR_ALL
                else None)
         out = None
         if why is None:
@@ -624,7 +689,10 @@ def create_app(root: Path) -> FastAPI:
     @app.get("/api/runs/{run_id}/file/{path:path}")
     def file(run_id: str, path: str):
         d = st.run_dir(run_id).resolve()
-        p = (d / path).resolve()
+        try:
+            p = (d / path).resolve()
+        except (ValueError, OSError):  # a null byte in the path
+            raise HTTPException(404, "no such file")
         if d not in p.parents or not p.is_file():
             raise HTTPException(404, "no such file")
         return FileResponse(p)  # answers Range requests, so the player can seek
@@ -926,17 +994,27 @@ def create_app(root: Path) -> FastAPI:
         d, _ = cut_of(run_id, v)
         return read_json(d / f"cover_v{v}.json") or {"moments": []}
 
+    async def own_paid(run_id: str, request: Request, est: float, what: str) -> tuple[str, dict]:
+        """The run a paid export call writes to and the body: on the hosted demo the judge's own copy of a sample
+        (cover_vN.json and post_vN.json written into a sample were the next judge's to see, code review day 1)."""
+        b = await body(request)
+        return await own(run_id, request, est=lambda _: est, what=what), b
+
     @app.post("/api/runs/{run_id}/export/cover")
-    def cover_post(run_id: str, b: dict):
+    async def cover_post(run_id: str, request: Request):
         """{"v": N}: Muse Spark watches the version and names its best cover moments (engine/cover.py, one call, about
-        $0.025, 10-20 s; python -m montivo.export --suggest-cover)."""
+        $0.025, 10-20 s; python -m montivo.export --suggest-cover). "run" is the run it went to."""
+        run_id, b = await own_paid(run_id, request, COST["cover"], "Picking a cover (Muse Spark)")
         v = int(b.get("v") or 0)
-        d, _ = cut_of(run_id, v)
-        with one_paid_call(run_id):
-            need_key("Picking a cover (Muse Spark)", COST["cover"])
-            if st.busy(run_id):
-                raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: ask for a cover after it")
-            return export_cmd(d, v, "--suggest-cover")
+
+        def go() -> dict:
+            d, _ = cut_of(run_id, v)
+            with one_paid_call(run_id):
+                need_key("Picking a cover (Muse Spark)", COST["cover"])
+                if st.busy(run_id):
+                    raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: ask for a cover after it")
+                return {**export_cmd(d, v, "--suggest-cover"), "run": run_id}
+        return await asyncio.to_thread(go)
 
     @app.get("/api/runs/{run_id}/export/post")
     def post_get(run_id: str, v: int):
@@ -945,16 +1023,20 @@ def create_app(root: Path) -> FastAPI:
         return read_json(d / f"post_v{v}.json") or {"platforms": None}
 
     @app.post("/api/runs/{run_id}/export/post")
-    def post_post(run_id: str, b: dict):
+    async def post_post(run_id: str, request: Request):
         """{"v": N}: the publish pack, a title, description and hashtags per platform from one Muse Spark call (about
-        $0.01, 5-15 s; python -m montivo.export --post-text) -> post_vN.json."""
+        $0.01, 5-15 s; python -m montivo.export --post-text) -> post_vN.json. "run" is the run it went to."""
+        run_id, b = await own_paid(run_id, request, 0.01, "Writing the post text (Muse Spark)")
         v = int(b.get("v") or 0)
-        d, _ = cut_of(run_id, v)
-        with one_paid_call(run_id):
-            need_key("Writing the post text (Muse Spark)", 0.01)
-            if st.busy(run_id):
-                raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: write the post text after it")
-            return export_cmd(d, v, "--post-text")
+
+        def go() -> dict:
+            d, _ = cut_of(run_id, v)
+            with one_paid_call(run_id):
+                need_key("Writing the post text (Muse Spark)", 0.01)
+                if st.busy(run_id):
+                    raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: write the post text after it")
+                return {**export_cmd(d, v, "--post-text"), "run": run_id}
+        return await asyncio.to_thread(go)
 
     def export_cmd(d: Path, v: int, *extra: str) -> dict:
         args = [sys.executable, "-m", "montivo.export", str(d.relative_to(st.root)) if d.is_relative_to(st.root) else str(d),
@@ -980,33 +1062,44 @@ def create_app(root: Path) -> FastAPI:
         return v, aspect, {"t_s": t, "template": template, "text": text, "highlight": highlight}
 
     @app.post("/api/runs/{run_id}/cover/design")
-    def cover_design(run_id: str, b: dict):
+    async def cover_design(run_id: str, request: Request):
         """{"v": N, "aspect"}: the agent designs the cover (engine/thumb.py: the exact still from a contact sheet,
         three headlines, a template, a render, Spark's check at grid-tile size and one fix; about $0.04, 30-60 s;
-        python -m montivo.export --design-cover). Returns cover_vN.json."""
-        v = int(b.get("v") or 0)
+        python -m montivo.export --design-cover). Returns cover_vN.json and "run", the run it went to."""
+        b = await body(request)
         aspect = b.get("aspect") or "9:16"
         if aspect not in ASPECTS:
             raise HTTPException(400, f"aspect: one of {', '.join(ASPECTS)}")
-        d, _ = cut_of(run_id, v)
-        with one_paid_call(run_id):
-            need_key("Designing a cover (Muse Spark)", COST["cover_design"])
-            if st.busy(run_id):
-                raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: design the cover after it")
-            return export_cmd(d, v, "--design-cover", *(["--aspect", aspect] if aspect != "9:16" else []))
+        run_id, _ = await own_paid(run_id, request, COST["cover_design"], "Designing a cover (Muse Spark)")
+        v = int(b.get("v") or 0)
+
+        def go() -> dict:
+            d, _ = cut_of(run_id, v)
+            with one_paid_call(run_id):
+                need_key("Designing a cover (Muse Spark)", COST["cover_design"])
+                if st.busy(run_id):
+                    raise HTTPException(409, f"{st.jobs[run_id].label} is running on this run: design the cover after it")
+                return {**export_cmd(d, v, "--design-cover", *(["--aspect", aspect] if aspect != "9:16" else [])),
+                        "run": run_id}
+        return await asyncio.to_thread(go)
 
     @app.post("/api/runs/{run_id}/cover/mask")
-    def cover_mask(run_id: str, b: dict):
+    async def cover_mask(run_id: str, request: Request):
         """{"v": N, "t": s, "aspect"}: SAM 3.1's person mask of that still for the cutout cover (one image request,
-        about $0.01, cached under ui/cache/cover/)."""
+        about $0.01, cached under ui/cache/cover/). "run" is the run it went to."""
         from ..engine.thumb import mask_path
-        v, aspect, design = cover_body(b)
-        d, _ = cut_of(run_id, v)
-        if not mask_path(d, v, design["t_s"], aspect).is_file():
-            with one_paid_call(run_id):
-                need_key("Cutting out the speaker (SAM 3.1)", COST["cover_mask"])
-                export_cmd(d, v, "--cover-mask", "--cover-t", f"{design['t_s']:.2f}", *(["--aspect", aspect] if aspect != "9:16" else []))
-        return {"ok": True}
+        v, aspect, design = cover_body(await body(request))
+        if not mask_path(st.run_dir(run_id), v, design["t_s"], aspect).is_file():
+            run_id, _ = await own_paid(run_id, request, COST["cover_mask"], "Cutting out the speaker (SAM 3.1)")
+
+        def go() -> dict:
+            d, _ = cut_of(run_id, v)
+            if not mask_path(d, v, design["t_s"], aspect).is_file():
+                with one_paid_call(run_id):
+                    need_key("Cutting out the speaker (SAM 3.1)", COST["cover_mask"])
+                    export_cmd(d, v, "--cover-mask", "--cover-t", f"{design['t_s']:.2f}", *(["--aspect", aspect] if aspect != "9:16" else []))
+            return {"ok": True, "run": run_id}
+        return await asyncio.to_thread(go)
 
     @app.post("/api/runs/{run_id}/cover/render")
     def cover_render(run_id: str, b: dict):
@@ -1280,10 +1373,13 @@ def create_app(root: Path) -> FastAPI:
             """Asked before the body (no 400 MB for nothing) and again before the rename (two uploads at once)."""
             if budget is None or not max_uploads:
                 return
-            mine = judge_of(request)
-            if sum(o == mine for o in (read_json(owners_file) or {}).values()) >= max_uploads:
+            mine, owners = judge_of(request), (read_json(owners_file) or {}).values()
+            if sum(o == mine for o in owners) >= max_uploads:
                 raise HTTPException(429, f"the demo server takes {max_uploads:.0f} uploads per judge: "
                                          "start a new project from a clip you already uploaded")
+            if len(owners) >= max_uploads_all:  # a new sign-in is a new judge: the Volume has a limit of its own
+                raise HTTPException(429, "the demo server has taken all the uploads it can: start a new project "
+                                         "from a clip you already uploaded, or open a sample")
 
         check_quota()
         size, limit = 0, (max_upload_mb or 0) * 1e6
@@ -1327,7 +1423,7 @@ def create_app(root: Path) -> FastAPI:
 
     @app.post("/api/runs")
     async def new_run(request: Request):
-        b = await request.json()
+        b = await body(request)
         src = (st.root / b.get("footage", "")).resolve()
         if st.footage.resolve() not in src.parents or not src.is_file() or not visible(src, request):
             raise HTTPException(400, "pick a file in footage/")
@@ -1340,15 +1436,15 @@ def create_app(root: Path) -> FastAPI:
         brief = (b.get("brief") or "").strip()
         if not brief:
             raise HTTPException(400, "the brief is empty")
-        rid = b.get("id") or free_name(st.runs, time.strftime("ui-%m%d-%H%M")).name  # two judges in one minute
-        if not SAFE_NAME.match(rid) or (st.runs / rid / "run.json").exists():
-            raise HTTPException(400, f"run id {rid!r} is taken or not a folder name")
+        rid = b.get("id") if budget is None else None  # on the host the server names it: an id from the client
+        if rid is not None and (not SAFE_NAME.match(str(rid)) or (st.runs / rid / "run.json").exists()):  # could be
+            raise HTTPException(400, f"run id {rid!r} is taken or not a folder name")  # another judge's copy name
         try:
             target = finite(b.get("target") or 40)
         except (TypeError, ValueError):
             raise HTTPException(400, "target: seconds")
         open_planner = planner_of(b)
-        args = ["-m", "montivo.cli", "run", str(src.relative_to(st.root)), "--brief", brief, "--out", f"runs/{rid}",
+        args = ["-m", "montivo.cli", "run", str(src.relative_to(st.root)), "--brief", brief, "--out", "",
                 "--target", f"{target:g}"]
         if b.get("hflip"):
             args.append("--hflip")
@@ -1365,6 +1461,11 @@ def create_app(root: Path) -> FastAPI:
             if kit is None:
                 raise HTTPException(400, f"no saved look {b['kit']!r}")
             args += ["--kit", json.dumps({k: kit[k] for k in ("look", "music", "title_card") if k in kit})]
+        # claimed here, after every check: mkdir is atomic, so two judges in one minute get ui-1031-0912 and
+        # ui-1031-0912-2 and neither can write the other's owner file (cloud security check, 31/10)
+        st.refuse_second_job()  # before the folder exists: a refused run leaves nothing behind
+        rid = rid or claim_dir(st.runs, time.strftime("ui-%m%d-%H%M"))
+        args[args.index("--out") + 1] = f"runs/{rid}"
         (st.runs / rid / "ui").mkdir(parents=True, exist_ok=True)
         if budget is not None:
             (st.runs / rid / "ui" / "owner").write_text(judge_of(request))
