@@ -21,7 +21,7 @@ from .captions import build_overlays, fit_line, highlight_words, norm
 from .edges import Audio
 from .edl import title_card_on
 from .frame import frame_for
-from .graphics import FONTS, CaptionStyle, font, normalize_look
+from .graphics import FONTS, CaptionStyle, font, normalize_look, pill_rows
 from .ingest import EDIT_MAX_FPS, EDIT_PROXY_SHORT, ffprobe, make_edit_proxy
 from .punch import plan_punches
 from .render import TITLE_FADE_S, TITLE_S, load_track, plan_paths, reframe_inputs
@@ -114,7 +114,9 @@ def _line(c: dict, style: CaptionStyle, names: set[str]) -> dict:
             "words": [{"w": st.shown(w["w"]), "t_in": w["t_in"], "t_out": w["t_out"],
                        "hl": norm(w["w"]).replace("'s", "") in names} for w in c["words"]],
             "size": st.size, "stroke": st.stroke, "space": st.space, "pad_x": st.pad_x, "pad_y": st.pad_y,
-            "ascent": asc, "descent": desc}
+            "ascent": asc, "descent": desc,
+            # the active-word pill's rows inside the line box (graphics.pill_rows), for LiveOverlay to match the render
+            "pill": list(pill_rows([st.shown(w["w"]) for w in c["words"]], st))}
 
 
 def preview_data(run_dir: Path, edl: dict, overlays: bool = True, laid: bool = False) -> dict:

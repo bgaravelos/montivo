@@ -214,6 +214,21 @@ def line_width(words: list[str], style: CaptionStyle) -> int:
             + 2 * (style.pad_x + style.stroke))
 
 
+def pill_rows(shown: list[str], style: CaptionStyle) -> tuple[int, int]:
+    """Top and bottom row of the active-word pill in a caption line's image, centred on the glyph box of the line's
+    actual text (its words' ink from the highest top to the lowest bottom, so the pill keeps one height and place
+    along the line): the pill used to hang from the font's ascent line, about twice as much yellow above a word as
+    below it (31 / 10 px on "meta" at 84 px, a Discord report). Its height is unchanged (ascent + 2 * pad_y - 2)."""
+    f = font(style.size, style.font)
+    ascent, _ = f.getmetrics()
+    boxes = [f.getbbox(w) for w in shown if w.strip()] or [f.getbbox("H")]
+    y = style.pad_y + style.stroke
+    mid = y + (min(b[1] for b in boxes) + max(b[3] for b in boxes)) / 2
+    half = (ascent + 2 * style.pad_y - 2) / 2
+    top = int(round(max(0.0, min(mid - half, style.height() - 1 - 2 * half))))
+    return top, top + int(round(2 * half))
+
+
 def draw_caption(words: list[str], active: int | None, highlight: list[bool], style: CaptionStyle, out: Path) -> tuple[int, int]:
     """One caption line as a transparent PNG in the style's look. The marker look (the default): white words with a
     black stroke, names in the accent colour, the word being spoken (`active`) in black on an accent pill.
@@ -247,7 +262,8 @@ def draw_caption(words: list[str], active: int | None, highlight: list[bool], st
     for i, (word, (x, l, ww)) in enumerate(zip(shown, xs)):
         stroke = {"stroke_width": style.stroke, "stroke_fill": stroke_c} if style.stroke else {}
         if i == active and look.active == "pill":
-            d.rounded_rectangle([x - style.pad_x, y - style.pad_y + 4, x + ww + style.pad_x, y + ascent + style.pad_y + 2],
+            top, bottom = pill_rows(shown, style)
+            d.rounded_rectangle([x - style.pad_x, top, x + ww + style.pad_x, bottom],
                                 radius=max(8, round(18 * style.size / 84)), fill=act_bg)
             d.text((x - l, y), word, font=f, fill=act_fg)
             continue
