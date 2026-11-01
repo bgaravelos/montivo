@@ -104,6 +104,36 @@ def test_a_failed_escalation_keeps_the_history_and_leaves_no_edl_without_its_cut
     assert [h["version"] for h in out["passes"]] == [1] and not (tmp_path / "edl_v2.json").exists()
 
 
+def test_a_replan_that_exits_is_recorded_and_the_loop_record_still_lands(tmp_path):
+    # human.replan stops with SystemExit ("the new plan placed no span on the transcript"): `except Exception` let it
+    # through and the loop died before loop.json and summary were written (bug audit, 1/11)
+    def esc(from_v, instruction):
+        raise SystemExit("the new plan placed no span on the transcript")
+    out = loop(tmp_path, reviews({1: (62, False)}), esc)
+    assert out["escalation"]["error"] == "SystemExit: the new plan placed no span on the transcript"
+    assert out["stop"] == "no applicable fix" and out["best"]["version"] == 1
+    assert json.loads((tmp_path / "review" / "loop.json").read_text()) == out
+
+
+def test_a_render_that_exits_ends_the_loop_with_its_record(tmp_path):
+    # render_run stops with SystemExit too (a missing audio.wav or source): the loop's per-pass handler records it
+    render = _loop_folder(tmp_path)
+
+    def render_exits(ep, name):
+        if name == "cut_v2.mp4":
+            raise SystemExit("audio.wav not found (ingest writes it)")
+        return render(ep, name)
+
+    def rv(e, cut, n):
+        return {"name": f"review_v{n}", "version": n, "cost_usd": 0.04, "duration_s": 4.5, "review": {
+            "pass": False, "overall": 60, "scores": {},
+            "issues": [issue(R.cut_map(e)[0].cut_in + 0.1, "extend_span", edge="out", seconds=0.3)]}}
+    out = R.review_loop(tmp_path, passes=3, budget_usd=1.0, log=lambda m: None, render_fn=render_exits,
+                        review_fn=rv, ledger=R.Ledger(tmp_path / "ledger.json"))
+    assert out["stop"].startswith("error in pass 2 (v2): SystemExit: audio.wav not found")
+    assert (tmp_path / "review" / "loop.json").is_file() and not (tmp_path / "edl_v2.json").exists()
+
+
 def test_the_default_escalation_replans_in_the_loops_own_ledger(tmp_path, monkeypatch):
     from montivo import human
     (tmp_path / "run.json").write_text(json.dumps({"brief": "b", "target_s": 40}))

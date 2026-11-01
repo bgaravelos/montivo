@@ -188,17 +188,27 @@ def displaced(audio: Audio, w: dict) -> bool:
     return heard < DROPPED_HEARD * max(1e-6, b - a)
 
 
-def without_knocks(runs: list[tuple[float, float]], first: bool) -> list[tuple[float, float]]:
+def without_knocks(runs: list[tuple[float, float]], first: bool,
+                   word: tuple[float, float] | None = None) -> list[tuple[float, float]]:
     """The runs without the knocks before (first) or after the speech: runs shorter than BLIP_S that start BLIP_GAP_S
     or more from the nearest run long enough to be a word. d1-nasa's two knocks after "supporting us." (0.10 and
     0.07 s, 0.3 s apart) kept a 1.2 s pause inside the cut; d1-tedx's "Once" opened 1.5 s early on 40 ms of the word
-    before. Unchanged when no run is long enough to be a word."""
-    seq = runs if first else [(-b, -a) for a, b in reversed(runs)]
+    before. Unchanged when no run is long enough to be a word. `word`: the Voice window of the span's first (first) or
+    last kept word; a short run more than half inside it is that word when the word-long run lies past the window (a
+    quick "I" before a hesitation, 80 ms of sound: it was cut out as a knock, bug audit 1/11), so it stays with what
+    follows it."""
+    flip = (lambda rs: rs) if first else (lambda rs: [(-b, -a) for a, b in reversed(rs)])
+    seq = flip(runs)
     k = next((i for i, (a, b) in enumerate(seq) if b - a >= BLIP_S), None)
     if not k or seq[k][0] - seq[k - 1][1] < BLIP_GAP_S:
         return runs
-    seq = seq[k:]
-    return seq if first else [(-b, -a) for a, b in reversed(seq)]
+    if word is not None:
+        wa, wb = word if first else (-word[1], -word[0])
+        if seq[k][0] >= wb - FRAME_S:  # the word-long run is not this word's own sound
+            own = [i for i, (a, b) in enumerate(seq[:k]) if min(b, wb) - max(a, wa) > (b - a) / 2]
+            if own:
+                return flip(seq[own[0]:])
+    return flip(seq[k:])
 
 
 def onset(span: dict, words: Words, audio: Audio, bound: float | None = None,
@@ -216,7 +226,8 @@ def onset(span: dict, words: Words, audio: Audio, bound: float | None = None,
         if runs[0][1] - t > longest or nxt - runs[0][1] < FRAGMENT_GAP_S:
             return None, False  # speech at the edge
         runs, skipped = rest, True
-    runs = without_knocks(runs, first=True)
+    w0 = tw[span["word_from"]]
+    runs = without_knocks(runs, first=True, word=(w0["t_start"], w0["t_end"]))
     if not runs:
         return None, skipped
     return runs[0][0], skipped
@@ -237,7 +248,8 @@ def offset(span: dict, words: Words, audio: Audio, bound: float | None = None,
         if t - runs[-1][0] > longest or runs[-1][0] - prv < FRAGMENT_GAP_S:
             return None, False  # speech at the edge
         runs, skipped = rest, True
-    runs = without_knocks(runs, first=False)
+    w1 = tw[span["word_to"]]
+    runs = without_knocks(runs, first=False, word=(w1["t_start"], w1["t_end"]))
     if not runs:
         return None, skipped
     return runs[-1][1], skipped

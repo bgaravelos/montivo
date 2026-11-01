@@ -57,6 +57,23 @@ def test_challenger_order(tmp_path):
     assert H.challengers({"spans": edl["spans"][:1]}, tmp_path) == []
 
 
+def test_reviewer_target_follows_source_time_across_a_replan(tmp_path):
+    # review_v1 asked to open with the line at 4.0 s of cut_v1 (s3, source 30.6-32.1). A re-plan made v2 where "s3"
+    # is another passage and the reviewer's line is "s2": the target goes by source time, not by the old id
+    edl = folder(tmp_path)
+    (tmp_path / "review_v1.json").write_text(json.dumps({"review": {"issues": [issue(1.6, "swap_hook", target_t_s=4.0)]}}))
+    v2 = json.loads(json.dumps(edl))
+    s1, s2, s3 = v2["spans"]
+    s2["id"], s3["id"] = "s3", "s2"
+    v2["spans"] = [s1, s3, s2]
+    first = H.challengers(v2, tmp_path)[0]
+    assert first[0] == "s2" and "reviewer asked" in first[1] and "source 31.0 s" in first[1]
+    # a re-plan that left the reviewer's passage out: the target is dropped, not given to whatever span is "s3" now
+    v3 = json.loads(json.dumps(edl))
+    v3["spans"][2].update(t_in=40.0, t_out=41.5)
+    assert all("reviewer asked" not in why for _, why in H.challengers(v3, tmp_path))
+
+
 def test_b_wins_and_everything_is_recorded(tmp_path):
     folder(tmp_path)
     renders, reviews = [], []

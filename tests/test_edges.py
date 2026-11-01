@@ -315,10 +315,10 @@ def test_a_join_on_the_same_source_second_is_not_a_cut_inside_speech():
     audio = SynthAudio([(10.0, 14.0)])
     a = {"id": "s1", "turn_id": 0, "word_from": 0, "word_to": 3, "t_in": 10.0, "t_out": 12.0, "duration": 2.0, "role": "hook"}
     b = {"id": "s2", "turn_id": 1, "word_from": 0, "word_to": 3, "t_in": 12.0, "t_out": 14.0, "duration": 2.0, "role": "body"}
-    edges = R.cut_edge_levels(edl_of(a, b), audio)
-    assert edges[0]["continuous"] and not edges[0]["loud"]
+    edges = R.cut_edge_levels(edl_of(a, b), audio)  # [0] is the hook's in point
+    assert edges[1]["continuous"] and not edges[1]["loud"]
     b2 = dict(b, t_in=12.4)  # 0.4 s left out: a real cut, inside speech
-    assert R.cut_edge_levels(edl_of(a, b2), audio)[0]["loud"]
+    assert R.cut_edge_levels(edl_of(a, b2), audio)[1]["loud"]
 
 
 def test_a_reviewer_extension_never_settles_into_another_speakers_kept_turn():

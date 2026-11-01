@@ -14,7 +14,8 @@ The first 1.5 s decide whether a viewer stays, and the planner's opener is not a
 The challenger is picked deterministically, first match wins:
 
 1. the line the reviewer itself asked to open with: the target_t_s of a swap_hook issue in this run's reviews, newest
-   review first, mapped through the cut map of the version that review saw (the reviewer named it, blind to the plan);
+   review first, mapped through the cut map of the version that review saw to source time, then to the span of A that
+   plays it (the reviewer named it, blind to the plan; a re-plan gives the same span id to another passage);
 2. another span the planner marked `hook` (it saw two openers and placed one);
 3. the planner's `payoff` span, the last one if an old EDL has several (the punchline as a cold open, a common
    short-form opening);
@@ -57,20 +58,42 @@ def _json(p: Path) -> dict | None:
         return None
 
 
-def reviewer_targets(run_dir: Path) -> list[tuple[str, str]]:
-    """(span id, why) for every swap_hook target in this run's reviews, newest review first."""
+SOURCE_SLACK_S = 0.25  # the edge pass moves an edge by a few frames: a target that close to A's span still means it
+
+
+def source_second(edl: dict, c, t: float) -> float:
+    """The source second playing at cut second t inside span c of this EDL's cut map (clamped into the span)."""
+    s = edl["spans"][c.index]
+    return min(float(s["t_out"]), max(float(s["t_in"]), float(s["t_in"]) + t - c.cut_in))
+
+
+def span_holding(edl: dict, src: float) -> dict | None:
+    """The span of this EDL that plays source second src (a few frames of slack at its edges), else None."""
+    hold = [s for s in edl["spans"] if s["t_in"] - SOURCE_SLACK_S <= src <= s["t_out"] + SOURCE_SLACK_S]
+    return min(hold, key=lambda s: 0.0 if s["t_in"] <= src <= s["t_out"] else
+               min(abs(src - s["t_in"]), abs(src - s["t_out"]))) if hold else None
+
+
+def reviewer_targets(run_dir: Path, edl: dict) -> list[tuple[str, str]]:
+    """(span id of edl, why) for every swap_hook target in this run's reviews, newest review first. A target is a cut
+    second of the version that review saw: it goes to source time through that version's cut map, then to the span of
+    edl that plays that source second. Span ids do not carry across a re-plan (the same id names another passage), so
+    a target no span of edl plays is dropped."""
     out: list[tuple[str, str]] = []
     reviews = sorted((int(m.group(1)), p) for p in run_dir.glob("review_v*.json") if (m := REVIEWED.fullmatch(p.name)))
     for n, p in reversed(reviews):
-        rv, edl = _json(p), _json(run_dir / f"edl_v{n}.json")
-        if not rv or not edl or not edl.get("spans"):
+        rv, old = _json(p), _json(run_dir / f"edl_v{n}.json")
+        if not rv or not old or not old.get("spans"):
             continue
-        cmap = cut_map(edl)
+        cmap = cut_map(old)
         for i in (rv.get("review") or {}).get("issues") or []:
             tgt = float((i.get("params") or {}).get("target_t_s", -1))
-            if i.get("fix_op") == "swap_hook" and tgt >= 0 and (c := span_at(cmap, tgt)) is not None:
-                out.append((c.span, f"the reviewer asked to open with the line at {tgt:.1f} s of cut_v{n} "
-                                    f"({i.get('severity')}: {i.get('what', '')[:80]})"))
+            if i.get("fix_op") != "swap_hook" or tgt < 0 or (c := span_at(cmap, tgt)) is None:
+                continue
+            src = source_second(old, c, tgt)
+            if (s := span_holding(edl, src)) is not None:
+                out.append((s["id"], f"the reviewer asked to open with the line at {tgt:.1f} s of cut_v{n} "
+                                     f"(source {src:.1f} s; {i.get('severity')}: {i.get('what', '')[:80]})"))
     return out
 
 
@@ -80,7 +103,7 @@ def challengers(edl: dict, run_dir: Path) -> list[tuple[str, str]]:
     if len(spans) < 2:
         return []
     ids = {s["id"] for s in spans[1:]}
-    cands = [c for c in reviewer_targets(run_dir) if c[0] in ids]
+    cands = [c for c in reviewer_targets(run_dir, edl) if c[0] in ids]
     cands += [(s["id"], "the planner marked it a hook too") for s in spans[1:]
               if "hook" in (s["role"], s.get("planner_role"))]
     # the last payoff: an EDL built before normalize_roles may carry several (012-open v3 marked every body span)

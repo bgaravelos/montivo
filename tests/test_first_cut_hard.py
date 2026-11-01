@@ -73,6 +73,21 @@ def test_a_false_start_inside_a_span_is_a_plan_problem_and_a_parallel_is_not():
     assert E.restarts(heli)[0].startswith("s4 keeps a false start: \"out of the out of\"")
 
 
+def test_a_parallel_said_on_purpose_is_not_a_false_start():
+    # a first take that goes on in words of its own is not broken off: no repair call (bug audit, 1/11)
+    edl = {"spans": [{"id": "s1", "words": "The more you practice, the more you learn."},
+                     {"id": "s2", "words": "Every single day, every single night we ship."},
+                     {"id": "s3", "words": "I love this game, I love this team."}]}
+    assert E.restarts(edl) == []
+    # a take broken off and said again whole is still one
+    cut = {"spans": [{"id": "s5", "words": "the more you the more you practice the better"}]}
+    assert E.restarts(cut)[0].startswith("s5 keeps a false start: \"the more you the more\"")
+    # a self-correction with no clause break (d1-nasa s9, fc-d1-tedx s4) is still one
+    nasa = {"spans": [{"id": "s9", "words": "we're grateful for that we're grateful for a nation"},
+                      {"id": "s4", "words": "So I had a notepad and I took a notepad and I wrote down"}]}
+    assert [f.split(" keeps")[0] for f in E.restarts(nasa)] == ["s9", "s4"]
+
+
 def test_an_edge_the_speaker_runs_on_across_goes_to_the_planner(monkeypatch):
     # d1-nasa: "Happy Thanksgiving!" (turn 9) starts while turn 8 still talks: no quiet point near the in edge, so
     # neither the preflight nor three loop passes could move it; only another plan can
@@ -87,10 +102,11 @@ def test_an_edge_the_speaker_runs_on_across_goes_to_the_planner(monkeypatch):
               "t_out": 22.0, "duration": 2.0, "words": " ".join(x["w"] for x in tw9)}]
     edl = {"spans": spans, "source": {"fps": 30.0}}
     monkeypatch.setattr(R, "preflight", lambda run_dir, e, *a, **k: (e, {}))
-    audio = FakeAudio((9.3, 9.6), (21.95, 22.4))  # quiet after s1, after s2; speech straight into s2's first word
+    # quiet before s1, after s1, after s2; speech straight into s2's first word
+    audio = FakeAudio((4.85, 5.05), (9.3, 9.6), (21.95, 22.4))
     found = R.stuck_edges(None, edl, w, audio)
     assert len(found) == 1 and found[0].startswith("s2 opens on \"Happy Thanksgiving everyone from ...\"")
-    quiet = FakeAudio((9.3, 9.6), (19.85, 20.05), (21.95, 22.4))
+    quiet = FakeAudio((4.85, 5.05), (9.3, 9.6), (19.85, 20.05), (21.95, 22.4))
     assert R.stuck_edges(None, edl, w, quiet) == []
 
 
@@ -128,6 +144,26 @@ def test_knocks_after_the_last_word_are_not_speech():
     # a short word close to the speech stays, and so does everything when no run is long enough to be a word
     assert G.without_knocks([(10.0, 11.5), (11.7, 11.8)], first=False) == [(10.0, 11.5), (11.7, 11.8)]
     assert G.without_knocks([(1.0, 1.05), (2.0, 2.08)], first=True) == [(1.0, 1.05), (2.0, 2.08)]
+    # the knocks sit inside the Voice window of "us." too, but "us." has its own sound (10.87-11.53): still knocks
+    assert G.without_knocks(runs, first=False, word=(11.02, 13.34)) == runs[:2]
+
+
+def test_a_short_first_word_before_a_hesitation_is_not_a_knock():
+    # "I" (Voice 10.0-10.6, sounded 10.05-10.13), a 0.57 s hesitation, then "think this works well.": the 80 ms "I"
+    # was taken for a knock and the in edge moved past it (bug audit, 1/11)
+    from montivo.engine import edges as G
+    ws = [{"turn_id": 1, "i": k, "w": w, "t_start": a, "t_end": b} for k, (w, a, b) in enumerate(
+        [("Okay.", 8.0, 8.5), ("I", 10.0, 10.6), ("think", 10.6, 11.0), ("this", 11.0, 11.4), ("works", 11.4, 11.8),
+         ("well.", 11.8, 12.3)])]
+    audio = _room([(8.0, 8.4), (10.05, 10.13), (10.70, 12.2)])
+    span = {"id": "s1", "turn_id": 1, "word_from": 1, "word_to": 5, "t_in": 10.0, "t_out": 12.3,
+            "words": "I think this works well.", "role": "hook"}
+    G.tighten_edges({"spans": [span]}, Words(ws), audio)
+    assert span["t_in"] < 10.05  # the in edge leads "I", not "think"
+    assert G.without_knocks([(10.05, 10.13), (10.70, 12.2)], first=True, word=(10.0, 10.6)) == [(10.05, 10.13),
+                                                                                                (10.70, 12.2)]
+    # the same 80 ms before the first word's window is a knock
+    assert G.without_knocks([(9.3, 9.38), (10.0, 12.2)], first=True, word=(9.95, 10.6)) == [(10.0, 12.2)]
 
 
 def test_the_planner_reads_where_the_recording_pauses(tmp_path):
