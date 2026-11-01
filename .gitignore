@@ -47,3 +47,6 @@ judge.key
 
 # private notes for Claude Code (background, hosted address, task board)
 CLAUDE.local.md
+
+# the Docker volume (compose.yaml)
+/data/
