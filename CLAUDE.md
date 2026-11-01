@@ -1124,7 +1124,10 @@ phrasing with a comma is no false start; a short first word is no knock; title h
 price; a focused slider keeps Space and the editor keys. combo_check on 017: 49 versions, 0 failures; stored edges
 unchanged. Main 882dbe1, pushed and deployed 1/11 on Billy's go from a clean worktree (no container was running);
 /api/health 200, /api/runs 401, /s/nope 404, /api/monti 401, a POST from another origin 403; smoke drop on 015: 34.2 s,
--14.0 LUFS / -1.7 dBTP, render 8.4 s; smoke --live ok. Left: a lone "the" line after splitting 015 s5 (captions.isolate).
+-14.0 LUFS / -1.7 dBTP, render 8.4 s; smoke --live ok. Then (commit 24e78b0, Billy's go) `captions.isolate`: one word a
+retext leaves behind opens the next line (015 split s5: "models do all | the work Muse Voice", was "| the |"); all 46
+stored EDLs lay out as before; deployed 1/11 22:3x (no job since 21:07, the 22:13 container stopped), health 200 / 401 /
+404 / 403 as before, smoke drop on 015 34.2 s, -14.0 LUFS / -1.7 dBTP.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
