@@ -63,7 +63,7 @@ from ..ledger import Entry, Ledger, Timer
 from .api import dump_json, upload_file
 from .captions import CAPTION_TOP, DEDUPE_GAP_S, HEAD_MARGIN, SAFE_BOTTOM, overlaps
 from .edges import Audio, Words, level_db, tighten_edges  # noqa: F401 (level_db re-exported for callers)
-from .edl import check_brief, norm, norm_tokens
+from .edl import _FILLER as CONTENT_SKIP, check_brief, norm, norm_tokens
 from .graphics import font
 from .ingest import make_wav
 from .music import follow_cut
@@ -275,7 +275,9 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
             else:
                 line += "every cut here is below it."
             out.append(line)
+    edge_fact = 0
     if edge_words is not None:
+        edge_fact = len(out) + 1
         miss = edge_words["unheard"]
         line = (f"{len(out) + 1}. The words this cut keeps on both sides of every cut ({edge_words['edge_words']} words "
                 f"at {edge_words['cuts']} cuts) against what a speech model hears in the cut's own audio (the same model "
@@ -312,7 +314,8 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
                    + ". That speech model mishears names and similar-sounding words and can add a stray word at a cut.")
     diff_words = heard if heard is not None else diff_heard
     if diff_words is not None and timeline:
-        diffs = caption_heard_diff(timeline, diff_words)
+        clipped = (edge_words or {}).get("unheard") or []
+        diffs = caption_heard_diff(timeline, diff_words, clipped)
         heard_what = "the heard words" if heard is not None else "the words a speech model hears in the cut's own audio"
         checked = [c for c in timeline if c.get("checked")]
         out.append(f"{len(out) + 1}. Where the caption words and {heard_what} differ (the two aligned word by word): "
@@ -321,6 +324,9 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
                    + ". The captions were checked by hand where the speech model got a name wrong, so a pair that "
                      "sounds alike (\"Muse\" / \"news\") is the speech model's mistake, not the caption's: a caption "
                      "is wrong only where its word sounds nothing like what was heard."
+                   + (f" The words clipped at a cut (fact {edge_fact}) are left out here: they are in the recording "
+                      "and the caption is right to show them, the cut is what clips them (no_cut_mid_word, move_cut)."
+                      if clipped and edge_fact else "")
                    + (" A person checked these lines against the recording, so they are right as written and are left "
                       "out of the comparison: " + "; ".join(f"{c['t_in']:.2f} s \"{c['text']}\"" for c in checked) + "."
                       if checked else ""))
@@ -372,22 +378,33 @@ def _tok(w: str) -> str:
     return re.sub(r"[^a-z0-9']", "", w.lower())
 
 
-def caption_heard_diff(timeline: list[dict], heard: list[dict]) -> list[dict]:
+def caption_heard_diff(timeline: list[dict], heard: list[dict], clipped: list[dict] | None = None) -> list[dict]:
     """Caption words against the heard words, aligned as two word sequences (difflib), every replaced or unheard caption
     word with its cut time. No similarity threshold: whether a pair sounds alike is left to the reviewer, which knows
     "Muse" / "news" rhyme and "Google" / "voice" do not (character ratios rank those two pairs the other way round).
     Lines a person checked (`checked`) take part in the alignment (so the heard words under them stay paired with
-    them) but their differences are not reported."""
-    cap = [(_tok(w), c["t_in"], bool(c.get("checked"))) for c in timeline for w in c["text"].split() if _tok(w)]
+    them) but their differences are not reported. Neither are the words the edge-word check found clipped at a cut
+    (`clipped`: edge_words_unheard's `unheard`, a word on a line that meets its cut): that fault is the cut's, and
+    listed twice it came back as a captions_match_speech major too, whose caption_fix dropped the word from a right
+    caption (heli-04 v1 "when", d1-nasa v3 "sardines", fc-d1-nasa v1 "Brussels" / "Happy")."""
+    def clip(w: str, c: dict) -> set[str] | None:  # the heard tokens the edge check gave this clipped word
+        hits = [m for m in clipped or [] if _tok(m["w"]) == _tok(w)
+                and c["t_in"] - MEASURED_CUT_S <= m["cut_t"] <= c["t_out"] + MEASURED_CUT_S]
+        return {_tok(x) for m in hits for x in (m.get("heard") or "").split()} if hits else None
+    cap = [(_tok(w), c["t_in"], bool(c.get("checked")), clip(w, c)) for c in timeline for w in c["text"].split()
+           if _tok(w)]
     hw = [_tok(w["w"]) for w in sorted(heard, key=lambda w: w["t_start"]) if _tok(w["w"])]
     sm = difflib.SequenceMatcher(None, [c[0] for c in cap], hw, autojunk=False)
     out = []
     for op, a1, a2, b1, b2 in sm.get_opcodes():
         if op == "replace" and a2 - a1 == b2 - b1:  # as many words on both sides: pair them one to one
             out += [{"t": cap[a][1], "caption": cap[a][0], "heard": hw[b]} for a, b in zip(range(a1, a2), range(b1, b2))
-                    if not cap[a][2]]
+                    if not cap[a][2] and not (cap[a][3] is not None and hw[b] in cap[a][3])]
         elif op in ("replace", "delete"):
             mine = [c for c in cap[a1:a2] if not c[2]]
+            if mine and all(c[3] is not None for c in mine) and set(hw[b1:b2]) <= set().union(*(c[3] for c in mine)):
+                continue  # only clipped words, heard as nothing or as the edge check heard them (d1-tedx v2: "I"
+                # against "and the guy" stays: those heard words are speech the captions do not show)
             if mine:
                 out.append({"t": mine[0][1], "caption": " ".join(c[0] for c in mine), "heard": " ".join(hw[b1:b2])})
     return out
@@ -1159,9 +1176,46 @@ def _src_time(edl: dict, cmap: list[CutSpan], span_id: str, t_cut: float) -> flo
     return round(s["t_in"] + (t_cut - c.cut_in), 3)
 
 
+def pick_callout(calls: list[dict], t: float, what: str) -> dict:
+    """The callout a retime_callout issue is about: the one whose words the issue quotes, else the one on screen at
+    t, else the nearest. Taking the first within 2 s moved the wrong one: fcb-b0-heli-01 v3, "Callout NVG HOIST
+    CAPABLE is on from ~3-6 s" at t 3.0 shifted "716 SAVES" (0.31-2.51 s) by +3 s and left NVG (3.1-6.1 s) where it was."""
+    said = set(norm_tokens(what))
+    named = [c for c in calls if norm_tokens(c.get("text") or "") and set(norm_tokens(c["text"])) <= said]
+    on = [c for c in calls if c["t_in"] <= t <= c["t_out"]]
+    return (named or on or sorted(calls, key=lambda c: min(abs(t - c["t_in"]), abs(t - c["t_out"]))))[0]
+
+
+def said_in_cut(text: str, edl: dict) -> bool:
+    """A callout text shares a content word with the words the cut keeps (or has no content word to check)."""
+    want = [w for w in norm_tokens(text) if w not in CONTENT_SKIP]
+    kept = {w for s in edl.get("spans") or [] for w in norm_tokens(s.get("words") or "")}
+    return not want or any(w in kept for w in want)
+
+
+MEASURED_CUT_S = 0.15  # a caption line's first / last word this close to a cut sits at that cut
+
+
+def edge_drop(have: list[str], want: list[str], cap: dict, measured_cuts: list[float]) -> str:
+    """The retext only removes words at an end of the line where the line meets a cut the gate measured as clipped
+    (a loud edge or an unheard edge word), or "": the word is in the recording, the cut is at fault and its own fix
+    (move_cut) brings the word back, so the caption keeps it. heli-04 v1: "when the call came" -> "the call came"
+    beside the gate's move_cut at 9.68 s, and the next review asked to drop "the" too; 018 v5: "it scores the cut" ->
+    "scores the cut" at a cut whose kept edge words were unheard (the line was right: Billy put it back by hand)."""
+    n = len(want)
+    if not 0 < n < len(have):
+        return ""
+    if have[-n:] == want and any(abs(c - cap["t_in"]) <= MEASURED_CUT_S for c in measured_cuts):
+        return "start"
+    if have[:n] == want and any(abs(c - cap["t_out"]) <= MEASURED_CUT_S for c in measured_cuts):
+        return "end"
+    return ""
+
+
 def resolve(issue: dict, k: int, edl: dict, words: Words, cmap: list[CutSpan],
-            audio: Audio | None = None) -> tuple[Fix | None, str]:
-    """One review issue -> one concrete Fix on this EDL, or None and why not."""
+            audio: Audio | None = None, measured_cuts: list[float] | None = None) -> tuple[Fix | None, str]:
+    """One review issue -> one concrete Fix on this EDL, or None and why not. `measured_cuts`: the cut times where
+    the gate measured a clipped edge (plan_fixes passes them; a caption_fix never drops the words at such a cut)."""
     op = issue["fix_op"]
     p = issue.get("params") or {}
     t = float(issue["t_s"])
@@ -1292,6 +1346,17 @@ def resolve(issue: dict, k: int, edl: dict, words: Words, cmap: list[CutSpan],
             ratio = difflib.SequenceMatcher(a=have, b=want).ratio()
             if len(want) > len(have) + 2 or ratio < 0.5:
                 return None, f"caption text {text!r} does not look like the line {cap['text']!r}"
+            prior = [o for o in edl.get("caption_overrides") or [] if o.get("why") == "review" and o.get("text")
+                     and o.get("span") == sid and src_a - 0.02 <= float(o["src_t"]) <= src_b + 0.02]
+            if prior:
+                # one hearing against another: 6 of the 54 stored caption_text fixes retexted a line an earlier review
+                # had retexted, each a flip ("raw footage in" -> "raw footage" -> "raw footage in" on 017, "better
+                # for us" -> "dad and" -> "it and" on fc-013 / fx-013) and none of the versions they made scored higher
+                return None, (f"the line {cap['text']!r} was already retexted by a review ({prior[-1]['text']!r}): "
+                              "a second retext is the speech model's ear against itself")
+            if side := edge_drop(have, want, cap, measured_cuts or []):
+                return None, (f"{text!r} drops the words at the {side} of {cap['text']!r}, where the cut clips them "
+                              "(measured): the cut is fixed, the caption keeps them")
             return mk("caption_text", key, span=sid, src_t=src_t, text=text), ""
         x, y, w, h = cap["box"]
         head = cap.get("head_box")
@@ -1308,9 +1373,16 @@ def resolve(issue: dict, k: int, edl: dict, words: Words, cmap: list[CutSpan],
                  or c["t_in"] <= t <= c["t_out"]]
         if not calls:
             return None, f"no callout near {t:.2f}"
-        call = calls[0]
+        call = pick_callout(calls, t, issue.get("what") or "")
         sec = max(-3.0, min(3.0, float(p.get("seconds") or 0.0)))
         text = (p.get("text") or "").strip()
+        if text and not said_in_cut(text, edl):
+            # fcb-b3-013 v2, fcb-b5-013 v1 / v2: the source's burned-in lower third ("Tanya Gallegos, USGS Research
+            # Engineer", cropped by the 9:16 frame) was written over the cut's own callout "uranium miner"; a callout
+            # names what the clip says (anchor_callouts times it by those words)
+            if not sec:
+                return None, f"callout text {text!r} names nothing said in the cut (text burned into the footage?)"
+            text = ""
         if not sec and not text:
             return None, "retime_callout with no shift and no text"
         return mk("retime_callout", call["span"], seconds=sec, text=text), ""
@@ -1342,6 +1414,7 @@ def plan_fixes(review: dict, edl: dict, words: Words, audio: Audio | None = None
     the reviewer's count are the gate's); at equal severity a check's fix goes first, since it is measured."""
     cmap = cut_map(edl)
     issues = list(review.get("issues") or []) + list((gate or {}).get("issues") or [])
+    measured_cuts = [float(i["t_s"]) for i in (gate or {}).get("issues") or [] if i.get("check") in ("loud_edge", "edge_word")]
     order = sorted(range(len(issues)),
                    key=lambda k: (SEVERITY_RANK.get(issues[k]["severity"], 3), not issues[k].get("check"), issues[k]["t_s"]))
     fixes: list[Fix] = []
@@ -1352,7 +1425,7 @@ def plan_fixes(review: dict, edl: dict, words: Words, audio: Audio | None = None
         if issue["severity"] not in APPLY_SEVERITY:
             skipped.append({"issue": k, "reason": f"severity {issue['severity']}"})
             continue
-        fix, why = resolve(issue, k, edl, words, cmap, audio)
+        fix, why = resolve(issue, k, edl, words, cmap, audio, measured_cuts)
         if fix is not None and issue.get("check"):
             fix.check = issue["check"]
         if fix is None:

@@ -228,6 +228,107 @@ def test_a_line_a_person_checked_is_left_out_of_the_diff_and_not_retexted():
     assert fix is None and "a person checked" in why
 
 
+def test_a_line_a_review_already_retexted_is_not_retexted_again():
+    # runs/017 v1 -> v2 -> v7: "raw footage" -> "raw footage in" -> "raw footage" -> "raw footage in", one fix per
+    # review; fc-013 / fx-013 "better for us" -> "dad and" -> "it and": the speech model's ear against itself
+    edl, words = make_edl()
+    edl["captions"] = [caption(4.0, 4.6, ["s3"], [("w13", 4.0, 4.3), ("w14", 4.3, 4.6)], [400, 1300, 300, 100], None)]
+    fix, _ = R.resolve(issue(4.2, "caption_fix", text="w13 w15"), 0, edl, words, R.cut_map(edl))
+    assert fix.op == "caption_text"
+    edl["caption_overrides"] = [{"span": "s3", "src_t": 31.01, "text": "w13 w14", "why": "review"}]
+    fix, why = R.resolve(issue(4.2, "caption_fix", text="w13 w15"), 0, edl, words, R.cut_map(edl))
+    assert fix is None and "already retexted by a review" in why
+    edl["caption_overrides"] = [{"span": "s2", "src_t": 12.01, "text": "w06", "why": "review"}]  # another line
+    fix, _ = R.resolve(issue(4.2, "caption_fix", text="w13 w15"), 0, edl, words, R.cut_map(edl))
+    assert fix.op == "caption_text"
+
+
+def test_a_caption_keeps_the_words_a_measured_cut_clips():
+    # heli-04 v1: "when the call came" -> "the call came" while the gate moved the clipped cut at 9.68 s; 018 v5:
+    # "it scores the cut" -> "scores the cut" at a cut whose kept edge words were unheard (the line was right)
+    edl, words = make_edl()
+    head = None
+    edl["captions"] = [caption(3.6, 4.2, ["s3"], [("w12", 3.6, 3.9), ("w13", 3.9, 4.2)], [400, 1300, 300, 100], head),
+                       dict(caption(4.2, 5.1, ["s3"], [("w14", 4.2, 4.5), ("w15", 4.5, 4.8), ("w16", 4.8, 5.1)],
+                                    [400, 1300, 300, 100], head), id="c2")]
+    drop_first = dict(issue(3.7, "caption_fix", text="w13"), criterion="captions_match_speech")
+    edge = {"t_s": 3.6, "t_end_s": 3.6, "criterion": "no_cut_mid_word", "severity": "major", "what": "kept word",
+            "fix_op": "move_cut", "params": {"edge": "in", "seconds": 0, "target_t_s": -1, "text": "",
+                                              "direction": "none"}, "fix_args": "", "check": "edge_word"}
+    fixes, skipped = R.plan_fixes({"issues": [drop_first]}, edl, words)
+    assert [f.op for f in fixes] == ["caption_text"]  # no measured fault at that cut: the retext goes ahead
+    fixes, skipped = R.plan_fixes({"issues": [drop_first]}, edl, words, gate={"issues": [edge]})
+    assert "caption_text" not in [f.op for f in fixes]
+    assert "where the cut clips them" in {s["issue"]: s["reason"] for s in skipped}[0]
+    # a retext that changes a word (not only drops the edge ones) still goes ahead beside the measured cut
+    fixes, _ = R.plan_fixes({"issues": [dict(drop_first, params=dict(drop_first["params"], text="w12 w19"))]}, edl,
+                            words, gate={"issues": [edge]})
+    assert "caption_text" in [f.op for f in fixes]
+    # the end of a line that does not meet a measured cut keeps its retext
+    drop_last = dict(issue(4.6, "caption_fix", text="w14 w15"), criterion="captions_match_speech")
+    fixes, _ = R.plan_fixes({"issues": [drop_last]}, edl, words, gate={"issues": [edge]})
+    assert "caption_text" in [f.op for f in fixes]
+    fixes, skipped = R.plan_fixes({"issues": [drop_last]}, edl, words, gate={"issues": [dict(edge, t_s=5.1)]})
+    assert "caption_text" not in [f.op for f in fixes]
+
+
+def test_retime_callout_moves_the_callout_the_issue_names():
+    # fcb-b0-heli-01 v3: "Callout NVG HOIST CAPABLE is on from ~3-6 s" at t 3.0 shifted "716 SAVES" (the first callout
+    # within 2 s); s9-long-0111 v3: "Top pill shows Score 87 ... say 81" retexted "Score 68" into "Score 81"
+    edl, words = make_edl()
+    edl["callouts"] = [{"span": "s1", "text": "716 SAVES", "t_in": 0.31, "t_out": 2.51},
+                       {"span": "s2", "text": "NVG HOIST CAPABLE", "t_in": 3.1, "t_out": 6.1}]
+    named = dict(issue(3.0, "retime_callout", seconds=7.5), what="Callout NVG HOIST CAPABLE is on from ~3-6 s while ...")
+    fix, _ = R.resolve(named, 0, edl, words, R.cut_map(edl))
+    assert (fix.target, fix.args["seconds"]) == ("s2", 3.0)
+    fix, _ = R.resolve(issue(2.0, "retime_callout", seconds=1.0), 0, edl, words, R.cut_map(edl))
+    assert fix.target == "s1"  # nothing named: the one on screen at t
+    fix, _ = R.resolve(issue(2.9, "retime_callout", seconds=1.0), 0, edl, words, R.cut_map(edl))
+    assert fix.target == "s2"  # nothing named, none on screen: the nearest (0.2 s to 3.1, 0.39 s to 2.51)
+
+
+def test_a_callout_is_not_retexted_to_words_the_cut_never_says():
+    # fcb-b3-013 v2, fcb-b5-013 v1 / v2: the source's burned-in lower third, cropped by the 9:16 frame, was written
+    # over the cut's own callout "uranium miner"
+    edl, words = make_edl()
+    edl["spans"][2]["words"] = "a uranium miner's daughter scores 81"
+    edl["callouts"] = [{"span": "s3", "text": "uranium miner", "t_in": 3.8, "t_out": 5.0}]
+    lower = dict(issue(4.2, "retime_callout", text="Tanya Gallegos, USGS Research Engineer"), what="Lower-third cropped")
+    fix, why = R.resolve(lower, 0, edl, words, R.cut_map(edl))
+    assert fix is None and "names nothing said in the cut" in why
+    fix, _ = R.resolve(dict(lower, params=dict(lower["params"], seconds=1.0)), 0, edl, words, R.cut_map(edl))
+    assert (fix.op, fix.args["text"], fix.args["seconds"]) == ("retime_callout", "", 1.0)  # the shift alone
+    fix, _ = R.resolve(issue(4.2, "retime_callout", text="Score 81"), 0, edl, words, R.cut_map(edl))
+    assert fix.args["text"] == "Score 81"  # "81" is said
+
+
+def test_words_clipped_at_a_cut_are_left_out_of_the_caption_diff():
+    # heli-04 v1: "when" clipped at the cut at 9.68 s was listed in both the edge-word fact and the caption diff
+    # (heard "(nothing)"), and the reviewer filed a captions_match_speech major whose caption_fix dropped "when"
+    timeline = [{"t_in": 8.1, "t_out": 9.68, "text": "with the rocks"}, {"t_in": 9.68, "t_out": 10.3, "text": "when the call came"}]
+    heard = [{"w": x, "t_start": 8.1 + k * 0.3, "t_end": 8.3 + k * 0.3} for k, x in enumerate("with the rocks the call came".split())]
+    clipped = [{"w": "when", "edge": "in", "cut_t": 9.68, "heard": ""}]
+    assert R.caption_heard_diff(timeline, heard) == [{"t": 9.68, "caption": "when", "heard": ""}]
+    assert R.caption_heard_diff(timeline, heard, clipped) == []
+    # the same word elsewhere, away from that cut, is still compared
+    far = [{"t_in": 1.0, "t_out": 2.0, "text": "when"}] + timeline
+    assert R.caption_heard_diff(far, heard, clipped) == [{"t": 1.0, "caption": "when", "heard": ""}]
+    # heard as the fragment the edge check reported: left out; heard as other speech: kept (d1-tedx v2, "I" against
+    # "and the guy": words in the audio the captions do not show)
+    frag = [dict(clipped[0], heard="win")]
+    heard_frag = heard[:3] + [{"w": "win", "t_start": 8.95, "t_end": 9.0}] + heard[3:]
+    assert R.caption_heard_diff(timeline, heard_frag, frag) == []
+    heard_more = heard[:3] + [{"w": x, "t_start": 8.9 + k * 0.03, "t_end": 8.92 + k * 0.03}
+                               for k, x in enumerate(("and", "a", "guy"))] + heard[3:]
+    assert R.caption_heard_diff(timeline, heard_more, clipped) == [{"t": 9.68, "caption": "when", "heard": "and a guy"}]
+    edge_words = {"edge_words": 4, "cuts": 1, "unheard": clipped}
+    caps = {"lines": 2, "over_face": [], "min_clearance_px": None}
+    text = R.facts_text([], caps, 12.0, None, timeline, edge_words=edge_words, diff_heard=heard)
+    assert '"when" (start of the passage after the cut at 9.68 s) not heard' in text
+    assert 'differ (the two aligned word by word): nowhere' in text and "clipped at a cut (fact 3)" in text
+    assert "clipped at a cut (fact" not in R.facts_text([], caps, 12.0, None, timeline, diff_heard=heard)
+
+
 def test_plan_fixes_skips_minor_and_takes_one_fix_per_target():
     edl, words = make_edl()
     rv = {"issues": [issue(3.0, "drop_span", sev="minor"), issue(3.1, "drop_span"), issue(3.2, "extend_span"),
