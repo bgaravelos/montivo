@@ -31,10 +31,16 @@ def schema() -> dict:
 
 
 def said(edl: dict, limit: int = 2400) -> str:
-    """The cut's words in order, one clip a line (the EDL's span words), cut at `limit` characters."""
+    """The cut's words in order, one clip a line, cut at `limit` characters: the rendered caption lines (glossary
+    fixes and hand retexts in), else the EDL's span words. Voice's raw words put "New Spark" and "Soundtracks me"
+    in front of the model on both samples, and the prompt asks it to use the names it reads."""
+    lines: dict[str, list[str]] = {}
+    for c in edl.get("captions") or []:
+        if c.get("text"):
+            lines.setdefault((c.get("spans") or ["?"])[0], []).append(str(c["text"]))
     out, n = [], 0
     for s in edl.get("spans") or []:
-        w = " ".join(str(s.get("words") or "").split())
+        w = " ".join(" ".join(lines.get(s.get("id")) or [str(s.get("words") or "")]).split())
         if not w:
             continue
         out.append(f"- {w}")

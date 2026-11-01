@@ -253,3 +253,18 @@ def test_a_selection_never_turns_into_a_whole_cut_replan():
     ops, skipped = agent.check(edl, [replan], agent.norm_scope({"clips": ["s2"]}))
     assert ops == [] and "clear the selection" in skipped[0]
     assert [o["op"] for o in agent.check(edl, [replan])[0]] == ["replan"]  # no selection: a re-plan is fine
+
+
+def test_the_card_says_what_a_trim_an_insert_pauses_and_a_restore_do(tmp_path):
+    d = _run(tmp_path)
+    (d / "edl_v2.json").write_text(json.dumps({"version": 2, "spans": SPANS[:2], "runtime_s": 5.0}))
+    (d / "review_v2.json").write_text(json.dumps({"review": {"overall": 81}}))
+    edl = json.loads((d / "edl_v3.json").read_text())
+    card = lambda o: agent.preview_card(d, edl, [o], None, 0)["lines"]
+    trim = card(op("trim", span="s2", edge="out", word=7))
+    assert trim[1] == "s2 ends on “form” (word 7)" and trim[0] == "3 clips, about 6 s (now 7.0 s)"  # "video here" go
+    assert card(op("trim", span="s2", edge="in", word=5))[1] == "s2 starts on “cut” (word 5)"
+    assert card(op("insert", turn=0, word_from=2, word_to=3))[1] == "Puts back 2 words in recording order: “am Billy”"
+    assert card(op("pauses"))[1].startswith("Shortens the long pauses")
+    restore = card(op("restore", version=2))
+    assert restore[1] == "Brings back v2 as it was: 2 clips, 5.0 s, blind score 81" and "about 5 s" in restore[0]

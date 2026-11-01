@@ -46,10 +46,15 @@ const MAKES_VERSION = ["drop", "trim", "reorder", "cut", "split", "punch", "capt
 // a version made while a Live draft is open would leave the draft on an older base: these wait for Make Version too
 const DRAFT_HOLDS = [...MAKES_VERSION, "restore", "ask/apply"];
 
+// a slider takes no typing: after a fader move Space still plays (bug audit 1/11)
+const NOT_TYPED = new Set(["range"]);
 const typing = (el: EventTarget | null) => {
   const e = el as HTMLElement | null;
+  if (e?.tagName === "INPUT" && NOT_TYPED.has((e as HTMLInputElement).type)) return false;
   return !!e && (e.tagName === "INPUT" || e.tagName === "TEXTAREA" || e.tagName === "SELECT" || e.isContentEditable);
 };
+// the keys a focused slider moves itself by
+const SLIDER_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"]);
 // a focused control Space should press (a button, a link, a summary, a role="button" row), not the player's play/pause;
 // the clips, captions and markers on the timeline canvas stay on play/pause (select a clip, Space plays), as in an NLE
 const CONTROL = "button, a[href], summary, [role=button], [role=checkbox], [role=switch], [role=tab], [role=menuitem], [role=option], [role=radio]";
@@ -549,9 +554,12 @@ export function Editor({ id, replay, go }: Props) {
   // keyboard, through a ref so the listener sees the current state without re-subscribing
   const keys = useRef<(e: KeyboardEvent) => void>(() => {});
   keys.current = (e: KeyboardEvent) => {
-    if (typing(e.target) || dialog) return;
-    const p = player.current;
     const mod = e.metaKey || e.ctrlKey;
+    // ⌘P opens the palette from a text field too (else the browser's print dialog)
+    if (mod && (e.key === "p" || e.key === "P") && !dialog) { e.preventDefault(); setDialog({ kind: "palette" }); return; }
+    if (typing(e.target) || dialog) return;
+    if ((e.target as HTMLInputElement | null)?.type === "range" && SLIDER_KEYS.has(e.key)) return;
+    const p = player.current;
     if (mod && (e.key === "z" || e.key === "Z")) { e.preventDefault(); step(e.shiftKey ? 1 : -1); return; }
     if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); setZoom((z) => Math.min(ZOOM_MAX, (z ?? ppsRef.current) * 1.4)); return; }
     if (mod && e.key === "-") { e.preventDefault(); setZoom((z) => Math.max(ZOOM_MIN, (z ?? ppsRef.current) / 1.4)); return; }

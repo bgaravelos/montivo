@@ -50,6 +50,21 @@ def test_the_keyword_reader_without_a_key():
     assert none["ops"] == [] and "MODEL_API_KEY" in none["reply"]
 
 
+def test_the_keyword_reader_reads_on_and_off_per_clause_and_never_drops_part_of_a_clip():
+    edl = {"spans": SPANS}
+    ops = lambda msg: [(o["op"], o["on"]) if o["op"] == "punch" else o["op"] for o in agent.keywords(edl, msg)["ops"]]
+    assert ops("add music, no punch-ins") == ["music_on", ("punch", False)]
+    assert ops("put lofi music and remove the title") == ["music_on", "title_off"]
+    assert ops("βάλε μουσική και βγάλε τον τίτλο") == ["music_on", "title_off"]
+    assert ops("put the title back, no music") == ["music_off", "title_on"]
+    assert ops("delete the title") == ["title_off"]
+    assert ops("turn off the music and punch-ins") == ["music_off", ("punch", False)]
+    for part in ("cut s2 shorter", "remove the pause in s2", "κόψε λίγο το s2", "cut the boxing part",
+                 "clean up the captions"):
+        assert ops(part) == [], part
+    assert agent.keywords(edl, "box captions")["ops"][0]["preset"] == "box"
+
+
 def test_one_message_makes_one_version_rendered_once(tmp_path, monkeypatch):
     d = _run(tmp_path)
     monkeypatch.setattr(agent, "route", lambda *a, **kw: ({"reply": "Lo-fi under it, bold captions, punch-ins on.",

@@ -274,7 +274,7 @@ Loop (top bar) lays every version out left to right: its frame, blind score and 
 
 ## Hook A/B
 <!-- monti: target=insp words=hook,hook a/b,opening,first line,another hook,try another hook,a/b,άνοιγμα,πρώτη ατάκα,αρχή,hook -->
-"Try another hook" (in the review inspector) makes a version that opens on another line, reviews it blind, and a pairwise judge watches both twice in swapped order; the new opener is kept only if it wins both (~$0.04 to $0.07).
+"Try another hook" (in the review inspector) makes a version that opens on another line, reviews it blind, and a pairwise judge watches both twice in swapped order; the new opener is kept only if it wins both (~$0.11 to $0.15).
 The editor then opens the version it kept.
 
 ## Export
@@ -307,7 +307,7 @@ Share (top bar) makes a read-only page for this version: the cut, its score and 
 ## Cost and time
 <!-- monti: target=top.more words=cost,costs,price,how much,money,dollars,spend,ledger,cost and time,κόστος,κοστ,κοστίζει,πόσο κάνει,λεφτά,χρεών -->
 More (top bar) > Cost and time shows this project's ledger: every model call with its tokens, dollars and seconds.
-1. Rough prices: a new run about $0.045 + $0.0026 per footage second; the review loop about $0.05; a blind review $0.035; an Ask Montivo message about $0.006; a re-plan $0.05 (Spark Open $0.012); a title card or B-roll still $0.01; a look from words $0.008 ($0.004 on Spark Open).
+1. Rough prices: a new run about $0.045 + $0.0026 per footage second; the review loop about $0.05; a blind review $0.035; an Ask Montivo message about $0.006; a re-plan $0.05 (Spark Open $0.012); a hook A/B ("Try another hook") $0.11 to $0.15; a title card or B-roll still $0.01; a look from words $0.008 ($0.004 on Spark Open).
 2. $0: every edit (trim, delete, move, split, captions, style, music, speakers), Live drafts, exports, renders.
 3. A Monti question is about $0.004 on Muse Spark Open, which reads this whole guide (it stays cached on Baseten), or $0.013 on Muse Spark 1.3 without a Baseten key; without a model key Monti answers from this guide's keywords for $0.
 
@@ -320,7 +320,7 @@ More (top bar) > Replay the agent run plays a finished run back at 1x or 4x, wit
 On the hosted demo everyone shares a model budget; the meter on the project list and the composer show what is left.
 1. Editing a sample makes your own copy; other judges never see it.
 2. A clip can be up to 95 s and 1000 MB, three uploads per judge; one job runs at a time on the server.
-3. Past the budget, the finished projects and every $0 edit still work; paid calls (a new run, reviews, Ask Montivo, Monti's model) stop, and Monti answers from this guide.
+3. Past the budget, the finished projects and every $0 edit still work; paid calls (a new run, reviews, Monti's model) stop; Ask Montivo then reads only simple keywords (music, punch-ins, a caption preset by name, the title on or off, delete or move a named clip), and Monti answers from this guide.
 4. Each judge may spend about $3 of model calls (the shared budget caps everyone together); past that, every $0 edit still works.
 
 ## When a job is running

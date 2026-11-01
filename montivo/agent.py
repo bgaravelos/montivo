@@ -427,12 +427,33 @@ DELETE = re.compile(r"\b(delete|drop|remove|cut)\b|σβήσ|διάγραψ|κό�
 THIS = re.compile(r"\b(this|these|that|those|it|them|selected|selection)\b|αυτ|επιλεγμέν", re.I)
 UNDO = re.compile(r"\bundo\b|\bgo back\b|αναίρε|γύρνα πίσω", re.I)
 MOVE = re.compile(r"\bmove\s+(s\d+)\s+(?:before|in front of)\s+(s\d+)|\bmove\s+(s\d+)\s+to the end", re.I)
+# "add music, no punch-ins": each feature reads the on/off words of its own clause (one OFF for the whole message
+# turned the music off there); a clause with neither keeps the clause before it ("turn off the music and punch-ins")
+CLAUSE = re.compile(r"[,;.!?]|\b(?:and|but|then|also)\b|\bκαι\b|\bαλλά\b|\bμετά\b", re.I)
+ON = re.compile(r"\b(add|put|turn on|use|with|want|keep|back|bring)\b|βάλ|πρόσθεσ|θέλω|κράτα|φέρ", re.I)
+HIDE = re.compile(r"\b(delete|drop|hide)\b|κρύψ|διάγραψ", re.I)
+# "cut s3 shorter", "remove the pause in s3": a part of the clip, which the keywords cannot place; never a whole drop
+PART = re.compile(r"\b(shorter|short|trim|tighten|pause|pauses|silence|bit|part|word|words|first|last|start|end|"
+                  r"beginning|ending|seconds?)\b|λίγο|παύσ|σιωπ|λέξ|αρχ|τέλ|μικρότερ|κοντύτερ|δευτερόλεπτ", re.I)
+
+
+def switched_off(m: str, feature: str, hide: bool = False) -> bool:
+    """Whether the clauses that name a feature ask for it off ("no", "without", and for the title "delete", "hide")."""
+    off, seen, last = False, False, False
+    for part in CLAUSE.split(m):
+        part = part or ""
+        said = bool(OFF.search(part) or (hide and HIDE.search(part)))
+        now = said or (last and not ON.search(part))
+        if re.search(feature, part):
+            seen, off = True, now
+        if said or ON.search(part):
+            last = said
+    return off if seen else bool(OFF.search(m))
 
 
 def keywords(edl: dict, message: str, scope: dict | None = None) -> dict:
     """The router without a model: the few edits a keyword names safely. Same answer shape as `route`."""
     m = message.lower()
-    off = bool(OFF.search(m))
     scope = scope or {}
     ops, said = [], []
     blank = {k: "" for k in ("span", "before", "text", "track", "preset", "look_prompt", "instruction")} | \
@@ -448,14 +469,14 @@ def keywords(edl: dict, message: str, scope: dict | None = None) -> dict:
             for w in scope["words"]:
                 ops.append(blank | {"op": "cut", "span": w["span"], "word_from": w["from"], "word_to": w["to"]})
                 said.append(f"{w['to'] - w['from'] + 1} words of {w['span']} deleted")
-        else:
+        elif not PART.search(m):
             for sid in named or (scope.get("clips") if THIS.search(m) else []) or []:
                 ops.append(blank | {"op": "drop", "span": sid})
                 said.append(f"clip {sid} deleted")
     ts = music_mod.tracks()
     named = next((t for t in ts if t["id"].replace("_", " ") in m or t["name"].lower() in m), None)
     if named or re.search(r"music|μουσικ|τραγούδ|soundtrack", m):
-        if off and not named:
+        if switched_off(m, r"music|μουσικ|τραγούδ|soundtrack") and not named:
             ops.append(blank | {"op": "music_off"})
             said.append("music out")
         else:
@@ -465,14 +486,18 @@ def keywords(edl: dict, message: str, scope: dict | None = None) -> dict:
             ops.append(blank | {"op": "music_on", "track": pick["id"]})
             said.append(f"music: {pick['name']}")
     if re.search(r"punch|zoom|ζουμ", m):
+        off = switched_off(m, r"punch|zoom|ζουμ")
         ops.append(blank | {"op": "punch", "on": not off})
         said.append(f"punch-ins {'off' if off else 'on'}")
-    preset = next((k for k in PRESETS if k.replace("_", " ") in m or PRESET_NAMES[k].lower() in m), None) \
+    # whole words only ("the boxing part" is no Box), and "clean up" is a verb, not the Clean preset
+    preset = next((k for k in PRESETS if re.search(rf"\b({re.escape(k.replace('_', ' '))}|"
+                                                    rf"{re.escape(PRESET_NAMES[k].lower())})\b(?! up)", m)), None) \
         or next((v for k, v in GREEK_PRESETS.items() if k in m), None)
     if preset:
         ops.append(blank | {"op": "style", "preset": preset})
         said.append(f"captions: {PRESET_NAMES[preset]}")
     if re.search(r"title|τίτλ", m):
+        off = switched_off(m, r"title|τίτλ", hide=True)
         ops.append(blank | {"op": "title_off" if off else "title_on"})
         said.append(f"title card {'off' if off else 'on'}")
     if not ops:
@@ -872,6 +897,47 @@ def preview_card(run_dir: Path, edl: dict, ops: list[dict], planner: str | None,
             cut_s += max(0.0, float(tw[b]["t_end"]) - float(tw[a]["t_start"]))
         text = " ".join(tw[i]["w"] for i in range(a, b + 1) if i in tw)
         cut_lines.append(f"{s['id']} loses {b - a + 1} word{'s' if b > a else ''}" + (f": “{text[:80]}”" if text else ""))
+    # trim, insert, pauses, restore are previewed too ("undo that" in Rendered is a restore): say what each does
+    other_lines, delta = [], 0.0
+    for o in ops:
+        if o["op"] == "trim" and o.get("span") in by_id:
+            s, w = by_id[o["span"]], int(o["word"])
+            tw = {x["i"]: x for x in words.turn(s["turn_id"])} if words else {}
+            word = f" “{tw[w]['w']}”" if w in tw else ""
+            if o["edge"] == "in":
+                other_lines.append(f"{s['id']} starts on{word} (word {w})")
+                span = range(min(w, s["word_from"]), max(w, s["word_from"]))
+                sign = -1 if w > s["word_from"] else 1
+            else:
+                other_lines.append(f"{s['id']} ends on{word} (word {w})")
+                span = range(min(w, s["word_to"]) + 1, max(w, s["word_to"]) + 1)
+                sign = -1 if w < s["word_to"] else 1
+            if all(i in tw for i in span) and len(span):
+                delta += sign * (float(tw[span[-1]]["t_end"]) - float(tw[span[0]]["t_start"]))
+        elif o["op"] == "insert":
+            a, b = int(o["word_from"]), int(o["word_to"])
+            tw = {x["i"]: x for x in words.turn(int(o["turn"]))} if words else {}
+            text = " ".join(tw[i]["w"] for i in range(a, b + 1) if i in tw)
+            where = f"in front of {o['before']}" if o.get("before") not in ("", "end", None) else \
+                ("at the end" if o.get("before") == "end" else "in recording order")
+            other_lines.append(f"Puts back {b - a + 1} words {where}" + (f": “{text[:80]}”" if text else ""))
+            if a in tw and b in tw:
+                delta += float(tw[b]["t_end"]) - float(tw[a]["t_start"])
+        elif o["op"] == "pauses":
+            other_lines.append("Shortens the long pauses between words (no word is cut)")
+        elif o["op"] == "restore":
+            v = int(o["version"])
+            old_edl = json.loads((run_dir / f"edl_v{v}.json").read_text()) \
+                if (run_dir / f"edl_v{v}.json").is_file() else {}
+            rv = json.loads((run_dir / f"review_v{v}.json").read_text()) \
+                if (run_dir / f"review_v{v}.json").is_file() else {}
+            score = (rv.get("review") or {}).get("overall")
+            other_lines.append(f"Brings back v{v} as it was" + (f": {len(old_edl['spans'])} clips, "
+                                                                f"{float(old_edl.get('runtime_s') or 0):.1f} s"
+                                                                if old_edl.get("spans") else "")
+                               + (f", blind score {score}" if score is not None else ""))
+            if old_edl.get("runtime_s"):
+                delta += float(old_edl["runtime_s"]) - runtime
     moves = []
     for o in ops:
         if o["op"] == "reorder" and o["span"] in order:
@@ -883,13 +949,13 @@ def preview_card(run_dir: Path, edl: dict, ops: list[dict], planner: str | None,
             moves.append(f"{o['span']} moves " + (f"in front of {o['before']}" if o.get("before") else "to the end"))
     if not replan:
         gone = list(dict.fromkeys(gone))
-        after_s = max(0.0, runtime - sum(float(by_id[g].get("duration", 0.0)) for g in gone) - cut_s)
+        after_s = max(0.0, runtime - sum(float(by_id[g].get("duration", 0.0)) for g in gone) - cut_s + delta)
         kept = [x for x in order if x not in gone]
         lines.append(f"{len(spans)} → {len(kept)} clips, about {after_s:.0f} s (now {runtime:.1f} s)"
                      if gone else f"{len(kept)} clips, about {after_s:.0f} s (now {runtime:.1f} s)")
         for g in gone:
             lines.append(f"{g} goes: “{(by_id[g].get('words') or '')[:80]}”")
-        lines += cut_lines + moves
+        lines += cut_lines + other_lines + moves
         if moves:
             lines.append("New order: " + " ".join(kept))
     also = [op_label(o) for o in ops if o["op"] not in STRUCTURAL]
