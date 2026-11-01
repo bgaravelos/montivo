@@ -352,11 +352,14 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
         met = [item(c) for c in brief_checks if c["status"] == "met"]
         missed = [item(c) for c in brief_checks if c["status"] == "missed"]
         rest = [f"\"{c['item']}\"" for c in brief_checks if c["status"] == "open"]
+        cannot = [item(c) for c in brief_checks if c["status"] == "unreachable"]
         out.append(f"{len(out) + 1}. The brief as a checklist, measured on the words this cut keeps (the source "
                    "transcript, so a word the speech model misheard still counts): "
                    + "; ".join(x for x in (f"met: {', '.join(met)}" if met else "",
                                            f"missed: {', '.join(missed)}" if missed else "",
-                                           f"not measurable, yours to judge: {', '.join(rest)}" if rest else "") if x)
+                                           f"not measurable, yours to judge: {', '.join(rest)}" if rest else "",
+                                           f"cannot be met by any cut of this footage (do not count it against the "
+                                           f"cut): {', '.join(cannot)}" if cannot else "") if x)
                    + ". Judge brief_covered by this list.")
     if not_in_source:
         out.append(f"{len(out) + 1}. The source footage was searched for everything the brief asks for; these are not "
@@ -1797,6 +1800,14 @@ def replan_escalation(run_dir: Path, ledger: Ledger, log=print):
     return go
 
 
+def stalled(stop: str, history: list[dict]) -> bool:
+    """The loop used every pass and no version scored over the first: a live judge run on the hosted demo (1/11,
+    live-walk-0853) went 68 / 68 / 68 and stopped on "max passes (3)" without the re-plan a stuck loop gets. One review
+    (`--passes 1`, "Review this version") is a review, not a stalled loop."""
+    return (stop.startswith("max passes") and len(history) >= 2
+            and max(h["overall"] for h in history) <= history[0]["overall"])
+
+
 def _escalate(run_dir: Path, history: list[dict], reviews: dict[int, dict], stop: str, spent: float, budget_usd: float,
               words: Words, audio: Audio | None, escalate_fn, render_fn, review_fn, log) -> tuple[dict, float, Path]:
     """The escalation step of review_loop (C4): returns its record, the money spent so far and the loop's last EDL.
@@ -1995,7 +2006,7 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
                 log(f"review loop: edl_v{n}.json removed (no cut), the last version stays {edl_path.name}")
             break
     escalation = None
-    if escalate_fn and history and not error and stop.startswith(ESCALATE_ON):
+    if escalate_fn and history and not error and (stop.startswith(ESCALATE_ON) or stalled(stop, history)):
         escalation, spent, edl_path = _escalate(run_dir, history, reviews, stop, spent, budget_usd, words, audio,
                                                 escalate_fn, render_fn, review_fn, log)
         if escalation.get("pass"):

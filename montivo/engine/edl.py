@@ -181,6 +181,30 @@ def locate(span_text: str, turn_words: list[Word], after: int = -1,
     return first, last, False, round(ratio, 3)
 
 
+COPY_MAX_WORDS = 3
+COPY_SHORTER = 0.6  # Voice's echo of a phrase is this much shorter than the phrase itself, or less
+
+
+def earlier_copy(tw: list[Word], a: int, b: int) -> int:
+    """A span that opens on Voice's echo of the phrase just before it starts on the phrase itself: live-walk-0853 (the
+    hosted demo, 1/11) heard "Now I'm back. I'm back." where Billy said it once (24.96-25.72 s); the plan kept "I'm
+    back. Did it find me?", which landed on the 0.16 s echo, the edge pass took the real words for the neighbour's
+    sound and the cut showed "I'm back." over silence (a captions_match_speech major on all three versions). The echo:
+    the same 1 to COPY_MAX_WORDS words right before, abutting, at most COPY_SHORTER of their length. A speaker's own
+    retake is as long as the first take and stays where the plan put it."""
+    for k in range(COPY_MAX_WORDS, 0, -1):
+        if a - k < 0 or a + k - 1 > b:
+            continue
+        first, echo = tw[a - k:a], tw[a:a + k]
+        if [norm(w.w) for w in first] != [norm(w.w) for w in echo] or not norm(echo[0].w):
+            continue
+        if echo[0].t_start - first[-1].t_end > 0.05:
+            continue
+        if echo[-1].t_end - echo[0].t_start <= COPY_SHORTER * (first[-1].t_end - first[0].t_start):
+            return a - k
+    return a
+
+
 OVER_TARGET = 1.10  # a plan running more than 10 % over the target loses its weakest body span (fit_length)
 UNDER_TARGET = 0.80  # never below this share of the target by a drop
 
@@ -246,6 +270,8 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
                             "reason": "quote not found in the turn" if tw else "turn not found"})
             continue
         a, b, exact, ratio = loc
+        if not any(x <= a - 1 and earlier_copy(tw, a, b) <= y for x, y in placed):  # never into another span's words
+            a = earlier_copy(tw, a, b)
         t_in, t_out = tw[a].t_start, tw[b].t_end
         spans.append(Span(id=f"s{k + 1}", order=k, turn_id=tid, speaker=turns[tid].speaker if tid in turns else "?",
                           role=item["role"], words=" ".join(w.w for w in tw[a:b + 1]), t_in=t_in, t_out=t_out,
@@ -258,12 +284,16 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
         if cur.turn_id == prev.turn_id and cur.word_from == prev.word_to + 1:
             cur.contiguous_with_previous = True
     runtime = round(sum(s.duration for s in spans), 2)
+    # every turn's speech: the most any cut of this footage can hold (check_brief: a length the brief asks for that
+    # the recording cannot give is not missed by the cut)
+    source_speech = round(sum(max(0, t.endMs - t.startMs) for t in voice.turns) / 1000.0, 2)
     edl = {
         "version": 1,
         "brief": brief,
         "source": source,
         "target": {"aspect": "9:16", "width": 1080, "height": 1920},
         "runtime_s": runtime,
+        "source_speech_s": source_speech,
         "spans": [asdict(s) for s in spans],
         "unplaced": missing,
         "role_fixes": role_fixes,
@@ -385,6 +415,11 @@ def check_brief(edl: dict, duration_s: float | None = None) -> list[dict]:
             lo, hi = c.get("min_s", -1), c.get("max_s", -1)
             ok = (lo < 0 or runtime >= lo - LENGTH_SLACK_S) and (hi < 0 or runtime <= hi + LENGTH_SLACK_S)
             status, found = ("met" if ok else "missed"), f"{runtime:.1f} s"
+            have = edl.get("source_speech_s")
+            if not ok and have is not None and lo > float(have) + LENGTH_SLACK_S:
+                # live-walk-0853 (hosted demo, 1/11): the "Talking head" preset asks 35 to 45 s of a 34.5 s clip with
+                # 30.6 s of speech; the reviewer called the length a brief_covered blocker on every version
+                status, found = "unreachable", f"{runtime:.1f} s; the whole recording holds {float(have):.1f} s of speech"
         elif kind in ("opening", "ending") and quote and kept:
             part = kept[:len(quote) + 1] if kind == "opening" else kept[-(len(quote) + 1):]
             r = _best_window(quote, part)

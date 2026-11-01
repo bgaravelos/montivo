@@ -164,3 +164,31 @@ def test_a_filler_hook_is_a_problem_unless_the_brief_opens_on_it():
     assert E.filler_hook(edl) == []
     assert E.filler_hook({"spans": [{"id": "s1", "words": "Yeah so I think the most important thing"}]})
     assert E.filler_hook({"spans": [{"id": "s1", "words": "this past year we passed 716 saves"}]}) == []
+
+
+def test_a_length_the_recording_cannot_give_is_not_missed_by_the_cut():
+    # live-walk-0853 (hosted demo, 1/11): "35 to 45 s" of a clip with 30.6 s of speech, a brief_covered blocker on
+    # every version and a plan repair that could not help
+    from montivo.engine.review import facts_text
+    checks = [{"item": "35 to 45 s vertical reel", "kind": "length", "quote": "", "min_s": 35, "max_s": 45}]
+    edl = {"spans": [{"id": "s1", "words": "Here's a test"}], "brief_checks": checks, "runtime_s": 23.4,
+           "source_speech_s": 30.6, "unplaced": []}
+    c = E.check_brief(edl)[0]
+    assert c["status"] == "unreachable" and "30.6 s of speech" in c["found"]
+    assert not any(p.startswith("length") for p in E.plan_check(edl, 40.0))
+    caps = {"lines": 0, "over_face": [], "min_clearance_px": None}
+    text = facts_text([], caps, 23.4, brief_checks=E.check_brief(edl, 23.4))
+    assert "cannot be met by any cut of this footage" in text and "missed" not in text
+    del edl["source_speech_s"]  # an EDL from before keeps the old verdict
+    assert E.check_brief(edl)[0]["status"] == "missed"
+
+
+def test_a_span_on_voices_echo_of_a_phrase_starts_on_the_phrase():
+    from montivo.engine.voice import Word
+    ws = [("Now", 25.02, 25.18), ("I'm", 25.18, 25.34), ("back.", 25.34, 25.5), ("I'm", 25.5, 25.58),
+          ("back.", 25.58, 25.66), ("Did", 25.66, 28.54), ("it", 28.54, 28.62)]
+    tw = [Word(w=w, t_start=a, t_end=b, turn_id=3, speaker="A", i=k) for k, (w, a, b) in enumerate(ws)]
+    assert E.earlier_copy(tw, 3, 6) == 1  # live-walk-0853: "I'm back." is Voice's 0.16 s echo
+    same = [Word(w=w, t_start=a, t_end=b, turn_id=0, speaker="A", i=k) for k, (w, a, b) in
+            enumerate([("we", 1.0, 1.3), ("had", 1.3, 1.6), ("we", 1.6, 1.9), ("had", 1.9, 2.2), ("enough", 2.2, 2.6)])]
+    assert E.earlier_copy(same, 2, 4) == 2  # a retake as long as the first take stays
