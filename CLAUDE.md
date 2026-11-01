@@ -59,6 +59,7 @@ holds up in production, and startups may build on existing products. Stage 2 rub
 montivo/           the engine package (config, ledger, run, cli, human; server/ = the UI API + static build; engine/{api,ingest,voice,track,spark,schemas,edl,reframe,
                    render,captions,graphics,image,review}.py)
 tests/             offline tests on recorded Voice and SAM streams (make test)
+eval/              index of the benchmarks (tools/) and checks with their latest results
 tools/             kt_f_review_killtest.py, kill test (b) of the review loop (26/10 23:55, uses montivo)
 docs/notes/        hand-over notes copied from the Claude Code sessions (git-ignored, read them first)
 runs/              run folders (ignored); footage/ local clips (ignored)
@@ -1128,6 +1129,11 @@ unchanged. Main 882dbe1, pushed and deployed 1/11 on Billy's go from a clean wor
 retext leaves behind opens the next line (015 split s5: "models do all | the work Muse Voice", was "| the |"); all 46
 stored EDLs lay out as before; deployed 1/11 22:3x (no job since 21:07, the 22:13 container stopped), health 200 / 401 /
 404 / 403 as before, smoke drop on 015 34.2 s, -14.0 LUFS / -1.7 dBTP.
+eval/ + Docker (1/11 night, $0, Billy's go, first PRs of the repo: #1 `eval/README.md` indexes every benchmark in
+`tools/` and the $0 checks with their latest results; #2 `Dockerfile` (python:3.12-slim + ffmpeg + constraints, /data
+volume, a `sample` command) and `compose.yaml` (port 8765, `.env` optional), README Setup shows them; checked with colima
+on the Mac (`colima stop` stops it): the 015 sample in 13 s, serve, a drop render of 015 34.2 s, -14.0 LUFS / -1.7 dBTP).
+Reason: an unofficial leaderboard (watt-mind) scores repos on such signals (7.8, #35 on 1/11); new work goes through PRs.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
