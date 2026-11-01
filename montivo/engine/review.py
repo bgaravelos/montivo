@@ -196,13 +196,22 @@ def cut_edge_levels(edl: dict, audio: "Audio") -> list[dict]:
     and 012-ktb: -37.8 to -53.4 dB); an edge inside a word does not (the cut inside "agent" -25.8 dB, an end 20 ms into
     the next word -31.3 dB). Measured on the source because the render fades 20 ms at every join, and on the edge itself
     because a word that ends right at a tight cut is loud just before it without being clipped. Spark does not hear a
-    clipped word (kill test b: 0 of 3), so the levels are handed to it as a fact."""
+    clipped word (kill test b: 0 of 3), so the levels are handed to it as a fact. The cut's very first edge (the hook's
+    in point, `start`) is measured like the in edge of a join: a hook that opens inside a word clips it just the same
+    (18 stored EDLs opened loud and passed the gate, 1/11); an in point on the recording's own first frames is left
+    out, no edit can open earlier there."""
     out = []
     # a noisy room (run 013: floor -39.6 dB) puts room tone near -34 dB: loud means over its own speech threshold there
     loud_db = edge_loud_db(audio)
     for t, before, after in cuts(cut_map(edl)):
         if before is None:
-            continue  # the start of the first span is not a join
+            i = edl["spans"][after.index]["t_in"]
+            start_db = audio.level(i - EDGE_HALF_S, i + EDGE_HALF_S)
+            loud = i > EDGE_HALF_S and start_db > loud_db
+            runs_on = loud and audio.quietest(i - VALLEY_RANGE_S, i + VALLEY_RANGE_S, step=VALLEY_STEP_S)[1] > loud_db
+            out.append({"t": round(t, 2), "end_db": None, "start_db": start_db, "end": False, "start": True,
+                        "loud": loud, "loud_db": loud_db, **({"runs_on": ["in"]} if runs_on else {})})
+            continue
         e = edl["spans"][before.index]["t_out"]
         end_db = audio.level(e - EDGE_HALF_S, e + EDGE_HALF_S)
         start_db = None
@@ -260,6 +269,8 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
             def edge(e: dict) -> str:
                 if e["end"]:
                     return f"{e['t']:.2f} s (the end) {e['end_db']:.1f} dB"
+                if e.get("start"):
+                    return f"{e['t']:.2f} s (the start) {e['start_db']:.1f} dB"
                 if e.get("continuous"):
                     return (f"{e['t']:.2f} s: no cut in the sound, the next speaker's passage follows on the same "
                             "second of the recording")
@@ -849,7 +860,7 @@ def stuck_edges(run_dir: Path, edl: dict, words: Words, audio: Audio | None) -> 
     if audio is None or not edl.get("spans"):
         return []
     trial, _ = preflight(run_dir, copy.deepcopy(edl), words, audio, log=lambda *_: None)
-    by_t = {round(t, 2): (b, a) for t, b, a in cuts(cut_map(trial)) if b is not None}
+    by_t = {round(t, 2): (b, a) for t, b, a in cuts(cut_map(trial))}
     out = []
     for e in cut_edge_levels(trial, audio):
         if not e["loud"]:
@@ -1966,7 +1977,9 @@ def _escalate(run_dir: Path, history: list[dict], reviews: dict[int, dict], stop
         log(f"review: escalation v{n} {entry['overall']}{' pass' if entry['pass'] else ''} vs the best v{best['version']} "
             f"{best['overall']}: {'kept' if kept else 'not kept, the best stays v' + str(best['version'])}")
         return rec, spent, path
-    except Exception as exc:  # the loop's history stands whatever the escalation does
+    # the loop's history stands whatever the escalation does; human.replan and render_run stop with SystemExit ("the
+    # new plan placed no span on the transcript"), which used to end the loop before loop.json was written
+    except (Exception, SystemExit) as exc:
         rec["error"] = f"{type(exc).__name__}: {str(exc)[:500]}"
         log(f"review: escalation failed: {rec['error']}")
         if path is not None and not (run_dir / f"cut_{path.stem.split('_', 1)[1]}.mp4").is_file():
@@ -2104,7 +2117,7 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
             edl_path = run_dir / f"edl_v{n}.json"
             dump_json(edl_path, new)
             edl = new
-        except Exception as exc:  # a failed review or render ends the loop, never the history before it
+        except (Exception, SystemExit) as exc:  # a failed review or render ends the loop, never the history before it
             error = f"{type(exc).__name__}: {str(exc)[:500]}"
             stop = f"error in pass {k + 1} (v{n}): {error}"
             log(f"review loop: {stop}")

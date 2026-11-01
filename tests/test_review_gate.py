@@ -96,6 +96,30 @@ def test_gate_reasons_and_the_issues_it_hands_the_patcher():
     assert not R.gate_check({"over_face": []}, edges[1:], {"unheard": []}, {"out_of_frame": []})["blocked"]
 
 
+def test_a_hook_that_opens_inside_speech_is_a_gate_fault_with_a_fix():
+    # the cut's first edge was never measured: a hook opening inside a word passed the gate while the same edge one
+    # clip later was a fault (bug audit, 1/11: 18 stored EDLs opened loud)
+    from test_review import FakeAudio
+    edl, words = make_edl(title=False)  # s1 10.0-11.2, s2 11.8-12.7, s3 30.6-32.1
+    joins = [(11.15, 11.25), (11.75, 11.85), (12.65, 12.75), (30.55, 30.65), (32.05, 32.15)]
+    edges = R.cut_edge_levels(edl, FakeAudio(*joins))  # every join quiet, s1's in point inside speech
+    assert edges[0]["start"] and edges[0]["loud"] and edges[0]["runs_on"] == ["in"]
+    g = R.gate_check({}, edges, None, None)
+    assert g["reasons"] == [f"cut at 0.00 s inside speech (in edge over {edges[0]['loud_db']:.1f} dB; speech runs on at "
+                            "the in edge, no pause near it)"]
+    assert [(i["fix_op"], i["params"]["edge"]) for i in g["issues"]] == [("move_cut", "in")]
+    # a pause 0.1 s before it: the gate's fix moves the in point there, and the start clears
+    audio = FakeAudio(*joins, (9.86, 9.98))
+    g = R.gate_check({}, R.cut_edge_levels(edl, audio), None, None)
+    fix, _ = R.resolve(g["issues"][0], 0, edl, words, R.cut_map(edl), audio)
+    assert (fix.op, fix.target, fix.args["edge"], fix.args["mode"]) == ("move_cut", "s1", "in", "valley")
+    new, _ = R.apply_fixes(edl, [fix], words, audio)
+    assert not R.gate_check({}, R.cut_edge_levels(new, audio), None, None)["blocked"]
+    # an in point on the recording's first frames: nothing to open earlier on, not a fault
+    edl["spans"][0]["t_in"] = 0.0
+    assert not R.cut_edge_levels(edl, FakeAudio(*joins))[0]["loud"]
+
+
 def test_gate_issues_become_fixes_the_reviewer_missed_and_bias_moves_the_whole_segment():
     edl, words = make_edl(title=False)
     edl["spans"][0]["t_out"] = 10.95  # s1 cut halfway into w03 (ends 11.2)

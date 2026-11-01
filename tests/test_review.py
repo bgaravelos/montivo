@@ -145,7 +145,8 @@ def test_gate_says_speech_runs_on_where_no_pause_is_near():
     gate = R.gate_check({}, edges, None, None)
     assert any("speech runs on" in r for r in gate["reasons"])
     edges = R.cut_edge_levels(edl, FakeAudio((11.22, 11.28)))  # a pause right after s1
-    assert "out" not in edges[0].get("runs_on", []) and "in" in edges[0]["runs_on"]
+    assert edges[0]["start"]  # the hook's in point; the join s1 | s2 is next
+    assert "out" not in edges[1].get("runs_on", []) and "in" in edges[1]["runs_on"]
 
 
 def test_extend_span_stops_at_words_another_span_keeps():
@@ -533,13 +534,14 @@ def test_cut_edge_levels_flag_an_edge_inside_speech():
     """FakeAudio is loud everywhere except 11.06-11.12 s: s1 (ends 11.2) and s2 (starts 11.8) are cut inside speech."""
     edl, _ = make_edl(title=False)
     edges = R.cut_edge_levels(edl, FakeAudio())
-    assert [e["t"] for e in edges] == [1.2, 2.1, 3.6] and edges[2]["end"] and edges[2]["start_db"] is None
+    assert [e["t"] for e in edges] == [0.0, 1.2, 2.1, 3.6] and edges[3]["end"] and edges[3]["start_db"] is None
+    assert edges[0]["start"] and edges[0]["end_db"] is None  # the hook's in point (10.0) opens inside speech too
     assert all(e["loud"] for e in edges)
     edl["spans"][0]["t_out"] = 11.09
     edges = R.cut_edge_levels(edl, FakeAudio())
-    assert edges[0]["end_db"] < -100 and edges[0]["loud"]  # the next start (11.8) is still inside speech
+    assert edges[1]["end_db"] < -100 and edges[1]["loud"]  # the next start (11.8) is still inside speech
     text = R.facts_text([], {"lines": 0}, 3.6, edges)
-    assert "so a word is cut off there: 1.10 s" in text
+    assert "so a word is cut off there: 0.00 s, 1.10 s" in text and "0.00 s (the start) " in text
     quiet = [{**e, "loud": False} for e in edges]
     assert "every cut here is below it" in R.facts_text([], {"lines": 0}, 3.6, quiet)
 

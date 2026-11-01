@@ -456,6 +456,7 @@ def repeated_takes(edl: dict, n: int = REPEAT_N) -> list[str]:
 RESTART_WINDOW = 5  # a false start: the same two words again within this many words ...
 _PARALLEL = {"and", "but", "or", "then", "because"}  # ... with no conjunction between: "seemed to speak and everyone
 # seemed to be looking" and "over there and then over there" (d1-tedx) are said that way on purpose
+CLAUSE_END = set(",;:.!?—–")  # the last character of a word that closes a clause
 
 
 def restarts(edl: dict, window: int = RESTART_WINDOW) -> list[str]:
@@ -463,10 +464,16 @@ def restarts(edl: dict, window: int = RESTART_WINDOW) -> list[str]:
     it we had enough", d1-tedx; "a notepad and I took a notepad and I wrote"). The first review called d1-tedx's a
     repeated take (a brief_covered major) and the loop could not drop it: the window sits inside a span. Two different
     words, then the same two within `window` words with at least one word between; one-word doubles are Voice's
-    ("all all") and the captions drop them; a repeat after "and" / "then" is a parallel, not a restart. One problem
-    per span."""
+    ("all all") and the captions drop them; a repeat after "and" / "then" is a parallel, not a restart. So is a first
+    take that goes on in words of its own and ends on a clause break before the second ("The more you practice, the
+    more you learn.", "Every single day, every single night": two repair calls for nothing, 1/11). A first take is
+    broken off when the repeat runs on as far as the second take ("out of the | out of the year"), when the words after
+    it try the phrase again ("we had | we've had it | we had enough"), or when no punctuation closes it (Voice writes
+    none inside a restart: "we're grateful for that we're grateful for a nation", "a notepad and I took a notepad").
+    One problem per span."""
     out = []
     for s in edl.get("spans") or []:
+        raw = [t for t in (s.get("words") or "").split() if norm(t)]  # aligned with toks, punctuation kept
         toks = norm_tokens(s.get("words") or "")
         hit = None
         for i in range(len(toks) - 1):
@@ -474,8 +481,18 @@ def restarts(edl: dict, window: int = RESTART_WINDOW) -> list[str]:
             if g[0] == g[1] or all(t in _FILLER for t in g):
                 continue
             for j in range(i + 3, min(len(toks) - 1, i + window + 1)):
-                if toks[j:j + 2] == g and not _PARALLEL & set(toks[i + 2:j]):
-                    hit = (i, j)
+                if toks[j:j + 2] != g or _PARALLEL & set(toks[i + 2:j]):
+                    continue
+                a, b = i, j  # where the two takes start: "more you" of "the more you ..., the more you" starts at "the"
+                while a > 0 and toks[a - 1] == toks[b - 1] and b - 1 > a + 1:
+                    a, b = a - 1, b - 1
+                run = 2  # how far the first take says what the second says
+                while a + run < b and b + run < len(toks) and toks[a + run] == toks[b + run]:
+                    run += 1
+                own = toks[a + run:b]  # what the first take says after the repeat, before the second take
+                closed = raw[b - 1][-1:] in CLAUSE_END
+                if not own or set(own) & (set(g) - _FILLER) or not closed:
+                    hit = (a, b)
                     break
             if hit:
                 break
