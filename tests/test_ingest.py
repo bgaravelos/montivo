@@ -60,3 +60,43 @@ def test_the_wav_is_the_first_audio_stream_as_the_render_reads_it(tmp_path):
     pcm = array("h", wav.read_bytes()[44:])
     crossings = sum(1 for a, b in zip(pcm, pcm[1:]) if (a < 0) != (b < 0))  # two a cycle: 440 Hz ~880, 1500 Hz ~3000
     assert 800 < crossings < 960
+
+
+needs_ffmpeg = __import__("pytest").mark.skipif(not __import__("shutil").which("ffmpeg"), reason="needs ffmpeg")
+
+
+def _late_audio_clip(tmp_path):
+    """5 s of picture whose audio stream starts 0.7 s in (an -itsoffset mux), with a 1 kHz beep 1.0 s into that
+    stream: at about 1.7 s of the clip, where the render's cut (timestamps) and the picture have it."""
+    beep, video, clip = tmp_path / "beep.m4a", tmp_path / "v.mp4", tmp_path / "late_audio.mp4"
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=f=1000:r=48000:d=0.2",
+                    "-af", "adelay=1000:all=1,apad=whole_dur=4", "-c:a", "aac", str(beep)], check=True)
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x240:r=30:d=5",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video)], check=True)
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", str(video), "-itsoffset", "0.7", "-i", str(beep),
+                    "-map", "0:v", "-map", "1:a", "-c", "copy", str(clip)], check=True)
+    return clip
+
+
+def _beep_at(media):
+    from array import array
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(media), "-ac", "1", "-ar", "8000", "-f", "s16le", "-"],
+                         capture_output=True, check=True).stdout
+    pcm = array("h", raw)
+    return next(i for i, v in enumerate(pcm) if abs(v) > 1500) / 8000
+
+
+@needs_ffmpeg
+def test_the_wav_and_the_edit_audio_start_at_the_clips_time_zero(tmp_path):
+    """An audio stream that starts after the picture: the wav and the live preview's FLAC used to begin at its first
+    sample, so Voice timed every word 0.7 s early against the cut and Live played the speech 0.7 s ahead of the lips."""
+    from montivo.engine.ingest import make_edit_proxy, make_wav
+    clip = _late_audio_clip(tmp_path)
+    assert abs(_beep_at(make_wav(clip, tmp_path / "a.wav")) - 1.7) < 0.05
+    make_edit_proxy(clip, tmp_path / "edit.mp4", tmp_path / "edit.flac", ffprobe(clip))
+    assert abs(_beep_at(tmp_path / "edit.flac") - 1.7) < 0.05
+    plain = tmp_path / "plain.mp4"  # a stream from 0 keeps its times
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", "testsrc2=s=320x240:r=30:d=3",
+                    "-f", "lavfi", "-i", "sine=f=1000:r=48000:d=0.2", "-af", "adelay=1200:all=1,apad=whole_dur=3",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(plain)], check=True)
+    assert abs(_beep_at(make_wav(plain, tmp_path / "p.wav")) - 1.2) < 0.05

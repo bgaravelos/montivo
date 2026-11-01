@@ -151,13 +151,13 @@ class FfmpegError(subprocess.CalledProcessError):
         return f"{super().__str__()}\n{(self.stderr or '').strip()[-1500:]}"
 
 
-def run_ffmpeg(cmd: list[str], what: str, log=None) -> None:
+def run_ffmpeg(cmd: list[str], what: str, log=None, stage: str = "ingest") -> None:
     """Run one ffmpeg step with its stderr captured; on failure the end of it goes to `log` (run.log) and into the
     FfmpegError (it used to reach only the terminal of whoever started the run)."""
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         if log:
-            log(f"ingest: {what} failed (ffmpeg exit {proc.returncode}):\n{proc.stderr.strip()[-1500:]}")
+            log(f"{stage}: {what} failed (ffmpeg exit {proc.returncode}):\n{proc.stderr.strip()[-1500:]}")
         raise FfmpegError(proc.returncode, cmd, proc.stdout, proc.stderr)
 
 
@@ -205,8 +205,8 @@ def make_edit_proxy(src: Path, dst: Path, audio_dst: Path, p: Probe, short: int 
                 "-vf", f"{'' if fps == p.fps else f'fps={fps:.6f},'}scale={w}:{h}:flags=lanczos", "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
                 "-g", str(gop), "-keyint_min", str(gop), "-sc_threshold", "0", "-pix_fmt", "yuv420p",
                 "-movflags", "+faststart", "-map_metadata", "-1", str(dst)], "edit proxy", log)
-    run_ffmpeg(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-map", "0:a:0", "-vn", "-ar", "48000", "-ac", "2",
-                "-c:a", "flac", str(audio_dst)], "edit audio", log)
+    run_ffmpeg(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-map", "0:a:0", "-vn", "-af", AUDIO_FROM_ZERO,
+                "-ar", "48000", "-ac", "2", "-c:a", "flac", str(audio_dst)], "edit audio", log)
     return ffprobe(dst)
 
 
@@ -292,17 +292,26 @@ def detect_picture(proxy: Path, proxy_w: int, proxy_h: int, src_w: int, src_h: i
     return picture_from_crop((w, h, x, y), proxy_w, proxy_h, src_w, src_h)
 
 
+# an audio stream that starts after the file's time 0 (an `-itsoffset` mux, some screen and stream recorders) comes out of
+# ffmpeg into a wav or FLAC from its first sample, so every word Voice timed on audio.wav sat that many seconds early
+# against the picture and the render's cut (render.cut_graph reads the source audio by its timestamps): a stream
+# starting at 0.68 s put a beep at 1.70 s of the clip at 1.02 s of audio.wav. This pads the start with silence (a stream
+# from 0, every clip in footage/ and runs/, comes out byte for byte the same)
+AUDIO_FROM_ZERO = "aresample=first_pts=0"
+
+
 def make_wav(src: Path, dst: Path, rate: int = 24000, start: float | None = None, seconds: float | None = None,
              log=None) -> Path:
     """24 kHz mono 16-bit PCM wav, the format the Voice endpoint measures best on, from the first audio stream: the
-    one the render cuts ([i:a]), not ffmpeg's own pick (the stream with the most channels)."""
+    one the render cuts ([i:a]), not ffmpeg's own pick (the stream with the most channels). Sample 0 is the file's
+    time 0 (AUDIO_FROM_ZERO): Voice's word times are read on the clock the render cuts the source by."""
     cmd = ["ffmpeg", "-y", "-loglevel", "error"]
     if start is not None:
         cmd += ["-ss", f"{start:.3f}"]
     if seconds is not None:
         cmd += ["-t", f"{seconds:.3f}"]
-    cmd += ["-i", str(src), "-map", "0:a:0", "-vn", "-ac", "1", "-ar", str(rate), "-c:a", "pcm_s16le", "-map_metadata", "-1",
-            str(dst)]
+    cmd += ["-i", str(src), "-map", "0:a:0", "-vn", *([] if start is not None else ["-af", AUDIO_FROM_ZERO]),
+            "-ac", "1", "-ar", str(rate), "-c:a", "pcm_s16le", "-map_metadata", "-1", str(dst)]
     run_ffmpeg(cmd, "wav", log)
     return dst
 

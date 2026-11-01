@@ -30,6 +30,12 @@ RETRIES = 3  # attempts after the first, for a 429 / 5xx / dropped connection
 TIMEOUT_RETRIES = 1  # a read timeout is retried once at most: each one already waited the call's whole timeout
 BACKOFF_S = (2.0, 5.0, 12.0)
 RETRY_AFTER_MAX_S = 60.0
+# how long a call may wait for its next bytes. Every model call on the run folders' ledgers took 75 s or less in all
+# (Spark 1.3 65 s, SAM 74 s, Voice 52 s) and a Voice stream sends an event every 0.2 s from its 8th second at the latest
+# (119 streams); the old 900 / 1800 / 1200 s let one stalled call outlast the hosted demo's 15 min job limit
+# (MONTIVO_JOB_MAX_S) before its retry could run
+CALL_TIMEOUT_S = 300.0  # a non-streamed /responses or chat call, and a /responses stream (SAM) between two events
+ASR_READ_S = 120.0  # a Voice stream between two events
 _sleep = time.sleep  # tests replace it
 
 
@@ -103,12 +109,12 @@ def _post_json(url: str, headers: dict[str, str], body: dict, what: str, timeout
     return _send(what, send, retries).json()
 
 
-def responses_create(body: dict, timeout_s: float = 900, retries: int = RETRIES) -> dict:
+def responses_create(body: dict, timeout_s: float = CALL_TIMEOUT_S, retries: int = RETRIES) -> dict:
     """POST /responses without streaming."""
     return _post_json(f"{BASE_URL}/responses", _headers(), body, "responses", timeout_s, retries)
 
 
-def chat_create(body: dict, timeout_s: float = 900, retries: int = RETRIES) -> dict:
+def chat_create(body: dict, timeout_s: float = CALL_TIMEOUT_S, retries: int = RETRIES) -> dict:
     """POST /chat/completions on the Open Weight host (Baseten, OpenAI-compatible) without streaming."""
     return _post_json(f"{OPEN_BASE_URL}/chat/completions", {"Authorization": f"Bearer {open_api_key()}"}, body,
                       "chat", timeout_s, retries)
@@ -173,13 +179,15 @@ def _parse_block(block: str) -> tuple[str, str | None]:
 
 
 @contextlib.contextmanager
-def _open_stream(what: str, timeout_s: float, request: Callable[[], dict], retries: int = RETRIES) -> Iterator[httpx.Response]:
+def _open_stream(what: str, timeout_s: float, request: Callable[[], dict], retries: int = RETRIES,
+                 read_s: float | None = None) -> Iterator[httpx.Response]:
     """An open streaming response for POST `request()` (httpx.stream kwargs, built per attempt), with the back-off of
-    _send while it opens: a 429 / 5xx answer or a connection that drops before the headers is tried again."""
+    _send while it opens: a 429 / 5xx answer or a connection that drops before the headers is tried again. `read_s`
+    is the longest wait for the next bytes (default timeout_s), timeout_s the rest (sending the request body)."""
     with contextlib.ExitStack() as stack:
         def send() -> httpx.Response:
             stack.close()
-            http = stack.enter_context(httpx.Client(timeout=httpx.Timeout(timeout_s, connect=30, read=timeout_s)))
+            http = stack.enter_context(httpx.Client(timeout=httpx.Timeout(timeout_s, connect=30, read=read_s or timeout_s)))
             r = stack.enter_context(http.stream("POST", **request()))
             if r.status_code >= 400:
                 r.read()
@@ -187,7 +195,7 @@ def _open_stream(what: str, timeout_s: float, request: Callable[[], dict], retri
         yield _send(what, send, retries)
 
 
-def stream_responses(body: dict, raw_sink: Path | None = None, timeout_s: float = 1800) -> Iterator[dict]:
+def stream_responses(body: dict, raw_sink: Path | None = None, timeout_s: float = CALL_TIMEOUT_S) -> Iterator[dict]:
     """POST /responses with stream=true over raw SSE. Yields each JSON event; writes the raw SSE to raw_sink."""
     body = {**body, "stream": True}
     sink = raw_sink.open("w") if raw_sink else None
@@ -209,14 +217,15 @@ def stream_responses(body: dict, raw_sink: Path | None = None, timeout_s: float 
             sink.close()
 
 
-def stream_transcribe(wav: Path, request: dict, timeout_s: float = 1200) -> Iterator[dict]:
+def stream_transcribe(wav: Path, request: dict, timeout_s: float = 1200, read_s: float = ASR_READ_S) -> Iterator[dict]:
     """POST /asr/transcribe as multipart with Accept: text/event-stream. Yields each JSON event with t_wall added."""
     t0 = time.perf_counter()
     audio = wav.read_bytes()  # sent again as it is on a retry (a 10 min chunk is 29 MB)
     with _open_stream("asr", timeout_s, lambda: {
             "url": f"{BASE_URL}/asr/transcribe", "params": {"sessionId": f"montivo-{uuid.uuid4().hex[:10]}"},
             "headers": _headers(Accept="text/event-stream"),
-            "files": {"request": (None, json.dumps(request), "application/json"), "audio": (wav.name, audio, "audio/wav")}}) as r:
+            "files": {"request": (None, json.dumps(request), "application/json"), "audio": (wav.name, audio, "audio/wav")}},
+            read_s=read_s) as r:
         for _event, data in iter_sse(r):
             try:
                 ev: Any = json.loads(data)

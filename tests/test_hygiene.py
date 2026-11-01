@@ -158,6 +158,32 @@ def test_a_stream_is_retried_while_it_opens(fake_http):
     assert fake_http["sleeps"] == [api.BACKOFF_S[0], 1.0]
 
 
+def test_a_stalled_call_gives_up_well_inside_the_hosted_job_limit(monkeypatch, tmp_path):
+    """A call that stops sending used to wait 900 s (Spark), 1800 s (SAM) or 1200 s (Voice) for its next bytes, and a
+    read timeout is retried once: the hosted demo's 15 min job limit (MONTIVO_JOB_MAX_S 900) killed the run before the
+    retry. Every call measured takes 75 s or less in all; a Voice stream sends an event every 0.2 s."""
+    monkeypatch.setattr(api, "api_key", lambda: "test-key")
+    seen = []
+    real = httpx.Client
+    handler = lambda request: httpx.Response(200, json={"id": "r"}) if request.url.path.endswith(
+        "/responses") and b'"stream": true' not in request.content else httpx.Response(
+        200, text='data: {"type": "x"}\n\n', headers={"content-type": "text/event-stream"})
+
+    def client(**kw):
+        seen.append(kw["timeout"])
+        return real(transport=httpx.MockTransport(handler), **kw)
+    monkeypatch.setattr(httpx, "Client", client)
+    api.responses_create({"model": "m"})
+    list(api.stream_responses({"model": "sam"}))
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"RIFF")
+    list(api.stream_transcribe(wav, {"mode": "DIARIZATION"}))
+    spark, sam, voice = (t.read for t in seen)
+    job_max = 900
+    assert (api.TIMEOUT_RETRIES + 1) * max(spark, sam) + 60 < job_max
+    assert voice <= 120 and (api.TIMEOUT_RETRIES + 1) * voice < job_max / 3
+
+
 def test_upload_backs_off_too(fake_http, tmp_path):
     f = tmp_path / "proxy.mp4"
     f.write_bytes(b"0" * 10)
@@ -205,6 +231,46 @@ def test_a_voice_chunk_whose_stream_broke_runs_again(tmp_path, monkeypatch):
     assert len(calls) == 2 and any("running it again" in m for m in logs)
     events = [json.loads(line) for line in (tmp_path / "voice" / "events.jsonl").read_text().splitlines()]
     assert len(events) == 1  # the broken attempt's events are not kept twice
+
+
+@needs_ffmpeg
+def test_a_voice_stream_that_ends_before_its_audio_runs_again(tmp_path, monkeypatch):
+    """A stream the server closed cleanly half way (no final event, audio heard to 4 of 10 s) used to be taken as the
+    whole transcript: the plan never saw the clip's second half. It runs again, and raises when it stays short."""
+    from montivo.engine import voice as V
+    wav = tmp_path / "audio.wav"
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "sine=f=300:r=24000:d=10", "-ac", "1", str(wav)],
+                   check=True)
+    calls = []
+
+    def turn(end_ms):
+        return [{"type": "speechStart", "turnId": 0, "audioProcessedMs": 500},
+                {"type": "transcript", "transcript": "hello", "audioProcessedMs": 1200},
+                {"type": "audioProgress", "audioProcessedMs": end_ms}]
+
+    def stream(path, request):
+        calls.append(path)
+        if len(calls) == 1:
+            yield from turn(4000)  # cut short: no final, no error
+            return
+        yield from turn(9900)
+        yield {"type": "transcript", "transcript": " there", "audioProcessedMs": 9960}
+        yield {"type": "speechEnd", "turnId": 0, "audioProcessedMs": 9960}
+        yield {"type": "transcript", "transcript": "", "final": True, "audioProcessedMs": 10000}
+    monkeypatch.setattr(V, "stream_transcribe", stream)
+    logs = []
+    res = V.transcribe(wav, tmp_path / "voice", Ledger(tmp_path / "ledger.json"), log=logs.append)
+    assert len(calls) == 2 and any("ended at 4.0 s of 10.0 s" in m for m in logs)
+    assert [w.w for w in res.words] == ["hello", "there"]
+
+    def always_short(path, request):
+        calls.append(path)
+        yield from turn(4000)
+    calls.clear()
+    monkeypatch.setattr(V, "stream_transcribe", always_short)
+    with pytest.raises(RuntimeError, match="ended at 4.0 s of 10.0 s"):
+        V.transcribe(wav, tmp_path / "voice2", Ledger(tmp_path / "ledger.json"), log=logs.append)
+    assert len(calls) == 2
 
 
 def test_sam_is_asked_again_only_when_nothing_came(tmp_path, monkeypatch):

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,7 +18,7 @@ import httpx
 from ..config import SAM_MODEL, TRACK_RESAMPLE_FPS, sam_cost
 from ..ledger import Entry, Ledger, Timer
 from .api import dump_json, stream_responses, upload_file
-from .ingest import Probe, ffprobe
+from .ingest import Probe, ffprobe, run_ffmpeg
 
 STREAM_RETRIES = 1
 FRAME_RE = re.compile(r"^<(\d+)f>")
@@ -97,9 +96,10 @@ def prepare_source(proxy: Path, proxy_probe: Probe, proxy_file_id: str, out_dir:
         return TrackSource(path=proxy, probe=proxy_probe, file_id=proxy_file_id, fps=proxy_probe.fps, resampled=False, upload_seconds=0.0)
     dst = out_dir / f"track_source_{fps:g}fps.mp4"
     with Timer() as t:
-        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(proxy), "-an", "-vf", f"fps={fps}",
-                        "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
-                        "-movflags", "+faststart", str(dst)], check=True)
+        # stderr to run.log on a failure (with check=True it reached only the job's output, the traceback had none)
+        run_ffmpeg(["ffmpeg", "-y", "-loglevel", "error", "-i", str(proxy), "-an", "-vf", f"fps={fps}",
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "20", "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart", str(dst)], f"resample to {fps:g} fps", log, stage="track")
         probe = ffprobe(dst)
         up = upload_file(dst, "video/mp4")
     ledger.add(Entry(stage="track.prepare", model="ffmpeg+files", seconds=t.seconds, cost_usd=0.0,
@@ -122,8 +122,19 @@ def parse_line(line: str) -> tuple[int, list[tuple[str, tuple[int, int, int, int
     return frame, recs
 
 
+def concept_dir(out_dir: Path, concept: str) -> Path:
+    """track/<concept> as track_concept names it ("a microphone" -> track/a_microphone)."""
+    return out_dir / re.sub(r"[^a-z0-9]+", "_", concept.lower()).strip("_")
+
+
+def failed_empty(ct: ConceptTrack) -> bool:
+    """A track whose request failed before SAM sent a single frame (a stream error, response.failed): nothing to
+    reuse. A completed track with no frames found nothing in the clip and stays."""
+    return ct.frames_with_records == 0 and ct.status != "completed"
+
+
 def track_concept(source: TrackSource, concept: str, out_dir: Path, ledger: Ledger, log=print) -> ConceptTrack:
-    cdir = out_dir / re.sub(r"[^a-z0-9]+", "_", concept.lower()).strip("_")
+    cdir = concept_dir(out_dir, concept)
     cdir.mkdir(parents=True, exist_ok=True)
     body = {"model": SAM_MODEL, "metadata": {"mask_encoding": "one_bit"},
             "input": [{"type": "message", "role": "user", "content": [

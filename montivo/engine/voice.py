@@ -290,6 +290,20 @@ def wav_duration_s(wav: Path) -> float:
     return max(0.0, (wav.stat().st_size - 44) / WAV_BYTES_PER_S)
 
 
+STREAM_END_SLACK_S = 1.5  # a stream that heard less than its audio minus this, with no final event, ended early
+
+
+def stream_short(events: list[dict], audio_s: float) -> float | None:
+    """None when a chunk's stream is whole, else the seconds of audio it reported. Every stream recorded on the run
+    folders (119 of 119) ends with one `transcript` event marked final at audioProcessedMs = the audio's length; one
+    that stops before it and before the end of its audio was cut short (the server closed it cleanly, so httpx raised
+    nothing) and its transcript is missing the rest of the clip."""
+    if any(ev.get("final") for ev in events):
+        return None
+    heard = max((float(ev.get("audioProcessedMs") or 0) for ev in events), default=0.0) / 1000
+    return None if heard >= audio_s - STREAM_END_SLACK_S else heard
+
+
 # --------------------------------------------------------------------------- the stage
 
 def transcribe(wav: Path, out_dir: Path, ledger: Ledger, language: str | None = "English", log=print,
@@ -319,8 +333,9 @@ def transcribe(wav: Path, out_dir: Path, ledger: Ledger, language: str | None = 
             chunk_files.append((i, cw, s, e))
 
     def run_chunk(item: tuple[int, Path, float, float]) -> tuple[int, list[dict], float]:
-        """One chunk's events; a stream whose connection breaks after it opened (api.py retries only the opening)
-        runs the chunk again from the start, CHUNK_RETRIES times."""
+        """One chunk's events; a stream whose connection breaks after it opened (api.py retries only the opening), or
+        that ends before the end of its audio (stream_short), runs the chunk again from the start, CHUNK_RETRIES
+        times; a stream still short after that raises (a transcript missing its end would plan a wrong cut)."""
         i, path, s, e = item
         with Timer() as t:
             for attempt in range(CHUNK_RETRIES + 1):
@@ -329,12 +344,20 @@ def transcribe(wav: Path, out_dir: Path, ledger: Ledger, language: str | None = 
                     for ev in stream_transcribe(path, request):
                         ev["chunk"] = i
                         events.append(ev)
-                    break
                 except httpx.TransportError as exc:
                     if attempt >= CHUNK_RETRIES:
                         raise
                     log(f"voice: chunk {i} stream broke after {len(events)} events ({type(exc).__name__}: "
                         f"{str(exc)[:200]}), running it again")
+                    continue
+                short = stream_short(events, e - s)
+                if short is None:
+                    break
+                if attempt >= CHUNK_RETRIES:
+                    raise RuntimeError(f"voice: chunk {i}'s stream ended at {short:.1f} s of {e - s:.1f} s "
+                                       f"{CHUNK_RETRIES + 1} times")
+                log(f"voice: chunk {i} stream ended at {short:.1f} s of {e - s:.1f} s with no final event, running "
+                    "it again")
         log(f"voice: chunk {i} ({e - s:.0f} s) streamed {len(events)} events in {t.seconds}s")
         return i, events, t.seconds
 
