@@ -1079,6 +1079,25 @@ routes, the share page routes, agent.measured, combo_check for the 30/10 ops). C
 1/11 on Billy's go from a clean worktree (no container was running before it, so no job and no old container to
 stop); /api/health 200 (the judge share in the budget), /api/runs 401, /s/nope 404, /api/monti 401, a POST from another
 origin 403, host spend $3.71 of $40; smoke drop on 015: 34.2 s, -14.0 LUFS / -1.7 dBTP, render 7.7 s.
+Four area audits (1/11, $0, Billy: the areas the improvement audit missed, each on its own branch, one agent each in
+its own worktree; merged into main on his go, UI built once at 50fe823): `audit-quality` (review.py: a line a review
+already retexted is not retexted again, 6 of 54 stored caption fixes flip-flopped; a caption keeps the words a measured
+cut clips, the gate's move_cut fixes the cut; clipped edge words leave the caption-vs-heard diff; retime_callout takes
+the callout the issue quotes and never writes words the cut never says, 013's burned-in lower third; bench unchanged
+91 % caught as major), `audit-ingest` (audio.wav and the edit FLAC start at the clip's time zero, `aresample=first_pts=0`,
+an audio track starting 0.68 s late put Voice 0.68 s early; a Voice stream with no final event runs again once; call
+read timeouts 300 s, Voice 120 s between events, so a stall retries inside the 15 min job limit; the SAM resample's
+ffmpeg error reaches run.log; `run --resume` tracks again only the SAM concepts that never returned), `audit-render-live`
+(Live and the faders play voice_db versions at the render's mix: the speech stays, the bed goes down by voice_db, was 6 dB
+over at voice +6; Live callouts keep their case and fade 0.2 s; the Style still past the source's last picture holds
+it), `audit-web-editor` (Live / Rendered keeps the playhead and play state, a version pick is refused while a draft is
+open, a deleted clip leaves the draft's selection, no draft thumbnail 404, the draft bar fits 375 px). 828 tests; 015
+v5 / 017 v13 render frame- and audio-identical. Pushed and deployed 1/11 from a clean worktree (no container was running);
+/api/health 200, /api/runs 401, /s/nope 404, /api/monti 401, a POST from another origin 403, host spend $3.71 of $40;
+smoke drop on 015: 34.2 s, -14.0 LUFS / -1.7 dBTP, render 8.7 s; smoke --live ok (015's edit media came from the Volume,
+so the new audio filter has not run on Modal's ffmpeg 5.1 yet; the next upload's ingest runs it). The draft thumbnail fix
+overlaps branch claude/amazing-heisenberg-3b0761 (Inspector.tsx). Not checked: Safari / iPhone for the Live mix, real
+HDR10 PQ footage.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
