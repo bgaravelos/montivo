@@ -38,6 +38,20 @@
         "8767"
       ],
       "port": 8767
+    },
+    {
+      "name": "notes",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8791",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        "docs/notes"
+      ],
+      "port": 8791
     }
   ]
 }

@@ -1110,7 +1110,7 @@ footage in": 017 v14 drops the glossary entry, v15 retexts the line "raw footage
 hour (a failed EUR 3.13 card charge; free credits $117 left), fixed by Billy. On the Volume only samples 015 and 017
 stay (017 opens on v15 with its review), with their footage and seed zips: 15 test runs, run 012, _archive, ten clips
 (TEDx copies, third-party and personal files) and seed 012 removed by Billy's run of the cleanup script; the deleted
-runs' $3.62 stays in budget.json as held (spent $3.71 of $40). README links a read-only share of 017 v15
+runs' $3.62 was first kept as held, then Billy had the meter reset: budget.json rebaselined on 015, 017 and Monti, $0 of $40 (the old file in the session scratchpad). README links a read-only share of 017 v15
 (`/s/CAlQGWBgIBbo`, commit f91c245). The offline release `sample-017` still holds v13.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
