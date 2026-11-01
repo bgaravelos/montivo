@@ -457,14 +457,18 @@ OPENING_FILLERS = {"um", "uh", "uhm", "erm", "so", "yeah", "okay", "ok", "well",
 
 def filler_hook(edl: dict) -> list[str]:
     """The hook opens on a filler: heli-01's repaired plan opened on "Yeah so I think the the most important thing"
-    (hook_in_1_5s 2, a blocker); the rubric fails filler in the first 1.5 s. A brief that names its opening line
-    decides the opening itself (check_brief)."""
+    (hook_in_1_5s 2, a blocker); the rubric fails filler in the first 1.5 s. Also when the brief names the opening
+    line: 016's plan opened "okay hi I'm Billy" for "Open on 'Hi. I'm Billy.'" (Voice heard "okay hi" as one run, the
+    reviewer's hook major), unless the brief's own words for the opening start on that word."""
     spans = edl.get("spans") or []
-    if not spans or any(c.get("kind") == "opening" and c.get("quote") for c in edl.get("brief_checks") or []):
+    if not spans:
         return []
     toks = norm_tokens(spans[0].get("words") or "")
     if not toks or toks[0] not in OPENING_FILLERS:
         return []
+    if any(c.get("kind") == "opening" and toks[0] in {t.strip("'") for t in norm_tokens(c.get("item") or "")}
+           for c in edl.get("brief_checks") or []):
+        return []  # the brief's own opening line starts on that word
     lead = " ".join((spans[0]["words"]).split()[:5])
     return [f"{spans[0]['id']} (the hook) opens on a filler: \"{lead} ...\". The first words a viewer hears must be the "
             "line itself: start the hook span after the filler, on a word that begins the claim, or open on another line"]

@@ -38,7 +38,9 @@ PLAN_EFFORT = "low"
 PAUSE_RULE = (
     "- In the transcript a / marks a pause in the recording: a moment of silence between two words. Start and end "
     "every span at a / whenever you can (right after one, right before one): anywhere else the speaker runs straight "
-    "on and the cut clips a word. Quote the words without the / marks.\n")
+    "on and the cut clips a word. Never take in a filler, a false start or words the brief drops to reach a /: a span "
+    "still starts on its first real word (\"/ okay hi I'm Billy\" is quoted \"hi I'm Billy\"). Quote the words "
+    "without the / marks.\n")
 HOOK_RULE = (
     "- The hook is the one line of the whole recording that makes a stranger keep watching: a short, complete sentence "
     "(one or two, ideally under 6 seconds) with the most surprising claim, number, stake, result or feeling, taken from "

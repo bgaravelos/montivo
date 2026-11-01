@@ -153,3 +153,14 @@ def test_the_planner_reads_where_the_recording_pauses(tmp_path):
     assert PAUSE_RULE in sp.captured[1]
     sp.plan("brief", "[turn 0] hi", {"summary": "s", "visual_shots": [], "speaker_map": []}, 40.0)
     assert PAUSE_RULE not in sp.captured[1]
+
+
+def test_a_filler_hook_is_a_problem_unless_the_brief_opens_on_it():
+    checks = [{"item": "Open on 'Hi. I'm Billy.'", "kind": "opening", "quote": "okay hi / I'm / Billy"}]
+    edl = {"spans": [{"id": "s1", "words": "okay hi I'm Billy I run a small agency"}], "brief_checks": checks}
+    assert E.filler_hook(edl) and E.filler_hook(edl)[0].startswith("s1 (the hook) opens on a filler")  # 016, b3
+    edl["brief_checks"] = [{"item": "Open on 'So, here is the thing'", "kind": "opening", "quote": "So here is"}]
+    edl["spans"][0]["words"] = "So, here is the thing about editors"
+    assert E.filler_hook(edl) == []
+    assert E.filler_hook({"spans": [{"id": "s1", "words": "Yeah so I think the most important thing"}]})
+    assert E.filler_hook({"spans": [{"id": "s1", "words": "this past year we passed 716 saves"}]}) == []
