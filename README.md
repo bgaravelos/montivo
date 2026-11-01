@@ -205,7 +205,7 @@ the planted faults were refined on these cuts, so they say what the reviewer cat
 rate; round 3 re-reviewed 28 of round 1's cuts with four of its fault types. A 150 s source comes to about $0.48 with the review
 loop. Every number above comes from that run's ledger (`runs/<id>/ledger.json`, which every run writes; the run
 folders hold footage and are not in the repository); how each one was measured is in
-[docs/measurements.md](docs/measurements.md).
+[docs/measurements.md](docs/measurements.md). Every benchmark harness, what it scores and its latest result: [eval/](eval/README.md).
 
 ## Open weight: Muse Spark Open
 
