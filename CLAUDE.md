@@ -1075,7 +1075,10 @@ copy, the "Make it 30 seconds" example priced as a re-plan. Docs: README (sample
 guide (cover maker steps and price, 95 s, three uploads and $3 per judge, "bundle" answers keyless), CLI hook A/B help,
 .env.example. Left: the review admission on the host prices 3 reviews while the loop may spend its $0.30 (up to ~$0.20
 over a judge's share; a fix would cut the hosted escalation), the test gaps the audit named (review_render, seven panel
-routes, the share page routes, agent.measured, combo_check for the 30/10 ops). Not deployed.
+routes, the share page routes, agent.measured, combo_check for the 30/10 ops). Commit 5bd9b28, pushed and deployed
+1/11 on Billy's go from a clean worktree (no container was running before it, so no job and no old container to
+stop); /api/health 200 (the judge share in the budget), /api/runs 401, /s/nope 404, /api/monti 401, a POST from another
+origin 403, host spend $3.71 of $40; smoke drop on 015: 34.2 s, -14.0 LUFS / -1.7 dBTP, render 7.7 s.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
