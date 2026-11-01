@@ -41,13 +41,26 @@ export const Player = forwardRef<PlayerHandle, {
   labelTone?: string;
   liveMix?: { level_db: number; voice_db: number } | null; // the timeline's faders while they are moved (live mode)
   liveSwap?: LiveData | null; // A4: the same cut with the Style panel's staged look, played in place while it is staged
-}>(function Player({ src, onTime, bands = [], marks = [], compact, muted, label, scrub, overlay, onPlaying, safe, live, labelTone, liveMix, liveSwap }, ref) {
+  // where a remounted player picks up (the Live / Rendered switch of one version): read once, when the media is ready
+  startAt?: { t: number; play: boolean } | null;
+}>(function Player({ src, onTime, bands = [], marks = [], compact, muted, label, scrub, overlay, onPlaying, safe, live, labelTone, liveMix, liveSwap, startAt }, ref) {
   const video = useRef<HTMLVideoElement>(null);
   const lm = useRef<LiveMedia | null>(null);
   const media = (): Media | null => (live ? lm.current : video.current);
   const box = useRef<HTMLDivElement>(null);
   const liveSwapRef = useRef(liveSwap);
   liveSwapRef.current = liveSwap;
+  const startRef = useRef(startAt ?? null); // taken by the first media that loads, then gone
+  const onPlayingRef = useRef(onPlaying);
+  onPlayingRef.current = onPlaying;
+  const takeStart = (m: Media) => {
+    const s = startRef.current;
+    startRef.current = null;
+    if (!s) return;
+    m.currentTime = Math.max(0, Math.min(s.t, (m.duration || s.t)));
+    setT(m.currentTime);
+    if (s.play) m.play().catch(() => {});
+  };
   const loaded = useRef<LiveData | null>(null); // the data the player loaded or a draft edit handed it
   const [liveData, setLiveData] = useState<LiveData | null>(null);
   const [liveErr, setLiveErr] = useState<string | null>(null);
@@ -158,11 +171,14 @@ export const Player = forwardRef<PlayerHandle, {
       lm.current = made;
       loaded.current = data;
       setLiveData(data); setD(data.duration_s); setT(0); last.current = -1;
+      takeStart(made);
       made.ready.catch((e) => on && lm.current === made && setLiveErr(String(e.message ?? e)));
     }).catch((e) => on && setLiveErr(String(e.message ?? e)));
     return () => { on = false; };
   }, [live]); // eslint-disable-line
-  useEffect(() => () => { lm.current?.destroy(); lm.current = null; }, []);
+  // unmounted (the Live / Rendered switch, another version): a player that was playing says it stopped, else the editor
+  // kept `playing` and hid the Style canvas, the head picker and the paused preview until the next play / pause
+  useEffect(() => () => { lm.current?.destroy(); lm.current = null; onPlayingRef.current?.(false); }, []);
   useEffect(() => { // the live box follows the frame's size
     if (!live || !box.current) return;
     const ro = new ResizeObserver(() => lm.current?.layout());
@@ -247,7 +263,7 @@ export const Player = forwardRef<PlayerHandle, {
           </>
         ) : (
           <video ref={video} src={src} preload="auto" playsInline muted={mute}
-            onLoadedMetadata={(e) => setD(e.currentTarget.duration)} onPlay={() => { setPlaying(true); onPlaying?.(true); }} onPause={() => { setPlaying(false); onPlaying?.(false); }} />
+            onLoadedMetadata={(e) => { setD(e.currentTarget.duration); takeStart(e.currentTarget); }} onPlay={() => { setPlaying(true); onPlaying?.(true); }} onPause={() => { setPlaying(false); onPlaying?.(false); }} />
         )}
         {label && <span className={`vlabel ${labelTone ?? ""}`}>{label}</span>}
         {overlay}

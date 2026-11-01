@@ -69,8 +69,9 @@ function ClipInspector({ id, state, v, b, words, busy, canEdit, onSeek, onDelete
       <Head icon="film" title={`Clip ${sp.id}`} sub={sp.role} onClear={onClear} />
       <div className="panel-body">
         <div className="insp-thumb-row">
+          {/* a Live draft has no cut yet, so no frame to show (GET /frame answered 404: a broken image) */}
           <button className="insp-thumb" onClick={() => onSeek(b.t0 + 0.02)} title="Go to the clip's start">
-            <img src={frameUrl(id, v.n, b.t0 + Math.min(0.5, (b.t1 - b.t0) / 2))} alt="" />
+            {v.cut && <img src={frameUrl(id, v.n, b.t0 + Math.min(0.5, (b.t1 - b.t0) / 2))} alt="" />}
           </button>
           <dl className="props">
             <dt>In</dt><dd className="mono">{tc(b.t0, 2)}</dd>
@@ -270,7 +271,7 @@ function PunchInspector({ id, v, p, next, canEdit, onSeek, onPunch, onClear }: {
       <div className="panel-body">
         <div className="insp-thumb-row">
           <button className="insp-thumb" onClick={play} title="Play the punch-in">
-            <img src={frameUrl(id, v.n, peak)} alt="" />
+            {v.cut && <img src={frameUrl(id, v.n, peak)} alt="" />}
           </button>
           <dl className="props">
             <dt>On</dt><dd>{punchLabel(p)}</dd>
