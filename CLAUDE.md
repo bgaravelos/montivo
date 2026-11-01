@@ -1095,9 +1095,15 @@ open, a deleted clip leaves the draft's selection, no draft thumbnail 404, the d
 v5 / 017 v13 render frame- and audio-identical. Pushed and deployed 1/11 from a clean worktree (no container was running);
 /api/health 200, /api/runs 401, /s/nope 404, /api/monti 401, a POST from another origin 403, host spend $3.71 of $40;
 smoke drop on 015: 34.2 s, -14.0 LUFS / -1.7 dBTP, render 8.7 s; smoke --live ok (015's edit media came from the Volume,
-so the new audio filter has not run on Modal's ffmpeg 5.1 yet; the next upload's ingest runs it). The draft thumbnail fix
-overlaps branch claude/amazing-heisenberg-3b0761 (Inspector.tsx). Not checked: Safari / iPhone for the Live mix, real
-HDR10 PQ footage.
+so the new audio filter has not run on Modal's ffmpeg 5.1 yet; the next upload's ingest runs it). Not checked: Safari /
+iPhone for the Live mix, real HDR10 PQ footage.
+Branch `claude/amazing-heisenberg-3b0761` merged (1/11, $0, commit `cac1eb7`, on Billy's go): an override from before
+`until` keeps the words it was written for (`captions.override_pins`: the lines of the version it was made on, pinned
+under any new breaks; 015 v5 in Bold pop no longer shows "against" twice), the Live title card found in the run folder
+from any cwd, and an open draft shows a "Draft" placeholder for its thumbnails (Inspector `Still`; the merge kept it over
+main's `v.cut &&`). 833 tests. Pushed and deployed 1/11 20:20 on his go from a clean worktree (no job since 12:17; the
+idle 20:11 container stopped); /api/health 200, /api/runs 401, /s/nope 404, /api/monti 401, a POST from another origin
+403, host spend $3.71 of $40; smoke drop on 015: 34.2 s, -14.0 LUFS / -1.7 dBTP, render 10.0 s.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
