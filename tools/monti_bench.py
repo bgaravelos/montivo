@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from montivo import monti  # noqa: E402
+from montivo.config import OPEN_MODEL, SPARK_MODEL  # noqa: E402
 
 E = {"page": "editor", "panel": "assistant", "version": 5, "live": True}
 # (question, context, accepted targets, panel or None (any), hand-off)
@@ -77,6 +78,7 @@ def main() -> None:
     ap.add_argument("--label", required=True)
     ap.add_argument("--root", default=str(ROOT / "runs" / "montibench"))
     ap.add_argument("--no-model", action="store_true")
+    ap.add_argument("--model", choices=["spark", "open"], default="spark", help="open = Muse Spark Open (Baseten)")
     ap.add_argument("--cases", type=int, nargs="*")
     ap.add_argument("--workers", type=int, default=1, help="1 keeps the guide prefix cached call after call")
     a = ap.parse_args()
@@ -90,7 +92,7 @@ def main() -> None:
         if a.no_model:
             out = monti.fallback(c[0], c[1]["page"]) | {"source": "guide", "cost_usd": 0.0}
         else:
-            out = monti.ask(root, c[0], c[1])
+            out = monti.ask(root, c[0], c[1], model=OPEN_MODEL if a.model == "open" else SPARK_MODEL)
         return {"i": i, "q": c[0], "page": c[1]["page"], "answer": out, "s": round(time.time() - t, 2), **score(c, out)}
 
     with ThreadPoolExecutor(a.workers) as ex:

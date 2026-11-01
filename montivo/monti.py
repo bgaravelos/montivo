@@ -25,7 +25,6 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .config import SPARK_MODEL
 
 GUIDE_PATH = Path(__file__).with_name("monti_guide.md")
 COST_USD = 0.014  # the hosted budget check: about 9K tokens in (the whole guide) and 400-700 out, $0.013-0.014 (30/10)
@@ -285,9 +284,13 @@ def history_text(history: list[dict] | None) -> str:
 LOCK = threading.Lock()  # one Monti call at a time: they share one ledger file
 
 
-def ask(root: Path, message: str, ctx: dict | None = None, history: list[dict] | None = None) -> dict:
-    """One Spark 1.3 call over the guide; the answer is checked like the fallback's. Raises on a failed call."""
-    from .engine.spark import Spark
+def ask(root: Path, message: str, ctx: dict | None = None, history: list[dict] | None = None,
+        model: str | None = None) -> dict:
+    """One Spark call over the guide; the answer is checked like the fallback's. Raises on a failed call. The model is
+    Muse Spark Open when BASETEN_API_KEY is set (engine/stagemodel.py: 24/24 on tools/monti_bench.py like Spark 1.3,
+    the guide prefix cached on Baseten, $0.0035 a question against $0.013), Spark 1.3 otherwise or when the open call
+    fails; `model` forces one."""
+    from .engine import stagemodel
     from .ledger import Ledger
     from .run import RunLog
     ctx = ctx or {}
@@ -297,9 +300,9 @@ def ask(root: Path, message: str, ctx: dict | None = None, history: list[dict] |
     folder = root / "monti"
     with LOCK:
         ledger = Ledger.resume(folder / "ledger.json")
-        call = Spark(folder, ledger, model=SPARK_MODEL, log=RunLog(folder / "monti.log")).call(
-            "monti", prompt, SCHEMA, max_output_tokens=3000, reasoning_effort="low", stage="spark.monti",
-            schema_name="monti")
+        call = stagemodel.call("monti", folder, ledger, "monti", prompt, SCHEMA, log=RunLog(folder / "monti.log"),
+                               model=model, max_output_tokens=3000, reasoning_effort="low", stage="spark.monti",
+                               schema_name="monti")
     p = dict(call.parsed)
     out = answer(reply=p.get("reply", ""), steps=p.get("steps"), target=p.get("target", "none"),
                  open_panel=p.get("open_panel", "none"), handoff=p.get("handoff_to_ask", ""),
@@ -307,7 +310,7 @@ def ask(root: Path, message: str, ctx: dict | None = None, history: list[dict] |
     if out["handoff"] and not out["target"] and page != "home":
         out.update(target="chat.composer", target_label=TARGETS["chat.composer"].label, open_panel="assistant",
                    needs="assistant", target_key="1")
-    out.update(source="spark", model=SPARK_MODEL, cost_usd=call.cost_usd, seconds=call.seconds)
+    out.update(source="spark", model=call.model, cost_usd=call.cost_usd, seconds=call.seconds)
     return out
 
 

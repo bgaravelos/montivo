@@ -940,7 +940,7 @@ export function Editor({ id, replay, go }: Props) {
         { id: "monti-tuck", label: montiTucked ? "Show Monti" : "Hide Monti (tuck him into the edge)", group: "Help", run: () => tuckMonti(!montiTucked) },
         { id: "home", label: "All projects", group: "Project", icon: "back", run: () => go("#/") },
       ]} />}
-      <Monti place="editor" hasKey={state.has_key} budget={state.budget} nonce={montiNonce}
+      <Monti place="editor" hasKey={state.has_key} hasOpen={state.has_open_key} budget={state.budget} nonce={montiNonce}
         ctx={{ page: dialog?.kind === "export" ? "export" : "editor", version: v?.draft ? null : v?.n ?? null, panel, live: replay ? null : liveOn, draft: !!draftV,
           selection: selKeys.length ? selKeys.join(", ") : block?.kind === "span" ? block.span!.id : wordSel ? "transcript words" : capSel ? "a caption line" : null }}
         prepare={(target, needs) => {

@@ -670,8 +670,8 @@ def create_app(root: Path) -> FastAPI:
     @app.post("/api/monti")
     def monti_ask(request: Request, b: dict):
         """Monti, the help gecko: {"message", "context": {page, version, panel, live, draft, selection},
-        "history": [{q, a}]} -> {reply, steps, target, open_panel, handoff, suggestions, source, cost_usd}. One
-        muse-spark-1.3 call over montivo/monti_guide.md (montivo/monti.py), logged in <root>/monti/ledger.json, which
+        "history": [{q, a}]} -> {reply, steps, target, open_panel, handoff, suggestions, source, model, cost_usd}. One
+        Spark call over montivo/monti_guide.md (Muse Spark Open with BASETEN_API_KEY, else muse-spark-1.3) (montivo/monti.py), logged in <root>/monti/ledger.json, which
         the hosted budget counts. Without the key, past the budget or past MONTI_PER_HOUR answers from the model in an
         hour (hosted, per judge), the $0 keyword match over the guide answers instead. Not a run and no job: it runs
         beside any job, one Monti call at a time."""

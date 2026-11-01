@@ -24,6 +24,8 @@ type Pose = "idle" | "hello" | "chin" | "think" | "point" | "yay" | "shrug";
 
 const PANEL_NAME: Record<string, string> = { assistant: "Assistant", media: "Media", captions: "Captions", style: "Style", text: "Text",
   music: "Music", speakers: "Speakers", versions: "Versions", export: "Export" };
+const modelName = (m: string | null) => (m?.startsWith("meta-models/") ? "Muse Spark Open" : "Muse Spark 1.3");
+
 const SUGGEST: Record<MontiPage, string[]> = {
   editor: ["Where do I add music?", "How do I fix a caption?", "What does the gate mean?"],
   home: ["How do I start a new project?", "What does the score mean?", "Which stage runs on Spark Open?"],
@@ -127,8 +129,9 @@ function rich(text: string): ReactNode {
   });
 }
 
-export function Monti({ ctx, budget, hasKey, place, nonce, prepare, onOpen, onHandoff, onShortcuts }: {
+export function Monti({ ctx, budget, hasKey, hasOpen, place, nonce, prepare, onOpen, onHandoff, onShortcuts }: {
   ctx: MontiCtx; budget?: Budget | null; hasKey: boolean; place: "editor" | "home"; nonce?: number; // a new nonce opens it (the palette)
+  hasOpen?: boolean; // BASETEN_API_KEY on the server: Monti answers on Muse Spark Open (engine/stagemodel.py)
   /** Before Show me: open the panel or the Export page the target lives in (or close Export for an editor target). */
   prepare?: (target: string, needs: string | null) => void;
   onOpen?: (panel: string) => void; onHandoff?: (text: string) => void; onShortcuts?: () => void;
@@ -370,8 +373,9 @@ export function Monti({ ctx, budget, hasKey, place, nonce, prepare, onOpen, onHa
             <button className="send" disabled={!text.trim() || busy} aria-label="Ask"><Icon name="send" size={14} /></button>
           </form>
           <div className="mp-foot">
-            <span>{last ? (last.source === "spark" ? `Muse Spark 1.3 · $${last.cost_usd.toFixed(3)} this question` : "From the guide · $0")
-              : hasKey ? "Muse Spark 1.3 · about $0.013 a question" : "From the guide · $0 (no model key)"}
+            <span>{last ? (last.source === "spark" ? `${modelName(last.model)} · $${last.cost_usd.toFixed(3)} this question` : "From the guide · $0")
+              : hasKey ? (hasOpen ? "Muse Spark Open · about $0.004 a question" : "Muse Spark 1.3 · about $0.013 a question")
+              : "From the guide · $0 (no model key)"}
               {left ? ` · ${usd(left.left)} left` : ""}</span>
             <span><kbd>?</kbd> opens · <kbd>Esc</kbd> closes</span>
           </div>

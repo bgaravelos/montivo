@@ -107,8 +107,9 @@ def settle_post(parsed: dict) -> dict:
     return out
 
 
-def post_text(run_dir: Path, n: int, ledger: Ledger, log=print) -> dict:
-    """The publish pack of version n (one Spark call) -> post_vN.json."""
+def post_text(run_dir: Path, n: int, ledger: Ledger, log=print, model: str | None = None) -> dict:
+    """The publish pack of version n (one Spark call; `model` another Spark model, e.g. config.OPEN_MODEL) ->
+    post_vN.json."""
     from .engine.api import dump_json
     from .engine.spark import Spark
     edl = json.loads((run_dir / f"edl_v{n}.json").read_text())
@@ -122,8 +123,10 @@ def post_text(run_dir: Path, n: int, ledger: Ledger, log=print) -> dict:
     prompt = POST_PROMPT.format(brief=run.get("brief") or "", title=edl.get("title_card_text") or "none",
                                 seconds=float((edl.get("render") or {}).get("duration_s") or edl.get("runtime_s") or 0),
                                 words=words[:6000], review=review)
-    call = Spark(run_dir, ledger, log=log).call(f"post_v{n}", prompt, POST_SCHEMA, max_output_tokens=4000,
-                                                reasoning_effort="low", stage="spark.post", schema_name="post_text")
+    kw = {"model": model} if model else {}
+    call = Spark(run_dir, ledger, log=log, **kw).call(f"post_v{n}", prompt, POST_SCHEMA, max_output_tokens=4000,
+                                                      reasoning_effort="low", stage="spark.post",
+                                                      schema_name="post_text")
     rec = {"version": n, "platforms": settle_post(call.parsed), "cost_usd": call.cost_usd, "seconds": call.seconds,
            "created": time.strftime("%Y-%m-%dT%H:%M:%S")}
     dump_json(run_dir / f"post_v{n}.json", rec)
