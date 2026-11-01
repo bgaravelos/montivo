@@ -17,7 +17,7 @@ from PIL import Image
 from . import broll
 from . import music as bed
 from .api import dump_json
-from .captions import build_overlays, fit_line, highlight_words, norm
+from .captions import build_overlays, fit_line, highlight_words, norm, override_pins
 from .edges import Audio
 from .edl import title_card_on
 from .frame import frame_for
@@ -181,7 +181,7 @@ def preview_data(run_dir: Path, edl: dict, overlays: bool = True, laid: bool = F
     head = load_track(run_dir, edl, "head")
     fields, _ = build_overlays(edl, words, segments, paths, head, load_track(run_dir, edl, "person"), cache / "layout",
                                title_s=title_s, captions=bool(words), reframe_concept=concept, draw_at=-1.0,
-                               face_track=load_track(run_dir, edl, "face"))
+                               face_track=load_track(run_dir, edl, "face"), pins=override_pins(run_dir, edl, words))
     edl.update(fields)
     names = highlight_words(edl, look)
     data["look"] = _caption_style(look)

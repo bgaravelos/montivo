@@ -18,7 +18,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from .captions import OUT_H, OUT_W, build_overlays
+from .captions import OUT_H, OUT_W, build_overlays, override_pins
 from .frame import frame_for
 from .graphics import _HEX, ACTIVE_MODES, CASES, FONTS, PRESET_NAMES, PRESETS, TOP_RANGE, Look, normalize_look, restyle
 from .render import load_track, plan_paths, reframe_inputs
@@ -125,7 +125,7 @@ def preview(run_dir: Path, edl: dict, t: float, cut: Path | None = None) -> tupl
         fields, overlays = build_overlays(edl, words, segments, paths, load_track(run_dir, edl, "head"),
                                           load_track(run_dir, edl, "person"), tmp, title_s=title_s,
                                           captions=bool(words), reframe_concept=concept, draw_at=t,
-                                          face_track=load_track(run_dir, edl, "face"))
+                                          face_track=load_track(run_dir, edl, "face"), pins=override_pins(run_dir, edl, words))
         start = title_s
         i = len(segments) - 1
         for k, seg in enumerate(segments):
@@ -159,7 +159,8 @@ def layout(run_dir: Path, edl: dict) -> dict:
     title_s = float(((edl.get("render") or {}).get("title") or {}).get("seconds") or 0.0)
     fields, _ = build_overlays(edl, words, segments, paths, load_track(run_dir, edl, "head"), load_track(run_dir, edl, "person"),
                                run_dir / "ui" / "cache" / "layout", title_s=title_s, captions=bool(words),
-                               reframe_concept=concept, draw_at=-1.0, face_track=load_track(run_dir, edl, "face"))
+                               reframe_concept=concept, draw_at=-1.0, face_track=load_track(run_dir, edl, "face"),
+                               pins=override_pins(run_dir, edl, words))
     return fields
 
 

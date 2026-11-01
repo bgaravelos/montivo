@@ -24,6 +24,7 @@ band (Frame.band: no app UI over a feed post).
 from __future__ import annotations
 
 import difflib
+import json
 import math
 import re
 from dataclasses import dataclass, field, replace
@@ -580,19 +581,25 @@ def override_for(words: list[CWord], overrides: list[dict]) -> dict | None:
     words: the new plan can break the lines elsewhere, and the old text would then replace the wrong words.
     The start is the first word's own Voice start when an edge clipped it: an in edge tightened into the silence Voice
     puts inside a passage's first word keeps that word, and its line keeps its text (016 copy, 28/10: "Four Meta")."""
+    hit = [ov for _, ov in _hits(words, overrides)]
+    return {k: v for ov in hit for k, v in ov.items() if v is not None} or None
+
+
+def _hits(words: list[CWord], overrides: list[dict | None]) -> list[tuple[int, dict]]:
+    """(index, entry) of every override on this line, in order, a carried text spliced in (override_for)."""
     heard = [w.w for w in words]
     lo = min(words[0].t_in, words[0].t0 if words[0].t0 is not None else words[0].t_in)
     hit = []
-    for ov in overrides:
-        if not (any(w.span == ov.get("span") for w in words) and lo - 0.01 <= float(ov["src_t"]) < words[-1].t_out):
+    for k, ov in enumerate(overrides):
+        if ov is None or not (any(w.span == ov.get("span") for w in words) and lo - 0.01 <= float(ov["src_t"]) < words[-1].t_out):
             continue
         if ov.get("voice") is not None:
             text = carried_text(heard, ov["voice"].split(), ov.get("text"))
             if text is None:
                 continue
             ov = {**ov, "text": text}
-        hit.append(ov)
-    return {k: v for ov in hit for k, v in ov.items() if v is not None} or None
+        hit.append((k, ov))
+    return hit
 
 
 def carried_text(heard: list[str], voice: list[str], text: str | None) -> str | None:
@@ -656,6 +663,10 @@ def covered(line: list[CWord], text: str, nxt: list[CWord]) -> int:
     return out
 
 
+def _inside(w: CWord, span: str, src_t: float, until: float) -> bool:
+    return w.span == span and w.t_in < until - 0.01 and (w.t_out > src_t or w.t_in > src_t - 0.01 - 1e-6)
+
+
 def isolate(lines: list[list[CWord]], span: str, src_t: float, until: float) -> list[list[CWord]]:
     """The words of `span` from src_t (a line's first word + 0.01 s) to `until` (its last word's end) as one line of
     their own, where the first of them stood; the words around them keep their lines. A retexted line (C6) is the
@@ -664,8 +675,7 @@ def isolate(lines: list[list[CWord]], span: str, src_t: float, until: float) -> 
     on its line and the retext replaced them too."""
     # a first word the edge pass clipped to no length (t_in == t_out == the line's start) is inside too: src_t is its
     # start + 0.01 s, so `t_out > src_t` alone left it on a line of its own beside the retext (audit 31/10)
-    inside = lambda w: w.span == span and w.t_in < until - 0.01 and (  # noqa: E731
-        w.t_out > src_t or w.t_in > src_t - 0.01 - 1e-6)
+    inside = lambda w: _inside(w, span, src_t, until)  # noqa: E731
     out: list[list[CWord]] = []
     mine: list[CWord] | None = None
     for ln in lines:
@@ -715,30 +725,142 @@ def apply_breaks(lines: list[list[CWord]], breaks: list[dict]) -> list[list[CWor
     return out
 
 
-def apply_overrides(lines: list[list[CWord]], overrides: list[dict]) -> tuple[list[list[CWord]], dict[int, dict]]:
+def said(words: list[CWord]) -> set[tuple[str, ...]]:
+    """The words as shown and as Voice heard them (a glossary's phrase once, as heard), normalised: what an override
+    pinned to them checks they still are (override_pins)."""
+    raw: list[str] = []
+    prev = None
+    for w in words:
+        if not w.src or w.src != prev:
+            raw += (w.src or w.w).split()
+        prev = w.src or None
+    return {tuple(x for x in map(norm, (w.w for w in words)) if x), tuple(x for x in map(norm, raw) if x)}
+
+
+def apply_overrides(lines: list[list[CWord]], overrides: list[dict], pins: dict[int, dict] | None = None,
+                    glossary: dict[str, str] | None = None,
+                    record: dict[int, list[CWord]] | None = None) -> tuple[list[list[CWord]], dict[int, dict]]:
     """The caption overrides on a segment's lines: a `text` retexts its line (taking over the next line's words it
     covers, so nothing shows twice; a next line left empty goes) and a `top` forces its position. Returns the lines and
-    {line index: override} of the forced ones."""
+    {line index: override} of the forced ones.
+    `pins` {index in `overrides`: {"src_t", "until", "said"}} (override_pins): an override from before `until` was kept
+    retexts the words it retexted on the line it was written for, kept as one line whatever the look, the glossary or
+    an edit breaks now (015 v5 in Bold pop: "scores it against" retexted "score it" and left "it's | against the", 1/11);
+    a reviewer's whose words are no longer those (`said`) is left out (a person's stays while its line holds its time).
+    `glossary` (the run's) goes over a reviewer's text, written before the run had it (018 v5: "and NewSpark").
+    `record` gets {index: the words its line had before the retext}, for override_pins."""
     out: list[list[CWord]] = []
     forced: dict[int, dict] = {}
     todo = [list(ln) for ln in lines]
-    for ov in overrides:  # a person's retext keeps the words it was written for as one line, whatever the style breaks
-        if ov.get("text") and ov.get("until") is not None and ov.get("voice") is None:
+    ovs: list[dict | None] = list(overrides)
+    for k, ov in enumerate(ovs):  # a person's retext keeps the words it was written for as one line, whatever the style breaks
+        if not ov or not ov.get("text") or ov.get("voice") is not None:
+            continue
+        if ov.get("until") is not None:
             todo = isolate(todo, ov["span"], float(ov["src_t"]), float(ov["until"]))
+        elif pins and k in pins:
+            pin = pins[k]
+            mine = [w for ln in todo for w in ln if _inside(w, ov["span"], pin["src_t"], pin["until"])]
+            if not mine or (ov.get("why") == "review" and not said(mine) & pin["said"]):
+                ovs[k] = None
+                continue
+            todo = isolate(todo, ov["span"], pin["src_t"], pin["until"])
+            ovs[k] = {**ov, "until": pin["until"]}
+        if glossary and ov.get("why") == "review":
+            ovs[k] = {**ovs[k], "text": " ".join(w.w for w in apply_glossary(
+                [CWord(w=x, t_in=0.0, t_out=0.0, span="") for x in ov["text"].split()], glossary)[0])}
     while todo:
         ws = todo.pop(0)
-        ov = override_for(ws, overrides)
+        hits = _hits(ws, ovs)
+        ov = {k: v for _, h in hits for k, v in h.items() if v is not None} or None
         if ov and ov.get("text"):
             n = covered(ws, ov["text"], todo[0]) if todo and ov.get("until") is None else 0
             if n:
                 ws, todo[0] = ws + todo[0][:n], todo[0][n:]
                 if not todo[0]:
                     todo.pop(0)
+            if record is not None:
+                record.update({k: ws for k, h in hits if h.get("text")})
             ws = retext(ws, ov["text"])
         if ov and ov.get("top") is not None:
             forced[len(out)] = ov
         out.append(ws)
     return out, forced
+
+
+def override_pins(run_dir: Path, edl: dict, words: list[dict]) -> dict[int, dict] | None:
+    """{index in the EDL's caption_overrides: pin} for every text override from before `until` was kept (the reviewer's
+    caption_text, a person's caption edit before C6): the words it retexted on the line it was written for, the line
+    of the version it was made on (the parent of the oldest version in this EDL's patches that has it, with the
+    override laid on it as it was then: its line and the next line's words it covered). A look, a glossary or an edit
+    that breaks the lines elsewhere used to move it onto whatever line its time fell in (apply_overrides). An override
+    whose versions are not in `run_dir` keeps the old rule. The pin: {"src_t": its first word, "until": its last
+    word's end, "said": what those words were (said)}."""
+    ovs = edl.get("caption_overrides") or []
+    todo = [k for k, o in enumerate(ovs) if o.get("text") and o.get("until") is None and o.get("voice") is None]
+    lineage = [int(p["from"]) for p in edl.get("patches") or [] if isinstance(p, dict) and p.get("from") is not None]
+    if not todo or not words or not lineage:
+        return None
+    key = lambda o: (o.get("span"), round(float(o["src_t"]), 3), o.get("text"))  # noqa: E731
+    pins: dict[int, dict] = {}
+    for k in todo:
+        o = ovs[k]
+        have = [key(o) in {key(x) for x in (_version(run_dir, v) or {}).get("caption_overrides") or [] if x.get("text")}
+                for v in lineage]
+        i = have.index(True) if True in have else len(lineage)
+        ref_v = lineage[max(0, i - 1)]
+        ref = _version(run_dir, ref_v)
+        if ref is None:
+            continue
+        pin = _pin(run_dir, ref_v, ref, o, words)
+        if pin is not None:
+            pins[k] = pin
+    return pins or None
+
+
+_EDLS: dict[tuple[str, int, int], dict] = {}
+
+
+def _version(run_dir: Path, v: int) -> dict | None:
+    """edl_vN.json of run_dir, what laying out its lines needs (cached on the file: a version never changes)."""
+    p = Path(run_dir) / f"edl_v{v}.json"
+    try:
+        st = p.stat()
+        sig = (str(p), st.st_mtime_ns, st.st_size)
+        if sig not in _EDLS:
+            e = json.loads(p.read_text())
+            if len(_EDLS) > 256:
+                _EDLS.clear()
+            _EDLS[sig] = {f: e[f] for f in ("spans", "look", "caption_breaks", "caption_overrides", "glossary",
+                                            "highlight") if f in e}
+        return _EDLS[sig]
+    except (OSError, ValueError):
+        return None
+
+
+def _pin(run_dir: Path, ref_v: int, ref: dict, o: dict, words: list[dict]) -> dict | None:
+    """The words override `o` retexts on version ref_v's lines (laid out as that version is, `o` on them if it was made
+    after it): the override_pins entry, or None when it lands on no line there."""
+    from .render import merge_segments
+    ovs = [x for x in ref.get("caption_overrides") or []]
+    k = next((j for j, x in enumerate(ovs) if x == o), None)
+    if k is None:
+        ovs.append(o)
+        k = len(ovs) - 1
+    look = normalize_look(ref.get("look"))
+    looks = _looks(ref, look, CaptionStyle.from_look(look))
+    seg_words, _ = segment_words(ref, words, {sid: i for i, seg in enumerate(merge_segments(ref["spans"]))
+                                              for sid in seg.span_ids}, run_glossary(ref))
+    rec: dict[int, list[CWord]] = {}
+    for ws in seg_words.values():
+        apply_overrides(segment_lines(ref, ws, looks), ovs, record=rec)
+        if k in rec:
+            line = rec[k]
+            # a last word an out edge clipped to no length stays inside (isolate takes words starting before until - 0.01)
+            return {"src_t": round(min(float(o["src_t"]), line[0].t_in + 0.01), 3),
+                    "until": max(line[-1].t_out, line[-1].t_in + 0.011),
+                    "said": said(line)}
+    return None
 
 
 # --------------------------------------------------------------------------- the stage
@@ -762,12 +884,48 @@ def span_looks(edl: dict) -> dict[str, Look]:
     return {s["id"]: restyle(edl.get("look"), s["look"]) for s in edl["spans"] if s.get("look")}
 
 
+def _looks(edl: dict, look: Look, style: CaptionStyle) -> dict[str | None, tuple[Look, CaptionStyle, set[str]]]:
+    """{span id with a look of its own, or None for the EDL's: (look, caption style, highlighted words)}."""
+    out = {k: (lk, CaptionStyle.from_look(lk), highlight_words(edl, lk)) for k, lk in span_looks(edl).items()}
+    out[None] = (look, style, highlight_words(edl, look))
+    return out
+
+
+def segment_words(edl: dict, words: list[dict], seg_of_span: dict[str, int],
+                  glossary: dict[str, str]) -> tuple[dict[int, list[CWord]], list[dict]]:
+    """The caption words of each segment ({segment index: words}, deduped and through the glossary) and the fixes."""
+    per_span = span_words(edl["spans"], words)
+    fixes: list[dict] = []
+    seg_words: dict[int, list[CWord]] = {}
+    for s in edl["spans"]:
+        ws, f1 = dedupe_words(per_span.get(s["id"], []))
+        ws, f2 = apply_glossary(ws, glossary)
+        fixes += f1 + f2
+        seg_words.setdefault(seg_of_span[s["id"]], []).extend(ws)
+    return seg_words, fixes
+
+
+def segment_lines(edl: dict, ws: list[CWord], looks: dict) -> list[list[CWord]]:
+    """A segment's words broken into caption lines (each run of one look on its own, `looks` from _looks) with the
+    person's line breaks, before the overrides."""
+    key = lambda w: w.span if w.span in looks else None  # noqa: E731 (the look a word is shown in)
+    runs: list[list[CWord]] = []  # the segment's words in runs of one look: a line never mixes two
+    for w in ws:
+        if runs and key(runs[-1][0]) == key(w):
+            runs[-1].append(w)
+        else:
+            runs.append([w])
+    grouped = [ln for r in runs for ln in group_lines(r, looks[key(r[0])][1], max_words=looks[key(r[0])][0].max_words,
+                                                      breaks=looks[None][0].line_breaks)]
+    return apply_breaks(grouped, edl.get("caption_breaks") or [])
+
+
 def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, head_track: dict | None,
                    person_track: dict | None, out_dir: Path, title_s: float = 0.0, captions: bool = True,
                    callouts: bool = True, glossary: dict[str, str] | None = None,
                    style: CaptionStyle | None = None, reframe_concept: str | None = None,
                    draw_at: float | None = None, draw_captions: bool = True,
-                   face_track: dict | None = None) -> tuple[dict, dict[int, list[Overlay]]]:
+                   face_track: dict | None = None, pins: dict[int, dict] | None = None) -> tuple[dict, dict[int, list[Overlay]]]:
     """Caption lines and callouts for the rendered segments.
 
     `segments` are render.Segment (frame-aligned), `paths` the reframe SegmentPath of each (crop x per source frame).
@@ -790,14 +948,14 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
     `face_track` (SAM "face", tracked only when a line had no room, run.py): a line that would go over the head box is
     placed against the face inside it instead (the close-up's head box takes in long hair down to the shoulders, run
     013: y 46-539 of 540, the face 85-351), with the face box in its entry; every other line is placed as before.
+    `pins` (override_pins) keeps an override from before `until` on the words it was written for (apply_overrides).
     """
     frame = frame_for(edl)
     look = (style.look if style and style.look else None) or normalize_look(edl.get("look"))
     style = style or CaptionStyle.from_look(look)
     names = highlight_words(edl, look)
     own = span_looks(edl)
-    looks = {k: (lk, CaptionStyle.from_look(lk), highlight_words(edl, lk)) for k, lk in own.items()}
-    looks[None] = (look, style, names)
+    looks = _looks(edl, look, style)
     glossary = run_glossary(edl) if glossary is None else glossary
 
     def on_screen(a: float, b: float) -> bool:
@@ -863,14 +1021,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
 
     overrides = edl.get("caption_overrides") or []
     seg_of_span = {sid: i for i, seg in enumerate(segments) for sid in seg.span_ids}
-    per_span = span_words(edl["spans"], words)
-    fixes: list[dict] = []
-    seg_words: dict[int, list[CWord]] = {}
-    for s in edl["spans"]:
-        ws, f1 = dedupe_words(per_span.get(s["id"], []))
-        ws, f2 = apply_glossary(ws, glossary)
-        fixes += f1 + f2
-        seg_words.setdefault(seg_of_span[s["id"]], []).extend(ws)
+    seg_words, fixes = segment_words(edl, words, seg_of_span, glossary)
 
     overlays: dict[int, list[Overlay]] = {i: [] for i in range(len(segments))}
     cap_entries: list[dict] = []
@@ -879,16 +1030,7 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
     if captions:
         for i, ws in sorted(seg_words.items()):
             seg = segments[i]
-            key = lambda w: w.span if w.span in own else None  # noqa: E731 (the look a word is shown in)
-            runs: list[list[CWord]] = []  # the segment's words in runs of one look: a line never mixes two
-            for w in ws:
-                if runs and key(runs[-1][0]) == key(w):
-                    runs[-1].append(w)
-                else:
-                    runs.append([w])
-            grouped = [ln for r in runs for ln in group_lines(r, looks[key(r[0])][1], max_words=looks[key(r[0])][0].max_words,
-                                                              breaks=look.line_breaks)]
-            grouped, forced = apply_overrides(apply_breaks(grouped, edl.get("caption_breaks") or []), overrides)
+            grouped, forced = apply_overrides(segment_lines(edl, ws, looks), overrides, pins=pins, glossary=glossary)
             lines = [Line(words=lw, segment=i) for lw in grouped]
             for ln in lines:
                 ln.word_times = [(cut_t(i, w.t_in), cut_t(i, w.t_out)) for w in ln.words]

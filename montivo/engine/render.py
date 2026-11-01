@@ -60,7 +60,7 @@ from ..config import REFRAME_CONCEPT
 from ..ledger import Entry, Ledger, Timer
 from .api import dump_json
 from . import broll
-from .captions import Overlay, build_overlays
+from .captions import Overlay, build_overlays, override_pins
 from .edges import Audio
 from .frame import FRAME_916, Frame, frame_for
 from .music import normalize_music
@@ -980,7 +980,8 @@ def render(run_dir: Path, edl: dict, source: Path, ledger: Ledger, out_name: str
             fields, overlays = build_overlays(edl, words or [], segments, paths, load_track(run_dir, edl, "head"),
                                               load_track(run_dir, edl, "person"), ov_dir, title_s=title_s,
                                               captions=bool(words), callouts=callouts, reframe_concept=concept,
-                                              draw_captions=captions, face_track=load_track(run_dir, edl, "face"))
+                                              draw_captions=captions, face_track=load_track(run_dir, edl, "face"),
+                                              pins=override_pins(run_dir, edl, words or []))
             edl.update(fields)
             log(f"render: {len(fields['captions'])} caption lines{'' if captions else ' laid out, not drawn'} "
                 f"({sum(1 for c in fields['captions'] if c['placement'] in ('below_head', 'above_head'))} moved off the head, "
