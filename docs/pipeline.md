@@ -24,9 +24,18 @@ montivo run footage.mp4 --brief "..." --out runs/001
            glossary_suggestions, offered in the chat and the Captions panel ("Did you say ...?", Accept = the glossary
            edit), never applied unasked
   edl      spans mapped to Voice word boundaries, then every cut edge tightened to the speech in the source audio
-           (0.1 s before the onset, 0.15 s after the offset, 0.3 s at the very end)
+           (0.1 s before the onset, 0.15 s after the offset, 0.3 s at the very end; the speech threshold is 6 dB over the
+           floor but never more than 20 dB under the clip's median speech, and knocks under 0.12 s half a second from
+           the speech do not hold an edge)
   check    the paper edit against its checklist, the target, repeated takes and unplaced words (`edl.plan_check`, $0);
-           on a failure one more plan call with exactly what failed, kept when it fails fewer checks (`plan_check`)
+           a Spark 1.3 plan also against a false start kept inside a span (`edl.restarts`), a hook that opens on a filler
+           (`edl.filler_hook`) and every cut edge a trial preflight leaves inside speech (`review.stuck_edges`); on a
+           failure a plan call with exactly what failed and the first edit (its hook kept unless a problem names it),
+           kept when it fails fewer checks, up to two for Spark 1.3 (`plan_check`); the Spark 1.3 planner reads the
+           transcript with a " / " where the audio pauses between two words (`edges.pause_marks`) and a hook rule
+           (`spark.HOOK_RULE`: the strongest standalone line, not the chronological start, never the ending)
+  pauses   (Spark 1.3 plans) a pause over 1 s inside v1 is shortened to 0.3 s, no word removed (`run.shorten_long_pauses`,
+           the editor's pauses op, EDL `v1_pauses`); a callout starts when its words are said (`edl.anchor_callouts`)
   face     (a close-up) when the layout has caption lines it can only put over the head box, SAM 3.1 tracks "face" on
            the head track's frames (no new upload, about $0.10 a minute; `montivo face RUN` for an older run): those
            lines are placed against the face inside the head box, and the head-in-frame check measures the face
