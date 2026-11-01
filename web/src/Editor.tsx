@@ -174,7 +174,9 @@ export function Editor({ id, replay, go }: Props) {
     }
     if (selKey && !blocks.some((b) => b.key === selKey && b.kind !== "ghost") && !itemIn(v, selKey)) setSelKey(null);
     setSelKeys((ks) => ks.filter((k) => v.spans.some((sp) => sp.id === k)));
-  }, [v?.n]); // eslint-disable-line
+    // a Live draft keeps its number through its edits: its clips are part of the key, or a clip deleted after the
+    // draft's first edit stayed selected and Ask Montivo was scoped to a clip the cut no longer has
+  }, [v?.n, v?.spans.map((sp) => sp.id).join(",")]); // eslint-disable-line
   useEffect(() => setWordSel(null), [v?.n, tlMode]);
   useEffect(() => setCapSel(null), [v?.n]);
   // what the chat's "this" means: the selected clips, the transcript words, the caption line (UX B3)
@@ -222,6 +224,16 @@ export function Editor({ id, replay, go }: Props) {
   // the Player's key: a draft keeps its base version's key, so the first edit swaps in place, no remount (audit, 31/10)
   const playerKey = v ? (draftV ? `${draftSum?.base ?? draftData!.draft!.n}-live` : `${v.n}${live0 ? "-live" : ""}`) : "";
   const live = useLiveMix(id, v, getVideo, mix, mixStaged, playerKey);
+  // the Live / Rendered switch remounts the player on the same version: it picks up at the playhead, playing if it was
+  // (it used to start over at 0:00, paused); another version starts at the top as before
+  const playingRef = useRef(false);
+  playingRef.current = playing;
+  const lastPlayer = useRef<{ key: string; base: string }>({ key: "", base: "" });
+  const startAt = useMemo(() => {
+    const was = lastPlayer.current, baseKey = playerKey.replace(/-live$/, "");
+    lastPlayer.current = { key: playerKey, base: baseKey };
+    return was.key && was.key !== playerKey && was.base === baseKey ? { t: tRef.current, play: playingRef.current } : null;
+  }, [playerKey]);
   const styling = panel === "style" && !!(v?.cut || v?.draft) && !replay;
   const staged = draftCount(styleDraft, v);
   const { p: stylePreview, busy: previewBusy } = usePreview(id, v, t, styleDraft, styling && staged > 0 && !playing);
@@ -481,7 +493,17 @@ export function Editor({ id, replay, go }: Props) {
     try { localStorage.setItem(currentKey(id), JSON.stringify(c)); } catch { /* this tab only */ }
     api(`/api/runs/${id}/current`, c).catch(() => { /* the browser's copy still holds */ });
   }, [id, replay, newest]);
-  const pick = useCallback((n: number) => { setSel(n); remember(n); }, [remember]);
+  // a Live draft plays on top of its base version: picking another one only moved the Versions highlight (the viewer
+  // stayed on the draft) and a later Discard or ⌘Z then landed on the picked version, not the draft's base
+  const draftBase = draftV ? draftSum?.base ?? null : null;
+  const pick = useCallback((n: number) => {
+    if (draftBase != null && n !== draftBase)
+      return flash(`The viewer plays the draft on Version ${draftBase}: Make Version ${draftData?.draft?.n ?? ""} or Discard it first.`);
+    setSel(n); remember(n);
+  }, [remember, draftBase, draftData, flash]);
+  useEffect(() => { // the open draft's base is the version on screen under it (Discard and undo come back to it)
+    if (draftBase != null && visible.some((x) => x.n === draftBase)) setSel(draftBase);
+  }, [draftBase]); // eslint-disable-line
   /** A2: a caption line (`cap:<id>`) or callout (`callout:<span>`) picked on the timeline: selected, and its panel
    *  opens on it (Captions, Text). `edit` opens the line's text box there. */
   const pickItem = (key: string, edit = false) => {
@@ -667,7 +689,7 @@ export function Editor({ id, replay, go }: Props) {
         <span className="grow" />
         <span className="chip-aspect" title="Vertical 1080 × 1920">9:16</span>
         <button data-monti="top.score" className={`score-chip ${top?.review!.pass ? "pass" : ""} ${!top ? "none" : ""}`} title={scoreTip}
-          onClick={() => { if (top) { setSel(top.n); setSelKey(null); } }}>
+          onClick={() => { if (top) { pick(top.n); setSelKey(null); } }}>
           {top ? <>{top.review!.pass && <Icon name="check" size={13} />}<b>{top.review!.overall}</b><span>review</span></> : <span>not reviewed</span>}
         </button>
         <button className="btn quiet loop-btn" aria-label="Loop" data-monti="top.loop" onClick={() => go(`${base}/loop${replay ? `?replay=${replay}` : ""}`)}
@@ -805,7 +827,7 @@ export function Editor({ id, replay, go }: Props) {
           </button>
         )}
         {v && (v.cut || live0) ? (
-          <Player ref={player} key={playerKey}
+          <Player ref={player} key={playerKey} startAt={startAt}
             src={v.cut ? fileUrl(id, v.cut) : ""} onTime={onTime} onPlaying={setPlaying}
             live={draftV ? draftData! : live0 ? `/api/runs/${id}/preview?v=${v.n}` : undefined}
             liveMix={live0 && mixStaged ? mix : null} liveSwap={live0 && styleKey ? styled : null}

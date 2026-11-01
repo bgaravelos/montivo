@@ -1150,7 +1150,7 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
   body { overflow: auto; } /* the stacked review mode and Home are taller than the screen: body's hidden reached the viewport, nothing scrolled on a phone (28/10) */
   .editor {
     min-width: 0; height: auto; min-height: 100vh;
-    grid-template-columns: minmax(0, 1fr); grid-template-rows: 52px auto auto auto auto;
+    grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(52px, auto) auto auto auto auto;
     grid-template-areas: "top" "note" "viewer" "insp" "panel";
   }
   .editor .rail, .editor .tl-wrap, .editor .divider, .editor .undo-redo, .editor .chip-aspect, .editor .loop-btn, .editor .mark { display: none; }
@@ -1164,6 +1164,11 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
   .editor .saved { overflow: hidden; text-overflow: ellipsis; }
   .editor .score-chip { flex-shrink: 0; }
   .editor .score-chip.none { display: none; }
+  /* a Live draft (the chat's edits in review mode) puts Discard / Make Version on a row of their own: in the one row
+     they pushed Share and Export past the screen's edge and the page scrolled sideways (375 px, 1/11) */
+  .editor .top:has(.draft-bar) { flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px; row-gap: 6px; }
+  .editor .top:has(.draft-bar) .title-block { flex-basis: 0; } /* the name shrinks, Share and Export stay on the first row */
+  .editor .top .draft-bar { order: 1; flex: 1 0 100%; margin-left: 0; justify-content: flex-end; }
   .mobile-note { display: block; grid-area: note; padding: 8px 14px; font-size: 12px; color: var(--text-2); background: var(--panel-2); border-bottom: 1px solid var(--line); }
   .editor .viewer { height: min(78vh, 720px); padding: 10px 8px 4px; }
   .editor .insp { border-left: 0; border-top: 1px solid var(--line); }
