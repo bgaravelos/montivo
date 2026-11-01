@@ -52,6 +52,13 @@ function Head({ icon, title, sub, onClear }: { icon?: string; title: string; sub
   );
 }
 
+/** A frame of version v at cut second t; an open draft has no cut to take it from until Make Version (its /frame
+ * answered 404 and the inspector showed a broken image, 1/11), so it shows a placeholder. */
+function Still({ id, v, t, alt = "", lazy }: { id: string; v: Version; t: number; alt?: string; lazy?: boolean }) {
+  if (!v.cut) return <span className="still-none" title="The frame shows once the draft is a version (Make Version)"><Icon name="film" size={16} />Draft</span>;
+  return <img src={frameUrl(id, v.n, t)} alt={alt} loading={lazy ? "lazy" : undefined} />;
+}
+
 function ClipInspector({ id, state, v, b, words, busy, canEdit, onSeek, onDelete, onAsk, onClear }: {
   id: string; state: RunState; v: Version; b: Block; words: Record<string, Word[]>; busy: boolean; canEdit: string | null;
   onSeek: Seek; onDelete: (span: string) => void; onAsk: (span: string) => void; onClear: () => void;
@@ -71,7 +78,7 @@ function ClipInspector({ id, state, v, b, words, busy, canEdit, onSeek, onDelete
         <div className="insp-thumb-row">
           {/* a Live draft has no cut yet, so no frame to show (GET /frame answered 404: a broken image) */}
           <button className="insp-thumb" onClick={() => onSeek(b.t0 + 0.02)} title="Go to the clip's start">
-            {v.cut && <img src={frameUrl(id, v.n, b.t0 + Math.min(0.5, (b.t1 - b.t0) / 2))} alt="" />}
+            <Still id={id} v={v} t={b.t0 + Math.min(0.5, (b.t1 - b.t0) / 2)} />
           </button>
           <dl className="props">
             <dt>In</dt><dd className="mono">{tc(b.t0, 2)}</dd>
@@ -271,7 +278,7 @@ function PunchInspector({ id, v, p, next, canEdit, onSeek, onPunch, onClear }: {
       <div className="panel-body">
         <div className="insp-thumb-row">
           <button className="insp-thumb" onClick={play} title="Play the punch-in">
-            {v.cut && <img src={frameUrl(id, v.n, peak)} alt="" />}
+            <Still id={id} v={v} t={peak} />
           </button>
           <dl className="props">
             <dt>On</dt><dd>{punchLabel(p)}</dd>
@@ -491,7 +498,7 @@ export function IssueCard({ id, issue, v, all, onSeek }: { id: string; issue: Is
       </div>
       <div className="i-body">
         <button className="frame" onClick={loop} title="The frame the reviewer saw (its clock is burned in)">
-          <img src={frameUrl(id, v.n, issue.t_s + 0.1)} alt={`Version ${v.n} at ${tc(issue.t_s)}`} loading="lazy" />
+          <Still id={id} v={v} t={issue.t_s + 0.1} alt={`Version ${v.n} at ${tc(issue.t_s)}`} lazy />
         </button>
         <ol className="steps">
           <li><span className="k">saw</span><span>{issue.what}</span></li>

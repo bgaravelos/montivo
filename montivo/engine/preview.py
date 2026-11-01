@@ -17,7 +17,7 @@ from PIL import Image
 from . import broll
 from . import music as bed
 from .api import dump_json
-from .captions import CALLOUT_FADE_S, build_overlays, fit_line, highlight_words, norm
+from .captions import CALLOUT_FADE_S, build_overlays, fit_line, highlight_words, norm, override_pins
 from .edges import Audio
 from .edl import title_card_on
 from .frame import frame_for
@@ -80,7 +80,7 @@ def title_seconds(run_dir: Path, edl: dict) -> tuple[float, str | None]:
     rec = edl.get("render")
     if rec is not None and "title" in rec:
         t = rec["title"] or {}
-        png = t.get("png")
+        png = _title_file(run_dir, t.get("png"))
         if png and "text" in t and not _card_says(run_dir, t["text"]):
             png = None
         return float(t.get("seconds") or 0.0), png
@@ -92,6 +92,19 @@ def title_seconds(run_dir: Path, edl: dict) -> tuple[float, str | None]:
     fps = float(edl["source"]["fps"])
     same = _card_says(run_dir, edl.get("title_card_text"))
     return round(round(TITLE_S * fps) / fps, 4), png.as_posix() if same else None
+
+
+def _title_file(run_dir: Path, png: str | None) -> str | None:
+    """The card the render recorded as a path in this run folder: the render writes it relative to the folder it ran
+    from ("runs/015/title/title_card.png"), so a server started elsewhere (`montivo serve --root X`) resolved it against
+    its own cwd and the Live card came out black (1/11). The card's own folder `title/` is looked up in run_dir."""
+    if not png:
+        return png
+    p = Path(png)
+    for cand in ([p] if p.is_absolute() else []) + [Path(run_dir) / "title" / p.name, Path(run_dir) / p]:
+        if cand.is_file():
+            return cand.as_posix()
+    return png
 
 
 def loudness_gain(edl: dict | None) -> float | None:
@@ -181,7 +194,7 @@ def preview_data(run_dir: Path, edl: dict, overlays: bool = True, laid: bool = F
     head = load_track(run_dir, edl, "head")
     fields, _ = build_overlays(edl, words, segments, paths, head, load_track(run_dir, edl, "person"), cache / "layout",
                                title_s=title_s, captions=bool(words), reframe_concept=concept, draw_at=-1.0,
-                               face_track=load_track(run_dir, edl, "face"))
+                               face_track=load_track(run_dir, edl, "face"), pins=override_pins(run_dir, edl, words))
     edl.update(fields)
     names = highlight_words(edl, look)
     data["look"] = _caption_style(look)
