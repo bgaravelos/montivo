@@ -71,7 +71,8 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--kit", default=None, metavar="JSON",
                    help='a brand kit for the first cut: {"look": {...}, "music": {"track": ...} | "off", "title_card": true}')
     r.add_argument("--hook-ab", action="store_true",
-                   help="with --review: after the loop, a hook A/B on its best version (one or two more reviews, $0.10 cap)")
+                   help="with --review: after the loop, a hook A/B on its best version (one or two more reviews and the "
+                        "pairwise judge, $0.20 cap)")
     r.add_argument("--review-passes", type=int, default=3, help="max reviews in the loop (default 3)")
     r.add_argument("--review-budget", type=float, default=0.30, help="max dollars for the loop's review calls (default 0.30)")
 
@@ -98,7 +99,8 @@ def main(argv: list[str] | None = None) -> int:
     rv.add_argument("--budget", type=float, default=0.30, help="max dollars for review calls (default 0.30)")
     rv.add_argument("--no-clock", action="store_true", help="do not burn the cut-time clock into the copy Spark watches")
     rv.add_argument("--no-apply", action="store_true", help="review once and write the proposed fixes, no patch, no render")
-    rv.add_argument("--hook-ab", action="store_true", help="after the loop, a hook A/B on its best version (one more review)")
+    rv.add_argument("--hook-ab", action="store_true", help="after the loop, a hook A/B on its best version (one or two more reviews and the "
+                         "pairwise judge, --hook-budget)")
     rv.add_argument("--hook-budget", type=float, default=0.20,
                     help="max dollars for the hook A/B reviews and its pairwise judge (default 0.20)")
 

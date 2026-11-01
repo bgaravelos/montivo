@@ -78,7 +78,7 @@ PUNCH_KEY = re.compile(r"emphasis:[^\s@]{1,40}@\d{1,5}\.\d{1,3}|jump_cut:s\d+")
 OP_LABEL = {"kit": "Brand kit", "speakers": "Speakers", "style": "Style", "text": "Edit text", "music": "Music", "pin": "Pin a speaker"}
 COST = {"plan": 0.05, "plan_open": 0.012, "plan_s": 13, "plan_open_s": 7, "review": 0.035, "run_fixed": 0.045,
         "run_per_s": 0.0026, "run_wall_fixed_s": 30, "run_wall_per_s": 0.5, "review_loop": 0.05, "review_loop_s": 60,
-        "hook_ab": 0.04, "compare": 0.075, "ask": 0.006, "look": 0.008, "titles": 0.009, "cover": 0.025, "cover_design": 0.05, "cover_mask": 0.01,
+        "hook_ab": 0.04, "hook_ab_new": 0.07, "compare": 0.075, "ask": 0.006, "look": 0.008, "titles": 0.009, "cover": 0.025, "cover_design": 0.05, "cover_mask": 0.01,
         "review_s": 26, "review_prep_s": 8, "image_s": 10, "render_s_per_frame": 0.0175, "monti": 0.014}
 MONTI_PER_HOUR = 40  # Monti answers from the model per judge and hour on the hosted demo; past it, from the guide ($0)
 MONTI_PER_HOUR_ALL = 120  # and for all judges together (a new sign-in is a new judge): about $1.70 an hour at most
@@ -330,7 +330,26 @@ def retry_estimate(root: Path, kind: str, args: list[str], duration=lambda p: No
     # stopped title words nothing)
     if "--title" in args or any(a.startswith("--title=") for a in args) or ("overlay" in args and "--prompt" in args):
         est += 0.01
+    elif card_op(args):
+        est += 0.01
     return round(max(est, hosted.MIN_PAID_USD) if floor else est, 4)
+
+
+def card_op(args: list[str]) -> bool:
+    """A draft commit (--ops) or a panel op (--op ... --args) that may make a Muse Image title card: new title words,
+    a text op that turns the card style on, a kit (it can carry a card). Priced at most one card, as draft.cost does
+    for the first try; a retry used to run it with no budget check at all."""
+    try:
+        if "--ops" in args:
+            ops = json.loads(args[args.index("--ops") + 1])
+        elif "--op" in args and "--args" in args:
+            ops = [{"op": args[args.index("--op") + 1], "args": json.loads(args[args.index("--args") + 1])}]
+        else:
+            return False
+    except (IndexError, ValueError):
+        return False
+    return any(isinstance(o, dict) and (o.get("op") == "kit" or (o.get("op") == "text" and isinstance(o.get("args"), dict)
+               and (o["args"].get("title") or o["args"].get("title_style") == "card"))) for o in ops)
 
 
 def stop_hold(root: Path, job: "Job") -> float:
@@ -633,7 +652,7 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(400, "span: a span id like s3")
         review_passes(b)
 
-    async def own(run_id: str, request: Request, est=None, what: str = "This edit") -> str:
+    async def own(run_id: str, request: Request, est=None, what: str = "This edit", carry_draft: bool = True) -> str:
         """The run an edit goes to: the run itself, or on the hosted demo the judge's own copy of a sample (made on
         their first edit, runs/<id>-<judge>), so one judge's edits never become the next judge's opening version.
         The request body is read before the copy (Starlette keeps it for the route) and the copy runs in a thread:
@@ -653,7 +672,11 @@ def create_app(root: Path) -> FastAPI:
         cost = est(b) if est else COST["review"] * review_passes(b)
         if cost > 0:
             need_key(what, cost)
-        return await asyncio.to_thread(copy_sample, run_id, d, judge_of(request))
+        mine = await asyncio.to_thread(copy_sample, run_id, d, judge_of(request))
+        if carry_draft:  # the judge's open Live draft goes with them: the editor follows them to the copy, and a
+            # draft left on the sample was out of reach from there (a Rendered edit, a retry; only Ask moved it)
+            await asyncio.to_thread(draft.move, d, st.runs / mine, judge_of(request))
+        return mine
 
     def key_info() -> dict:
         judge = hosted.CURRENT_JUDGE.get()
@@ -1350,8 +1373,9 @@ def create_app(root: Path) -> FastAPI:
                 key = (j.id, j.ended) if j else None
                 if key != seen_job:
                     seen_job = key
-                    yield sse("job", j.public())
-                    yield sse("progress", job_progress(st, j))
+                    yield sse("job", j.public() if j else None)  # None: the run was archived under the stream
+                    if j:
+                        yield sse("progress", job_progress(st, j))
                 elif grew and j and j.ended is None:
                     yield sse("progress", job_progress(st, j))
                 new_fp = fingerprint(d)
@@ -1523,7 +1547,7 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(400, f"this clip is {dur:.0f} s: the demo server takes clips up to {max_footage_s:.0f} s")
         need_key("A new run", COST["run_fixed"] + COST["run_per_s"] * dur
                  + (COST["review_loop"] if b.get("review", True) else 0.0)
-                 + (0.07 + COST["compare"] if b.get("review", True) and b.get("hook_ab") else 0.0))
+                 + (COST["hook_ab_new"] + COST["compare"] if b.get("review", True) and b.get("hook_ab") else 0.0))
         # one line of at most 2000 characters, as a re-plan's new brief: it goes into every prompt of the run
         brief = " ".join(str(b.get("brief") or "").split())[:2000]
         if not brief:
@@ -2583,7 +2607,7 @@ def create_app(root: Path) -> FastAPI:
         args = j.cmd[1:]
         if j.kind == "run" and "--resume" not in args:
             args.append("--resume")  # the stages that finished stay: a second try pays only for the rest
-        if paid_cmd(st.runs / run_id, args):
+        if paid_cmd(st.runs / run_id, args) or retry_estimate(st.root, j.kind, args, footage_duration, floor=False) > 0:
             need_key(j.label, retry_estimate(st.root, j.kind, args, footage_duration))
         job = start_job(st, run_id, j.kind, j.label, args,
                         chat={"role": "user", "kind": "retry_job", "job": j.id, "text": f"Try again: {j.label}"})
@@ -2609,10 +2633,10 @@ def create_app(root: Path) -> FastAPI:
         """The hook A/B on one version: the next version opens on another line, both are reviewed blind and the
         pairwise judge sees both twice, swapped: the new one is kept only when it wins both (`montivo hook`, one or two
         reviews + the judge, $0.20 budget)."""
-        run_id = await own(run_id, request, lambda b: 0.07 + COST["compare"], "The hook A/B")
+        run_id = await own(run_id, request, lambda b: COST["hook_ab_new"] + COST["compare"], "The hook A/B")
         d = st.run_dir(run_id)
         b = await request.json()
-        need_key("The hook A/B", 0.07 + COST["compare"])
+        need_key("The hook A/B", COST["hook_ab_new"] + COST["compare"])
         frm = int(b.get("from") or latest_version(d))
         if not (d / f"edl_v{frm}.json").is_file():
             raise HTTPException(400, f"no edl_v{frm}.json in this run")
@@ -2649,17 +2673,18 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(403, "the sample projects stay on the demo server for everyone")
         if not judges(d, request):
             raise HTTPException(404, "no such run")
-        dest = st.runs / ARCHIVE / run_id
-        if dest.exists():
-            raise HTTPException(409, f"runs/{ARCHIVE}/{run_id} already exists: restore or rename that one first")
+        dest, k = st.runs / ARCHIVE / run_id, 2
+        while dest.exists() or any(side_logs(dest.parent, dest.name)):  # a second copy of a sample archived after
+            # the first: it takes the next free name (it used to answer 409 and the UI has no rename)
+            dest, k = st.runs / ARCHIVE / f"{run_id}-{k}", k + 1
         dest.parent.mkdir(exist_ok=True)
         shutil.move(str(d), str(dest))
         for p in side_logs(st.runs, run_id):
-            shutil.move(str(p), str(dest.parent / p.name))
+            shutil.move(str(p), str(dest.parent / (dest.name + p.name[len(run_id):])))
         st.jobs.pop(run_id, None)
         if budget is not None:
-            budget.move(run_id, f"{ARCHIVE}/{run_id}")
-        return {"archived": run_id}
+            budget.move(run_id, f"{ARCHIVE}/{dest.name}")
+        return {"archived": run_id, **({"as": dest.name} if dest.name != run_id else {})}
 
     @app.post("/api/archive/{run_id}/restore")
     def restore(run_id: str, request: Request):

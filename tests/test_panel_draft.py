@@ -206,6 +206,11 @@ def test_correct_all_is_a_glossary_entry_kept_by_a_replan(tmp_path, monkeypatch)
         H.apply_op(new, H._words(d), None, "glossary", {"add": {"meta meta": "Four Meta"}})
     gone, _ = H.apply_op(new, H._words(d), None, "glossary", {"drop": ["meta meta"]})
     assert "meta meta" not in gone["glossary"]
+    # one heard phrase, one entry: another case or punctuation replaces it, and a drop in any case takes it off
+    again, _ = H.apply_op(new, H._words(d), None, "glossary", {"add": {"News voice": "Muse Voice"}})
+    assert [k for k in again["glossary"] if k.lower() == "news voice"] == ["News voice"]
+    off, _ = H.apply_op(again, H._words(d), None, "glossary", {"drop": ["news Voice"]})
+    assert not [k for k in off["glossary"] if k.lower() == "news voice"]
     replanned = {"spans": []}
     carry_run_words(new, replanned)
     assert replanned["glossary"]["meta meta"] == "Four Meta"

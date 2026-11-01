@@ -146,7 +146,7 @@ def _client(tmp_path, hosted=False, own=None):
     st = State(tmp_path.resolve())
     app = FastAPI()
 
-    async def own_default(run_id, request):
+    async def own_default(run_id, request, **kw):
         return run_id
 
     def need_key(what, est=0.0):
@@ -303,7 +303,7 @@ def test_hosted_drafts_are_per_judge_and_copy_a_sample_only_at_the_commit(tmp_pa
     d = _run(tmp_path, monkeypatch)
     copies = []
 
-    async def own(run_id, request: Request):  # create_app's own(): a sample becomes the judge's copy
+    async def own(run_id, request: Request, **kw):  # create_app's own(): a sample becomes the judge's copy
         mine = f"{run_id}-{request.headers['x-judge']}"
         if not (tmp_path / "runs" / mine).exists():
             shutil.copytree(d, tmp_path / "runs" / mine)

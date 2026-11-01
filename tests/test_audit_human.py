@@ -163,3 +163,48 @@ def test_a_failed_apply_never_leaves_a_proposal_running(tmp_path, monkeypatch, m
         agent.apply(d, "prop1")
     assert json.loads((d / "ui" / "pending" / "prop1.json").read_text())["status"] == ("applied" if made else "open")
     assert human.latest_edl(d) == (4 if made else 3)
+
+
+def test_a_replan_keeps_the_title_style():
+    """'Card before' (one paid Muse Image card) survives a re-plan; an EDL from before the field keeps its card instead
+    of the header pill build_edl writes into every new plan."""
+    from montivo import human
+    from montivo.engine.edl import title_style
+    new = {"title_card_text": "New words", "title_style": "header"}
+    human.carry_title({"title_card_text": "Raw In", "title_style": "card"}, new)
+    assert new == {"title_card_text": "Raw In", "title_style": "card"}
+    new = {"title_card_text": "New words", "title_style": "header"}
+    human.carry_title({"title_card_text": "Raw In", "title_card": False}, new)
+    assert title_style(new) == "card" and new["title_card"] is False and new["title_card_text"] == "Raw In"
+    new = {"title_card_text": "New words", "title_style": "header"}
+    human.carry_title({"title_style": "header"}, new)
+    assert new == {"title_card_text": "New words", "title_style": "header"}
+
+
+def test_dropping_the_last_clip_makes_the_one_before_it_the_payoff(tmp_path, monkeypatch):
+    from montivo import human
+    d = _human_run(tmp_path, monkeypatch)
+    human.drop(d, "s3")
+    sp = json.loads((d / "edl_v2.json").read_text())["spans"]
+    assert [(s["id"], s["role"]) for s in sp] == [("s1", "hook"), ("s2", "payoff")]
+
+
+def test_a_callout_keeps_its_source_second_when_its_clip_start_moves():
+    """017 v13: s5 'Score 87 Pass' at 4.1 s into the clip, just before 'passes at 87'. A delete of the clip's first five
+    words moves its start 3.2 s later: the shift follows so the callout still fires at the same second of the
+    recording; a split that leaves that second in the second piece gives the callout to that piece."""
+    from montivo import human
+    prev = {"spans": [{"id": "s5", "turn_id": 5, "t_in": 97.98, "t_out": 104.38, "callout": "Score 87 Pass",
+                       "callout_shift_s": 4.1, "callout_xy": [500, 300]}]}
+    new = {"spans": [{**prev["spans"][0], "t_in": 101.19}]}
+    fixes = human.follow_callouts(prev, new)
+    assert new["spans"][0]["callout_shift_s"] == 0.89 and fixes[0]["op"] == "callout_follow"
+    new = {"spans": [{**prev["spans"][0], "t_out": 101.0},
+                     {"id": "s9", "turn_id": 5, "t_in": 101.0, "t_out": 104.38, "callout": ""}]}
+    human.follow_callouts(prev, new)
+    a, b = new["spans"]
+    assert a["callout"] == "" and "callout_shift_s" not in a and "callout_xy" not in a
+    assert b["callout"] == "Score 87 Pass" and b["callout_xy"] == [500, 300] and b["callout_shift_s"] == 1.08
+    # nothing moved: nothing changes
+    same = {"spans": [dict(prev["spans"][0])]}
+    assert human.follow_callouts(prev, same) == [] and same == prev

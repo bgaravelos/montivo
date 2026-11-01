@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent as RMouseEvent, type PointerEvent as RPointerEvent, type ReactNode } from "react";
-import { api, usd } from "./api";
+import { api, spendable, usd } from "./api";
 import { Icon, MarkLoader } from "./icons";
 import type { Budget } from "./types";
 
@@ -376,7 +376,7 @@ export function Monti({ ctx, budget, hasKey, hasOpen, place, nonce, prepare, onO
             <span>{last ? (last.source === "spark" ? `${modelName(last.model)} · $${last.cost_usd.toFixed(3)} this question` : "From the guide · $0")
               : hasKey ? (hasOpen ? "Muse Spark Open · about $0.004 a question" : "Muse Spark 1.3 · about $0.013 a question")
               : "From the guide · $0 (no model key)"}
-              {left ? ` · ${usd(left.left)} left` : ""}</span>
+              {left ? ` · ${usd(spendable(left).left)} left` : ""}</span>
             <span><kbd>?</kbd> opens · <kbd>Esc</kbd> closes</span>
           </div>
         </div>

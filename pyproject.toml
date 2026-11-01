@@ -36,3 +36,5 @@ include = ["montivo*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]  # tests import shared helpers as tests.<module>
+# FastAPI's TestClient on the pinned Starlette: a notice about a future httpx2, nothing about this code
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient` is deprecated"]

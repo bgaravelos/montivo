@@ -39,7 +39,7 @@ On the project list, press New project (key N), pick or drop a clip, write a one
 2. Pick what kind of video it is (talking head, interview, product demo, event recap) and a length chip; the brief is one sentence on what the cut should say.
 3. Advanced: review loop on or off, hook A/B, punch-ins, the planner (Spark 1.3 or Spark Open), a brand kit.
 4. Create (⌘Enter). The sheet shows the price and time before you start: about $0.045 plus $0.0026 per second of footage, plus about $0.05 for the review loop.
-On the hosted demo a clip can be up to 90 s; a first run of a minute of footage takes about 2 minutes.
+On the hosted demo a clip can be up to 95 s; a first run of a minute of footage takes about 2 minutes.
 
 ## The project list (Home)
 <!-- monti: target=home.grid words=home,projects,project list,all projects,samples,yours,tiles,archive,αρχική,έργα,projects,λίστα,δείγματα -->
@@ -278,7 +278,7 @@ Loop (top bar) lays every version out left to right: its frame, blind score and 
 The editor then opens the version it kept.
 
 ## Export
-<!-- monti: target=top.export words=export,download,save,file,mp4,render out,εξαγωγή,κατέβασ,αποθήκευσ,export,αρχείο -->
+<!-- monti: target=top.export words=export,download,save,file,mp4,render out,bundle,zip,include,what goes in,files,εξαγωγή,κατέβασ,αποθήκευσ,export,αρχείο -->
 Export (top right) opens the Export page: cover, destination, what goes in the bundle, the pre-flight checks, then Export.
 1. Destination: 1080x1920 as rendered, Feed 4:5, Square 1:1, or a 720 copy for messages.
 2. Include: the video, the video without captions, SRT, WebVTT, the cover and its grid crop, WAV, a transcript, post text (more than one file comes as a zip).
@@ -292,9 +292,9 @@ On the Export page pick Feed 4:5 or Square 1:1 under Destination: the version is
 ## Cover
 <!-- monti: target=export.cover words=cover,thumbnail,poster,headline,cover image,εξώφυλλο,thumbnail,μικρογραφία -->
 On the Export page the cover maker picks a frame and lays a headline over it, shown with the Instagram grid's 3:4 crop.
-1. Scrub to a frame, or "Let Muse Spark pick" (three moments with a reason, ~$0.018).
+1. Scrub the Still slider to a frame; once Muse Spark has designed a cover, its moments show as chips to jump to.
 2. Templates: frame, headline, sticker, cutout (the headline behind the speaker, cut out by SAM 3.1, $0.010).
-3. "Design it with Muse Spark" picks the still, writes the headline, checks the cover and its tile, fixes it once (~$0.011).
+3. "Design it with Muse Spark" picks the still, writes the headline, checks the cover and its tile, fixes it once (~$0.05).
 
 ## Post text
 <!-- monti: target=export.post words=post text,caption for post,hashtags,description,title for instagram,περιγραφή,hashtags,κείμενο ανάρτησης -->
@@ -319,8 +319,9 @@ More (top bar) > Replay the agent run plays a finished run back at 1x or 4x, wit
 <!-- monti: target=home.budget words=hosted,demo,judge,judges,budget left,limit,password,copy,sample,κριτ,όριο,προϋπολογισμός,demo -->
 On the hosted demo everyone shares a model budget; the meter on the project list and the composer show what is left.
 1. Editing a sample makes your own copy; other judges never see it.
-2. A clip can be up to 90 s and 1000 MB; one job runs at a time on the server.
+2. A clip can be up to 95 s and 1000 MB, three uploads per judge; one job runs at a time on the server.
 3. Past the budget, the finished projects and every $0 edit still work; paid calls (a new run, reviews, Ask Montivo, Monti's model) stop, and Monti answers from this guide.
+4. Each judge may spend about $3 of model calls (the shared budget caps everyone together); past that, every $0 edit still works.
 
 ## When a job is running
 <!-- monti: target=top.more words=job,running,progress,waiting,slow,stuck,stop,cancel,τρέχει,περιμένω,πρόοδος,σταμάτα,ακύρωσ -->

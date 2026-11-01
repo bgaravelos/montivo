@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { api, crit, frameUrl, tc, usd, type Seen } from "./api";
+import { api, crit, frameUrl, tc, spendable, usd, type Seen } from "./api";
 import { selRange, sevRank, speakerName, type FlatWord, type WordSel } from "./edit";
 import { Icon, MarkLoader } from "./icons";
 import { MishearList, openSuggestions, useHiddenSuggestions } from "./Panels";
@@ -107,7 +107,7 @@ type Item =
   | { kind: "version"; v: Version; by: string }
   | { kind: "review"; v: Version }
   | { kind: "mishear"; v: Version } // C3: "Did you say ...?" under a planned version
-  | { kind: "preview"; card: PendingCard; status: "open" | "applying" | "applied" | "retried" }
+  | { kind: "preview"; card: PendingCard; status: "open" | "applying" | "applied" | "retried" | "stale" }
   | { kind: "error"; text: string; charged?: number | null; retry?: boolean }
   | { kind: "checks"; v: Version; checks: AgentChecks }; // B1: the $0 checks on a version the chat made, with Fix it
 
@@ -141,11 +141,13 @@ export function scopeChips(s: AskScope | null | undefined): string[] {
 
 /** Where a proposal stands: applied once a version carries it, applying while its Apply runs, turned down for another
  *  try, else open (an Apply that failed can be clicked again). */
-function proposalStatus(id: string, chat: ChatLine[], versions: Version[], job: Job | null): "open" | "applying" | "applied" | "retried" {
+function proposalStatus(id: string, chat: ChatLine[], versions: Version[], job: Job | null, on: number): "open" | "applying" | "applied" | "retried" | "stale" {
   if (versions.some((x) => x.origin.agent?.pending === id)) return "applied";
   const mine = chat.filter((c) => c.role === "user" && c.pending === id);
   if (mine.some((c) => c.kind === "retry")) return "retried";
   if (mine.some((c) => c.kind === "apply") && job?.running && job.kind === "ask") return "applying";
+  // a newer version came after it: Apply could only be refused ("the cut changed since this proposal")
+  if (versions.length && versions[versions.length - 1].n > on) return "stale";
   return "open";
 }
 
@@ -217,13 +219,15 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
     for (const c of replay ? [] : asked.filter((x) => x.after === v.n)) { // a message that made no version: its reply or proposal
       if (c.kind === "error") {
         const last = failed?.id === c.job;
-        out.push({ kind: "error", text: `${c.text ?? ""}${last && failed!.rc! > 0 && tail(failed!) ? `\n${tail(failed!)}` : ""}`, charged: c.charged_usd, retry: last });
+        // a proposal the cut moved past is refused again on every try: no Try again, ask again instead
+        const moved = /the cut changed since this proposal/.test(c.text ?? "") || /the cut changed since this proposal/.test(failed?.tail ?? "");
+        out.push({ kind: "error", text: `${c.text ?? ""}${last && failed!.rc! > 0 && tail(failed!) ? `\n${tail(failed!)}` : ""}`, charged: c.charged_usd, retry: last && !moved });
         continue;
       }
       out.push({ kind: "you", text: c.retry_of ? "Try something else" : typed(c.message), chips: c.retry_of ? [] : [...scopeChips(c.scope), `v${v.n}`] });
       if (c.text) out.push({ kind: "text", who: "montivo", text: c.text, seek: seeks(c.ui) });
       const card = c.kind === "preview" && typeof c.pending === "object" ? c.pending : null;
-      if (card) out.push({ kind: "preview", card, status: proposalStatus(card.id, chat, versions, job) });
+      if (card) out.push({ kind: "preview", card, status: proposalStatus(card.id, chat, versions, job, v.n) });
     }
   }
   if (job?.running) {
@@ -336,7 +340,7 @@ function ReviewCard({ v, current, onPick, onSeek }: { v: Version; current: boole
 /** A structural or costly ask before it runs (agent.py preview_card): what changes in plain words, the cost and time,
  *  Apply and one free Try something else. A re-plan's card shows the note and the target: Apply plans it, once. */
 function PreviewCard({ card, status, busy, onApply, onRetry }: {
-  card: PendingCard; status: "open" | "applying" | "applied" | "retried"; busy: string | null;
+  card: PendingCard; status: "open" | "applying" | "applied" | "retried" | "stale"; busy: string | null;
   onApply: (id: string) => void; onRetry: (id: string) => void;
 }) {
   const open = status === "open";
@@ -350,7 +354,7 @@ function PreviewCard({ card, status, busy, onApply, onRetry }: {
           <button className="btn small" disabled={!!busy} title={busy ?? "Make the new version"} onClick={() => onApply(card.id)}><Icon name="check" size={12} />Apply</button>
           {card.can_retry && <button className="btn quiet small" disabled={!!busy} title={busy ?? "Montivo proposes another way, once (one routing call, no review)"} onClick={() => onRetry(card.id)}>Try something else</button>}
         </div>
-      ) : <div className="pc-state mute small">{status === "applied" ? "Applied" : status === "applying" ? "Applying…" : "Turned down: another try below"}</div>}
+      ) : <div className="pc-state mute small">{status === "applied" ? "Applied" : status === "applying" ? "Applying…" : status === "stale" ? "The cut changed since: ask again on the newest version" : "Turned down: another try below"}</div>}
     </div>
   );
 }
@@ -471,6 +475,17 @@ const refusedKey = (id: string) => `montivo.refused.${id}`;
 const CHAT_STORED = "montivo:chat-stored";
 const stored = <T,>(key: string): T[] => { try { return JSON.parse(localStorage.getItem(key) ?? "[]") as T[]; } catch { return []; } };
 const store = (key: string, x: unknown[]) => { try { localStorage.setItem(key, JSON.stringify(x)); } catch { /* this tab only */ } };
+/** The hosted demo's first edit on a sample moves the editor to the judge's copy: the messages queued or refused on
+ *  the sample go with it (they were stored under the sample's id and never sent). */
+export function moveChat(from: string, to: string) {
+  for (const key of [queueKey, refusedKey]) {
+    const old = stored<unknown>(key(from));
+    if (!old.length) continue;
+    store(key(to), [...stored<unknown>(key(to)), ...old]);
+    try { localStorage.removeItem(key(from)); } catch { /* this tab only */ }
+  }
+  window.dispatchEvent(new Event(CHAT_STORED));
+}
 
 export function Assistant({ state, versions, lines, job, seen, progress, replay, v, selection, getTime, focusNonce, prefill, onSend, onStop, onPick, onSeek, onCompare, onRestore, onApply, onRetry, onRetryJob, onGlossary }: {
   state: RunState; versions: Version[]; lines: LogLine[]; job: Job | null; seen: Seen; progress: Progress | null; replay: number; v: Version | null;
@@ -689,7 +704,7 @@ export function Assistant({ state, versions, lines, job, seen, progress, replay,
               <Icon name="eyeOff" size={13} />Review{review && state.has_key ? "" : " off"}
             </button>
             <span className="grow" />
-            <span className="cost" title={state.has_key ? `One Muse Spark 1.3 call picks the edits${review ? ", plus one blind review" : ""}. A re-plan (~${usd(planner === "open" ? state.costs.plan_open : state.costs.plan)} on ${planner === "open" ? "Muse Spark Open" : "Muse Spark 1.3"}), deleting or moving clips, and anything over $0.02 show a preview first: nothing runs until you Apply. Music, look, captions and callouts are $0 and apply at once.` : "Without the key Montivo reads keywords: $0"}>~{usd(cost)}{state.budget ? <span className="mute"> · {usd(state.budget.left)} left</span> : null}</span>
+            <span className="cost" title={state.has_key ? `One Muse Spark 1.3 call picks the edits${review ? ", plus one blind review" : ""}. A re-plan (~${usd(planner === "open" ? state.costs.plan_open : state.costs.plan)} on ${planner === "open" ? "Muse Spark Open" : "Muse Spark 1.3"}), deleting or moving clips, and anything over $0.02 show a preview first: nothing runs until you Apply. Music, look, captions and callouts are $0 and apply at once.` : "Without the key Montivo reads keywords: $0"}>~{usd(cost)}{state.budget ? <span className="mute"> · {usd(spendable(state.budget).left)} left</span> : null}</span>
             <button className="send" disabled={!!blocked || !text.trim()} onClick={send} title={running ? "Queue it: it goes when the running job ends (Enter)" : "Send (Enter)"}><Icon name={running ? "clock" : "send"} size={15} /></button>
           </div>
         </div>

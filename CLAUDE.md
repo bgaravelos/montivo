@@ -1054,6 +1054,28 @@ router, titles, post text and cover stay on 1.3 (measured worse); README "Open w
 (no job since 10:59; the old container stopped); /api/health 200 (cap 40, spent 3.70), /api/runs 401, /s/nope 404; smoke drop on
 015: 34.2 s, -14.0 LUFS / -1.7 dBTP, render 8.5 s; live Monti answered on `meta-models/muse-spark-open-1026`. Left: the New
 project preset brief could follow the clip length (UI); 013's burned-in lower third cropped by 9:16.
+Improvement audit (1/11, $0): six of ten audit agents finished before the session limit
+(render/Live, web editor, ingest and quality ideas did not run); each of their findings checked in the code first, 22
+fixed with a test that fails on the old code (805 -> 814 tests, `make test` without the Starlette warning), 015 v5
+renders frame- and audio-identical. Engine: a callout keeps its source second when its clip's start moves and goes to
+the split piece that plays it (`human.follow_callouts` in every structural op; 017 v13 "Score 87 Pass" after deleting
+the clip's first words used to slide 3.2 s late); a re-plan keeps `title_style` (`human.carry_title`: a chosen card
+stays a card, an old EDL keeps its card); dropping the last clip sets the payoff; two pauses one word apart no longer
+leave a one-word clip; one glossary entry per heard phrase whatever its case; the edge-word check reads the run's named
+mishearings (`review.named_words`: s9-long's "Montevideo" heard as "montivo" no longer blocks the gate); one
+reframe_bias step per segment per pass; the regression stop says why (`review.lost_to`, not "83 (gated) < 68"); a
+review asked with a Live draft open waits for Make Version; a new `montivo run` without MODEL_API_KEY stops before
+making a folder. Server: a judge's Live draft moves into their sample copy on any edit (`own(carry_draft=)`, not the
+commit); archiving a second copy of the same id takes `<id>-2` (Undo restores that name); Try again on a draft / op
+that makes a title card checks the budget (`card_op`); the /events stream survives an archive; one hook A/B price
+(`COST["hook_ab_new"]`) for the run route, the hook route and the New project sheet. UI: the budget shows the judge's
+own $3 share (`spendable`), a first run that failed or stopped stays on Home with a try-again tile, a proposal card
+made before a newer version says so instead of a dead Apply, the queued chat moves with the editor to the judge's
+copy, the "Make it 30 seconds" example priced as a re-plan. Docs: README (samples, 95 s, Monti on Spark Open), Monti
+guide (cover maker steps and price, 95 s, three uploads and $3 per judge, "bundle" answers keyless), CLI hook A/B help,
+.env.example. Left: the review admission on the host prices 3 reviews while the loop may spend its $0.30 (up to ~$0.20
+over a judge's share; a fix would cut the hosted escalation), the test gaps the audit named (review_render, seven panel
+routes, the share page routes, agent.measured, combo_check for the 30/10 ops). Not deployed.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 

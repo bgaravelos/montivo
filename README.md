@@ -82,7 +82,7 @@ The full table is under [Measured results](#measured-results).
 Three ways in, quickest first.
 
 **1. Hosted (judges).** Montivo runs hosted for you, with my Meta key on the server. The link and the password are in
-the submission. Two finished projects open there, and you can upload your own clip (up to 90 s) and let the agent
+the submission. The finished sample projects open there, and you can upload your own clip (up to 95 s) and let the agent
 plan, cut, review and re-cut it; your edits go to your own copy, so every judge starts from the same samples. A shared
 budget caps the Meta model calls; past it, the finished projects and the $0 edits still work.
 
@@ -396,8 +396,9 @@ Monti, the gecko under the editor's panel icons and in the corner of the project
 tuck him into a window edge), is the app's help: ask "where do I add
 music?" or "πώς διορθώνω έναν υπότιτλο;" and it answers from one guide file (`montivo/monti_guide.md`, every panel,
 key, op, price and model per stage), with steps and a Show me that runs along the window's edges to the place and frames
-it between an in and an out bracket. It never edits: an edit request goes into Ask Montivo's box, unsent. One Muse
-Spark 1.3 call per question (about $0.013, counted by the hosted budget), or the guide's keywords for $0 without a key;
+it between an in and an out bracket. It never edits: an edit request goes into Ask Montivo's box, unsent. One call per
+question, counted by the hosted budget: Muse Spark Open when `BASETEN_API_KEY` is set, as on the hosted demo (about
+$0.0035), else Muse Spark 1.3 (about $0.013); or the guide's keywords for $0 without a key;
 `tools/monti_bench.py` scores it on 24 questions in English and Greek: 20 of 20 run on Spark 1.3 (30/10), 21 of 24 on
 the keywords.
 

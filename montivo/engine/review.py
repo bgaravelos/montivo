@@ -526,7 +526,23 @@ def _same_word(kept: str, heard: str) -> bool:
             or (len(heard) >= len(kept) and heard[:3] == kept[:3]))
 
 
-def edge_words_unheard(kept: list[dict], heard: list[dict], speech_at=None) -> dict:
+def named_words(edl: dict) -> dict[str, list[str]]:
+    """{a heard word: the written words} for one-word mishearings the run already named: the glossary and the
+    planner's glossary suggestions (s9-long-0111: the source transcript kept "Montevideo", the planner suggested
+    "Montivo", and Voice on the cut heard "montivo": a word heard right, which the edge check counted as clipped)."""
+    from .captions import run_glossary
+    pairs = list(run_glossary(edl).items()) + [(g.get("heard") or "", g.get("written") or "")
+                                               for g in edl.get("glossary_suggestions") or []]
+    out: dict[str, list[str]] = {}
+    for h, w in pairs:
+        hs = [t for t in map(_tok, str(h).split()) if t]
+        if len(hs) == 1:
+            out.setdefault(hs[0], []).extend(t for t in map(_tok, str(w).split()) if t)
+    return out
+
+
+def edge_words_unheard(kept: list[dict], heard: list[dict], speech_at=None,
+                       named: dict[str, list[str]] | None = None) -> dict:
     """Kept words at the cut edges that Voice does not hear in the cut. Both word lists come from the same speech
     model (the source transcript and the cut's own), so a name it mishears it mostly mishears the same way twice; a
     word missing from the cut's transcript, or heard as a different word, may have been cut off at the edge. The two
@@ -552,7 +568,9 @@ def edge_words_unheard(kept: list[dict], heard: list[dict], speech_at=None) -> d
                 if abs((hw[b]["t_start"] + hw[b]["t_end"]) / 2 - mid) < 0.6:
                     got[a] = ht[b]
     at_edges = [k for k, w in enumerate(kept) if w["edge"] and kt[k]]
-    ok = {k: _same_word(kt[k], got[k] or "") for k in at_edges}
+    named = named or {}
+    ok = {k: _same_word(kt[k], got[k] or "") or any(_same_word(w, got[k] or "") for w in named.get(kt[k], []))
+          for k in at_edges}
     missing: list[dict] = []
     quiet: list[dict] = []
     for k in at_edges:
@@ -1399,10 +1417,15 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
     touched: dict[tuple[str, str], int] = {}  # (span, edge) put back on a Voice word boundary -> its log entry
     by_id = {s["id"]: s for s in new["spans"]}
     overrides = new.setdefault("caption_overrides", [])
+    biased: set[str] = set()  # spans whose segment a reframe_bias fix of this pass already moved
     for f in sorted(fixes, key=lambda f: f.op in STRUCTURAL):
         s = by_id.get(f.target)
         note = ""
         rejoined = False
+        if f.op == "reframe_bias" and f.target in biased:  # two stretches of one segment: one step, not their sum
+            why = "its segment is already re-framed in this pass"
+            log.append({**asdict(f), "fingerprint": f.fingerprint, "note": f"not applied: {why}", "skipped": True})
+            continue
         if why := conflict(new, f):
             log.append({**asdict(f), "fingerprint": f.fingerprint, "note": f"not applied: {why}", "skipped": True})
             continue
@@ -1496,6 +1519,7 @@ def apply_fixes(edl: dict, fixes: list[Fix], words: Words, audio: Audio | None =
             # segment of three spans moved a third of the step
             step = int(f.args.get("px") or BIAS_PX) * (1 if f.args["dir"] == "right" else -1)
             seg = next((g.span_ids for g in merge_segments(new["spans"]) if f.target in g.span_ids), [f.target])
+            biased.update(seg)
             for x in new["spans"]:
                 if x["id"] in seg:
                     x["reframe_bias_px"] = int(x.get("reframe_bias_px") or 0) + step
@@ -1613,7 +1637,7 @@ def review_render(run_dir: Path, edl: dict, cut: Path, version: int, ledger: Led
         words_heard = f_heard.result()
         vpath = run_dir / "voice" / "voice.json"
         edge_words = (edge_words_unheard(kept_words(edl, Words(json.loads(vpath.read_text())["words"])), words_heard,
-                                         edge_speech(edl, audio) if audio else None)
+                                         edge_speech(edl, audio) if audio else None, named=named_words(edl))
                       if vpath.is_file() else None)
         facts = facts_text(sil, caps, duration, edges, timeline, words_heard if heard else None, edge_words=edge_words,
                            head=head, diff_heard=words_heard, music=(edl.get("render") or {}).get("music"),
@@ -1725,6 +1749,18 @@ def rank(h: dict) -> tuple[bool, bool, float]:
     and keeps a failed version), then one no measured check blocks beats one a check blocks, then the reviewer's score
     (an open reviewer major already costs score, so it does not rank twice; old loop.json has no `checks`)."""
     return (bool(h.get("pass")), not h.get("checks", h.get("gate")), h["overall"])
+
+
+def lost_to(entry: dict, best: dict) -> str:
+    """Why a new version ranks under the best one, in rank()'s order, for loop.json's stop and the chat: a higher score
+    held by a measured check read "v2 scored 83 (gated) < v1 68" (s9-long-0111)."""
+    n, b, x, y = entry["version"], best["version"], entry["overall"], best["overall"]
+    if bool(best.get("pass")) and not entry.get("pass"):
+        return f"v{n} scored {x} and does not pass, while v{b} ({y}) passes"
+    held = entry.get("checks", entry.get("gate")) or []
+    if held and not best.get("checks", best.get("gate")):
+        return f"v{n} scored {x} but a measured check holds it ({held[0]}), while v{b} ({y}) is clear"
+    return f"v{n} scored {x} < v{b} {y}"
 
 
 def best_of(history: list[dict]) -> dict:
@@ -1947,8 +1983,7 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
                         spent += judged["cost_usd"]
                         entry["pairwise"] = {k: judged[k] for k in ("a", "b", "winner", "agree", "verdict", "cost_usd")}
                 if not judged or judged["winner"] != "b":
-                    stop = (f"regression: v{n} scored {entry['overall']}{' (gated)' if entry['gate'] else ''} < "
-                            f"v{best_before['version']} {best_before['overall']}, the best stays v{best_before['version']}"
+                    stop = (f"regression: {lost_to(entry, best_before)}, the best stays v{best_before['version']}"
                             + (f"; the pairwise judge: {judged['verdict']}" if judged else why_not))
                     break
                 entry["preferred_over"] = best_before["version"]

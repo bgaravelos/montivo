@@ -838,6 +838,7 @@ button.ghost-mark:hover, .ghost-mark.sel { width: 5px; margin-left: -3px; opacit
 .hm-prog { position: absolute; z-index: 3; left: 8px; right: 8px; bottom: 30px; padding: 6px 8px; border-radius: 8px; background: #000c; backdrop-filter: blur(6px); }
 .hm-prog .prog-mini { font-size: 11px; }
 .hm-working { position: absolute; inset: 0; display: grid; place-items: center; background: radial-gradient(circle at 50% 42%, #ffc6291a, #000 65%); }
+.hm-failed { text-align: center; padding: 0 12px; font-size: 13px; line-height: 1.5; color: var(--text, #f3f0e8); }
 .hm-name { font-weight: 650; font-size: 14px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .hm-vchain { display: flex; gap: 3px; }
 .hm-vchain i { height: 4px; flex: 1; border-radius: 3px; background: var(--panel-3); }

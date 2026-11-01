@@ -113,3 +113,12 @@ def test_resume_refuses_other_footage_or_another_hflip(tmp_path, plans):
     with pytest.raises(SystemExit, match="with --hflip"):
         go(out, tmp_path, hflip=True)
     assert plans == []
+
+
+def test_a_new_run_without_the_key_stops_before_making_a_folder(tmp_path, monkeypatch):
+    """README 'With your own key' typed before the key is exported: no ingest, no half run folder for Home to list."""
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    out = tmp_path / "runs" / "001"
+    with pytest.raises(SystemExit, match="MODEL_API_KEY"):
+        R.run(R.RunOptions(footage=tmp_path / "clip.mp4", brief=BRIEF, out=out))
+    assert not out.exists()

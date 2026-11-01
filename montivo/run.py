@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, open_api_key, sam_cost
+from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, api_key, open_api_key, sam_cost
 from .engine import track as track_mod
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, pause_marks, tighten_edges
@@ -156,6 +156,8 @@ def run(opts: RunOptions) -> dict:
     out = opts.out
     if opts.planner_model:
         open_api_key()  # fail before any spend, not at the plan call after Voice, SAM and watch
+    if not opts.resume:
+        api_key()  # a new run calls the Meta models from its first stage: no half run folder without the key
     out.mkdir(parents=True, exist_ok=True)
     log = RunLog(out / "run.log")
     ledger = Ledger.resume(out / "ledger.json") if opts.resume else Ledger(out / "ledger.json")

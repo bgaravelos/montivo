@@ -297,9 +297,14 @@ def test_archive_moves_and_restores(tmp_path):
     assert c.get("/api/runs/r1").status_code == 404
     _run_folder(tmp_path)  # a new r1 in the way
     assert c.post("/api/archive/r1/restore").status_code == 409
-    assert c.post("/api/runs/r1/archive").status_code == 409  # and archiving it would collide
-    import shutil
-    shutil.rmtree(d)
+    # archiving the new one takes the next free name (a judge's second copy of a sample; the UI has no rename)
+    (tmp_path / "runs" / "r1.stdout.log").write_text("z")
+    assert c.post("/api/runs/r1/archive").json() == {"archived": "r1", "as": "r1-2"}
+    assert (tmp_path / "runs" / "_archive" / "r1-2" / "edl_v2.json").is_file()
+    assert (tmp_path / "runs" / "_archive" / "r1-2.stdout.log").read_text() == "z"
+    assert (tmp_path / "runs" / "_archive" / "r1.stdout.log").read_text() == "x"
+    assert sorted(r["id"] for r in c.get("/api/archive").json()["runs"]) == ["r1", "r1-2"]
+    assert c.post("/api/archive/r1-2/restore").json() == {"restored": "r1-2"}
     assert c.post("/api/archive/r1/restore").json() == {"restored": "r1"}
     assert (d / "edl_v2.json").is_file() and (tmp_path / "runs" / "r1.stdout.log").is_file()
     assert c.get("/api/archive").json()["runs"] == []

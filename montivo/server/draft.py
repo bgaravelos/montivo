@@ -639,7 +639,8 @@ def router(st, own, judge_of, need_key, hosted: bool = False) -> APIRouter:
                 if state is None or not state["ops"]:
                     raise HTTPException(409, "nothing to make: the draft has no edits")
         await asyncio.to_thread(ready)
-        target = await own(run_id, request)  # the run itself, or the judge's copy of a sample
+        target = await own(run_id, request, carry_draft=False)  # the run itself, or the judge's copy of a sample (the
+        # draft it commits stays on the sample: its state there records the commit)
         b = await request.json() if (await request.body()) else {}
         b = b if isinstance(b, dict) else {}
         passes = review_passes(b)

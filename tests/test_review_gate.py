@@ -43,6 +43,23 @@ def test_a_clipped_edge_word_is_reported_only_where_speech_runs_at_the_edge():
     assert R._same_word("montivo", "montevideo") and R._same_word("news", "newspark") and not R._same_word("montivo", "mont")
 
 
+def test_a_mishearing_the_run_named_is_not_a_clipped_edge_word():
+    """s9-long-0111: the source transcript kept "Montevideo" (the planner suggested "Montivo"), Voice on the cut heard
+    "montivo" at the in edge: the word is all there, so the gate must not block the cut on it."""
+    edl, words = make_edl(title=False)
+    kept = R.kept_words(edl, words)
+    kept[0]["w"] = "Montevideo"
+    speech = lambda cut_t, edge: (-42.7, True)  # noqa: E731
+    heard = heard_from(kept, swap={"Montevideo": "montivo"})
+    assert [m["w"] for m in R.edge_words_unheard(kept, heard, speech)["unheard"]] == ["Montevideo"]
+    edl["glossary_suggestions"] = [{"heard": "Montevideo", "written": "Montivo"}]
+    named = R.named_words(edl)
+    assert named["montevideo"] == ["montivo"]
+    assert R.edge_words_unheard(kept, heard, speech, named=named)["unheard"] == []
+    # still a clip when the cut heard less than the name
+    assert R.edge_words_unheard(kept, heard_from(kept, swap={"Montevideo": "mon"}), speech, named=named)["unheard"]
+
+
 def test_head_frame_finds_where_the_followed_head_leaves_the_crop(tmp_path):
     edl, _ = make_edl(title=False)
     # one head, 160 px wide, standing still near x 960 of a 1920 source for the whole of both turns (track at 5 fps)
@@ -98,6 +115,12 @@ def test_gate_issues_become_fixes_the_reviewer_missed_and_bias_moves_the_whole_s
     new, log = R.apply_fixes(edl, [fix], words)
     assert [s.get("reframe_bias_px") for s in new["spans"]] == [300, 300, None]  # ... and both move, not a third
     assert "2 spans of the segment" in log[0]["note"]
+    # two stretches of that segment in one pass (one in s1, one in s2): one step, not their sum
+    fix2, _ = R.resolve(issue(1.5, "reframe_bias", direction="right", px=300), 1, edl, words, R.cut_map(edl))
+    assert fix2.target == "s2"
+    new, log = R.apply_fixes(edl, [fix, fix2], words)
+    assert [s.get("reframe_bias_px") for s in new["spans"]] == [300, 300, None]
+    assert log[1]["skipped"] and "already re-framed" in log[1]["note"]
 
 
 def test_facts_text_gives_every_reviewer_the_checks_and_spark13_only_the_caption_diff():

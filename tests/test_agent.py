@@ -244,3 +244,21 @@ def test_the_checks_stay_on_the_version_for_fix_it(tmp_path):
     agent.keep_checks(d, 3, checks)
     assert json.loads((d / "edl_v3.json").read_text())["patches"][-1]["agent"]["checks"] == checks
     assert "Fix what the checks found" in agent.PROMPT
+
+
+def test_review_with_a_live_draft_open_waits_for_make_version(tmp_path, monkeypatch):
+    """A review reads a rendered version: with a Live draft open it would review the draft's base and leave the
+    draft's edits out, so it waits for Make Version like every other version-making ask."""
+    d = _run(tmp_path, {"version": 3, "spans": SPANS, "runtime_s": 2.0, "patches": []})
+    fd = d / "ui" / "draft"
+    fd.mkdir(parents=True)
+    (fd / "edl.json").write_text(json.dumps({"version": 3, "spans": SPANS[:1], "runtime_s": 1.0, "patches": []}))
+    (fd / "state.json").write_text(json.dumps({"id": "x", "base": 3, "ops": [{"op": "drop", "args": {}, "say": "s2 out"}]}))
+    monkeypatch.setattr(agent, "route", lambda *a, **kw: ({"reply": "Reviewing.", "question": "", "ops": [op("review")]}, 0.004))
+    ran = []
+    monkeypatch.setattr(agent, "execute", lambda *a, **kw: ran.append(a) or {})
+    out = agent.ask(d, "review it", draft=True, draft_edl=fd / "edl.json")
+    assert not ran and out["version"] is None and any("Make Version first" in x for x in out["skipped"])
+    # without a draft the review runs
+    agent.ask(d, "review it")
+    assert ran

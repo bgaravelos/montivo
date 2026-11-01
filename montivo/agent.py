@@ -1074,6 +1074,10 @@ def ask(run_dir: Path, message: str | None, from_v: int | None = None, passes: i
         record["draft"] = dops
         log(f"agent: {len(dops)} edit(s) for the Live draft: {', '.join(o['op'] for o in dops)}")
         return record
+    if draft_open and asked_review and not ops:  # a review reads a rendered version; the draft is none yet
+        record["skipped"] += ["review: this reviews a rendered version, and the draft's edits are not one yet. "
+                              "Make Version first, then ask again"]
+        return record
     if draft and ops and draft_open:  # a version from the draft's base would leave the draft's edits out
         record["skipped"] += [f"{', '.join(dict.fromkeys(o['op'] for o in ops))}: this makes a version, and the "
                               "draft's edits are not one yet. Make Version first, then ask again"]

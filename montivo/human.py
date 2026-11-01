@@ -242,8 +242,51 @@ def follows_cut(op):
         if moved := follow_cut(edl, new):
             rec.fixes = [*rec.fixes, *moved]
             rec.say += f"; {len(moved)} music duck edit(s) followed"
+        if kept := follow_callouts(edl, new):
+            rec.fixes = [*rec.fixes, *kept]
         return new, rec
     return run
+
+
+def follow_callouts(prev: dict, new: dict) -> list[dict]:
+    """A callout stays on the source second it was timed to when its clip's start moves (a trim of the in edge, a
+    transcript delete of the clip's first words, a pause split): `callout_shift_s` counts from the clip's start, so it
+    used to slide onto later words, past the one edl.anchor_callouts put it on (017 v13's "Score 87 Pass" after its
+    clip lost its first five words). When a split leaves that second in a later piece, the callout moves there. In
+    place on `new`; returns one patch entry per callout moved."""
+    out = []
+    by_new = {s["id"]: s for s in new["spans"]}
+    for p in prev["spans"]:
+        text = (p.get("callout") or "").strip()
+        n = by_new.get(p["id"])
+        if not text or n is None or (n.get("callout") or "").strip() != text:
+            continue
+        src = float(p["t_in"]) + CALLOUT_LEAD_S + float(p.get("callout_shift_s") or 0.0)
+        if n["t_in"] == p["t_in"] and src < n["t_out"]:
+            continue
+        home = n
+        if src >= n["t_out"]:  # a split: the piece of the same turn that now plays that second
+            home = next((x for x in new["spans"] if x is not n and x["turn_id"] == n["turn_id"]
+                         and x["t_in"] <= src < x["t_out"] and not (x.get("callout") or "").strip()), n)
+        if home is not n:
+            home["callout"], n["callout"] = n["callout"], ""
+            if "callout_xy" in n:
+                home["callout_xy"] = n.pop("callout_xy")
+            n.pop("callout_shift_s", None)
+        room = max(0.0, float(home["t_out"]) - float(home["t_in"]) - CALLOUT_LEAD_S - CALLOUT_MIN_S)
+        shift = round(min(room, max(0.0, src - CALLOUT_LEAD_S - float(home["t_in"]))), 2)
+        was = float(p.get("callout_shift_s") or 0.0)
+        if shift >= 0.01:
+            home["callout_shift_s"] = shift
+        else:
+            home.pop("callout_shift_s", None)
+        if home is not n or abs(shift - was) >= 0.01:
+            out.append({"op": "callout_follow", "target": home["id"], "issue": -1, "severity": "human",
+                        "args": {"from": p["id"], "shift_s": shift, "src_t": round(src, 3)},
+                        "note": f"callout “{text}” kept at {src:.2f} s of the recording"
+                                + (f", moved from {p['id']} to {home['id']}" if home is not n else
+                                   f" (shift {was:.2f} -> {shift:.2f} s)")})
+    return out
 
 
 def _run_edit(run_dir: Path, from_v: int | None, passes: int, budget: float, op, **args) -> dict:
@@ -302,6 +345,9 @@ def drop_edit(edl: dict, words: Words, audio: Audio | None, span: str) -> tuple[
         plog[0]["note"] += retighten(new, words, audio, neighbours)
         for s in new["spans"]:
             refresh_span(s, words)
+    roles = roles_by_position(new["spans"])  # the last clip dropped: the one before it is the payoff now
+    if roles:
+        plog[0]["note"] += f"; roles by position: {', '.join(roles)}"
     return new, Edit("drop", plog, f"delete clip {span_id}",
                      head=lambda f, n: f"montivo drop: {span_id} from edl_v{f} -> edl_v{n}",
                      lines=lambda f, n: [f"patch v{f} -> v{n}: drop_span {span_id}: {plog[0]['note']} (human)"])
@@ -462,17 +508,23 @@ def glossary_edit(edl: dict, words: Words, audio: Audio | None, add: dict[str, s
     applied to every caption line at the layout) gains `add` and loses `drop`, so one fix reads right on every line
     that says it, in this version and in every re-plan (edl.carry_run_words). An EDL from before per-run words starts
     from the demo glossary it was using."""
-    from .engine.captions import run_glossary
+    from .engine.captions import norm, run_glossary
     gl = run_glossary(edl)
     was = dict(gl)
     clean = lambda x: " ".join(str(x).split()).rstrip(".,!?;:")  # noqa: E731 (the glossary keeps Voice's punctuation)
+    key = lambda x: tuple(norm(t) for t in str(x).split())  # noqa: E731 (how apply_glossary matches the heard words)
+
+    def forget(heard: str) -> None:  # one heard phrase, one entry, whatever its case or punctuation
+        for k in [k for k in gl if key(k) == key(heard)]:
+            del gl[k]
     for heard, written in (add or {}).items():
         h, w = clean(heard), clean(written)
         if not (0 < len(h) <= 80 and 0 < len(w) <= 80):
             raise SystemExit("the glossary takes the heard words and the written words, 1 to 80 characters each")
+        forget(h)
         gl[h] = w
     for heard in drop or []:
-        gl.pop(clean(heard), None)
+        forget(clean(heard))
     if gl == was:
         raise SystemExit("nothing to change: the glossary already says this")
     new, _ = apply_fixes(edl, [], words)
@@ -992,6 +1044,19 @@ def carry_by_source(prev: dict, new: dict) -> tuple[list[str], list[dict]]:
     return list(dict.fromkeys(skips)), breaks
 
 
+def carry_title(prev: dict, new: dict) -> None:
+    """A re-plan keeps the title as it was: the same words (no new Muse Image call), off when it was off, and its
+    style: a card a person chose (one paid image) stays a card, and an EDL from before `title_style` (read as a card by
+    edl.title_style) keeps its card instead of the header build_edl writes."""
+    new["title_card_text"] = prev.get("title_card_text") or new.get("title_card_text") or ""
+    if prev.get("title_card") is False:
+        new["title_card"] = False
+    if prev.get("title_style") in ("header", "card"):
+        new["title_style"] = prev["title_style"]
+    else:
+        new.pop("title_style", None)
+
+
 def roles_by_position(spans: list[dict]) -> list[str]:
     """edl.normalize_roles on EDL span dicts: after a move, the first clip is the hook and the last the payoff."""
     ns = [SimpleNamespace(id=s["id"], role=s["role"], planner_role=s.get("planner_role")) for s in spans]
@@ -1491,6 +1556,7 @@ def pause_plan(edl: dict, words: Words, audio: Audio, over: float = PAUSE_OVER_S
     by_id = {s["id"]: s for s in edl["spans"]}
     cmap = {c.span: c for c in cut_map(edl)} if edl.get("render") else {}
     pauses, skipped, seen = [], [], set()
+    cuts: dict[str, list[int]] = {}  # span id -> the words a pause inside it already ends on (pieces keep two words)
     for seg in merge_segments(edl["spans"]):
         spans = [by_id[i] for i in seg.span_ids]
         bounds = []  # (source time, the span left of it, its last word, the span right of it when it is a junction)
@@ -1511,11 +1577,16 @@ def pause_plan(edl: dict, words: Words, audio: Audio, over: float = PAUSE_OVER_S
                 continue
             _, s, j, right = min(near, key=lambda x: (dist(x[0]), abs(x[0] - (g0 + g1) / 2)))
             tw = words.turn(s["turn_id"])
-            if right is None and (j - s["word_from"] + 1 < 2 or s["word_to"] - j < 2):
-                skipped.append({**rec, "span": s["id"], "why": "a clip keeps at least two words"})
-                continue
             if (s["id"], j) in seen:
                 continue
+            if right is None:  # a split inside the clip: both pieces, between this and the other pauses, keep two words
+                done = cuts.get(s["id"], [])
+                lo = max([c for c in done if c < j], default=s["word_from"] - 1)
+                hi = min([c for c in done if c > j], default=s["word_to"])
+                if j - lo < 2 or hi - j < 2:
+                    skipped.append({**rec, "span": s["id"], "why": "a clip keeps at least two words"})
+                    continue
+                cuts.setdefault(s["id"], []).append(j)
             seen.add((s["id"], j))
             c = cmap.get(s["id"])
             nxt = words.turn(right["turn_id"])[right["word_from"]] if right else tw[j + 1]
@@ -1918,10 +1989,7 @@ def replan(run_dir: Path, instruction: str, from_v: int | None = None, target_s:
     if new.get("brief_missing"):
         log(f"plan: not in the footage: {'; '.join(new['brief_missing'])}")
     new["version"] = n
-    # the title card stays as it was: same text (no new Muse Image call), and off when the reviewer dropped it
-    new["title_card_text"] = prev.get("title_card_text") or new["title_card_text"]
-    if prev.get("title_card") is False:
-        new["title_card"] = False
+    carry_title(prev, new)
     if prev.get("punch"):
         new["punch"] = True
     skips, breaks = carry_by_source(prev, new)

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, dur, fileUrl, tc, usd, useRun } from "./api";
-import { Assistant, wordScope, type Selection } from "./Assistant";
+import { Assistant, moveChat, wordScope, type Selection } from "./Assistant";
 import { EditDialog, LedgerDialog, ShortcutsDialog } from "./Dialogs";
 import { ExportPage } from "./Export";
 import { childOf, clipsAsk, cutAsk, flatWords, layout, parentOf, projectName, splitAt, type CutAsk, type WordSel } from "./edit";
@@ -268,7 +268,7 @@ export function Editor({ id, replay, go }: Props) {
       flash(`Version ${nextN(state)} branches from Version ${forkFrom}, the one you stepped back to; Versions ${forkFrom + 1}–${newest} stay in Versions.`);
     try {
       const r = await api<{ job?: { run?: string } }>(`/api/runs/${id}/${path}`, body);
-      if (r.job?.run && r.job.run !== id) go(`#/run/${r.job.run}`); // the hosted demo edits the judge's own copy of a sample
+      if (r.job?.run && r.job.run !== id) { moveChat(id, r.job.run); go(`#/run/${r.job.run}`); } // the hosted demo edits the judge's own copy of a sample
       return true;
     } catch (e) { refusal.current = String((e as Error).message); flash(refusal.current, "error"); return false; }
   }, [id, flash, go, forkFrom, newest, state]);

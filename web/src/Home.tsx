@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, crit, dur, fileUrl, frameUrl, tc, usd } from "./api";
+import { api, crit, dur, fileUrl, frameUrl, tc, spendable, usd } from "./api";
 import { fixText, nameOf, originLabel, parentOf, sevRank } from "./edit";
 import { Monti } from "./Monti";
 import { Icon, MarkLoader } from "./icons";
@@ -38,7 +38,8 @@ function estimate(c: Costs, clipS: number, o: { review: boolean; hookAb: boolean
   let s = (c.run_wall_fixed_s ?? 60) + (c.run_wall_per_s ?? 0.9) * clipS;
   if (o.open) { usd_ -= c.plan - c.plan_open; s -= c.plan_s - c.plan_open_s; }
   if (o.review) { usd_ += c.review_loop ?? 0.07; s += c.review_loop_s ?? 85; }
-  if (o.review && o.hookAb) { usd_ += (c.hook_ab ?? 0.04) + (c.compare ?? 0.075); s += (c.review_s ?? 26) + 45; }
+  // the server admits a run's hook A/B at hook_ab_new + compare (a challenger reviewed with no review of A cached)
+  if (o.review && o.hookAb) { usd_ += (c.hook_ab_new ?? 0.07) + (c.compare ?? 0.075); s += (c.review_s ?? 26) + 45; }
   return { usd: usd_, s };
 }
 const POLL_MS = 2000; // while a project has a job running, its card follows the job
@@ -173,7 +174,9 @@ export function Home({ go }: { go: (h: string) => void }) {
   }, [sheet]);
   const hasFiles = (e: React.DragEvent) => Array.from(e.dataTransfer.types).includes("Files");
 
-  const all = (runs ?? []).filter((r) => r.has_cut || r.job?.running); // a new project shows while it works on its first cut
+  // a new project shows while it works on its first cut, and after that first run failed or was stopped (open it to
+  // try again: it used to vanish, reachable only by its URL)
+  const all = (runs ?? []).filter((r) => r.has_cut || r.job?.running || (r.job && r.job.ended != null && r.job.rc));
   const hosted = !!budget;
   // the cut to show first: on the hosted demo a sample (or the judge's copy of one), the best passing one
   const featured = [...all].filter((r) => r.card?.score && (!hosted || isSample(r)))
@@ -198,8 +201,8 @@ export function Home({ go }: { go: (h: string) => void }) {
   const flash = (t: { text: string; undo?: string; tone?: string }) => { setToast(t); window.setTimeout(() => setToast((x) => (x === t ? null : x)), 7000); };
   const archive = async (id: string) => {
     try {
-      await api(`/api/runs/${id}/archive`, {});
-      flash({ text: `Archived ${id}: moved to runs/_archive, nothing deleted.`, undo: id });
+      const r = await api<{ archived: string; as?: string }>(`/api/runs/${id}/archive`, {});
+      flash({ text: `Archived ${id}: moved to runs/_archive, nothing deleted.`, undo: r?.as ?? id });
     } catch (e) { flash({ text: (e as Error).message, tone: "error" }); }
     loadRuns(); loadArchived();
   };
@@ -304,11 +307,13 @@ export function Home({ go }: { go: (h: string) => void }) {
 
 /** The hosted demo's spend cap as a meter: what is left of the Meta model budget everyone on the server shares. */
 function BudgetMeter({ b }: { b: Budget }) {
-  const frac = b.cap > 0 ? Math.max(0, Math.min(1, b.left / b.cap)) : 0;
+  const s = spendable(b);
+  const frac = s.cap > 0 ? Math.max(0, Math.min(1, s.left / s.cap)) : 0;
   return (
-    <span data-monti="home.budget" className={`hm-budget ${frac < 0.2 ? "low" : ""}`} title="Demo budget for Meta model calls, shared by everyone on this server">
+    <span data-monti="home.budget" className={`hm-budget ${frac < 0.2 ? "low" : ""}`}
+      title={s.mine ? `Your share of Meta model calls on this demo; the server's shared budget has ${usd(b.left)} of ${usd(b.cap)} left` : "Demo budget for Meta model calls, shared by everyone on this server"}>
       <span className="hm-meter"><i style={{ width: `${frac * 100}%` }} /></span>
-      {usd(b.left)} of {usd(b.cap)} left
+      {usd(s.left)} of {s.mine ? `your ${usd(s.cap)}` : usd(s.cap)} left
     </span>
   );
 }
@@ -459,7 +464,7 @@ function Featured({ r, hosted, costs }: { r: RunCard; hosted: boolean; costs: Co
         </div>
         {hosted && (
           <p className="hm-try mute small">
-            Then ask in the chat: “Make it 30 seconds” <span className="btn-cost">~{usd((costs.ask ?? 0.006) + costs.review)}</span> ·
+            Then ask in the chat: “Make it 30 seconds” <span className="btn-cost" title="A re-plan: shown as a card first, nothing runs until you Apply">~{usd((costs.ask ?? 0.006) + costs.plan + costs.review)}</span> ·
             “Add some chill music” <span className="btn-cost">~{usd(costs.ask ?? 0.006)}</span> ·
             captions, style, music and timeline edits by hand <span className="btn-cost free">free</span>
           </p>
@@ -515,8 +520,12 @@ function Tile({ r, onArchive }: { r: RunCard; onArchive: () => void }) {
           <video ref={video} src={hot ? fileUrl(r.id, `cut_v${c.shown}.mp4`) : undefined} muted loop playsInline preload="none" className={hot ? "on" : ""} />
           {c.score && (c.score_is_shown ? <Ring s={c.score} /> : <NotReviewed n={c.shown} best={c.score} />)}
           {c.duration_s != null && <span className="hm-dur mono">{tc(c.duration_s, 0)}</span>}
-        </> : (
+        </> : running ? (
           <div className="hm-working"><MarkLoader size={48} label="Working on the first cut" /></div>
+        ) : (
+          <div className="hm-working hm-failed">
+            <span>{(r.job?.rc ?? 0) < 0 ? "Stopped" : "The first cut did not finish"}<br /><span className="mute small">open to try again</span></span>
+          </div>
         )}
         {r.kind === "sample" && <span className="hm-tag sample">Sample</span>}
         {r.kind === "copy" && <span className="hm-tag">Your copy</span>}
@@ -673,7 +682,7 @@ function NewProject({ go, close, footage, f, setF, put, upload, uploading, limit
         <div className="hm-sheet-f">
           <div className="hm-est" title="From the clip's length, measured on runs 014 and 015; a review loop that needs a third pass costs a little more">
             <b>{uploading ? `Uploading ${uploading}: Create waits for it` : est ? `About ${usd(est.usd)} · ${dur(est.s)}` : "Pick a clip to see the cost"}</b>
-            {budget && hasKey && <span className="mute small">{usd(budget.left)} of the demo budget left</span>}
+            {budget && hasKey && <span className="mute small">{usd(spendable(budget).left)} of {spendable(budget).mine ? "your share" : "the demo budget"} left</span>}
             <span className="hm-pipe">{steps.map((s) => <i key={s}>{s}</i>)}</span>
           </div>
           <span className="grow" />

@@ -393,3 +393,16 @@ def test_an_inserted_clip_never_widens_into_the_words_after_the_selection(tmp_pa
     H.insert(d, 1, 7, 8, before="s1")
     s = next(x for x in json.loads((d / "edl_v2.json").read_text())["spans"] if x["word_from"] == 7)
     assert s["word_to"] == 8 and s["t_out"] <= 32.75
+
+
+def test_two_pauses_one_word_apart_leave_no_one_word_clip():
+    """'... first cut. Right. Then ...': a 0.9 s pause either side of one word. The first pause splits the clip; the
+    second would leave 'Right.' alone, so it is skipped like a pause after a clip's first word."""
+    import montivo.human as H
+    from montivo.engine.edges import Words
+    ws = [{"w": f"w{i}", "t_start": t, "t_end": round(t + 0.3, 3), "turn_id": 0, "i": i}
+          for i, t in enumerate([0.0, 0.3, 0.6, 1.8, 3.0, 3.3, 3.6, 3.9])]
+    s = {"id": "s1", "turn_id": 0, "role": "hook", "t_in": 0.0, "t_out": 4.2, "word_from": 0, "word_to": 7, "speaker": "A"}
+    plan = H.pause_plan({"spans": [s]}, Words(ws), SynthAudio([(0.0, 0.9), (1.8, 2.1), (3.0, 4.2)]), 0.6, 0.3)
+    assert [p["word"] for p in plan["pauses"]] == [2]
+    assert [x["why"] for x in plan["skipped"]] == ["a clip keeps at least two words"]

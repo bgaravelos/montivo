@@ -93,6 +93,10 @@ export function tc(s: number | null | undefined, digits = 1): string {
 }
 
 export const usd = (x: number | null | undefined, d = 2) => (x == null ? "–" : `$${x.toFixed(d)}`);
+/** What a judge may still spend on the hosted demo: their own share when the server has one (the smaller of it and
+ *  what the shared budget has left), else the shared budget. A judge used to read "$36 left" and get refused at $3. */
+export const spendable = (b: { cap: number; left: number; judge?: { cap: number; left: number } }) =>
+  b.judge ? { left: Math.min(b.left, b.judge.left), cap: b.judge.cap, mine: true } : { left: b.left, cap: b.cap, mine: false };
 
 export function dur(s: number): string {
   if (s < 90) return `${Math.round(s)} s`;

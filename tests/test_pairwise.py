@@ -174,3 +174,15 @@ def test_best_of_follows_the_judges_wins():
          {"version": 3, "overall": 60, "pass": False, "preferred_over": 2}, {"version": 4, "overall": 50, "pass": False}]
     assert R.best_of(h)["version"] == 3
     assert R.best_of(h[:1] + h[3:])["version"] == 1
+
+
+def test_the_regression_stop_says_why_the_new_version_lost():
+    """s9-long-0111: v2 83 held by a measured check vs v1 68 used to read "v2 scored 83 (gated) < v1 68"."""
+    from montivo.engine.review import lost_to
+    v1 = {"version": 1, "overall": 68, "pass": False, "checks": []}
+    v2 = {"version": 2, "overall": 83, "pass": False, "checks": ["cut at 3.64 s inside speech (out edge over -34.0 dB)"]}
+    assert lost_to(v2, v1) == ("v2 scored 83 but a measured check holds it (cut at 3.64 s inside speech (out edge over "
+                               "-34.0 dB)), while v1 (68) is clear")
+    assert lost_to({**v2, "checks": []}, {**v1, "pass": True}) == "v2 scored 83 and does not pass, while v1 (68) passes"
+    assert lost_to({"version": 2, "overall": 66, "checks": []}, {"version": 1, "overall": 70, "checks": []}) == \
+        "v2 scored 66 < v1 70"

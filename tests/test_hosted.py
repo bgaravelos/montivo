@@ -356,6 +356,14 @@ def test_try_again_checks_what_the_job_costs_not_the_cheapest_action(tmp_path, h
     assert A.retry_estimate(tmp_path, "review", ["-m", "montivo.cli", "review", "runs/r", "--passes", "3"]) == \
         pytest.approx(3 * A.COST["review"])
     assert A.retry_estimate(tmp_path, "drop", ["-m", "montivo.human", "drop", "runs/r", "--span", "s1"]) == H.MIN_PAID_USD
+    # a draft or panel op that makes a title card (Muse Image) is a paid retry: it used to skip the budget check
+    title = ["-m", "montivo.human", "draft", "runs/r", "--ops", json.dumps([{"op": "drop", "args": {"span": "s2"}},
+             {"op": "text", "args": {"title": "New words"}}]), "--id", "x", "--from", "3", "--review", "0"]
+    assert A.retry_estimate(tmp_path, "draft", title, floor=False) == pytest.approx(0.01)
+    kit = ["-m", "montivo.human", "op", "runs/r", "--op", "kit", "--args", json.dumps({"kit": {}}), "--from", "2"]
+    assert A.retry_estimate(tmp_path, "kit", kit, floor=False) == pytest.approx(0.01)
+    drop = ["-m", "montivo.human", "draft", "runs/r", "--ops", json.dumps([{"op": "drop", "args": {"span": "s2"}}])]
+    assert A.retry_estimate(tmp_path, "draft", drop, floor=False) == 0.0
 
 
 def test_two_paid_calls_in_requests_never_run_at_once(tmp_path, hosted_env):
@@ -572,3 +580,27 @@ def test_the_host_sets_aside_versions_a_restart_left_without_a_cut(tmp_path, hos
     A.create_app(tmp_path)
     assert not (d / "edl_v3.json").exists() and (d / "stopped" / "edl_v3-restart.json").is_file()
     assert (d / "edl_v1.json").is_file() and (d / "edl_v2.json").is_file()
+
+
+def test_a_judges_live_draft_goes_with_them_into_their_copy(tmp_path, hosted_env):
+    """A Rendered edit (or a retry) on a sample made the judge's copy and left their open Live draft on the sample,
+    out of reach from the copy the editor follows; only Ask Montivo moved it. The draft commit keeps it on the sample,
+    where its state records the commit."""
+    d = _run_folder(tmp_path)
+    ledger(d, 0.36)
+    fd = d / "ui" / "draft" / "aa11"
+    fd.mkdir(parents=True)
+    (fd / "state.json").write_text(json.dumps({"id": "x", "base": 2, "ops": [{"op": "drop", "args": {"span": "s1"}}]}))
+    (fd / "edl.json").write_text((d / "edl_v2.json").read_text())
+    other = d / "ui" / "draft" / "bb22"
+    other.mkdir()
+    (other / "state.json").write_text(json.dumps({"id": "y", "base": 2, "ops": []}))
+    hosted_env.setenv("MONTIVO_BUDGET_USD", "15")
+    fake_jobs(hosted_env)
+    c = TestClient(A.create_app(tmp_path))
+    c.cookies.set(H.JUDGE, "aa11")
+    assert c.post("/api/runs/r1/drop", json={"span": "s1", "from": 2}).json()["job"]["run"] == "r1-aa11"
+    mine = tmp_path / "runs" / "r1-aa11"
+    assert json.loads((mine / "ui" / "draft" / "aa11" / "state.json").read_text())["id"] == "x"
+    assert not fd.exists() and (other / "state.json").is_file()  # off the sample; the other judge's stays
+    assert not (mine / "ui" / "draft" / "bb22").exists()
