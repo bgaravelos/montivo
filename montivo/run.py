@@ -110,6 +110,7 @@ REPAIR_KEEP = ("\n- Keep the hook (the opening line) of the first edit unless a 
                "span no problem names as it was.")
 
 
+PLAN_REPAIRS = 2  # repair calls at most for a Spark 1.3 plan the check fails (about $0.013 each)
 V1_PAUSE_S = 1.0  # a pause longer than this inside the first cut is shortened before anything is rendered
 
 
@@ -374,30 +375,41 @@ def run(opts: RunOptions) -> dict:
         record = {"first": problems, "repaired": False}
         if problems:
             log(f"plan check: {len(problems)} problem(s): " + "; ".join(problems))
-            try:
-                planner = Spark(out, ledger, model=opts.planner_model, log=log) if opts.planner_model else spark
-                again = planner.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
-                                     file_id=ing.file_id if opts.plan_with_video else None,
-                                     reasoning_effort=opts.plan_effort, words_per_s=wps, name="plan_repair",
-                                     repair="\n".join(f"- {p}" for p in problems)
-                                     + ("" if opts.planner_model else REPAIR_KEEP + "\n\nThe first paper edit (span "
-                                        f"ids as the problems name them, source seconds):\n{edl_summary(edl)}"))
-                edl2 = build_edl(again.parsed, voice, watch.parsed, source, opts.brief, track_summary,
-                                 reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out),
-                                 target_s=opts.target_s)
-                if prev_v1:
-                    carry_run_words(prev_v1, edl2)
-                left = check(edl2)
-                record.update(left=left, repaired=len(left) < len(problems))
-                if record["repaired"]:
-                    dump_json(out / "plan_first.json", planned.parsed)
-                    planned, edl = again, edl2
-                    dump_json(out / "plan.json", planned.parsed)
-                log(f"plan check: the repaired plan {'is kept' if record['repaired'] else 'is not better, the first stays'}"
-                    f" ({len(left)} left{': ' + '; '.join(left) if left else ''})")
-            except Exception:
-                errors.append(("plan repair", traceback.format_exc()))
-                log(f"ERROR in plan repair (the first plan stays):\n{errors[-1][1]}")
+            first = planned
+            # Spark 1.3 gets a second repair when the first one still fails (heli-01: a speaker who runs his sentences
+            # together, two loud edges left after one repair), each from the best edit so far; the Open planner one
+            for k in range(1 if opts.planner_model else PLAN_REPAIRS):
+                try:
+                    planner = Spark(out, ledger, model=opts.planner_model, log=log) if opts.planner_model else spark
+                    again = planner.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
+                                         file_id=ing.file_id if opts.plan_with_video else None,
+                                         reasoning_effort=opts.plan_effort, words_per_s=wps,
+                                         name="plan_repair" if k == 0 else f"plan_repair{k + 1}",
+                                         repair="\n".join(f"- {p}" for p in problems)
+                                         + ("" if opts.planner_model else REPAIR_KEEP + "\n\nThe first paper edit "
+                                            f"(span ids as the problems name them, source seconds):\n{edl_summary(edl)}"))
+                    edl2 = build_edl(again.parsed, voice, watch.parsed, source, opts.brief, track_summary,
+                                     reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out),
+                                     target_s=opts.target_s)
+                    if prev_v1:
+                        carry_run_words(prev_v1, edl2)
+                    left = check(edl2)
+                    better = len(left) < len(problems)
+                    record.update(left=left, repaired=record["repaired"] or better, rounds=k + 1)
+                    if better:
+                        planned, edl, problems = again, edl2, left
+                    log(f"plan check: the repaired plan {'is kept' if better else 'is not better, the one before stays'}"
+                        f" ({len(left)} left{': ' + '; '.join(left) if left else ''})")
+                except Exception:
+                    errors.append(("plan repair", traceback.format_exc()))
+                    log(f"ERROR in plan repair (the plan before stays):\n{errors[-1][1]}")
+                    break
+                if not problems:
+                    break
+            if record["repaired"]:
+                record["left"] = problems
+                dump_json(out / "plan_first.json", first.parsed)
+                dump_json(out / "plan.json", planned.parsed)
         else:
             log("plan check: the paper edit meets the brief's checks")
         edl["plan_check"] = record
