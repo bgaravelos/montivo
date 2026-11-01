@@ -352,11 +352,14 @@ def facts_text(silences: list[tuple[float, float]], caps: dict, duration_s: floa
         met = [item(c) for c in brief_checks if c["status"] == "met"]
         missed = [item(c) for c in brief_checks if c["status"] == "missed"]
         rest = [f"\"{c['item']}\"" for c in brief_checks if c["status"] == "open"]
+        cannot = [item(c) for c in brief_checks if c["status"] == "unreachable"]
         out.append(f"{len(out) + 1}. The brief as a checklist, measured on the words this cut keeps (the source "
                    "transcript, so a word the speech model misheard still counts): "
                    + "; ".join(x for x in (f"met: {', '.join(met)}" if met else "",
                                            f"missed: {', '.join(missed)}" if missed else "",
-                                           f"not measurable, yours to judge: {', '.join(rest)}" if rest else "") if x)
+                                           f"not measurable, yours to judge: {', '.join(rest)}" if rest else "",
+                                           f"cannot be met by any cut of this footage (do not count it against the "
+                                           f"cut): {', '.join(cannot)}" if cannot else "") if x)
                    + ". Judge brief_covered by this list.")
     if not_in_source:
         out.append(f"{len(out) + 1}. The source footage was searched for everything the brief asks for; these are not "
@@ -800,6 +803,39 @@ def preflight(run_dir: Path, edl: dict, words: Words, audio: Audio | None, log=p
     log(f"preflight: {'clear' if not gate['blocked'] else 'left: ' + '; '.join(gate['reasons'])}"
         f" ({len(done)} fix{'es' if len(done) != 1 else ''}, $0)")
     return edl, {"rounds": k + 1, "fixes": done, "clear": not gate["blocked"], "left": gate["reasons"], "stop": stop}
+
+
+def stuck_edges(run_dir: Path, edl: dict, words: Words, audio: Audio | None) -> list[str]:
+    """The cut edges still inside speech after a trial preflight of the paper edit, as problems for the planner's
+    repair call: the preflight moves an edge only within its pause search, so what is left needs another span edge.
+    d1-nasa's "Happy Thanksgiving!" starts while turn 8 still talks (-22.6 dB at the edge, no quiet point near: the
+    first review's blocker, three loop passes could not move it); heli-01's new hook "we passed 716 saves" runs straight
+    into the next sentence, which another span keeps (1/11, two loud edges, the first review's two majors)."""
+    if audio is None or not edl.get("spans"):
+        return []
+    trial, _ = preflight(run_dir, copy.deepcopy(edl), words, audio, log=lambda *_: None)
+    by_t = {round(t, 2): (b, a) for t, b, a in cuts(cut_map(trial)) if b is not None}
+    out = []
+    for e in cut_edge_levels(trial, audio):
+        if not e["loud"]:
+            continue
+        before, after = by_t.get(e["t"], (None, None))
+        for side, db in (("out", e["end_db"]), ("in", e["start_db"])):
+            c = before if side == "out" else after
+            if c is None or db is None or db <= e["loud_db"]:
+                continue
+            s = trial["spans"][c.index]
+            toks = (s.get("words") or "").split()
+            if side == "in":
+                out.append(f"{s['id']} opens on \"{' '.join(toks[:4])} ...\" where the recording has no pause before it: "
+                           "the speech runs straight on from the words before, so the cut clips its first word. Open it "
+                           "on a sentence the speaker starts after a pause, or take the end of the passage before it "
+                           "with it as the span right before")
+            else:
+                out.append(f"{s['id']} ends on \"... {' '.join(toks[-4:])}\" where the recording has no pause after it: "
+                           "the speaker runs straight on into the next words, so the cut clips them. End it where the "
+                           "speaker pauses (a sentence end with a breath after it), or keep the words that follow with it")
+    return list(dict.fromkeys(out))
 
 
 # --------------------------------------------------------------------------- the copy Spark watches
@@ -1764,6 +1800,14 @@ def replan_escalation(run_dir: Path, ledger: Ledger, log=print):
     return go
 
 
+def stalled(stop: str, history: list[dict]) -> bool:
+    """The loop used every pass and no version scored over the first: a live judge run on the hosted demo (1/11,
+    live-walk-0853) went 68 / 68 / 68 and stopped on "max passes (3)" without the re-plan a stuck loop gets. One review
+    (`--passes 1`, "Review this version") is a review, not a stalled loop."""
+    return (stop.startswith("max passes") and len(history) >= 2
+            and max(h["overall"] for h in history) <= history[0]["overall"])
+
+
 def _escalate(run_dir: Path, history: list[dict], reviews: dict[int, dict], stop: str, spent: float, budget_usd: float,
               words: Words, audio: Audio | None, escalate_fn, render_fn, review_fn, log) -> tuple[dict, float, Path]:
     """The escalation step of review_loop (C4): returns its record, the money spent so far and the loop's last EDL.
@@ -1962,7 +2006,7 @@ def review_loop(run_dir: Path, edl_path: Path | None = None, passes: int = MAX_P
                 log(f"review loop: edl_v{n}.json removed (no cut), the last version stays {edl_path.name}")
             break
     escalation = None
-    if escalate_fn and history and not error and stop.startswith(ESCALATE_ON):
+    if escalate_fn and history and not error and (stop.startswith(ESCALATE_ON) or stalled(stop, history)):
         escalation, spent, edl_path = _escalate(run_dir, history, reviews, stop, spent, budget_usd, words, audio,
                                                 escalate_fn, render_fn, review_fn, log)
         if escalation.get("pass"):

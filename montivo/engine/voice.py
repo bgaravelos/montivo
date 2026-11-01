@@ -123,10 +123,11 @@ class VoiceResult:
         rate = len(self.words) / spoken_s
         return round(rate, 2) if lo <= rate <= hi else default
 
-    def transcript_text(self) -> str:
+    def transcript_text(self, pauses: dict[int, set[int]] | None = None) -> str:
         """The authoritative transcript handed to Spark: one line per turn with id, times and speaker. Voice's short
         duplicate words are left out (shown_words) when the turn's text is its words joined, as it is on every run
-        folder; edl.locate finds a quote either way."""
+        folder; edl.locate finds a quote either way. `pauses` {turn id: word indices k}: a " /" goes before word k
+        (k = the turn's word count: after its last word) where the recording pauses (edges.pause_marks)."""
         by_turn: dict[int, list[Word]] = {}
         for w in self.words:
             by_turn.setdefault(w.turn_id, []).append(w)
@@ -135,7 +136,11 @@ class VoiceResult:
             tw = by_turn.get(t.turnId) or []
             if not tw or " ".join(w.w for w in tw).strip() != t.transcript.strip():
                 return t.transcript
-            return " ".join(w.w for w in shown_words(tw))
+            marks = (pauses or {}).get(t.turnId) or set()
+            if not marks:
+                return " ".join(w.w for w in shown_words(tw))
+            return " ".join(("/ " if w.i in marks else "") + w.w for w in shown_words(tw)) + (
+                " /" if len(tw) in marks else "")
         return "\n".join(f"[turn {t.turnId} | {t.startMs / 1000:.2f}-{t.endMs / 1000:.2f}s | speaker {t.speaker}] {text(t)}"
                          for t in self.turns)
 

@@ -1,0 +1,194 @@
+"""First cut on the hard clips (1/11): what the first review of 013, d1-nasa, d1-tedx and heli-01 still failed on,
+each fixed before the first render (docs/notes/first-cut-hard_2026-11-01.md)."""
+from montivo.engine import edl as E
+from montivo.engine.edges import Words
+
+
+def _words(turn: int, text: str, t0: float = 10.0, step: float = 0.4) -> list[dict]:
+    return [{"turn_id": turn, "i": k, "w": w, "t_start": round(t0 + k * step, 3), "t_end": round(t0 + (k + 1) * step, 3)}
+            for k, w in enumerate(text.split())]
+
+
+def _room(speech: list[tuple[float, float]], seconds: float = 20.0):
+    """A quiet room (about -75 dB) with speech at about -34 dB over `speech`."""
+    import array
+    import math
+    from montivo.engine.edges import Audio
+
+    class Room(Audio):
+        def __init__(self):
+            self.rate = 8000
+            self.pcm = array.array("h", [int(6 * math.sin(k * 1.7)) for k in range(int(seconds * self.rate))])
+            for a, b in speech:
+                for k in range(int(a * self.rate), int(b * self.rate)):
+                    self.pcm[k] = int(900 * math.sin(k / 3))
+    return Room()
+
+
+def test_a_callout_shows_when_its_words_are_said():
+    # heli-01 v1: "716 SAVES" came up at the span start, 7 s before "716 saves" is spoken (callouts_anchored 4)
+    tw = _words(5, "Um our squadron's got a rich history it's been at Fairchild for over 50 years we passed 716 saves")
+    w = Words(tw)
+    s1 = {"id": "s1", "turn_id": 5, "word_from": 0, "word_to": len(tw) - 1, "t_in": tw[0]["t_start"],
+          "t_out": tw[-1]["t_end"], "callout": "716 SAVES"}
+    s0 = {"id": "s0", "turn_id": 5, "word_from": 0, "word_to": 3, "t_in": 10.0, "t_out": 11.6, "callout": "rich history"}
+    edl = {"spans": [s0, s1], "title_card_text": "Huey", "title_style": "header"}
+    E.anchor_callouts(edl, w)
+    at = tw[17]["t_start"] - s1["t_in"]  # "716", 6.8 s in
+    room = (s1["t_out"] - s1["t_in"]) - 0.3 - 2.0  # the callout keeps its 2 s on screen before the span ends
+    assert abs(s1["callout_shift_s"] - min(room, at - 0.3)) < 0.01 and s1["callout_shift_s"] > 5
+    assert "callout_shift_s" not in s0  # words not in the span: the span-start timing stays
+    # a callout whose words the span never says keeps its time; a person's timing is never replaced
+    s2 = dict(s1, callout="NVG HOIST", callout_shift_s=None)
+    s3 = dict(s1, callout="716 SAVES", callout_shift_s=1.0)
+    E.anchor_callouts({"spans": [s0, s2, s3]}, w)
+    assert not s2.get("callout_shift_s") and s3["callout_shift_s"] == 1.0
+
+
+def test_the_spark_plan_prompt_asks_for_a_real_hook_and_the_open_one_is_unchanged(tmp_path):
+    from montivo.config import OPEN_MODEL
+    from montivo.engine.spark import HOOK_RULE
+    from montivo.ledger import Ledger
+    from tests.test_plan_prompt import _Capture
+    watch = {"summary": "s", "visual_shots": [], "speaker_map": []}
+    sp = _Capture(tmp_path, Ledger(tmp_path / "ledger.json"), log=lambda *_: None)
+    sp.plan("brief", "[turn 0] hi", watch, 40.0)
+    assert HOOK_RULE in sp.captured[1] and "usually NOT the start of the recording" in sp.captured[1]
+    op = _Capture(tmp_path, Ledger(tmp_path / "ledger2.json"), model=OPEN_MODEL, log=lambda *_: None)
+    op.plan("brief", "[turn 0] hi", watch, 40.0)
+    assert HOOK_RULE not in op.captured[1]
+    assert sp.captured[1].replace(HOOK_RULE, "") == op.captured[1]
+
+
+def test_a_false_start_inside_a_span_is_a_plan_problem_and_a_parallel_is_not():
+    # d1-tedx v1: "we had we've had it we had enough" inside s6 (a brief_covered major the loop could not drop)
+    edl = {"spans": [{"id": "s6", "words": "for 15 minutes we had we've had it we had enough and we left"},
+                     {"id": "s4", "words": "everyone seemed to speak and everyone seemed to be looking down"},
+                     {"id": "s2", "words": "Brussels sprouts all all of it"},
+                     {"id": "s3", "words": "we stood over there and then over there I showed them"}]}
+    found = E.restarts(edl)
+    assert len(found) == 1 and found[0].startswith("s6 keeps a false start: \"we had we've had it we had\"")
+    assert "we had enough" in found[0]
+    heli = {"spans": [{"id": "s4", "words": "on call 48 weeks out of the out of the year up there"}]}
+    assert E.restarts(heli)[0].startswith("s4 keeps a false start: \"out of the out of\"")
+
+
+def test_an_edge_the_speaker_runs_on_across_goes_to_the_planner(monkeypatch):
+    # d1-nasa: "Happy Thanksgiving!" (turn 9) starts while turn 8 still talks: no quiet point near the in edge, so
+    # neither the preflight nor three loop passes could move it; only another plan can
+    from montivo.engine import review as R
+    from tests.test_review import FakeAudio
+    tw8 = _words(8, "we are grateful for a nation that lets us live free", t0=5.0)
+    tw9 = _words(9, "Happy Thanksgiving everyone from space", t0=20.0)
+    w = Words(tw8 + tw9)
+    spans = [{"id": "s1", "turn_id": 8, "speaker": "A", "role": "hook", "word_from": 0, "word_to": 10, "t_in": 5.0,
+              "t_out": 9.4, "duration": 4.4, "words": " ".join(x["w"] for x in tw8)},
+             {"id": "s2", "turn_id": 9, "speaker": "B", "role": "payoff", "word_from": 0, "word_to": 4, "t_in": 20.0,
+              "t_out": 22.0, "duration": 2.0, "words": " ".join(x["w"] for x in tw9)}]
+    edl = {"spans": spans, "source": {"fps": 30.0}}
+    monkeypatch.setattr(R, "preflight", lambda run_dir, e, *a, **k: (e, {}))
+    audio = FakeAudio((9.3, 9.6), (21.95, 22.4))  # quiet after s1, after s2; speech straight into s2's first word
+    found = R.stuck_edges(None, edl, w, audio)
+    assert len(found) == 1 and found[0].startswith("s2 opens on \"Happy Thanksgiving everyone from ...\"")
+    quiet = FakeAudio((9.3, 9.6), (19.85, 20.05), (21.95, 22.4))
+    assert R.stuck_edges(None, edl, w, quiet) == []
+
+
+def test_a_studio_quiet_floor_does_not_turn_handling_noise_into_speech():
+    # d1-nasa: floor -74 dB, speech about -31 dB; the floor rule (-68 dB) counted mic handling at -50 to -60 dB as
+    # speech, so a 1.2 s pause stayed whole and the cut held 1.1 s of near silence after "Happy Thanksgiving!"
+    import array
+    import math
+    from montivo.engine.edges import Audio
+
+    class Clip(Audio):
+        def __init__(self):
+            self.rate = 8000
+            self.pcm = array.array("h", [int(6 * math.sin(k * 1.7)) for k in range(20 * self.rate)])  # about -75 dB
+            for a, b, amp in ((1.0, 5.0, 900), (6.2, 9.0, 900), (5.3, 5.4, 40)):  # speech -31 dB, a knock -58 dB
+                for k in range(int(a * self.rate), int(b * self.rate)):
+                    self.pcm[k] = int(amp * math.sin(k / 3))
+
+    clip = Clip()
+    speech = clip.level(2.0, 3.0)  # about -34 dB
+    assert clip.floor_db() < -70
+    assert abs(clip.threshold_db() - (speech - 20.0)) < 1.0  # 20 dB under the speech, not 6 over the floor
+    runs = clip.speech_runs(0.5, 9.5)
+    assert len(runs) == 2 and runs[0][1] < 5.1 and runs[1][0] > 6.1  # the knock at 5.3 s is not speech: one pause
+    assert clip.level(5.3, 5.4) > clip.floor_db() + 6  # ... though the floor rule alone counted it
+
+
+def test_knocks_after_the_last_word_are_not_speech():
+    # d1-nasa s1: "us." (Voice 11.02-13.34) is said by 11.53; two mic knocks (0.10 and 0.07 s) at 12.69 and 13.08 kept
+    # the out edge at 13.3, a 1.2 s pause in the cut and the first review's pacing major
+    from montivo.engine import edges as G
+    runs = [(10.0, 10.78), (10.87, 11.53), (12.69, 12.79), (13.08, 13.15)]
+    assert G.without_knocks(runs, first=False) == runs[:2]
+    assert G.without_knocks([(2.48, 2.52), (4.07, 4.31), (4.42, 4.9)], first=True) == [(4.07, 4.31), (4.42, 4.9)]
+    # a short word close to the speech stays, and so does everything when no run is long enough to be a word
+    assert G.without_knocks([(10.0, 11.5), (11.7, 11.8)], first=False) == [(10.0, 11.5), (11.7, 11.8)]
+    assert G.without_knocks([(1.0, 1.05), (2.0, 2.08)], first=True) == [(1.0, 1.05), (2.0, 2.08)]
+
+
+def test_the_planner_reads_where_the_recording_pauses(tmp_path):
+    # heli-01: Voice words abut, so every plan opened spans where the speaker runs on ("We're part of the national SAR
+    # plan"); the transcript now carries the pauses the audio shows, one mark per pause, on the nearest boundary
+    from montivo.engine.edges import pause_marks
+    from montivo.engine.spark import PAUSE_RULE
+    from montivo.engine.voice import Turn, VoiceResult, Word
+    from montivo.ledger import Ledger
+    from tests.test_plan_prompt import _Capture
+    tw = _words(0, "we passed 716 saves we were involved in a save", t0=10.0)  # 0.4 s words, 10.0-14.0 s
+    audio = _room([(10.0, 11.55), (11.9, 13.98)])  # speech with one 0.35 s pause after "saves" (11.2-11.6)
+    marks = pause_marks(tw, audio)
+    assert marks == {0: {0, 4, 10}}  # before "we", before the second "we", after the last word
+    voice = VoiceResult(turns=[Turn(turnId=0, startMs=10000, endMs=14000, speaker="A",
+                                    transcript=" ".join(w["w"] for w in tw))],
+                        words=[Word(w=w["w"], t_start=w["t_start"], t_end=w["t_end"], turn_id=0, speaker="A", i=w["i"])
+                               for w in tw], audio_s=20.0, chunks=[])
+    assert voice.transcript_text(pauses=marks).endswith("/ we passed 716 saves / we were involved in a save /")
+    assert "/" not in voice.transcript_text()
+    sp = _Capture(tmp_path, Ledger(tmp_path / "ledger.json"), log=lambda *_: None)
+    sp.plan("brief", "[turn 0] hi", {"summary": "s", "visual_shots": [], "speaker_map": []}, 40.0, paused=True)
+    assert PAUSE_RULE in sp.captured[1]
+    sp.plan("brief", "[turn 0] hi", {"summary": "s", "visual_shots": [], "speaker_map": []}, 40.0)
+    assert PAUSE_RULE not in sp.captured[1]
+
+
+def test_a_filler_hook_is_a_problem_unless_the_brief_opens_on_it():
+    checks = [{"item": "Open on 'Hi. I'm Billy.'", "kind": "opening", "quote": "okay hi / I'm / Billy"}]
+    edl = {"spans": [{"id": "s1", "words": "okay hi I'm Billy I run a small agency"}], "brief_checks": checks}
+    assert E.filler_hook(edl) and E.filler_hook(edl)[0].startswith("s1 (the hook) opens on a filler")  # 016, b3
+    edl["brief_checks"] = [{"item": "Open on 'So, here is the thing'", "kind": "opening", "quote": "So here is"}]
+    edl["spans"][0]["words"] = "So, here is the thing about editors"
+    assert E.filler_hook(edl) == []
+    assert E.filler_hook({"spans": [{"id": "s1", "words": "Yeah so I think the most important thing"}]})
+    assert E.filler_hook({"spans": [{"id": "s1", "words": "this past year we passed 716 saves"}]}) == []
+
+
+def test_a_length_the_recording_cannot_give_is_not_missed_by_the_cut():
+    # live-walk-0853 (hosted demo, 1/11): "35 to 45 s" of a clip with 30.6 s of speech, a brief_covered blocker on
+    # every version and a plan repair that could not help
+    from montivo.engine.review import facts_text
+    checks = [{"item": "35 to 45 s vertical reel", "kind": "length", "quote": "", "min_s": 35, "max_s": 45}]
+    edl = {"spans": [{"id": "s1", "words": "Here's a test"}], "brief_checks": checks, "runtime_s": 23.4,
+           "source_speech_s": 30.6, "unplaced": []}
+    c = E.check_brief(edl)[0]
+    assert c["status"] == "unreachable" and "30.6 s of speech" in c["found"]
+    assert not any(p.startswith("length") for p in E.plan_check(edl, 40.0))
+    caps = {"lines": 0, "over_face": [], "min_clearance_px": None}
+    text = facts_text([], caps, 23.4, brief_checks=E.check_brief(edl, 23.4))
+    assert "cannot be met by any cut of this footage" in text and "missed" not in text
+    del edl["source_speech_s"]  # an EDL from before keeps the old verdict
+    assert E.check_brief(edl)[0]["status"] == "missed"
+
+
+def test_a_span_on_voices_echo_of_a_phrase_starts_on_the_phrase():
+    from montivo.engine.voice import Word
+    ws = [("Now", 25.02, 25.18), ("I'm", 25.18, 25.34), ("back.", 25.34, 25.5), ("I'm", 25.5, 25.58),
+          ("back.", 25.58, 25.66), ("Did", 25.66, 28.54), ("it", 28.54, 28.62)]
+    tw = [Word(w=w, t_start=a, t_end=b, turn_id=3, speaker="A", i=k) for k, (w, a, b) in enumerate(ws)]
+    assert E.earlier_copy(tw, 3, 6) == 1  # live-walk-0853: "I'm back." is Voice's 0.16 s echo
+    same = [Word(w=w, t_start=a, t_end=b, turn_id=0, speaker="A", i=k) for k, (w, a, b) in
+            enumerate([("we", 1.0, 1.3), ("had", 1.3, 1.6), ("we", 1.6, 1.9), ("had", 1.9, 2.2), ("enough", 2.2, 2.6)])]
+    assert E.earlier_copy(same, 2, 4) == 2  # a retake as long as the first take stays

@@ -134,3 +134,11 @@ def test_the_notes_are_the_open_majors_worst_first_and_the_measured_faults():
     assert R.escalation_notes(rv) == ["3.0 s, blocker hook_in_1_5s: slow open (the reviewer's fix: open on s3)",
                                       "9.0 s, major pacing: a repeated take",
                                       "measured: cut at 12.30 s inside speech (out edge over -34.0 dB)"]
+
+
+def test_a_loop_that_used_every_pass_without_gaining_escalates():
+    # live-walk-0853 on the hosted demo (1/11): 68 / 68 / 68, "max passes (3)", no re-plan; now it is a stuck stop
+    assert R.stalled("max passes (3)", [{"overall": 68}, {"overall": 68}, {"overall": 68}])
+    assert not R.stalled("max passes (3)", [{"overall": 68}, {"overall": 72}, {"overall": 70}])
+    assert not R.stalled("max passes (1)", [{"overall": 68}])  # one review is not a loop
+    assert not R.stalled("budget: ...", [{"overall": 68}, {"overall": 60}])

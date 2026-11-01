@@ -181,6 +181,30 @@ def locate(span_text: str, turn_words: list[Word], after: int = -1,
     return first, last, False, round(ratio, 3)
 
 
+COPY_MAX_WORDS = 3
+COPY_SHORTER = 0.6  # Voice's echo of a phrase is this much shorter than the phrase itself, or less
+
+
+def earlier_copy(tw: list[Word], a: int, b: int) -> int:
+    """A span that opens on Voice's echo of the phrase just before it starts on the phrase itself: live-walk-0853 (the
+    hosted demo, 1/11) heard "Now I'm back. I'm back." where Billy said it once (24.96-25.72 s); the plan kept "I'm
+    back. Did it find me?", which landed on the 0.16 s echo, the edge pass took the real words for the neighbour's
+    sound and the cut showed "I'm back." over silence (a captions_match_speech major on all three versions). The echo:
+    the same 1 to COPY_MAX_WORDS words right before, abutting, at most COPY_SHORTER of their length. A speaker's own
+    retake is as long as the first take and stays where the plan put it."""
+    for k in range(COPY_MAX_WORDS, 0, -1):
+        if a - k < 0 or a + k - 1 > b:
+            continue
+        first, echo = tw[a - k:a], tw[a:a + k]
+        if [norm(w.w) for w in first] != [norm(w.w) for w in echo] or not norm(echo[0].w):
+            continue
+        if echo[0].t_start - first[-1].t_end > 0.05:
+            continue
+        if echo[-1].t_end - echo[0].t_start <= COPY_SHORTER * (first[-1].t_end - first[0].t_start):
+            return a - k
+    return a
+
+
 OVER_TARGET = 1.10  # a plan running more than 10 % over the target loses its weakest body span (fit_length)
 UNDER_TARGET = 0.80  # never below this share of the target by a drop
 
@@ -246,6 +270,8 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
                             "reason": "quote not found in the turn" if tw else "turn not found"})
             continue
         a, b, exact, ratio = loc
+        if not any(x <= a - 1 and earlier_copy(tw, a, b) <= y for x, y in placed):  # never into another span's words
+            a = earlier_copy(tw, a, b)
         t_in, t_out = tw[a].t_start, tw[b].t_end
         spans.append(Span(id=f"s{k + 1}", order=k, turn_id=tid, speaker=turns[tid].speaker if tid in turns else "?",
                           role=item["role"], words=" ".join(w.w for w in tw[a:b + 1]), t_in=t_in, t_out=t_out,
@@ -258,12 +284,16 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
         if cur.turn_id == prev.turn_id and cur.word_from == prev.word_to + 1:
             cur.contiguous_with_previous = True
     runtime = round(sum(s.duration for s in spans), 2)
+    # every turn's speech: the most any cut of this footage can hold (check_brief: a length the brief asks for that
+    # the recording cannot give is not missed by the cut)
+    source_speech = round(sum(max(0, t.endMs - t.startMs) for t in voice.turns) / 1000.0, 2)
     edl = {
         "version": 1,
         "brief": brief,
         "source": source,
         "target": {"aspect": "9:16", "width": 1080, "height": 1920},
         "runtime_s": runtime,
+        "source_speech_s": source_speech,
         "spans": [asdict(s) for s in spans],
         "unplaced": missing,
         "role_fixes": role_fixes,
@@ -305,7 +335,36 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
                 ep["moves"] += more["moves"]
                 ep.update(moved=len(ep["moves"]), widened=sum(m["widened"] for m in ep["moves"]),
                           removed_s=round(sum(abs(m["to"] - m["from"]) for m in ep["moves"]), 2))
+    anchor_callouts(edl, words)
     return edl
+
+
+CALLOUT_SHIFT_MIN_S = 0.5  # a callout whose words come sooner than this keeps the span-start timing
+
+
+def anchor_callouts(edl: dict, words: Words) -> None:
+    """A callout shows when the span says its words, not at the span's start: heli-01's "716 SAVES" came up 7 s before
+    "716 saves" was spoken and "NVG HOIST CAPABLE" over the lines about hikers (callouts_anchored 4, two majors at the
+    first review). The first content word of the callout the span says sets `callout_shift_s` (a number first: "716"),
+    within the room build_overlays needs; a callout whose words are not in the span keeps its time. The first span
+    keeps its time when its words come while the title header is up (build_overlays then waits for the header)."""
+    from .captions import CALLOUT_LEAD_S, CALLOUT_MIN_S, HEADER_S  # captions imports this module
+    for k, s in enumerate(edl["spans"]):
+        want = [t for t in norm_tokens(s.get("callout") or "") if t not in _FILLER]
+        if not want or s.get("callout_shift_s"):
+            continue
+        tw = words.turn(s["turn_id"])[s["word_from"]:s["word_to"] + 1]
+        said = [(norm(w["w"]), w) for w in tw]
+        hit = next((w for t, w in said if t in want and t[:1].isdigit()), None) or \
+            next((w for t, w in said if t in want), None)
+        if hit is None:
+            continue
+        at = max(0.0, float(hit["t_start"]) - s["t_in"])
+        room = max(0.0, s["t_out"] - s["t_in"] - CALLOUT_LEAD_S - CALLOUT_MIN_S)
+        shift = round(min(room, max(0.0, at - CALLOUT_LEAD_S)), 2)
+        if shift < CALLOUT_SHIFT_MIN_S or (k == 0 and title_header_on(edl) and at < HEADER_S):
+            continue
+        s["callout_shift_s"] = shift
 
 
 def edge_ids(spans: list[dict]) -> set[tuple[str, str]]:
@@ -356,6 +415,11 @@ def check_brief(edl: dict, duration_s: float | None = None) -> list[dict]:
             lo, hi = c.get("min_s", -1), c.get("max_s", -1)
             ok = (lo < 0 or runtime >= lo - LENGTH_SLACK_S) and (hi < 0 or runtime <= hi + LENGTH_SLACK_S)
             status, found = ("met" if ok else "missed"), f"{runtime:.1f} s"
+            have = edl.get("source_speech_s")
+            if not ok and have is not None and lo > float(have) + LENGTH_SLACK_S:
+                # live-walk-0853 (hosted demo, 1/11): the "Talking head" preset asks 35 to 45 s of a 34.5 s clip with
+                # 30.6 s of speech; the reviewer called the length a brief_covered blocker on every version
+                status, found = "unreachable", f"{runtime:.1f} s; the whole recording holds {float(have):.1f} s of speech"
         elif kind in ("opening", "ending") and quote and kept:
             part = kept[:len(quote) + 1] if kind == "opening" else kept[-(len(quote) + 1):]
             r = _best_window(quote, part)
@@ -387,6 +451,62 @@ def repeated_takes(edl: dict, n: int = REPEAT_N) -> list[str]:
                 break
             seen.setdefault(g, f"{s['id']}@{i}")
     return list(dict.fromkeys(out))
+
+
+RESTART_WINDOW = 5  # a false start: the same two words again within this many words ...
+_PARALLEL = {"and", "but", "or", "then", "because"}  # ... with no conjunction between: "seemed to speak and everyone
+# seemed to be looking" and "over there and then over there" (d1-tedx) are said that way on purpose
+
+
+def restarts(edl: dict, window: int = RESTART_WINDOW) -> list[str]:
+    """A false start kept inside one span: the speaker begins a phrase, breaks off and says it again ("we had we've had
+    it we had enough", d1-tedx; "a notepad and I took a notepad and I wrote"). The first review called d1-tedx's a
+    repeated take (a brief_covered major) and the loop could not drop it: the window sits inside a span. Two different
+    words, then the same two within `window` words with at least one word between; one-word doubles are Voice's
+    ("all all") and the captions drop them; a repeat after "and" / "then" is a parallel, not a restart. One problem
+    per span."""
+    out = []
+    for s in edl.get("spans") or []:
+        toks = norm_tokens(s.get("words") or "")
+        hit = None
+        for i in range(len(toks) - 1):
+            g = toks[i:i + 2]
+            if g[0] == g[1] or all(t in _FILLER for t in g):
+                continue
+            for j in range(i + 3, min(len(toks) - 1, i + window + 1)):
+                if toks[j:j + 2] == g and not _PARALLEL & set(toks[i + 2:j]):
+                    hit = (i, j)
+                    break
+            if hit:
+                break
+        if hit:
+            i, j = hit
+            out.append(f"{s['id']} keeps a false start: \"{' '.join(toks[i:j + 2])}\" says \"{' '.join(toks[i:i + 2])}\" "
+                       f"twice; quote the span from the take the speaker finishes (\"{' '.join(toks[j:j + 4])} ...\"), "
+                       "or split it into two spans around the false start")
+    return out
+
+
+OPENING_FILLERS = {"um", "uh", "uhm", "erm", "so", "yeah", "okay", "ok", "well", "and", "like", "anyway"}
+
+
+def filler_hook(edl: dict) -> list[str]:
+    """The hook opens on a filler: heli-01's repaired plan opened on "Yeah so I think the the most important thing"
+    (hook_in_1_5s 2, a blocker); the rubric fails filler in the first 1.5 s. Also when the brief names the opening
+    line: 016's plan opened "okay hi I'm Billy" for "Open on 'Hi. I'm Billy.'" (Voice heard "okay hi" as one run, the
+    reviewer's hook major), unless the brief's own words for the opening start on that word."""
+    spans = edl.get("spans") or []
+    if not spans:
+        return []
+    toks = norm_tokens(spans[0].get("words") or "")
+    if not toks or toks[0] not in OPENING_FILLERS:
+        return []
+    if any(c.get("kind") == "opening" and toks[0] in {t.strip("'") for t in norm_tokens(c.get("item") or "")}
+           for c in edl.get("brief_checks") or []):
+        return []  # the brief's own opening line starts on that word
+    lead = " ".join((spans[0]["words"]).split()[:5])
+    return [f"{spans[0]['id']} (the hook) opens on a filler: \"{lead} ...\". The first words a viewer hears must be the "
+            "line itself: start the hook span after the filler, on a word that begins the claim, or open on another line"]
 
 
 def plan_check(edl: dict, target_s: float) -> list[str]:

@@ -28,6 +28,31 @@ from .api import chat_as_response, chat_create, dump_json, output_text, response
 # 015 / 016 and 014): plan low 11-13 s / $0.012-0.016 vs the default 26-40 s / $0.03-0.05, the same kept words on
 # 016 and 015; watch low 10.8 s vs 32.5 s on 016, 18.7 s vs 50.3 s on 014, the same shots and moments.
 PLAN_EFFORT = "low"
+# The hook (1/11): at effort low the plan opened on the footage's chronological start on 3 of the 4 clips that never
+# pass ("when I was growing up my dad was", "The ride down the escalator took a full minute", "We're part of the
+# national SAR plan um"), and the first review's hook_in_1_5s major held the pass on each. Spark 1.3 only: the Open
+# planner keeps its own prompt (benchmarked apart). The first version of the rule took d1-tedx's hook from its payoff
+# ("I had written down the Russian word for exit" twice), and the repair for the repeat cut the ending short.
+# Where the recording pauses (1/11): Voice words abut, so the planner could not know that heli-01's speaker runs his
+# sentences together; every plan opened spans in running speech and the repairs kept doing it.
+PAUSE_RULE = (
+    "- In the transcript a / marks a pause in the recording: a moment of silence between two words. Start and end "
+    "every span at a / whenever you can (right after one, right before one): anywhere else the speaker runs straight "
+    "on and the cut clips a word. Never take in a filler, a false start or words the brief drops to reach a /: a span "
+    "still starts on its first real word (\"/ okay hi I'm Billy\" is quoted \"hi I'm Billy\"). Quote the words "
+    "without the / marks.\n")
+HOOK_RULE = (
+    "- The hook is the one line of the whole recording that makes a stranger keep watching: a short, complete sentence "
+    "(one or two, ideally under 6 seconds) with the most surprising claim, number, stake, result or feeling, taken from "
+    "wherever it is said, usually NOT the start of the recording. Read the whole transcript for it before you plan the "
+    "rest. Never open on scene-setting, background or chronology (\"when I was growing up\", \"we're part of the ...\", "
+    "\"the ride took a full minute\"), on a greeting unless the brief asks for it, or on a filler (\"um\", \"so\", \"yeah\"). "
+    "Start the hook on the first word of the claim itself and leave a lead-in out (\"I thought oh my gosh\", \"so I "
+    "think\", \"what was weird though is that\") when the line still makes sense without it. "
+    "When that line sits inside a passage you keep, quote it as its own span first and keep the rest of the passage "
+    "as a later span. Every word plays once: the hook is never repeated later as a teaser, and it is never the line "
+    "the video ends on (keep that one for the payoff, whole, and find the hook elsewhere). A brief that names the "
+    "opening line wins over this rule.\n")
 WATCH_EFFORT = "low"
 PARSE_RETRIES = 1  # an incomplete or unparsable answer is asked once more
 PARSE_RETRY_TOKENS = 1.5
@@ -169,9 +194,10 @@ class Spark:
 
     def plan(self, brief: str, transcript_text: str, watch: dict, target_s: float, file_id: str | None = None,
              reasoning_effort: str | None = None, words_per_s: float = 2.5, repair: str | None = None,
-             name: str = "plan") -> SparkCall:
+             name: str = "plan", paused: bool = False) -> SparkCall:
         """`words_per_s` is the speech rate measured by Voice on this clip (VoiceResult.speech_rate); 2.5 when unknown.
-        `repair` (A4): what the deterministic plan check found wrong in an earlier paper edit, for one more try."""
+        `repair` (A4): what the deterministic plan check found wrong in an earlier paper edit, for one more try.
+        `paused`: the transcript carries the recording's pauses as " / " (edges.pause_marks), PAUSE_RULE says so."""
         wps = words_per_s if words_per_s and words_per_s > 0 else 2.5
         shot_log = "\n".join(
             f"- {s['start_s']:.1f}-{s['end_s']:.1f}s {s['shot_type']}: {s['visual']}"
@@ -199,6 +225,8 @@ class Spark:
             f"Speakers:\n{speakers}\n\n"
             "Rules for the paper edit:\n"
             "- Ordered spans to keep, strongest line first (the hook must land inside the first 1.5 seconds of speech).\n"
+            + ("" if is_open_model(self.model) else HOOK_RULE)
+            + (PAUSE_RULE if paused else "") +
             "- Each span lies inside ONE transcript turn and quotes the exact contiguous words to keep, copied character for "
             "character from that turn's transcript, including repeated words and disfluencies. We cut on word boundaries "
             "taken from the audio, so a paraphrase or a cleaned-up quote cannot be used.\n"

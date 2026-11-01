@@ -29,6 +29,11 @@ class SynthAudio(E.Audio):
                 for k in range(int(a * RATE), int(b * RATE)):
                     self.pcm[k] = int(amp * math.sin(k / 3))
 
+    def threshold_db(self):
+        # the floor rule only: this tone sits 44 dB over the floor, more than any recording, and the cap under the
+        # median speech (SPEECH_UNDER_MEDIAN_DB, test_first_cut_hard) would lift the threshold past the faint runs here
+        return round(self.floor_db() + E.SPEECH_OVER_FLOOR_DB, 1)
+
 
 def voice_words():
     """Turn 0: 12 words of 0.5 s from 10.0 s; turn 1: 12 words of 0.5 s from 30.0 s (Voice words always abut)."""

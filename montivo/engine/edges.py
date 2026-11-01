@@ -33,6 +33,7 @@ from pathlib import Path
 
 FRAME_S = 0.01
 SPEECH_OVER_FLOOR_DB = 6.0  # run 012: floor -51 dB (10th percentile), word onsets cross -45 within 10 to 20 ms
+SPEECH_UNDER_MEDIAN_DB = 20.0  # ... and never further than this under the clip's median speech level (Audio.threshold_db)
 FLOOR_PERCENTILE = 0.10
 MIN_SPEECH_S = 0.04  # a louder run shorter than this is a click or a breath, not speech
 MERGE_GAP_S = 0.06  # dips shorter than this (stop consonants) stay inside one run of speech
@@ -47,6 +48,8 @@ FAINT_DB = 3.0  # with a dropped neighbour, runs this close to the threshold (br
 DROPPED_HEARD = 0.5  # a dropped word whose own Voice window is this much speech was said there: the sound at the edge
                      # is not that word (the span's own short first or last word, Codex review F03, 28/10)
 MIN_MOVE_S = 0.03  # smaller moves are left alone (a frame at 30 fps)
+BLIP_S = 0.12  # a run of sound this short, cut off from the span's speech by BLIP_GAP_S, is a knock, not a word ...
+BLIP_GAP_S = 0.5  # (d1-nasa: two mic knocks 0.07-0.1 s long after "supporting us." held a 1.2 s pause in the cut)
 WIDEN_S = 0.4  # a clipped edge looks this far outward for the gap after (before) the word it cuts
 JOIN_GAP_S = 0.05  # render.CONTIGUOUS_GAP_S: spans of one turn closer than this render as one segment
 MIN_SPAN_S = 0.2  # an edge moving inward stops this far from the span's other edge: the bound is the middle of the
@@ -135,7 +138,19 @@ class Audio:
         return cached
 
     def threshold_db(self) -> float:
-        return round(self.floor_db() + SPEECH_OVER_FLOOR_DB, 1)
+        """SPEECH_OVER_FLOOR_DB over the floor, but never more than SPEECH_UNDER_MEDIAN_DB under the clip's own speech
+        (the median frame over the floor threshold). A studio-quiet floor put d1-nasa's threshold at -68 dB, 37 dB under
+        its speech (-31 dB): mic handling at -50 to -60 dB counted as speech, so a 1.2 s pause stayed whole inside a
+        span (a pacing major) and the cut held 1.1 s of near silence after the last word. Every other run folder (floor
+        -40 to -57 dB) keeps its floor threshold."""
+        cached = getattr(self, "_threshold_db", None)
+        if cached is None:
+            thr = round(self.floor_db() + SPEECH_OVER_FLOOR_DB, 1)
+            speech = sorted(d for d in self.frame_db() if d > thr)
+            if speech:
+                thr = max(thr, round(speech[len(speech) // 2] - SPEECH_UNDER_MEDIAN_DB, 1))
+            cached = self._threshold_db = thr
+        return cached
 
     def speech_runs(self, t0: float, t1: float) -> list[tuple[float, float]]:
         """Runs of speech inside [t0, t1] (source seconds, on the 10 ms frame grid): frames over the threshold, dips
@@ -173,6 +188,19 @@ def displaced(audio: Audio, w: dict) -> bool:
     return heard < DROPPED_HEARD * max(1e-6, b - a)
 
 
+def without_knocks(runs: list[tuple[float, float]], first: bool) -> list[tuple[float, float]]:
+    """The runs without the knocks before (first) or after the speech: runs shorter than BLIP_S that start BLIP_GAP_S
+    or more from the nearest run long enough to be a word. d1-nasa's two knocks after "supporting us." (0.10 and
+    0.07 s, 0.3 s apart) kept a 1.2 s pause inside the cut; d1-tedx's "Once" opened 1.5 s early on 40 ms of the word
+    before. Unchanged when no run is long enough to be a word."""
+    seq = runs if first else [(-b, -a) for a, b in reversed(runs)]
+    k = next((i for i, (a, b) in enumerate(seq) if b - a >= BLIP_S), None)
+    if not k or seq[k][0] - seq[k - 1][1] < BLIP_GAP_S:
+        return runs
+    seq = seq[k:]
+    return seq if first else [(-b, -a) for a, b in reversed(seq)]
+
+
 def onset(span: dict, words: Words, audio: Audio, bound: float | None = None,
           dropped: bool = False) -> tuple[float | None, bool]:
     """Where the span's own speech starts, searched up to `bound` (default the middle of the span): (time or None,
@@ -188,6 +216,7 @@ def onset(span: dict, words: Words, audio: Audio, bound: float | None = None,
         if runs[0][1] - t > longest or nxt - runs[0][1] < FRAGMENT_GAP_S:
             return None, False  # speech at the edge
         runs, skipped = rest, True
+    runs = without_knocks(runs, first=True)
     if not runs:
         return None, skipped
     return runs[0][0], skipped
@@ -208,6 +237,7 @@ def offset(span: dict, words: Words, audio: Audio, bound: float | None = None,
         if t - runs[-1][0] > longest or runs[-1][0] - prv < FRAGMENT_GAP_S:
             return None, False  # speech at the edge
         runs, skipped = rest, True
+    runs = without_knocks(runs, first=False)
     if not runs:
         return None, skipped
     return runs[-1][1], skipped
@@ -350,3 +380,36 @@ def tighten_edges(edl: dict, words: Words, audio: Audio, only: set[tuple[str, st
     if only is None:
         edl["edge_pass"] = summary
     return summary
+
+
+MARK_GAP_S = 0.15  # pause_marks: a stretch under the speech threshold this long ...
+MARK_REACH_S = 0.35  # ... this close to a Voice word boundary (Voice's boundaries sit up to 0.3 s off the audio)
+
+
+def pause_marks(words: list[dict], audio: Audio) -> dict[int, set[int]]:
+    """Where the recording pauses between two words, for the planner's transcript (voice.transcript_text): {turn id:
+    the indices k of the words a pause comes before; k = the turn's word count for a pause after its last word}. A
+    span that starts or ends anywhere else cuts into running speech: heli-01's speaker runs his sentences together and
+    every plan opened spans where the preflight could find no quiet point ("We're part of the national SAR plan", "we
+    passed 716 saves we were involved"), the first review's no_cut_mid_word blockers. Voice words abut, so only the
+    audio shows the pause."""
+    by_turn: dict[int, list[dict]] = {}
+    for w in words:
+        by_turn.setdefault(int(w["turn_id"]), []).append(w)
+    out: dict[int, set[int]] = {}
+    for tid, tw in by_turn.items():
+        tw.sort(key=lambda w: w["i"])
+        lo, hi = tw[0]["t_start"] - 1.0, tw[-1]["t_end"] + 1.0
+        runs = audio.speech_runs(max(0.0, lo), min(audio.duration, hi))
+        edges = [max(0.0, lo)] + [x for r in runs for x in r] + [min(audio.duration, hi)]
+        gaps = [(a, b) for a, b in zip(edges[::2], edges[1::2]) if b - a >= MARK_GAP_S]
+        bounds = [tw[0]["t_start"]] + [w["t_end"] for w in tw]  # before word 0, after word k-1
+        marks = set()
+        for a, b in gaps:  # each pause marks the one boundary nearest it (a word boundary inside it first)
+            dist = lambda t: 0.0 if a <= t <= b else min(abs(t - a), abs(t - b))  # noqa: E731
+            k = min(range(len(bounds)), key=lambda k: (dist(bounds[k]), abs(bounds[k] - (a + b) / 2)))
+            if dist(bounds[k]) <= MARK_REACH_S:
+                marks.add(k)
+        if marks:
+            out[tid] = marks
+    return out
