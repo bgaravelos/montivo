@@ -23,8 +23,8 @@ from pathlib import Path
 import modal
 
 DATA = "/data"
-# the judges' limits (hosted.py): $15 in all and $3 a judge, 3 uploads a judge and 60 in all, 15 minutes a job
-HOSTED = {"MONTIVO_BUDGET_USD": "15", "MONTIVO_JUDGE_BUDGET_USD": "3", "MONTIVO_ONE_JOB": "1",
+# the judges' limits (hosted.py): $40 in all and $3 a judge, 3 uploads a judge and 60 in all, 15 minutes a job
+HOSTED = {"MONTIVO_BUDGET_USD": "40", "MONTIVO_JUDGE_BUDGET_USD": "3", "MONTIVO_ONE_JOB": "1",
           "MONTIVO_MAX_FOOTAGE_S": "95", "MONTIVO_MAX_UPLOAD_MB": "1000", "MONTIVO_MAX_UPLOADS": "3",
           "MONTIVO_MAX_UPLOADS_ALL": "60", "MONTIVO_JOB_MAX_S": "900", "PYTHONPATH": "/root/app"}
 
