@@ -8,7 +8,8 @@
 
 <p align="center">
   <a href="https://www.youtube.com/watch?v=JRa-nPJJVEc"><img alt="Watch the Montivo demo on YouTube (2:52)" src="assets/brand/png/montivo-demo-thumbnail.png" width="640"></a><br>
-  <a href="https://www.youtube.com/watch?v=JRa-nPJJVEc"><b>▶ Watch the demo (2:52)</b></a>
+  <a href="https://www.youtube.com/watch?v=JRa-nPJJVEc"><b>▶ Watch the demo (2:52)</b></a><br>
+  <a href="https://bgaravelos--montivo-web.us-east.modal.run/s/CAlQGWBgIBbo">See a finished cut on the hosted demo</a> (read-only, no sign-in: the cut, every version's blind score)
 </p>
 
 # Montivo
@@ -80,6 +81,9 @@ The full table is under [Measured results](#measured-results).
 ## Try it
 
 Three ways in, quickest first.
+
+To only look at a result: [this share link](https://bgaravelos--montivo-web.us-east.modal.run/s/CAlQGWBgIBbo) plays run 017's cut from the hosted demo with its review history,
+no sign-in needed.
 
 **1. Hosted (judges).** Montivo runs hosted for you, with my Meta key on the server. The link and the password are in
 the submission. The finished sample projects open there, and you can upload your own clip (up to 95 s) and let the agent
