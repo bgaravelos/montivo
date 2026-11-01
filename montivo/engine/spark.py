@@ -31,7 +31,8 @@ PLAN_EFFORT = "low"
 # The hook (1/11): at effort low the plan opened on the footage's chronological start on 3 of the 4 clips that never
 # pass ("when I was growing up my dad was", "The ride down the escalator took a full minute", "We're part of the
 # national SAR plan um"), and the first review's hook_in_1_5s major held the pass on each. Spark 1.3 only: the Open
-# planner keeps its own prompt (benchmarked apart).
+# planner keeps its own prompt (benchmarked apart). The first version of the rule took d1-tedx's hook from its payoff
+# ("I had written down the Russian word for exit" twice), and the repair for the repeat cut the ending short.
 HOOK_RULE = (
     "- The hook is the one line of the whole recording that makes a stranger keep watching: a short, complete sentence "
     "(one or two, ideally under 6 seconds) with the most surprising claim, number, stake, result or feeling, taken from "
@@ -39,7 +40,9 @@ HOOK_RULE = (
     "rest. Never open on scene-setting, background or chronology (\"when I was growing up\", \"we're part of the ...\", "
     "\"the ride took a full minute\"), on a greeting unless the brief asks for it, or on a filler (\"um\", \"so\", \"yeah\"). "
     "When that line sits inside a passage you keep, quote it as its own span first and keep the rest of the passage "
-    "as a later span. A brief that names the opening line wins over this rule.\n")
+    "as a later span. Every word plays once: the hook is never repeated later as a teaser, and it is never the line "
+    "the video ends on (keep that one for the payoff, whole, and find the hook elsewhere). A brief that names the "
+    "opening line wins over this rule.\n")
 WATCH_EFFORT = "low"
 PARSE_RETRIES = 1  # an incomplete or unparsable answer is asked once more
 PARSE_RETRY_TOKENS = 1.5
