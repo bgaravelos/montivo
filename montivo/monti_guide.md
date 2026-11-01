@@ -16,9 +16,9 @@ Every runtime model is a Meta model; every call is logged with its cost in the r
 
 ## Models per stage
 <!-- monti: target=top.more words=model,models,meta,spark,voice,sam,image,open,baseten,llama,μοντέλο,μοντέλα,which model,ποιο μοντέλο -->
-Each stage runs on one Meta model: Muse Spark 1.3 watches, plans, reviews and runs Ask Montivo; Muse Voice transcribes; SAM 3.1 tracks; Muse Image draws.
-1. Muse Spark 1.3: watch (shot log, speaker map), plan (the paper edit), the blind review with fix ops, Ask Montivo's router, style from words, cover design, post text, title hooks, and Monti's answers.
-2. Muse Spark Open (open weights, on Baseten): the plan, when you pick "Spark Open" in the planner menu (New project, or Ask Montivo's composer). About $0.012 and 7 s instead of $0.05 and 13 s. It does not review: it cannot hear the cut.
+Each stage runs on one Meta model: Muse Spark 1.3 watches, plans, reviews and runs Ask Montivo; Muse Spark Open answers Monti and styles captions from words; Muse Voice transcribes; SAM 3.1 tracks; Muse Image draws.
+1. Muse Spark 1.3: watch (shot log, speaker map), plan (the paper edit), the blind review with fix ops, Ask Montivo's router, cover design, post text and title hooks.
+2. Muse Spark Open (open weights, on Baseten): Monti's answers and a caption look from words whenever the server has a Baseten key (the hosted demo does), and the plan when you pick "Spark Open" in the planner menu (New project, or Ask Montivo's composer; about $0.012 and 7 s instead of $0.05 and 13 s). It does not review: it cannot hear the cut. If a Spark Open call fails, Spark 1.3 answers instead.
 3. Muse Voice Transcribe 1.0: the words, their times and the speakers of the footage, and each rendered cut again so the review can check the edge words.
 4. SAM 3.1: the speaker's head and person tracks for the 9:16 reframe, the face on close-ups, a microphone, and the cutout on a cover.
 5. Muse Image 1.0: a title card in the brand colours and B-roll stills ($0.01 each).
@@ -26,11 +26,11 @@ ffmpeg and Pillow do the cutting, captions, music and loudness: no model, $0.
 
 ## Open weight: Muse Spark Open
 <!-- monti: target=rail.assistant panel=assistant words=open weight,open,baseten,spark open,open model,ανοιχτό,ανοιχτού κώδικα,open-weight -->
-Muse Spark Open plans the cut (the paper edit) when you choose it; everything after the plan is the same code for both planners.
+Muse Spark Open answers Monti (this help) and turns a caption look described in words into a style, and plans the cut (the paper edit) when you choose it; everything after the plan is the same code for both planners.
 1. On a new project: New project, Advanced, Planner: Spark Open.
 2. On an open project: the planner menu in the Ask Montivo composer, then ask for a re-plan ("make it about 30 seconds").
 3. It needs BASETEN_API_KEY on the server (the hosted demo has it).
-The plan is the one stage that needs no picture or sound, so it runs on the open model; watch and review stay on Spark 1.3 because they must see and hear the cut.
+These calls need no sound, and measured side by side with Spark 1.3 they did as well (Monti 24 of 24 questions, looks 48 of 48 requests). Watch and review stay on Spark 1.3 because they must see and hear the cut; the chat router, title hooks, post text and cover headlines stay there too because Spark Open did worse on them.
 
 ## Start a new project
 <!-- monti: target=home.new words=new project,upload,new,start,footage,clip,create,run,νέο,ανέβασ,ανεβάζ,φόρτωσ,ξεκιν,καινούρ,βίντεο μου,my video,my clip,my own -->
@@ -307,9 +307,9 @@ Share (top bar) makes a read-only page for this version: the cut, its score and 
 ## Cost and time
 <!-- monti: target=top.more words=cost,costs,price,how much,money,dollars,spend,ledger,cost and time,κόστος,κοστ,κοστίζει,πόσο κάνει,λεφτά,χρεών -->
 More (top bar) > Cost and time shows this project's ledger: every model call with its tokens, dollars and seconds.
-1. Rough prices: a new run about $0.045 + $0.0026 per footage second; the review loop about $0.05; a blind review $0.035; an Ask Montivo message about $0.006; a re-plan $0.05 (Spark Open $0.012); a title card or B-roll still $0.01; a look from words $0.008.
+1. Rough prices: a new run about $0.045 + $0.0026 per footage second; the review loop about $0.05; a blind review $0.035; an Ask Montivo message about $0.006; a re-plan $0.05 (Spark Open $0.012); a title card or B-roll still $0.01; a look from words $0.008 ($0.004 on Spark Open).
 2. $0: every edit (trim, delete, move, split, captions, style, music, speakers), Live drafts, exports, renders.
-3. A Monti question is about $0.013 (Muse Spark 1.3 reads this whole guide); without the key Monti answers from this guide's keywords for $0.
+3. A Monti question is about $0.004 on Muse Spark Open, which reads this whole guide (it stays cached on Baseten), or $0.013 on Muse Spark 1.3 without a Baseten key; without a model key Monti answers from this guide's keywords for $0.
 
 ## Replay
 <!-- monti: target=top.more words=replay,watch the run,playback the agent,record,επανάληψη,replay -->

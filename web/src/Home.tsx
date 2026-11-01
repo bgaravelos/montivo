@@ -291,7 +291,7 @@ export function Home({ go }: { go: (h: string) => void }) {
         <NewProject go={go} close={() => setSheet(false)} footage={footage} f={f} setF={setF} put={put} upload={upload} uploading={uploading}
           limits={limits} hasKey={hasKey} hasOpen={hasOpen} keyNote={keyNote} budget={budget} costs={costs} />
       )}
-      {!sheet && <Monti place="home" hasKey={hasKey} budget={budget} ctx={{ page: "home" }} />}
+      {!sheet && <Monti place="home" hasKey={hasKey} hasOpen={hasOpen} budget={budget} ctx={{ page: "home" }} />}
       {dragging && !sheet && <div className="hm-drop" aria-hidden><div><Icon name="plus" size={22} />Drop the clip to start a new project</div></div>}
       {toast && (
         <div className={`toast bottom ${toast.tone ?? ""}`}>

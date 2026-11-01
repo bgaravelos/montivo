@@ -30,7 +30,8 @@ MUSIC = {"reply": "Open Music in the rail (key 6).", "steps": ["Press ▶ on a t
 
 @pytest.fixture
 def env(monkeypatch):
-    for k in ("MONTIVO_PASSWORD", "MONTIVO_BUDGET_USD", "MONTIVO_ONE_JOB", "MONTIVO_JUDGE_SECRET"):
+    # BASETEN_API_KEY off: Monti runs on Muse Spark Open when it is set (tests/test_open_stages.py covers that path)
+    for k in ("MONTIVO_PASSWORD", "MONTIVO_BUDGET_USD", "MONTIVO_ONE_JOB", "MONTIVO_JUDGE_SECRET", "BASETEN_API_KEY"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("MODEL_API_KEY", "test")
     return monkeypatch

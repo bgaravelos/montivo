@@ -139,6 +139,24 @@ in 6.8 s against Spark 1.3's $0.050 in 35 s; the blind reviewer gave that first 
 so the hook A/B took a middle line as the punchline; the plan prompt now defines each role and `build_edl` sets them by
 position for any planner (one `hook` first, the `payoff` last, `cta` only after it, `body` between; a changed label
 keeps the planner's in `planner_role` and `role_fixes`).
+Open weight stages (1/11): besides the planner, two calls run on Muse Spark Open by default whenever `BASETEN_API_KEY`
+is set, Monti's answer (`monti.ask`) and a caption look from words (`look.suggest`, the Style panel's Describe it, POST
+/style/suggest and Ask Montivo's look_prompt). `montivo/engine/stagemodel.py` holds the list (`OPEN_STAGES`): `model_for`
+gives Spark Open for a listed stage when the Baseten key is set, Spark 1.3 otherwise, and `call` sends a failed open
+call (HTTP error, no JSON after the retry) to Spark 1.3 once when `MODEL_API_KEY` is set, logging why; the ledger names
+the model that answered and Monti's answer carries it (`model`, shown in Monti's footer). `MONTIVO_OPEN_STAGES=0` puts
+both back on Spark 1.3. Measured with `tools/open_stages_bench.py` (titles, post, look, cover, repair; eight finished
+projects, run folders cloned to `runs/openbench/<label>/`, a blind pairwise judge run on both models with the answers
+shown twice in swapped order), `tools/monti_bench.py --model open` and `tools/chat_bench.py --model open`:
+Monti 24/24 on both, $0.0035 a question on Spark Open (Baseten caches the guide prefix: 9,344 of 9,393 prompt tokens
+cached) against $0.0134, 2.9 s against 3.5 s; looks from words 48/48 on both over two rounds, no answer corrected by
+`settle`, $0.0035 against $0.0059, 3.0 s against 4.2 s. Left on Spark 1.3: the chat router (37/38 against 33/38; Spark
+Open put a whole clip line in `span`, -1 in `word_from` for an insert, nothing for "delete this" with a selection),
+title hooks (rule breaks on 3 of 8: over 6 words or 40 characters; judges 9 to 6 for 1.3), post text (judges 9 to 4 for
+1.3, claims the video does not make flagged 16 times against 5), the cover pick (headlines 7 to 4 for Open in round 1,
+12 to 1 for 1.3 in round 2, stills even, twice as slow on Open). The plan repair (run.py, A4) replayed on the six runs
+whose plan check failed, twice per model: both repaired 6 of 12, Spark Open left more problems than the first plan in
+2 of 12, Spark 1.3 in none, so the repair keeps running on the model that planned.
 
 Hook A/B (`engine/hook.py`, `montivo hook runs/001 [--edl edl_vN.json] [--budget 0.20]`, or `montivo review runs/001
 --hook-ab [--hook-budget 0.20]` after the loop): version A is the EDL as it is, version B the next free version with one
@@ -238,8 +256,9 @@ runs/015 --at 18.5 --text "Four Meta models do all" [--at ... --text ...]` gives
 second the words actually spoken (the reviewer's `caption_text` patch, timing kept, $0); in the editor, the Captions panel does the same (double-click a line or the pencil, then Make Version N).
 
 Monti, the help gecko under the editor's rail and in the corner of the project list (key ?), answers "where is X?" and "how do I Y?"
-from `montivo/monti_guide.md` only: `POST /api/monti {message, context}` -> one muse-spark-1.3 call (strict schema,
-reasoning effort low, about 9K tokens in, $0.013-0.014) that picks the answer's place on screen from a closed list
+from `montivo/monti_guide.md` only: `POST /api/monti {message, context}` -> one Spark call (Muse Spark Open when
+`BASETEN_API_KEY` is set, $0.0035 with the guide cached on Baseten; else muse-spark-1.3, $0.013-0.014; strict schema,
+reasoning effort low, about 9K tokens in) that picks the answer's place on screen from a closed list
 (`montivo/monti.py` TARGETS, each a `data-monti` attribute in `web/src`), the panel to open, and for an edit request
 the message to put in Ask Montivo's box (never sent). The calls are logged in `<root>/monti/ledger.json`, which the
 hosted budget counts, and the questions in `<root>/monti/questions.jsonl`. Without the key, past the hosted budget or

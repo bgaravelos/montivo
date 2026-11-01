@@ -52,8 +52,8 @@ Loop shows nothing new; switch to **Rendered** (V) for one version per edit. Det
 
 | Role | Model | What it does |
 |---|---|---|
-| Eyes and judgement | **Muse Spark 1.3** (`muse-spark-1.3`) | shot log and speaker map (`watch`), paper edit by turn id with verbatim words (`plan`), the blind rubric review with fix ops (`review`), the pairwise hook judge, the Ask Montivo router, Monti's answers |
-| Open-weight planner | **Muse Spark Open** (`meta-models/muse-spark-open-1026`, on Baseten) | the paper edit (`plan`) when you pick it, and the review loop's one escalation re-plan whenever a Baseten key is set (the hosted demo has one): see [Open weight](#open-weight-muse-spark-open) |
+| Eyes and judgement | **Muse Spark 1.3** (`muse-spark-1.3`) | shot log and speaker map (`watch`), paper edit by turn id with verbatim words (`plan`), the blind rubric review with fix ops (`review`), the pairwise hook judge, the Ask Montivo router, title hooks, post text, the cover pick |
+| Open-weight model | **Muse Spark Open** (`meta-models/muse-spark-open-1026`, on Baseten) | the paper edit (`plan`) when you pick it; whenever a Baseten key is set (the hosted demo has one): the review loop's one escalation re-plan, Monti's answers and a caption look from words: see [Open weight](#open-weight-muse-spark-open) |
 | Ears and clock | **Muse Voice Transcribe 1.0** (`muse-voice-transcribe-1.0`) | turns, speakers and word timings of the footage, and each rendered cut transcribed again so the review can check its edge words |
 | Camera operator | **SAM 3.1** (`sam-3.1`) | tracks the speaker's head (5 fps) for the 9:16 reframe, the person plus any callout concept per frame, the face in close-ups; the cutout on a cover |
 | Art department | **Muse Image 1.0** (`muse-image-1.0`) | title card and B-roll stills |
@@ -111,7 +111,7 @@ streams, no network).
 costs about $0.20 to $0.40, logged per call in the run's `ledger.json`):
 
 ```bash
-export MODEL_API_KEY=...       # optional: export BASETEN_API_KEY=... for Muse Spark Open as the planner
+export MODEL_API_KEY=...       # optional: export BASETEN_API_KEY=... for Muse Spark Open (Monti, looks from words, the planner)
 .venv/bin/montivo run footage/clip.mp4 --brief "A 40 second vertical reel: ..." --target 40 --review --out runs/001
 make ui                        # or start from New project in the UI and upload the clip there
 ```
@@ -205,8 +205,8 @@ folders hold footage and are not in the repository); how each one was measured i
 
 ## Open weight: Muse Spark Open
 
-**Where it runs.** One stage runs on Meta's open-weight model: the **plan**, the paper edit that picks the lines, their
-order, the hook and the callouts. It runs there in two cases:
+**Where it runs.** Three calls run on Meta's open-weight model. The **plan**, the paper edit that picks the lines, their
+order, the hook and the callouts, runs there in two cases:
 
 - **By choice.** Choose "Spark Open" in the planner menu on New project or in Ask Montivo (the hosted demo has it), or
   `--planner open` on `montivo run` / `montivo plan`.
@@ -216,8 +216,14 @@ order, the hook and the callouts. It runs there in two cases:
   `BASETEN_API_KEY` is set, which it is on the hosted demo, else Spark 1.3; it is kept only if its review beats the
   best version.
 
-Spark Open was also measured as a reviewer (the benchmark below), but it reviews nothing in the product. Either way the
-call goes to Muse Spark Open (`meta-models/muse-spark-open-1026`) on Baseten Model APIs
+And two editor calls run on it by default whenever `BASETEN_API_KEY` is set (the hosted demo), with Spark 1.3 when
+it is not or when the open call fails (`montivo/engine/stagemodel.py`):
+
+- **Monti's answers**, the help gecko reading the whole 9K-token guide for each question.
+- **A caption look from words** (the Style panel's Describe it box, and Ask Montivo when it styles from a sentence).
+
+Spark Open was also measured as a reviewer (the benchmark below), but it reviews nothing in the product. Every one of
+these calls goes to Muse Spark Open (`meta-models/muse-spark-open-1026`) on Baseten Model APIs
 (`https://inference.baseten.co/v1`) as an OpenAI-compatible chat completion with the same prompt and the same strict JSON schema Spark 1.3 gets; its answer is logged in the
 run's ledger like any other call. Everything downstream (the EDL on Voice's word boundaries, the render, the blind
 review loop, the editor) is the same code for both planners.
@@ -227,6 +233,23 @@ word timings and the shot log as text and answers in JSON. Watch and review stay
 and hear the footage. I measured that too: in round 1 of the reviewer benchmark (27/10, `tools/reviewer_bench.py`) Spark Open
 read the cut's frames but heard nothing, caught the planted faults as often as Spark 1.3 (82 %), but scored clean cuts
 15 to 20 points lower and never passed one, so it does not judge the cuts.
+
+**Why those two editor calls, and not the others.** On 1/11 I measured every other Spark call that needs no sound, on
+the same inputs with both models (`tools/open_stages_bench.py`, `tools/monti_bench.py`, `tools/chat_bench.py`; eight
+finished projects; a blind pairwise judge saw both answers twice in swapped order, run once on Spark 1.3 and once on
+Spark Open so a judge that favours its own model shows up). A stage moved only where Spark Open matched Spark 1.3:
+
+| Call | Quality, Spark 1.3 vs Spark Open | Cost per call | Median time | Decision |
+|---|---|---|---|---|
+| Monti's answer | 24/24 vs 24/24 questions right | $0.0134 vs $0.0035 (Baseten caches the guide) | 3.5 s vs 2.9 s | **Spark Open** |
+| Look from words | 48/48 vs 48/48 requests met, none needing a correction (two rounds) | $0.0059 vs $0.0035 | 4.2 s vs 3.0 s | **Spark Open** |
+| Ask Montivo router | 37/38 vs 33/38 messages routed right (34 counting a reorder the router's check repairs) | $0.0063 vs $0.0028 | 2.9 s vs 2.4 s | Spark 1.3 |
+| Title hooks | rules met 8/8 vs 5/8 (lines over 6 words or 40 characters); judges 9 vs 6 for 1.3 | $0.0070 vs $0.0057 | 5.4 s vs 4.1 s | Spark 1.3 |
+| Post text | judges 9 vs 4 for 1.3; claims the video does not make flagged 5 vs 16 times | $0.0077 vs $0.0049 | 5.8 s vs 5.5 s | Spark 1.3 |
+| Cover headlines and still | headlines: round 1 leaned Open (7 vs 4), round 2 went to 1.3 (12 vs 1), 16 vs 8 in all, Open's flagged for invented claims more often; stills even (7 vs 6) | $0.0072 vs $0.0064 | 5.7 s vs 10.7 s | Spark 1.3 |
+| Plan repair (the plan check's retry) | fewer problems after the retry 6/12 vs 6/12, but worse than before 0/12 vs 2/12 | $0.0192 vs $0.0116 | 12.2 s vs 6.8 s | follows the planner |
+
+The plan repair stays with whichever model planned. The hook A/B's challenger is picked by code, not a model.
 
 **Measured A/B, same footage, same brief** (run 012, Billy's 125 s talking head):
 
@@ -360,7 +383,7 @@ said in the chat. A structural change or anything over $0.02 first comes back as
 time (Apply, or Try something else), a question gets an answer and no version, a selection of clips, words or a
 caption line scopes the request, and a message typed during a job waits for it. `tools/chat_bench.py` scores the
 routing on 38 messages in English and Greek over three runs: 22 of 38 before the recording, the chat and the editor's
-own edits reached the router, 38 of 38 after (Spark Open: 35 of 38 at 2.4 s). Share makes a read-only page for
+own edits reached the router, 38 of 38 after (Spark Open: 35 of 38 at 2.4 s; on 1/11 with today's prompt Spark 1.3 37 of 38, Spark Open 33 of 38, so the router stays on Spark 1.3). Share makes a read-only page for
 one version (`/s/<token>`: the cut, its score and score history, the top notes; Unshare removes it). On the Export
 page the cover maker lays a headline over a still (frame, headline, sticker, or a cutout with the headline behind the
 speaker, cut out by SAM 3.1 from that one still, $0.010), or "Design it with Muse Spark" picks the still from a

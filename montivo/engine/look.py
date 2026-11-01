@@ -254,9 +254,11 @@ def settle(raw: dict, current: Look) -> tuple[dict, list[str]]:
 
 
 def suggest(run_dir: Path, edl: dict, text: str, ledger, log=print, model: str | None = None) -> tuple[dict, str, list[str]]:
-    """One Spark call (about $0.008): the look a sentence asks for, on top of the version's current look, checked by
-    normalize_look. Returns (look dict, the model's one-line why, corrections made to its answer)."""
-    from .spark import Spark  # the API client only when a sentence is styled
+    """One Spark call (about $0.008 on Spark 1.3, $0.0034 on Spark Open): the look a sentence asks for, on top of the
+    version's current look, checked by normalize_look. Returns (look dict, the model's one-line why, corrections made
+    to its answer). Runs on Muse Spark Open when BASETEN_API_KEY is set (engine/stagemodel.py: 24 of 24 requests met
+    like Spark 1.3 on tools/open_stages_bench.py, at about half the cost), else on Spark 1.3; `model` forces one."""
+    from . import stagemodel  # the API client only when a sentence is styled
     current = normalize_look(edl.get("look"))
     band = (max(TOP_RANGE[0], current.top - 50), min(OUT_H, current.top + 300))
     back = backdrop(run_dir, edl, band)
@@ -266,9 +268,8 @@ def suggest(run_dir: Path, edl: dict, text: str, ledger, log=print, model: str |
                            fonts=", ".join(f"{k} ({v[0]})" for k, v in FONTS.items()), band=list(band),
                            backdrop=f"{back['reads_as']} (mean luma {back['mean_luma']})" if back else "unknown",
                            face=face_note(edl, current.size))
-    kw = {"model": model} if model else {}
-    call = Spark(run_dir, ledger, log=log, **kw).call("look", prompt, schema(), max_output_tokens=6000, reasoning_effort="low",
-                                                       stage="spark.look", schema_name="caption_look")
+    call = stagemodel.call("look", run_dir, ledger, "look", prompt, schema(), log=log, model=model,
+                           max_output_tokens=6000, reasoning_effort="low", stage="spark.look", schema_name="caption_look")
     raw = dict(call.parsed)
     why = str(raw.pop("why", "")).strip()
     look, fixed = settle(raw, current)
