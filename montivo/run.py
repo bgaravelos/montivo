@@ -152,6 +152,33 @@ def supersede_v1(out: Path, log=print) -> Path | None:
     return dest
 
 
+def resume_tracks(out: Path, opts: RunOptions, ing: Ingested, ledger: Ledger, log=print) -> dict:
+    """The tracks of a resumed run: every finished concept from track/<concept>/tracks.json, tracked again where the
+    first run asked SAM and got nothing back: its request failed before the first frame (track.failed_empty), or the
+    run was stopped while SAM ran (request.json written, no tracks.json; person and head run side by side, so the
+    hosted job limit or Stop could leave one of them). Try again resumes the run, so both used to stay that way for good:
+    the empty track reused, the unfinished one refused below. A concept this folder never asked for is still refused."""
+    loaded = track_mod.load_all(out / "track")
+    wanted = [c for c in dict.fromkeys([*opts.concepts, opts.reframe_concept]) if c]
+    redo = [c for c in wanted if (c in loaded and track_mod.failed_empty(loaded[c]))
+            or (c not in loaded and (track_mod.concept_dir(out / "track", c) / "request.json").is_file())]
+    missing = [c for c in wanted if c not in loaded and c not in redo]
+    if missing:
+        raise SystemExit(f"resume: track/ has {', '.join(loaded)} but this run asks for {', '.join(missing)}; "
+                         "use a new --out (or remove track/ to track again)")
+    sources: dict = {}  # one resample and upload per rate, as the first run had
+    for c in redo:
+        why = f"its last request failed ({loaded[c].status})" if c in loaded else "the last run stopped while it ran"
+        log(f"resume: tracking {c} again: {why}")
+        fps = opts.reframe_fps if c == opts.reframe_concept and c not in opts.concepts else opts.track_fps
+        if fps not in sources:
+            sources[fps] = track_mod.prepare_source(ing.proxy, ing.proxy_probe, ing.file_id, out / "track", ledger,
+                                                    fps=fps, log=log)
+        loaded[c] = track_mod.track_concept(sources[fps], c, out / "track", ledger, log)
+    log(f"resume: tracks from track/*/tracks.json ({', '.join(c for c in loaded if c not in redo)})")
+    return loaded
+
+
 def run(opts: RunOptions) -> dict:
     out = opts.out
     if opts.planner_model:
@@ -242,13 +269,7 @@ def run(opts: RunOptions) -> dict:
         if opts.skip_track:
             return {}
         if opts.resume and list((out / "track").glob("*/tracks.json")):
-            loaded = track_mod.load_all(out / "track")
-            missing = [c for c in [*opts.concepts, opts.reframe_concept] if c and c not in loaded]
-            if missing:
-                raise SystemExit(f"resume: track/ has {', '.join(loaded)} but this run asks for {', '.join(missing)}; "
-                                 "use a new --out (or remove track/ to track again)")
-            log(f"resume: tracks from track/*/tracks.json ({', '.join(loaded)})")
-            return loaded
+            return resume_tracks(out, opts, ing, ledger, log)
         src = track_mod.prepare_source(ing.proxy, ing.proxy_probe, ing.file_id, out / "track", ledger, fps=opts.track_fps, log=log)
         concepts = list(opts.concepts)
         reframe = opts.reframe_concept

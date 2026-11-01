@@ -44,3 +44,21 @@ def test_every_concept_is_tracked_at_the_head_tracks_rate():
     assert TRACK_RESAMPLE_FPS == REFRAME_TRACK_FPS == 5.0
     assert track_fps(29.97) == 5.0 and track_fps(59.94) == 5.0  # short clips too: no more 30 fps SAM under 60 s
     assert track_fps(29.97, 10.0) == 10.0 and track_fps(4.0) == 4.0  # --track-fps wins; never above the source
+
+
+@pytest.mark.skipif(not __import__("shutil").which("ffmpeg"), reason="needs ffmpeg")
+def test_a_failed_track_resample_reaches_the_run_log(tmp_path):
+    """The SAM source resample ran ffmpeg with check=True and no capture: run.log got a traceback without ffmpeg's
+    reason, the reason went only to the job's output."""
+    import subprocess
+
+    from montivo.engine.ingest import Probe
+    from montivo.engine.track import prepare_source
+    from montivo.ledger import Ledger
+    bad = tmp_path / "proxy.mp4"
+    bad.write_bytes(b"not a video")
+    logs = []
+    with pytest.raises(subprocess.CalledProcessError):
+        prepare_source(bad, Probe(960, 540, 30.0, 2.0, 11, True, "h264"), "file-1", tmp_path / "track",
+                       Ledger(tmp_path / "ledger.json"), log=logs.append)
+    assert logs and logs[0].startswith("track: resample to 5 fps failed (ffmpeg exit") and "proxy.mp4" in logs[0]

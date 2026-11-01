@@ -122,3 +122,52 @@ def test_a_new_run_without_the_key_stops_before_making_a_folder(tmp_path, monkey
     with pytest.raises(SystemExit, match="MODEL_API_KEY"):
         R.run(R.RunOptions(footage=tmp_path / "clip.mp4", brief=BRIEF, out=out))
     assert not out.exists()
+
+
+def _track_json(out, concept, status, frames):
+    d = out / "track" / concept
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "request.json").write_text("{}")
+    objects = {"0": [{"f": 0, "t": 0.0, "box": [1, 2, 30, 40]}]} if frames else {}
+    (d / "tracks.json").write_text(json.dumps({"concept": concept, "objects": objects, "frames_processed": 100,
+                                               "frames_with_records": frames, "status": status, "track_fps": 5.0,
+                                               "file_id": "file-5"}))
+
+
+def test_resume_tracks_again_what_sam_never_returned_and_keeps_the_rest(tmp_path, monkeypatch):
+    """Try again resumes the run. A SAM request that failed before its first frame left an empty tracks.json the resume
+    reused for good; a run stopped while SAM ran (person and head side by side) left head with no tracks.json, and the
+    resume refused the folder ("use a new --out"), so every Try again failed the same way."""
+    from montivo.engine import track as T
+    from montivo.engine.ingest import Ingested, Probe
+    out = tmp_path / "run"
+    probe = Probe(960, 540, 30.0, 20.0, 1, True, "h264")
+    ing = Ingested(source=tmp_path / "clip.mp4", probe=probe, proxy=out / "proxy.mp4", proxy_probe=probe,
+                   wav=out / "audio.wav", file_id="file-1", upload_seconds=0.0)
+    prepared, tracked = [], []
+    monkeypatch.setattr(T, "prepare_source", lambda proxy, pp, fid, d, led, fps=None, log=print: prepared.append(fps)
+                        or T.TrackSource(path=proxy, probe=pp, file_id="file-5", fps=5.0, resampled=True,
+                                         upload_seconds=0.0))
+    monkeypatch.setattr(T, "track_concept", lambda src, c, d, led, log=print: tracked.append(c)
+                        or T.ConceptTrack(concept=c, tracks_path=d / c / "tracks.json", masks_path=d / c / "m",
+                                          objects={"0": []}, frames_with_records=9, status="completed"))
+    opts = R.RunOptions(footage=tmp_path / "clip.mp4", brief=BRIEF, out=out, resume=True)
+    logs = []
+    _track_json(out, "person", "completed", 80)
+    _track_json(out, "head", "stream_error: RuntimeError: responses stream 500", 0)
+    got = R.resume_tracks(out, opts, ing, None, logs.append)
+    assert tracked == ["head"] and prepared == [5.0] and got["head"].status == "completed"
+    assert got["person"].frames_with_records == 80  # the finished track is not paid for twice
+
+    tracked.clear()
+    (out / "track" / "head" / "tracks.json").unlink()  # stopped while SAM tracked the head: request.json, no tracks.json
+    got = R.resume_tracks(out, opts, ing, None, logs.append)
+    assert tracked == ["head"] and any("stopped while it ran" in m for m in logs)
+
+    tracked.clear()
+    _track_json(out, "head", "completed", 0)  # SAM answered and found no head: kept, not asked again
+    assert R.resume_tracks(out, opts, ing, None, logs.append)["head"].status == "completed" and tracked == []
+
+    opts.concepts = ["person", "logo"]  # a concept this folder never asked SAM for is still refused
+    with pytest.raises(SystemExit, match="asks for logo"):
+        R.resume_tracks(out, opts, ing, None, logs.append)
