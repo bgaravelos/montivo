@@ -1,0 +1,11 @@
+services:
+  montivo:
+    build: .
+    image: montivo
+    ports:
+      - "8765:8765"
+    volumes:
+      - ./data:/data          # runs/ and footage/ (put your clips in ./data/footage)
+    env_file:
+      - path: .env            # MODEL_API_KEY, BASETEN_API_KEY (see .env.example); optional
+        required: false

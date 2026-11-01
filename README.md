@@ -434,6 +434,14 @@ export MODEL_API_KEY=...      # from dev.meta.ai, never committed
 .venv/bin/montivo run footage.mp4 --brief "A 30 second vertical teaser: why launching from US soil again matters." --out runs/001
 ```
 
+Or in Docker (ffmpeg, Python 3.12 and the pinned packages in the image; runs and footage in `./data`):
+
+```bash
+docker compose run --rm montivo sample      # the 015 sample run, no key needed to open it
+docker compose up --build                   # the editor on http://localhost:8765, keys from .env if present
+docker compose run --rm montivo montivo run footage/clip.mp4 --brief "..." --out runs/001
+```
+
 Every flag, the other commands (render, review, edges, speakers, plan, hook, the editor's edits from the shell)
 and the run folder layout are in [docs/pipeline.md](docs/pipeline.md).
 
