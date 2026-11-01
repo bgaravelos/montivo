@@ -21,7 +21,7 @@ from PIL import Image
 from .captions import OUT_H, OUT_W, build_overlays
 from .frame import frame_for
 from .graphics import _HEX, ACTIVE_MODES, CASES, FONTS, PRESET_NAMES, PRESETS, TOP_RANGE, Look, normalize_look, restyle
-from .render import load_track, plan_paths, reframe_inputs
+from .render import load_track, plan_paths, reframe_inputs, video_end
 
 
 def source_of(run_dir: Path, edl: dict) -> Path:
@@ -84,7 +84,11 @@ def frame_at(run_dir: Path, edl: dict, t: float, plan=None) -> Image.Image:
     local = min(max(0.0, t - start), seg.duration - 1e-3)
     k = min(len(path.xs) - 1, int(local * seg.fps))
     fr = frame_for(edl)
-    return grab(source_of(run_dir, edl), seg.t_in + k / seg.fps,
+    src = source_of(run_dir, edl)
+    at, end = seg.t_in + k / seg.fps, video_end(src)
+    if end is not None:  # past the picture (a clip whose audio runs on) the render holds the last frame (tpad): so does
+        at = min(at, max(0.0, end - 1.5 / seg.fps))  # the still, where ffmpeg used to return no frame at all
+    return grab(src, at,
                 f"crop={path.crop_w}:{path.crop_h}:{path.xs[k]}:{path.crop_y}:exact=1,scale={fr.w}:{fr.h}:flags=lanczos,setsar=1")
 
 

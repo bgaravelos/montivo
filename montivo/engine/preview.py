@@ -17,7 +17,7 @@ from PIL import Image
 from . import broll
 from . import music as bed
 from .api import dump_json
-from .captions import build_overlays, fit_line, highlight_words, norm
+from .captions import CALLOUT_FADE_S, build_overlays, fit_line, highlight_words, norm
 from .edges import Audio
 from .edl import title_card_on
 from .frame import frame_for
@@ -202,12 +202,13 @@ def preview_data(run_dir: Path, edl: dict, overlays: bool = True, laid: bool = F
         data["fonts"][lk.font] = FONTS[lk.font][0]
         ca, cd = font(58, lk.font).getmetrics()  # graphics.draw_callout's size
         data["callouts"].append({"span": c["span"], "text": c["text"], "t_in": c["t_in"], "t_out": c["t_out"], "box": c["box"],
-                                 "size": 58, "ascent": ca, "descent": cd, **({"look": _caption_style(lk)} if c.get("look") else {})})
+                                 "size": 58, "ascent": ca, "descent": cd, "fade_s": CALLOUT_FADE_S,  # the overlay's fade
+                                 **({"look": _caption_style(lk)} if c.get("look") else {})})
     if fields.get("title_header"):  # the title over the opening speech: the same pill as a callout, at its own size
         h = fields["title_header"]
         ca, cd = font(h["size"], look.font).getmetrics()
         data["callouts"].append({"span": "title", "text": h["text"], "t_in": h["t_in"], "t_out": h["t_out"], "box": h["box"],
-                                 "size": h["size"], "ascent": ca, "descent": cd})
+                                 "size": h["size"], "ascent": ca, "descent": cd, "fade_s": CALLOUT_FADE_S})
     if edl.get("overlays"):
         stills, records = broll.place(edl, segments, title_s, run_dir, cache / "broll", frame)
         at = {o.png.as_posix(): o for ovs in stills.values() for o in ovs}
