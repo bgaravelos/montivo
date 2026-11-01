@@ -678,13 +678,20 @@ def isolate(lines: list[list[CWord]], span: str, src_t: float, until: float) -> 
     inside = lambda w: _inside(w, span, src_t, until)  # noqa: E731
     out: list[list[CWord]] = []
     mine: list[CWord] | None = None
+    # one word the retext's line leaves behind it opens the next line instead of standing alone (015 v5 split before
+    # "models": "models do all | the | work Muse Voice", bug audit 1/11)
+    lone: list[CWord] = []
     for ln in lines:
         before = [w for w in ln if not inside(w) and w.t_in < src_t]
         hit = [w for w in ln if inside(w)]
         after = [w for w in ln if not inside(w) and w.t_in >= src_t]
         if not hit:
-            out.append(ln)
+            out.append(lone + ln)
+            lone = []
             continue
+        if lone:
+            out.append(lone)
+            lone = []
         if before:
             out.append(before)
         if mine is None:
@@ -692,8 +699,12 @@ def isolate(lines: list[list[CWord]], span: str, src_t: float, until: float) -> 
             out.append(mine)
         else:
             mine.extend(hit)
-        if after:
+        if len(after) == 1:
+            lone = after
+        elif after:
             out.append(after)
+    if lone:
+        out.append(lone)
     return out
 
 

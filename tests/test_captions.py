@@ -328,3 +328,14 @@ def test_dedupe_drops_a_phrase_voice_heard_twice_back_to_back():
     # a phrase said again after a real pause stays: that is a retake the cut may keep
     words, fixes = dedupe_words(cw([("so", 1.0, 1.2), ("we", 1.2, 1.4), ("so", 1.9, 2.1), ("we", 2.1, 2.3)]))
     assert [w.w for w in words] == ["so", "we", "so", "we"] and fixes == []
+
+
+def test_one_word_a_retext_leaves_behind_opens_the_next_line():
+    # 015 v5 split before "models": the retext "models do all" is its own line and "the" used to stand alone
+    from montivo.engine.captions import CWord, isolate
+    ws = [CWord(w, 1.0 + 0.3 * i, 1.25 + 0.3 * i, "s5b") for i, w in enumerate("models do all the work Muse Voice".split())]
+    lines = [ws[:4], ws[4:]]
+    out = isolate(lines, "s5b", ws[0].t_in + 0.01, ws[2].t_out)
+    assert [" ".join(w.w for w in ln) for ln in out] == ["models do all", "the work Muse Voice"]
+    two = isolate([ws[:5], ws[5:]], "s5b", ws[0].t_in + 0.01, ws[2].t_out)  # two words left keep their own line
+    assert [" ".join(w.w for w in ln) for ln in two] == ["models do all", "the work", "Muse Voice"]
