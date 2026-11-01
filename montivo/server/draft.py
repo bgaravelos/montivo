@@ -316,12 +316,15 @@ def cost(ops: list[dict], run_dir: Path | None = None, edl: dict | None = None, 
     """What a commit of these ops spends: one Muse Image card for new title words, else nothing. Given the EDL the ops
     make (and the one they start from), what its render will make: a card the base did not show, with no image yet
     for its words, is a card too, whatever op turned it on (a text op's title_style "card" on a header EDL, a kit with
-    a title card: priced $0 before, audit 31/10)."""
+    a title card: priced $0 before, audit 31/10). New title words on a header-style EDL are drawn over the speech, no
+    card: $0 (bug audit, 1/11: they were priced $0.01, so a keyless commit answered 409)."""
     words = TITLE_COST if any(o["op"] == "text" and o["args"].get("title") for o in ops) else 0.0
-    if edl is None or words:
+    if edl is None:
         return words
-    new = title_card_on(edl) and not (base is not None and title_card_on(base)
-                                      and base.get("title_card_text") == edl["title_card_text"])
+    if not title_card_on(edl):
+        return 0.0
+    new = words or not (base is not None and title_card_on(base)
+                        and base.get("title_card_text") == edl["title_card_text"])
     return TITLE_COST if new and not card_made(run_dir, edl["title_card_text"]) else 0.0
 
 
@@ -447,6 +450,19 @@ def newest_cut(run_dir: Path) -> int:
     return max(vs, default=0) or newest(run_dir)
 
 
+def new_state(run_dir: Path, base: int) -> dict:
+    """A new draft from `base`, with the newest version there was when it started ("seen"): a version picked on
+    purpose (v1 while v2 exists) is not one that "came after" the draft, so its commit stays on v1 (bug audit, 1/11:
+    it was rebased onto v2 and kept v2's music)."""
+    return {"id": uuid.uuid4().hex[:12], "base": base, "seen": max(base, newest(run_dir)), "ops": [], "redo": [],
+            "created": time.time()}
+
+
+def seen(state: dict) -> int:
+    """The newest version when the draft started (a draft from before 1/11: its base)."""
+    return int(state.get("seen") or state["base"])
+
+
 def push(run_dir: Path, fd: Path, ops: list[dict], base: int) -> tuple[dict, list[str], list[str]]:
     """Ops Ask Montivo routed in Live (agent.py draft_ops) added to the draft, or to a new one from `base`: each
     checked as its route checks it, resolved and stepped like a click; one the draft refuses is skipped with why.
@@ -458,7 +474,7 @@ def push(run_dir: Path, fd: Path, ops: list[dict], base: int) -> tuple[dict, lis
         if state and state.get("commit"):
             return summary(run_dir, state, None), [], ["a version is being made from the draft"]
         if state is None:
-            state = {"id": uuid.uuid4().hex[:12], "base": base, "ops": [], "redo": [], "created": time.time()}
+            state = new_state(run_dir, base)
             cur = base_edl(run_dir, base)
         else:
             cur = current(fd, run_dir, state)
@@ -485,7 +501,7 @@ def summary(run_dir: Path, state: dict | None, edl: dict | None, with_edl: bool 
         return {"draft": None, "latest": latest}
     spans = [{k: s.get(k) for k in ("id", "turn_id", "word_from", "word_to", "t_in", "t_out", "duration", "role", "words",
                                     "callout")} for s in (edl or {}).get("spans", [])]
-    out = {"draft": {"id": state["id"], "base": state["base"], "latest": latest, "stale": latest > state["base"],
+    out = {"draft": {"id": state["id"], "base": state["base"], "latest": latest, "stale": latest > seen(state),
                      "ops": [{"op": o["op"], "args": o["args"], "say": o.get("say")} for o in state["ops"]],
                      "can_undo": bool(state["ops"]), "can_redo": bool(state.get("redo")),
                      "runtime_s": (edl or {}).get("runtime_s"), "spans": spans,
@@ -531,6 +547,17 @@ def router(st, own, judge_of, need_key, hosted: bool = False) -> APIRouter:
         state.pop("commit", None)
         state["commit_failed"] = "Making the version did not finish: the draft is still here."
         save(fd, state, None)
+        if c["run"] != run_id:
+            # a hosted sample's first commit failed or was stopped in the judge's new copy: the editor and Home are
+            # on the copy now, so the draft goes there (it stayed on the sample, out of reach; bug audit, 1/11)
+            src = st.run_dir(run_id)
+            dfd = st.runs / c["run"] / fd.relative_to(src)
+            with run_lock(st.runs / c["run"]):  # the caller holds the sample's lock (sample before copy, as move())
+                if (st.runs / c["run"]).is_dir() and load(dfd) is None:
+                    shutil.rmtree(dfd, ignore_errors=True)
+                    dfd.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(fd), str(dfd))
+                    return None
         return state
 
     def refuse_beside_job(run_id: str, state: dict | None) -> None:
@@ -554,7 +581,7 @@ def router(st, own, judge_of, need_key, hosted: bool = False) -> APIRouter:
             if state is None:
                 base = newest_cut(d) if frm is None else _int(frm, "from")
                 cur = base_edl(d, base)
-                state = {"id": uuid.uuid4().hex[:12], "base": base, "ops": [], "redo": [], "created": time.time()}
+                state = new_state(d, base)
             else:
                 if frm is not None and _int(frm, "from") != state["base"]:
                     raise HTTPException(409, f"a draft from v{state['base']} is open: make its version or discard it "
@@ -669,10 +696,13 @@ def router(st, own, judge_of, need_key, hosted: bool = False) -> APIRouter:
                             shutil.rmtree(x.parent, ignore_errors=True)
                 ops = [{"op": o["op"], "args": o["args"]} for o in state["ops"]]
                 frm, latest = state["base"], newest(td)
-                if latest > frm and not rebase:
+                # only a version made after the draft started is replayed onto: one that was there already (the
+                # person picked an older version on purpose) leaves the draft on its own base
+                after = latest > seen(state)
+                if after and not rebase:
                     raise HTTPException(409, f"v{latest} was made after this draft started from v{frm}: discard the "
                                              f"draft, or make it on v{latest}")
-                if latest > frm:
+                if after:
                     why = rebase_conflict(base_edl(td, frm), base_edl(td, latest), ops)
                     if why:
                         raise HTTPException(409, f"v{latest} was made after this draft started from v{frm} and {why}: "

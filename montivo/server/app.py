@@ -23,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -328,17 +329,33 @@ def retry_estimate(root: Path, kind: str, args: list[str], duration=lambda p: No
     # new title words go as one "--title=WORDS" argument; a B-roll still costs only when made (--prompt), not when it
     # is moved or taken out (cloud review, 29/10: a stopped $0 Ask held $0.05, a stopped overlay remove $0.01 and
     # stopped title words nothing)
-    if "--title" in args or any(a.startswith("--title=") for a in args) or ("overlay" in args and "--prompt" in args):
+    words = "--title" in args or any(a.startswith("--title=") for a in args)
+    if words and ("--title-style=card" in args or (base_style(root, args) == "card" and "--title-style=header" not in args)):
+        est += 0.01  # header-style title words are drawn over the speech: no Muse Image card
+    elif "overlay" in args and "--prompt" in args:
         est += 0.01
-    elif card_op(args):
+    elif card_op(args, root):
         est += 0.01
     return round(max(est, hosted.MIN_PAID_USD) if floor else est, 4)
 
 
-def card_op(args: list[str]) -> bool:
-    """A draft commit (--ops) or a panel op (--op ... --args) that may make a Muse Image title card: new title words,
-    a text op that turns the card style on, a kit (it can carry a card). Priced at most one card, as draft.cost does
-    for the first try; a retry used to run it with no budget check at all."""
+def base_style(root: Path, args: list[str]) -> str:
+    """The title style of the version a job's command edits ("runs/<id>", --from N, else the newest): "card" or
+    "header"; "card" (the paid one) when the EDL cannot be read."""
+    try:
+        rd = root / next(a for a in args if a.startswith("runs/"))
+        n = int(args[args.index("--from") + 1]) if "--from" in args else latest_version(rd)
+        return title_style(json.loads((rd / f"edl_v{n}.json").read_text()))
+    except (StopIteration, IndexError, ValueError, OSError):
+        return "card"
+
+
+def card_op(args: list[str], root: Path | None = None) -> bool:
+    """A draft commit (--ops) or a panel op (--op ... --args) that may make a Muse Image title card: new title words
+    in the card style (the base version's, or the one a text op before them chose), a text op that turns the card
+    style on, a kit (it can carry a card). Priced at most one card, as draft.cost does for the first try; a retry
+    used to run it with no budget check at all. New words on a header-style version make no card (bug audit, 1/11:
+    a keyless commit of 017's new title words answered 409 "set MODEL_API_KEY" for a $0 header)."""
     try:
         if "--ops" in args:
             ops = json.loads(args[args.index("--ops") + 1])
@@ -348,8 +365,21 @@ def card_op(args: list[str]) -> bool:
             return False
     except (IndexError, ValueError):
         return False
-    return any(isinstance(o, dict) and (o.get("op") == "kit" or (o.get("op") == "text" and isinstance(o.get("args"), dict)
-               and (o["args"].get("title") or o["args"].get("title_style") == "card"))) for o in ops)
+    style = base_style(root, args) if root is not None else "card"
+    for o in ops:
+        if not isinstance(o, dict):
+            continue
+        if o.get("op") == "kit":
+            return True
+        a = o.get("args") if isinstance(o.get("args"), dict) else {}
+        if o.get("op") == "text":
+            if a.get("title_style") in ("card", "header"):
+                style = a["title_style"]
+                if style == "card":
+                    return True
+            if a.get("title") and style == "card":
+                return True
+    return False
 
 
 def stop_hold(root: Path, job: "Job") -> float:
@@ -479,7 +509,9 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
         st.refuse_second_job()
         st.refuse_beside_paid_call(run_id)
         (d / "ui").mkdir(parents=True, exist_ok=True)
-        jid = time.strftime("%Y%m%d-%H%M%S")
+        # the second plus a random tail: two jobs in one second (on two runs) shared one .out file, and a draft's
+        # settle, which matches its commit by job id, could take the other job's end for its own (bug audit, 1/11)
+        jid = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
         out = d / "ui" / f"job-{jid}-{kind}.out"
         cmd = [sys.executable, *args]
         logp = d / "run.log"
@@ -1089,11 +1121,14 @@ def create_app(root: Path) -> FastAPI:
         d, _ = cut_of(run_id, v)
         return read_json(d / f"cover_v{v}.json") or {"moments": []}
 
-    async def own_paid(run_id: str, request: Request, est: float, what: str) -> tuple[str, dict]:
+    async def own_paid(run_id: str, request: Request, est: float, what: str,
+                       carry_draft: bool = True) -> tuple[str, dict]:
         """The run a paid export call writes to and the body: on the hosted demo the judge's own copy of a sample
-        (cover_vN.json and post_vN.json written into a sample were the next judge's to see, code review day 1)."""
+        (cover_vN.json and post_vN.json written into a sample were the next judge's to see, code review day 1). The
+        Export page reopens on the copy, so the judge's Live draft goes with them; the suggest routes pass
+        carry_draft=False (the editor stays on the sample there)."""
         b = await body(request)
-        return await own(run_id, request, est=lambda _: est, what=what), b
+        return await own(run_id, request, est=lambda _: est, what=what, carry_draft=carry_draft), b
 
     @app.post("/api/runs/{run_id}/export/cover")
     async def cover_post(run_id: str, request: Request):
@@ -2285,7 +2320,9 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(400, "prompt: the look in a few words")
         asked = run_id
         edl = await asyncio.to_thread(suggest_edl, run_id, request, b)
-        run_id, _ = await own_paid(run_id, request, COST["look"], "Styling from a sentence (Muse Spark)")
+        # the draft stays on the sample: the editor ignores "run" here, and a draft moved into the copy was lost to the
+        # next draft edit (a new draft on the sample) and to its commit (bug audit, 1/11)
+        run_id, _ = await own_paid(run_id, request, COST["look"], "Styling from a sentence (Muse Spark)", carry_draft=False)
 
         def go() -> dict:
             d = st.run_dir(run_id)
@@ -2313,7 +2350,7 @@ def create_app(root: Path) -> FastAPI:
         b = await body(request)
         asked = run_id
         edl = await asyncio.to_thread(suggest_edl, run_id, request, b)
-        run_id, _ = await own_paid(run_id, request, COST["titles"], "Title hooks (Muse Spark)")
+        run_id, _ = await own_paid(run_id, request, COST["titles"], "Title hooks (Muse Spark)", carry_draft=False)
 
         def go() -> dict:
             d = st.run_dir(run_id)
@@ -2604,6 +2641,11 @@ def create_app(root: Path) -> FastAPI:
         j = st.job(run_id)
         if not j or j.ended is None or not j.rc:
             raise HTTPException(409, "nothing failed to try again")
+        if j.kind == "draft":
+            # a draft's version is made from the draft as it stands (the commit records itself in the draft): the old
+            # command once more made the version but left the draft open with the same ops, and the next Make Version
+            # answered 409 (bug audit, 1/11)
+            raise HTTPException(409, "the draft is still open: press Make Version again to make its version")
         args = j.cmd[1:]
         if j.kind == "run" and "--resume" not in args:
             args.append("--resume")  # the stages that finished stay: a second try pays only for the rest
@@ -2611,6 +2653,9 @@ def create_app(root: Path) -> FastAPI:
             need_key(j.label, retry_estimate(st.root, j.kind, args, footage_duration))
         job = start_job(st, run_id, j.kind, j.label, args,
                         chat={"role": "user", "kind": "retry_job", "job": j.id, "text": f"Try again: {j.label}"})
+        # a Live Ask puts its edits into the editor's draft when it ends: without the folder a retry's edits were
+        # dropped while the chat said done (bug audit, 1/11)
+        job.draft_dir = j.draft_dir
         return {"job": job.public()}
 
     @app.post("/api/runs/{run_id}/review")

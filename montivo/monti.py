@@ -261,10 +261,10 @@ def targets_text() -> str:
 def context_text(ctx: dict) -> str:
     page = ctx.get("page") if ctx.get("page") in PAGES else "editor"
     bits = [f"page: {page}" + (" (the Export page, over the editor)" if page == "export" else "")]
-    if ctx.get("version"):
-        bits.append(f"version: {ctx['version']}")
+    if ctx.get("version"):  # capped like the selection: the browser sends them, so a long one went in whole
+        bits.append(f"version: {str(ctx['version'])[:40]}")
     if ctx.get("panel"):
-        bits.append(f"open panel: {ctx['panel']}")
+        bits.append(f"open panel: {str(ctx['panel'])[:40]}")
     if ctx.get("live") is not None and page != "home":
         bits.append("viewer: Live" if ctx.get("live") else "viewer: Rendered")
     if ctx.get("draft"):
