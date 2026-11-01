@@ -802,6 +802,39 @@ def preflight(run_dir: Path, edl: dict, words: Words, audio: Audio | None, log=p
     return edl, {"rounds": k + 1, "fixes": done, "clear": not gate["blocked"], "left": gate["reasons"], "stop": stop}
 
 
+def stuck_edges(run_dir: Path, edl: dict, words: Words, audio: Audio | None) -> list[str]:
+    """The cut edges still inside speech after a trial preflight of the paper edit, as problems for the planner's
+    repair call: the preflight moves an edge only within its pause search, so what is left needs another span edge.
+    d1-nasa's "Happy Thanksgiving!" starts while turn 8 still talks (-22.6 dB at the edge, no quiet point near: the
+    first review's blocker, three loop passes could not move it); heli-01's new hook "we passed 716 saves" runs straight
+    into the next sentence, which another span keeps (1/11, two loud edges, the first review's two majors)."""
+    if audio is None or not edl.get("spans"):
+        return []
+    trial, _ = preflight(run_dir, copy.deepcopy(edl), words, audio, log=lambda *_: None)
+    by_t = {round(t, 2): (b, a) for t, b, a in cuts(cut_map(trial)) if b is not None}
+    out = []
+    for e in cut_edge_levels(trial, audio):
+        if not e["loud"]:
+            continue
+        before, after = by_t.get(e["t"], (None, None))
+        for side, db in (("out", e["end_db"]), ("in", e["start_db"])):
+            c = before if side == "out" else after
+            if c is None or db is None or db <= e["loud_db"]:
+                continue
+            s = trial["spans"][c.index]
+            toks = (s.get("words") or "").split()
+            if side == "in":
+                out.append(f"{s['id']} opens on \"{' '.join(toks[:4])} ...\" where the recording has no pause before it: "
+                           "the speech runs straight on from the words before, so the cut clips its first word. Open it "
+                           "on a sentence the speaker starts after a pause, or take the end of the passage before it "
+                           "with it as the span right before")
+            else:
+                out.append(f"{s['id']} ends on \"... {' '.join(toks[-4:])}\" where the recording has no pause after it: "
+                           "the speaker runs straight on into the next words, so the cut clips them. End it where the "
+                           "speaker pauses (a sentence end with a breath after it), or keep the words that follow with it")
+    return list(dict.fromkeys(out))
+
+
 # --------------------------------------------------------------------------- the copy Spark watches
 
 def draw_clock(t: float, out: Path, size: int = 40) -> None:

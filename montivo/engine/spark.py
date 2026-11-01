@@ -28,6 +28,18 @@ from .api import chat_as_response, chat_create, dump_json, output_text, response
 # 015 / 016 and 014): plan low 11-13 s / $0.012-0.016 vs the default 26-40 s / $0.03-0.05, the same kept words on
 # 016 and 015; watch low 10.8 s vs 32.5 s on 016, 18.7 s vs 50.3 s on 014, the same shots and moments.
 PLAN_EFFORT = "low"
+# The hook (1/11): at effort low the plan opened on the footage's chronological start on 3 of the 4 clips that never
+# pass ("when I was growing up my dad was", "The ride down the escalator took a full minute", "We're part of the
+# national SAR plan um"), and the first review's hook_in_1_5s major held the pass on each. Spark 1.3 only: the Open
+# planner keeps its own prompt (benchmarked apart).
+HOOK_RULE = (
+    "- The hook is the one line of the whole recording that makes a stranger keep watching: a short, complete sentence "
+    "(one or two, ideally under 6 seconds) with the most surprising claim, number, stake, result or feeling, taken from "
+    "wherever it is said, usually NOT the start of the recording. Read the whole transcript for it before you plan the "
+    "rest. Never open on scene-setting, background or chronology (\"when I was growing up\", \"we're part of the ...\", "
+    "\"the ride took a full minute\"), on a greeting unless the brief asks for it, or on a filler (\"um\", \"so\", \"yeah\"). "
+    "When that line sits inside a passage you keep, quote it as its own span first and keep the rest of the passage "
+    "as a later span. A brief that names the opening line wins over this rule.\n")
 WATCH_EFFORT = "low"
 PARSE_RETRIES = 1  # an incomplete or unparsable answer is asked once more
 PARSE_RETRY_TOKENS = 1.5
@@ -199,6 +211,7 @@ class Spark:
             f"Speakers:\n{speakers}\n\n"
             "Rules for the paper edit:\n"
             "- Ordered spans to keep, strongest line first (the hook must land inside the first 1.5 seconds of speech).\n"
+            + ("" if is_open_model(self.model) else HOOK_RULE) +
             "- Each span lies inside ONE transcript turn and quotes the exact contiguous words to keep, copied character for "
             "character from that turn's transcript, including repeated words and disfluencies. We cut on word boundaries "
             "taken from the audio, so a paraphrase or a cleaned-up quote cannot be used.\n"

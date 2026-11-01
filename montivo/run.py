@@ -15,7 +15,7 @@ from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, open_api_ke
 from .engine import track as track_mod
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, tighten_edges
-from .engine.edl import build_edl, carry_run_words, plan_check, title_card_on
+from .engine.edl import build_edl, carry_run_words, edl_summary, filler_hook, plan_check, restarts, title_card_on
 from .engine.image import generate_title_card
 from .engine.ingest import Ingested, Probe, detect_shots, ingest
 from .engine.render import render as render_edl
@@ -101,6 +101,34 @@ def plan_reuse(opts: RunOptions, made: dict, have_plan: bool, inputs_resumed: bo
     if changed:
         return False, f"{', '.join(changed)} changed since plan.json: a new plan"
     return True, "same brief, target and planner as plan.json: plan reused (--replan makes a new one)"
+
+
+# heli-01 (1/11): the repair for one loud edge after the new hook "we passed 716 saves" came back opening on "Yeah so I
+# think the the most important thing" (hook 2, a blocker): the repair call never saw the first edit it was asked to
+# keep what was right of. Spark 1.3 repairs now get that edit and what to keep
+REPAIR_KEEP = ("\n- Keep the hook (the opening line) of the first edit unless a problem above names it, and keep every "
+               "span no problem names as it was.")
+
+
+V1_PAUSE_S = 1.0  # a pause longer than this inside the first cut is shortened before anything is rendered
+
+
+def shorten_long_pauses(edl: dict, words: Words, audio: Audio | None, log=print) -> dict:
+    """A long pause inside a kept passage, shortened to human.PAUSE_KEEP_S in v1 (the editor's pauses op, no word
+    removed): d1-nasa's first cut held 1.16 s of silence between "supporting us." and the next speaker inside one span,
+    the first review's pacing major every round (the loop cannot drop part of a span). Only pauses over V1_PAUSE_S:
+    the reviewer calls the shorter ones minor, and Billy's own clips (012, 015, 016) have none. Recorded as EDL
+    `v1_pauses`; the EDL stays version 1."""
+    from .human import pause_plan, pauses_edit
+    if audio is None or not edl.get("spans"):
+        return edl
+    if not pause_plan(edl, words, audio, over=V1_PAUSE_S)["pauses"]:
+        return edl
+    new, rec = pauses_edit(edl, words, audio, over=V1_PAUSE_S)
+    new["version"] = edl.get("version", 1)
+    new["v1_pauses"] = rec.fixes[0]["args"]["pauses"]
+    log(f"pauses: {rec.fixes[0]['note']}")
+    return new
 
 
 def supersede_v1(out: Path, log=print) -> Path | None:
@@ -329,7 +357,20 @@ def run(opts: RunOptions) -> dict:
             carry_run_words(prev_v1, edl)
         # A4: the paper edit checked word by word against the brief's checklist (C1), the target, repeated takes and
         # unplaced words; one more plan call with exactly what failed, kept when it fails fewer checks ($0 when clean)
-        problems = plan_check(edl, opts.target_s)
+        def check(e: dict) -> list[str]:
+            # Spark 1.3 plans also answer for what only another span edge fixes (1/11): a false start inside a span and
+            # a cut edge the speaker runs on across; the Open planner keeps the checks it was benchmarked with
+            found = plan_check(e, opts.target_s)
+            if not opts.planner_model:
+                from .engine.review import stuck_edges
+                try:
+                    found += (filler_hook(e) + restarts(e)
+                              + stuck_edges(out, e, Words([asdict(w) for w in voice.words]), Audio.load(out)))
+                except Exception:
+                    log(f"ERROR in the plan check's edge test (left out):\n{traceback.format_exc()}")
+            return found
+
+        problems = check(edl)
         record = {"first": problems, "repaired": False}
         if problems:
             log(f"plan check: {len(problems)} problem(s): " + "; ".join(problems))
@@ -338,13 +379,15 @@ def run(opts: RunOptions) -> dict:
                 again = planner.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
                                      file_id=ing.file_id if opts.plan_with_video else None,
                                      reasoning_effort=opts.plan_effort, words_per_s=wps, name="plan_repair",
-                                     repair="\n".join(f"- {p}" for p in problems))
+                                     repair="\n".join(f"- {p}" for p in problems)
+                                     + ("" if opts.planner_model else REPAIR_KEEP + "\n\nThe first paper edit (span "
+                                        f"ids as the problems name them, source seconds):\n{edl_summary(edl)}"))
                 edl2 = build_edl(again.parsed, voice, watch.parsed, source, opts.brief, track_summary,
                                  reframe_concept=opts.reframe_concept or "person", audio=Audio.load(out),
                                  target_s=opts.target_s)
                 if prev_v1:
                     carry_run_words(prev_v1, edl2)
-                left = plan_check(edl2, opts.target_s)
+                left = check(edl2)
                 record.update(left=left, repaired=len(left) < len(problems))
                 if record["repaired"]:
                     dump_json(out / "plan_first.json", planned.parsed)
@@ -371,6 +414,8 @@ def run(opts: RunOptions) -> dict:
             ep = edl["edge_pass"]
             log(f"edges: {ep['moved']} cut edges tightened to the speech, {ep['removed_s']} s of pause removed "
                 f"(floor {ep['floor_db']} dB, speech over {ep['threshold_db']} dB)")
+        if not opts.planner_model:  # the Open planner's v1 stays as it was benchmarked
+            edl = shorten_long_pauses(edl, Words([asdict(w) for w in voice.words]), Audio.load(out), log=log)
     if opts.punch:
         edl["punch"] = True
     if opts.kit:

@@ -305,7 +305,36 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
                 ep["moves"] += more["moves"]
                 ep.update(moved=len(ep["moves"]), widened=sum(m["widened"] for m in ep["moves"]),
                           removed_s=round(sum(abs(m["to"] - m["from"]) for m in ep["moves"]), 2))
+    anchor_callouts(edl, words)
     return edl
+
+
+CALLOUT_SHIFT_MIN_S = 0.5  # a callout whose words come sooner than this keeps the span-start timing
+
+
+def anchor_callouts(edl: dict, words: Words) -> None:
+    """A callout shows when the span says its words, not at the span's start: heli-01's "716 SAVES" came up 7 s before
+    "716 saves" was spoken and "NVG HOIST CAPABLE" over the lines about hikers (callouts_anchored 4, two majors at the
+    first review). The first content word of the callout the span says sets `callout_shift_s` (a number first: "716"),
+    within the room build_overlays needs; a callout whose words are not in the span keeps its time. The first span
+    keeps its time when its words come while the title header is up (build_overlays then waits for the header)."""
+    from .captions import CALLOUT_LEAD_S, CALLOUT_MIN_S, HEADER_S  # captions imports this module
+    for k, s in enumerate(edl["spans"]):
+        want = [t for t in norm_tokens(s.get("callout") or "") if t not in _FILLER]
+        if not want or s.get("callout_shift_s"):
+            continue
+        tw = words.turn(s["turn_id"])[s["word_from"]:s["word_to"] + 1]
+        said = [(norm(w["w"]), w) for w in tw]
+        hit = next((w for t, w in said if t in want and t[:1].isdigit()), None) or \
+            next((w for t, w in said if t in want), None)
+        if hit is None:
+            continue
+        at = max(0.0, float(hit["t_start"]) - s["t_in"])
+        room = max(0.0, s["t_out"] - s["t_in"] - CALLOUT_LEAD_S - CALLOUT_MIN_S)
+        shift = round(min(room, max(0.0, at - CALLOUT_LEAD_S)), 2)
+        if shift < CALLOUT_SHIFT_MIN_S or (k == 0 and title_header_on(edl) and at < HEADER_S):
+            continue
+        s["callout_shift_s"] = shift
 
 
 def edge_ids(spans: list[dict]) -> set[tuple[str, str]]:
@@ -387,6 +416,58 @@ def repeated_takes(edl: dict, n: int = REPEAT_N) -> list[str]:
                 break
             seen.setdefault(g, f"{s['id']}@{i}")
     return list(dict.fromkeys(out))
+
+
+RESTART_WINDOW = 5  # a false start: the same two words again within this many words ...
+_PARALLEL = {"and", "but", "or", "then", "because"}  # ... with no conjunction between: "seemed to speak and everyone
+# seemed to be looking" and "over there and then over there" (d1-tedx) are said that way on purpose
+
+
+def restarts(edl: dict, window: int = RESTART_WINDOW) -> list[str]:
+    """A false start kept inside one span: the speaker begins a phrase, breaks off and says it again ("we had we've had
+    it we had enough", d1-tedx; "a notepad and I took a notepad and I wrote"). The first review called d1-tedx's a
+    repeated take (a brief_covered major) and the loop could not drop it: the window sits inside a span. Two different
+    words, then the same two within `window` words with at least one word between; one-word doubles are Voice's
+    ("all all") and the captions drop them; a repeat after "and" / "then" is a parallel, not a restart. One problem
+    per span."""
+    out = []
+    for s in edl.get("spans") or []:
+        toks = norm_tokens(s.get("words") or "")
+        hit = None
+        for i in range(len(toks) - 1):
+            g = toks[i:i + 2]
+            if g[0] == g[1] or all(t in _FILLER for t in g):
+                continue
+            for j in range(i + 3, min(len(toks) - 1, i + window + 1)):
+                if toks[j:j + 2] == g and not _PARALLEL & set(toks[i + 2:j]):
+                    hit = (i, j)
+                    break
+            if hit:
+                break
+        if hit:
+            i, j = hit
+            out.append(f"{s['id']} keeps a false start: \"{' '.join(toks[i:j + 2])}\" says \"{' '.join(toks[i:i + 2])}\" "
+                       f"twice; quote the span from the take the speaker finishes (\"{' '.join(toks[j:j + 4])} ...\"), "
+                       "or split it into two spans around the false start")
+    return out
+
+
+OPENING_FILLERS = {"um", "uh", "uhm", "erm", "so", "yeah", "okay", "ok", "well", "and", "like", "anyway"}
+
+
+def filler_hook(edl: dict) -> list[str]:
+    """The hook opens on a filler: heli-01's repaired plan opened on "Yeah so I think the the most important thing"
+    (hook_in_1_5s 2, a blocker); the rubric fails filler in the first 1.5 s. A brief that names its opening line
+    decides the opening itself (check_brief)."""
+    spans = edl.get("spans") or []
+    if not spans or any(c.get("kind") == "opening" and c.get("quote") for c in edl.get("brief_checks") or []):
+        return []
+    toks = norm_tokens(spans[0].get("words") or "")
+    if not toks or toks[0] not in OPENING_FILLERS:
+        return []
+    lead = " ".join((spans[0]["words"]).split()[:5])
+    return [f"{spans[0]['id']} (the hook) opens on a filler: \"{lead} ...\". The first words a viewer hears must be the "
+            "line itself: start the hook span after the filler, on a word that begins the claim, or open on another line"]
 
 
 def plan_check(edl: dict, target_s: float) -> list[str]:
