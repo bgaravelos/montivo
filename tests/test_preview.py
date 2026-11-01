@@ -271,3 +271,24 @@ def test_live_falls_back_to_inter_tight_for_glyphs_the_look_font_lacks(tmp_path)
     edl["look"] = {"preset": "bold_pop", "font": "anton"}
     data = P.preview_data(d, edl)
     assert data["fonts"] == {"anton": "Anton", "inter-tight": "Inter Tight"}
+
+
+def test_the_title_card_is_found_in_the_run_folder_from_any_cwd(tmp_path, monkeypatch):
+    """1/11: the render records the card relative to where it ran ("runs/015/title/title_card.png"); `montivo serve
+    --root X` started from another folder resolved it against its own cwd, so the Live card was black."""
+    from fastapi.testclient import TestClient
+
+    from montivo.server.app import create_app
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    d = tmp_path / "root" / "runs" / "r1"
+    (d / "title").mkdir(parents=True)
+    (d / "title" / "title_card.png").write_bytes(b"\x89PNG card")
+    (d / "run.json").write_text("{}")
+    edl = _edl(tmp_path / "x.mp4", render={"title": {"png": "runs/r1/title/title_card.png", "seconds": 1.5}})
+    (d / "edl_v1.json").write_text(json.dumps(edl))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert P.title_seconds(d, edl) == (1.5, (d / "title" / "title_card.png").as_posix())
+    r = TestClient(create_app(tmp_path / "root")).get("/api/runs/r1/preview/title.png?v=1")
+    assert r.status_code == 200 and r.content == b"\x89PNG card"
