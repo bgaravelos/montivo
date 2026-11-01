@@ -1112,6 +1112,19 @@ stay (017 opens on v15 with its review), with their footage and seed zips: 15 te
 (TEDx copies, third-party and personal files) and seed 012 removed by Billy's run of the cleanup script; the deleted
 runs' $3.62 was first kept as held, then Billy had the meter reset: budget.json rebaselined on 015, 017 and Monti, $0 of $40 (the old file in the session scratchpad). README links a read-only share of 017 v15
 (`/s/CAlQGWBgIBbo`, commit f91c245). The offline release `sample-017` still holds v13.
+Bug audit 1/11 night ($0, `docs/notes/bug-audit_2026-11-01.md`): six read-only agents (render / Live parity clean),
+then every Must and Should fixed with a test that fails on the old code (833 -> 860), on Billy's go: a suggest route on
+a sample leaves the judge's Live draft there; a draft on a picked older version commits from it (`seen` in state.json);
+a failed first commit on a sample takes the draft to the copy; Try again keeps a Live ask's draft, refuses a draft
+commit; job ids unique; header-style title words $0; retexts follow split / cut / trim (`human.fit_overrides`); a second
+punch-in skip on a draft; a clip moved away and back rejoins its take; keyword router reads on/off per clause and never
+drops part of a clip; the Ask card says what trim / insert / pauses / restore do; hook challengers by source time; the
+first clip's in edge is measured (015 v5 / 017 v15 / 012 v2 still clear); escalation SystemExit recorded; parallel
+phrasing with a comma is no false start; a short first word is no knock; title hooks read the captions; Monti's hook A/B
+price; a focused slider keeps Space and the editor keys. combo_check on 017: 49 versions, 0 failures; stored edges
+unchanged. Main 882dbe1, pushed and deployed 1/11 on Billy's go from a clean worktree (no container was running);
+/api/health 200, /api/runs 401, /s/nope 404, /api/monti 401, a POST from another origin 403; smoke drop on 015: 34.2 s,
+-14.0 LUFS / -1.7 dBTP, render 8.4 s; smoke --live ok. Left: a lone "the" line after splitting 015 s5 (captions.isolate).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
