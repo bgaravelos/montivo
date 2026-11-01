@@ -28,7 +28,7 @@ export type LiveData = {
     pill?: [number, number];
     look?: LiveLook }[]; // a clip's own look (S4), else the cut's `look`
   callouts?: { span: string; text: string; t_in: number; t_out: number; box: [number, number, number, number]; size: number; ascent: number; descent: number;
-    look?: LiveLook }[];
+    fade_s?: number; look?: LiveLook }[];
   stills?: { id: string; placement: string; t_in: number; t_out: number; x: number; y: number; w: number; h: number; fade_s: number; url: string }[];
   draft?: { id: string; base: number; ops: number; n: number };
   music?: { track: string; name: string; url: string; gain_db: number; level_db: number; track_lufs: number; duck_db: number;
@@ -41,6 +41,18 @@ const LEAD_S = 0.03; // audio and picture start this far ahead of "now", so the 
 const RAMP_S = 0.005; // a short gain ramp at every cut edge: no click (the render crossfades 20 ms, engine/render.cut_graph)
 const HARD_DRIFT_S = 0.25; // the picture this far off the audio clock seeks; less is pulled in by the playback rate
 const PREROLL_S = 0.15; // the next segment's <video> starts playing (hidden) this far ahead of its cut: play() takes 30-80 ms
+
+/** The speech's and the bed's gain in dB as the render's mix leaves them (render.render_audio): the speech, normalised
+ *  by its loudness gain, moved by voice_db, the bed added at its level, then the mix normalised to -14 LUFS again, so the
+ *  speech comes back to about its own loudness and the bed goes down by voice_db (the bed's small share of the mix's
+ *  loudness, 0.1-0.5 dB, left out). `over` = the faders while they are moved. Adding voice_db to the speech played a
+ *  version at voice +6 6 dB louder than its export, into the limiter (a 015 render: speech -0.1 dB, bed -6.1 dB). */
+export function mixLevels(gainDb: number | null, music: LiveData["music"] | undefined,
+  over: { level_db: number; voice_db: number } | null): { speech: number; bed: number } {
+  const voice = over?.voice_db ?? music?.voice_db ?? 0;
+  const bed = !music ? 0 : over ? over.level_db - music.track_lufs : music.gain_db;
+  return { speech: gainDb ?? 0, bed: bed - voice };
+}
 
 type Stats = { swaps: { seg: number; late_ms: number; ready: number; by: string }[]; drift: number[]; firstFrameMs: number[]; ticks: number };
 
@@ -233,8 +245,9 @@ export class LiveMedia {
     this.onstate?.();
   }
 
-  /** The output chain once: the speech through the render's loudness gain (and the music's voice_db), the bed beside
-   *  it, both into mute -> a limiter (the render's -1.5 dBTP ceiling). Returns the speech's input. */
+  /** The output chain once: the speech through the render's loudness gain (mixLevels: the music's voice_db moves the
+   *  bed against it), the bed beside it, both into mute -> a limiter (the render's -1.5 dBTP ceiling). Returns the
+   *  speech's input. */
   private chain(): GainNode {
     const ctx = audioCtx();
     if (!this.master) {
@@ -244,8 +257,7 @@ export class LiveMedia {
       lim.threshold.value = -1.5; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.002; lim.release.value = 0.05;
       this.level.connect(this.master).connect(lim).connect(ctx.destination);
     }
-    const voice = this.mixOver?.voice_db ?? this.data.music?.voice_db ?? 0;
-    this.level!.gain.value = Math.pow(10, ((this.data.gain_db ?? 0) + voice) / 20);
+    this.level!.gain.value = Math.pow(10, mixLevels(this.data.gain_db, this.data.music, this.mixOver).speech / 20);
     this.master.gain.value = this.mute ? 0 : 1;
     return this.level!;
   }
@@ -254,7 +266,7 @@ export class LiveMedia {
    *  speech with its attack and release ramps (music.duck_at), the fade in and out. */
   private bedGain(c: number): number {
     const m = this.data.music!;
-    const gain = this.mixOver ? this.mixOver.level_db - m.track_lufs : m.gain_db;
+    const gain = mixLevels(this.data.gain_db, m, this.mixOver).bed;
     let duck = 0;
     for (const [a, b] of m.ducked)
       duck += Math.min(1, Math.max(0, (c - (a - m.attack_s)) / m.attack_s)) * Math.min(1, Math.max(0, (b + m.release_s - c) / m.release_s));
@@ -343,7 +355,7 @@ export class LiveMedia {
       const off = new OfflineAudioContext(2, Math.max(1, Math.ceil(this.duration * sr)), sr);
       const level = off.createGain(), master = off.createGain(), lim = off.createDynamicsCompressor();
       lim.threshold.value = -1.5; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.002; lim.release.value = 0.05;
-      level.gain.value = Math.pow(10, ((this.data.gain_db ?? 0) + (this.mixOver?.voice_db ?? this.data.music?.voice_db ?? 0)) / 20);
+      level.gain.value = Math.pow(10, mixLevels(this.data.gain_db, this.data.music, this.mixOver).speech / 20);
       level.connect(master).connect(lim).connect(off.destination);
       this.schedule(off, 0, 1, 0, level, master);
       const out = await off.startRendering();

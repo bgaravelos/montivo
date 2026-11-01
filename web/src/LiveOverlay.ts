@@ -9,7 +9,7 @@ export class LiveOverlay {
   readonly root: HTMLDivElement;
   private stills: { el: HTMLImageElement; a: number; b: number; fade: number }[] = [];
   private lines: { el: HTMLDivElement; words: HTMLSpanElement[]; a: number; b: number; starts: number[]; on: boolean; act: number; mode: string }[] = [];
-  private callouts: { el: HTMLDivElement; a: number; b: number; on: boolean }[] = [];
+  private callouts: { el: HTMLDivElement; a: number; b: number; on: boolean; fade: number }[] = [];
   private title: { el: HTMLDivElement; img: HTMLImageElement; s: number; fade: number } | null = null;
 
   constructor(private data: LiveData) {
@@ -103,9 +103,12 @@ export class LiveOverlay {
         lineHeight: `${c.ascent + c.descent}px`, borderRadius: `${h / 2}px`, display: "none",
         background: hex(look?.callout_bg ?? "#FFC629", 240), color: hex(look?.callout_fg ?? "#000000"),
         border: `4px solid ${hex(look?.callout_fg ?? "#000000")}`,
+        // the render draws a callout and the title header as written (graphics.draw_callout): an upper-case look
+        // capitalises the caption words only, so the pill does not take the root's uppercase
+        textTransform: "none",
       });
       this.root.append(el);
-      this.callouts.push({ el, a: c.t_in, b: c.t_out, on: false });
+      this.callouts.push({ el, a: c.t_in, b: c.t_out, on: false, fade: c.fade_s ?? 0 });
     }
     if (d.title) {
       const el = document.createElement("div");
@@ -145,9 +148,10 @@ export class LiveOverlay {
         sp.className = `lo-w ${said && ln.mode !== "none" ? `act-${ln.mode}` : ""}`;
       });
     }
-    for (const c of this.callouts) {
+    for (const c of this.callouts) { // a callout fades in and out as the render's overlay does (captions.CALLOUT_FADE_S)
       const on = t >= c.a && t < c.b;
       if (on !== c.on) { c.el.style.display = on ? "flex" : "none"; c.on = on; }
+      if (on) c.el.style.opacity = String(c.fade > 0 ? Math.max(0, Math.min(1, (t - c.a) / c.fade, (c.b - t) / c.fade)) : 1);
     }
     if (this.title) {
       const { el, img, s, fade } = this.title;

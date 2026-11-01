@@ -19,14 +19,17 @@ export const sameMix = (a: Mix | null, b: Mix | null) =>
 const db = (x: number) => 10 ** (x / 20);
 const DRIFT_S = 0.08; // restart the stems when they drift this far from the video
 
-/** The gains (linear) that make the stems sound like the render of `mix`: each track moved by its fader against the
- *  version's own mix, then the master the -14 LUFS normalisation would apply. The cut's loudness is mostly the voice;
- *  the bed adds its share, `margin_db` under it (measured by the render), so raising the voice brings everything down. */
+/** The gains (linear) that make the stems sound like the render of `mix`. The stems are what the render mixed, before
+ *  the mix: the speech normalised to -14 LUFS without the voice fader, the bed at its level (render.render_audio). The
+ *  render moves the speech by voice_db, adds the bed, then normalises the mix to -14 LUFS: the speech, mostly what the
+ *  loudness measures, comes back to about -14 and the bed goes down by voice_db and the bed's share, `margin_db` under
+ *  the speech (measured by the render with the version's voice_db; each fader moves it). Measured on a 015 render at
+ *  voice +6: speech stem x0.987, bed stem x0.494 (-6.1 dB); unity on both used to play the bed 6 dB too loud. */
 export function liveGains(base: Mix, mix: Mix, margin_db: number | null): { voice: number; music: number } {
   const dv = mix.voice_db - base.voice_db, dm = mix.level_db - base.level_db;
-  const r = 10 ** (-(margin_db ?? 18) / 10);
-  const master = -10 * Math.log10((10 ** (dv / 10) + r * 10 ** (dm / 10)) / (1 + r));
-  return { voice: db(dv + master), music: db(dm + master) };
+  const margin = (margin_db ?? 18) + dv - dm;
+  const share = 10 * Math.log10(1 + 10 ** (-margin / 10)); // the bed's part of the mix's loudness, taken off both
+  return { voice: db(-share), music: db(dm - mix.voice_db - share) };
 }
 
 let shared: AudioContext | null = null;
