@@ -380,3 +380,36 @@ def tighten_edges(edl: dict, words: Words, audio: Audio, only: set[tuple[str, st
     if only is None:
         edl["edge_pass"] = summary
     return summary
+
+
+MARK_GAP_S = 0.15  # pause_marks: a stretch under the speech threshold this long ...
+MARK_REACH_S = 0.35  # ... this close to a Voice word boundary (Voice's boundaries sit up to 0.3 s off the audio)
+
+
+def pause_marks(words: list[dict], audio: Audio) -> dict[int, set[int]]:
+    """Where the recording pauses between two words, for the planner's transcript (voice.transcript_text): {turn id:
+    the indices k of the words a pause comes before; k = the turn's word count for a pause after its last word}. A
+    span that starts or ends anywhere else cuts into running speech: heli-01's speaker runs his sentences together and
+    every plan opened spans where the preflight could find no quiet point ("We're part of the national SAR plan", "we
+    passed 716 saves we were involved"), the first review's no_cut_mid_word blockers. Voice words abut, so only the
+    audio shows the pause."""
+    by_turn: dict[int, list[dict]] = {}
+    for w in words:
+        by_turn.setdefault(int(w["turn_id"]), []).append(w)
+    out: dict[int, set[int]] = {}
+    for tid, tw in by_turn.items():
+        tw.sort(key=lambda w: w["i"])
+        lo, hi = tw[0]["t_start"] - 1.0, tw[-1]["t_end"] + 1.0
+        runs = audio.speech_runs(max(0.0, lo), min(audio.duration, hi))
+        edges = [max(0.0, lo)] + [x for r in runs for x in r] + [min(audio.duration, hi)]
+        gaps = [(a, b) for a, b in zip(edges[::2], edges[1::2]) if b - a >= MARK_GAP_S]
+        bounds = [tw[0]["t_start"]] + [w["t_end"] for w in tw]  # before word 0, after word k-1
+        marks = set()
+        for a, b in gaps:  # each pause marks the one boundary nearest it (a word boundary inside it first)
+            dist = lambda t: 0.0 if a <= t <= b else min(abs(t - a), abs(t - b))  # noqa: E731
+            k = min(range(len(bounds)), key=lambda k: (dist(bounds[k]), abs(bounds[k] - (a + b) / 2)))
+            if dist(bounds[k]) <= MARK_REACH_S:
+                marks.add(k)
+        if marks:
+            out[tid] = marks
+    return out

@@ -9,6 +9,22 @@ def _words(turn: int, text: str, t0: float = 10.0, step: float = 0.4) -> list[di
             for k, w in enumerate(text.split())]
 
 
+def _room(speech: list[tuple[float, float]], seconds: float = 20.0):
+    """A quiet room (about -75 dB) with speech at about -34 dB over `speech`."""
+    import array
+    import math
+    from montivo.engine.edges import Audio
+
+    class Room(Audio):
+        def __init__(self):
+            self.rate = 8000
+            self.pcm = array.array("h", [int(6 * math.sin(k * 1.7)) for k in range(int(seconds * self.rate))])
+            for a, b in speech:
+                for k in range(int(a * self.rate), int(b * self.rate)):
+                    self.pcm[k] = int(900 * math.sin(k / 3))
+    return Room()
+
+
 def test_a_callout_shows_when_its_words_are_said():
     # heli-01 v1: "716 SAVES" came up at the span start, 7 s before "716 saves" is spoken (callouts_anchored 4)
     tw = _words(5, "Um our squadron's got a rich history it's been at Fairchild for over 50 years we passed 716 saves")
@@ -112,3 +128,28 @@ def test_knocks_after_the_last_word_are_not_speech():
     # a short word close to the speech stays, and so does everything when no run is long enough to be a word
     assert G.without_knocks([(10.0, 11.5), (11.7, 11.8)], first=False) == [(10.0, 11.5), (11.7, 11.8)]
     assert G.without_knocks([(1.0, 1.05), (2.0, 2.08)], first=True) == [(1.0, 1.05), (2.0, 2.08)]
+
+
+def test_the_planner_reads_where_the_recording_pauses(tmp_path):
+    # heli-01: Voice words abut, so every plan opened spans where the speaker runs on ("We're part of the national SAR
+    # plan"); the transcript now carries the pauses the audio shows, one mark per pause, on the nearest boundary
+    from montivo.engine.edges import pause_marks
+    from montivo.engine.spark import PAUSE_RULE
+    from montivo.engine.voice import Turn, VoiceResult, Word
+    from montivo.ledger import Ledger
+    from tests.test_plan_prompt import _Capture
+    tw = _words(0, "we passed 716 saves we were involved in a save", t0=10.0)  # 0.4 s words, 10.0-14.0 s
+    audio = _room([(10.0, 11.55), (11.9, 13.98)])  # speech with one 0.35 s pause after "saves" (11.2-11.6)
+    marks = pause_marks(tw, audio)
+    assert marks == {0: {0, 4, 10}}  # before "we", before the second "we", after the last word
+    voice = VoiceResult(turns=[Turn(turnId=0, startMs=10000, endMs=14000, speaker="A",
+                                    transcript=" ".join(w["w"] for w in tw))],
+                        words=[Word(w=w["w"], t_start=w["t_start"], t_end=w["t_end"], turn_id=0, speaker="A", i=w["i"])
+                               for w in tw], audio_s=20.0, chunks=[])
+    assert voice.transcript_text(pauses=marks).endswith("/ we passed 716 saves / we were involved in a save /")
+    assert "/" not in voice.transcript_text()
+    sp = _Capture(tmp_path, Ledger(tmp_path / "ledger.json"), log=lambda *_: None)
+    sp.plan("brief", "[turn 0] hi", {"summary": "s", "visual_shots": [], "speaker_map": []}, 40.0, paused=True)
+    assert PAUSE_RULE in sp.captured[1]
+    sp.plan("brief", "[turn 0] hi", {"summary": "s", "visual_shots": [], "speaker_map": []}, 40.0)
+    assert PAUSE_RULE not in sp.captured[1]

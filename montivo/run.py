@@ -14,7 +14,7 @@ from pathlib import Path
 from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, open_api_key, sam_cost
 from .engine import track as track_mod
 from .engine.api import dump_json
-from .engine.edges import Audio, Words, tighten_edges
+from .engine.edges import Audio, Words, pause_marks, tighten_edges
 from .engine.edl import build_edl, carry_run_words, edl_summary, filler_hook, plan_check, restarts, title_card_on
 from .engine.image import generate_title_card
 from .engine.ingest import Ingested, Probe, detect_shots, ingest
@@ -271,6 +271,13 @@ def run(opts: RunOptions) -> dict:
     # On --resume plan.json is reused when nothing it read has changed; a new plan never replaces edl_v1 silently.
     # The plan reads Voice and watch only, so it starts the moment they are in, while SAM may still track (on the 016
     # clip with effort low, SAM finished 11 s after watch and the plan used to wait for it)
+    def plan_transcript(voice: VoiceResult) -> tuple[str, bool]:
+        # Spark 1.3 plans read where the recording pauses (" / ", edges.pause_marks); the Open planner the plain text
+        if opts.planner_model or (audio := Audio.load(out)) is None:
+            return voice.transcript_text(), False
+        marks = pause_marks([asdict(w) for w in voice.words], audio)
+        return voice.transcript_text(pauses=marks), bool(marks)
+
     def plan_stage(voice: VoiceResult, watch: SparkCall) -> tuple[SparkCall, bool, float]:
         wps = voice.speech_rate()
         reuse, why = plan_reuse(opts, made, (out / "plan.json").is_file(), not fresh)
@@ -285,9 +292,10 @@ def run(opts: RunOptions) -> dict:
         log(f"plan: speech rate {wps:.2f} words/s ({len(voice.words)} words over the spoken seconds of {len(voice.turns)} turns), "
             f"target {opts.target_s:.0f} s = about {opts.target_s * wps:.0f} to {opts.target_s * 1.2 * wps:.0f} words")
         planner = Spark(out, ledger, model=opts.planner_model, log=log) if opts.planner_model else spark
-        planned = planner.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
+        text, paused = plan_transcript(voice)
+        planned = planner.plan(opts.brief, text, watch.parsed, opts.target_s,
                                file_id=ing.file_id if opts.plan_with_video else None, reasoning_effort=opts.plan_effort,
-                               words_per_s=wps)
+                               words_per_s=wps, paused=paused)
         dump_json(out / "plan.json", planned.parsed)
         dump_json(out / "run.json", {**run_json, "plan_inputs": plan_inputs(opts)})
         return planned, reuse, wps
@@ -381,10 +389,12 @@ def run(opts: RunOptions) -> dict:
             for k in range(1 if opts.planner_model else PLAN_REPAIRS):
                 try:
                     planner = Spark(out, ledger, model=opts.planner_model, log=log) if opts.planner_model else spark
-                    again = planner.plan(opts.brief, voice.transcript_text(), watch.parsed, opts.target_s,
+                    text, paused = plan_transcript(voice)
+                    again = planner.plan(opts.brief, text, watch.parsed, opts.target_s,
                                          file_id=ing.file_id if opts.plan_with_video else None,
                                          reasoning_effort=opts.plan_effort, words_per_s=wps,
                                          name="plan_repair" if k == 0 else f"plan_repair{k + 1}",
+                                         paused=paused,
                                          repair="\n".join(f"- {p}" for p in problems)
                                          + ("" if opts.planner_model else REPAIR_KEEP + "\n\nThe first paper edit "
                                             f"(span ids as the problems name them, source seconds):\n{edl_summary(edl)}"))
