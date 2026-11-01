@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import difflib
 import functools
 import inspect
 import json
@@ -66,7 +67,7 @@ from .engine import broll
 from .engine.api import dump_json
 from .engine.captions import CALLOUT_LEAD_S, CALLOUT_MIN_S
 from .engine.edges import Audio, Words, reset_edges, tighten_edges
-from .engine.edl import build_edl, carry_run_words, edl_summary, normalize_roles, title_card_on, title_style
+from .engine.edl import build_edl, norm, carry_run_words, edl_summary, normalize_roles, title_card_on, title_style
 from .engine.graphics import Look, normalize_look, restyle
 from .engine.music import DUCK_DB as MUSIC_DUCK_DB, FADE_OUT_S as MUSIC_FADE_OUT_S, LEVEL_DB as MUSIC_LEVEL_DB, normalize_music
 from .engine.music import follow_cut
@@ -345,6 +346,7 @@ def drop_edit(edl: dict, words: Words, audio: Audio | None, span: str) -> tuple[
         plog[0]["note"] += retighten(new, words, audio, neighbours)
         for s in new["spans"]:
             refresh_span(s, words)
+        new["runtime_s"] = round(sum(s["duration"] for s in new["spans"]), 2)
     roles = roles_by_position(new["spans"])  # the last clip dropped: the one before it is the payoff now
     if roles:
         plog[0]["note"] += f"; roles by position: {', '.join(roles)}"
@@ -395,6 +397,7 @@ def trim_edit(edl: dict, words: Words, audio: Audio | None, span: str, edge: str
     fix = trim_fix(edl, words, span_id, edge, word)
     new, plog = apply_fixes(edl, [fix], words, audio)
     hold_trimmed_edges(edl, new, [fix], plog, words, audio)
+    fit_trimmed_overrides(edl, new, [fix], words)
     return new, Edit("trim", plog, f"trim the {'start' if edge == 'in' else 'end'} of clip {span_id}",
                      head=lambda f, n: f"montivo trim: {span_id} {edge} edge to word {word} in edl_v{f} -> edl_v{n}",
                      lines=lambda f, n: [f"patch v{f} -> v{n}: {fix.op} {span_id} {edge}: {plog[0]['note']} (human)"])
@@ -595,6 +598,16 @@ def caption(run_dir: Path, edits: list[tuple[float, str]], from_v: int | None = 
     return _run_edit(run_dir, from_v, passes, budget, caption_edit, lines=lines)
 
 
+def unlaid_punch(edl: dict, key: dict) -> dict | None:
+    """A punch-in key on an EDL whose punch-ins are not laid out: a jump cut into one of its clips, or a word that
+    starts inside one of them (plan_punches keys a word by its source start). The entry punch_edit notes, else None."""
+    if key["kind"] == "jump_cut":
+        return {"span": key["span"]} if any(s["id"] == key["span"] for s in edl["spans"][1:]) else None
+    t = float(key["src_t"])
+    return ({"word": key["word"]} if any(float(s["t_in"]) - 0.05 <= t < float(s["t_out"]) for s in edl["spans"])
+            else None)
+
+
 def punch_edit(edl: dict, words: Words, audio: Audio | None, on: bool | None = None,
                skip: str | None = None) -> tuple[dict, Edit]:
     """Punch-ins on or off (`on`), or one removed (`skip`, a key of the EDL's `punch_ins`). The render plans the rest
@@ -604,17 +617,23 @@ def punch_edit(edl: dict, words: Words, audio: Audio | None, on: bool | None = N
     new = copy.deepcopy(edl)
     if skip is not None:
         try:
-            parse_key(skip)
+            key = parse_key(skip)
         except ValueError as e:
             raise SystemExit(str(e))
         entry = next((e for e in edl.get("punch_ins") or [] if e.get("key") == skip), None)
+        if entry is None and edl.get("punch") and not edl.get("punch_ins") and skip not in (edl.get("punch_skip") or []):
+            # an EDL not laid out since its last edit (a Live draft: every punch edit clears punch_ins, the render
+            # plans them again) checks the key against its clips: a second removal, or one after Punch on, used to be
+            # refused with "punch-ins: none" while the Live player showed them (audit, 1/11)
+            entry = unlaid_punch(edl, key)
         if not edl.get("punch") or entry is None:
             have = ", ".join(e["key"] for e in edl.get("punch_ins") or [] if e.get("key")) or "none"
             raise SystemExit(f"{skip} is not a punch-in of {_of(edl)} (punch-ins: {have})")
         new["punch_skip"] = list(edl.get("punch_skip") or []) + [skip]
         what = entry.get("word") or f"the jump cut into {entry.get('span')}"
+        at = f" at {entry['t_in']:.2f} s (x{entry['zoom']})" if entry.get("t_in") is not None else ""
         fix = {"op": "punch_skip", "target": skip, "issue": -1, "severity": "human",
-               "note": f"punch-in removed: {what} at {entry['t_in']:.2f} s (x{entry['zoom']})"}
+               "note": f"punch-in removed: {what}{at}"}
         say = f"remove the punch-in on {what}"
     else:
         if bool(edl.get("punch")) == on:
@@ -1094,10 +1113,20 @@ def reorder_edit(edl: dict, words: Words, audio: Audio | None, span: str, before
     for i, e in ((moved - 1, "out"), (moved + 1, "in")):  # the new neighbours
         if 0 <= i < len(order):
             meet.add((order[i], e))
-    if audio is not None:
+    joined = []
+    sp = new["spans"]
+    for left, right in zip(sp, sp[1:]):  # a move back next to the clip it continues in the recording: one take again
+        if (left["id"], "out") in meet and (right["id"], "in") in meet and left["turn_id"] == right["turn_id"] \
+                and right["word_from"] == left["word_to"] + 1:
+            joined.append(f"{left['id']}|{right['id']} at {join_at_dip(left, right, words, audio):.3f}")
+            meet -= {(left["id"], "out"), (right["id"], "in")}
+    if joined:  # (015 s4 to the end and back: s3 | s4 | s5 stayed three tightened segments, 1.03 s of pause lost)
+        plog[0]["note"] += f"; joined to the clip it continues ({', '.join(joined)})"
+    if audio is not None and meet:
         plog[0]["note"] += retighten(new, words, audio, meet)
-        for s in new["spans"]:
-            refresh_span(s, words)
+    for s in new["spans"]:
+        refresh_span(s, words)
+    new["runtime_s"] = round(sum(s["duration"] for s in new["spans"]), 2)
     roles = roles_by_position(new["spans"])
     if roles:
         plog[0]["note"] += f"; roles by position: {', '.join(roles)}"
@@ -1173,6 +1202,84 @@ def next_span_id(edl: dict) -> int:
     return max(taken, default=0) + 1
 
 
+def override_words(o: dict, span: dict, words: Words) -> list[int] | None:
+    """The turn word indices a text override retexts in `span`: from the word under its src_t to `until` (a person's
+    retext since C6), else as far as its text aligns with the words Voice heard from there (an override from before
+    `until`: its line ended on the last heard word the text still says or replaces). None when the text matches none
+    of them."""
+    tw = words.turn(span["turn_id"])
+    t = float(o["src_t"])
+    i0 = next((w["i"] for w in tw if span["word_from"] <= w["i"] <= span["word_to"] and w["t_end"] > t - 0.01), None)
+    if i0 is None:
+        return None
+    if o.get("until") is not None:
+        end = float(o["until"]) - 0.01
+        idx = [i for i in range(i0, span["word_to"] + 1) if tw[i]["t_start"] < end]
+        return idx or None
+    text = [norm(x) for x in o["text"].split()]
+    heard = [norm(tw[i]["w"]) for i in range(i0, min(span["word_to"], i0 + len(text) + 3) + 1)]
+    ops = difflib.SequenceMatcher(None, heard, text, autojunk=False).get_opcodes()
+    if not any(tag == "equal" for tag, *_ in ops):
+        return None
+    n = max(i2 for tag, i1, i2, j1, j2 in ops if tag in ("equal", "replace"))
+    return list(range(i0, i0 + n))
+
+
+def fit_overrides(new: dict, words: Words, old: dict, pieces: list[dict]) -> None:
+    """A text override on span `old` whose words now play in more than one of `pieces` (a split inside its line) or
+    lost some (a transcript delete): one override per piece with the part of the text aligned to the words that piece
+    still plays (its src_t / until on those words), the text of deleted words gone. Its line used to stay on the piece
+    holding src_t with the whole text while the next piece captioned its own words again (015 v5 split before
+    "models": "Four Meta models do all | models do all the"; 017 v15: the deleted "I" of "EDITOR I TRIED STOPS" still
+    on screen). A text that cannot be divided word by word (a rewrite across the cut) is dropped: the words show as
+    heard. An override inside one piece with all its words is left as it was. In place on `new`."""
+    ovs = new.get("caption_overrides")
+    if not ovs:
+        return
+    tw = words.turn(old["turn_id"])
+    home = {i: p for p in pieces for i in range(p["word_from"], p["word_to"] + 1)}
+    out = []
+    for o in ovs:
+        idx = (override_words(o, old, words) if o.get("span") == old["id"] and o.get("text") and o.get("voice") is None
+               else None)
+        if not idx or (all(i in home for i in idx) and len({home[i]["id"] for i in idx}) == 1):
+            out.append(o)
+            continue
+        text = o["text"].split()
+        parts: dict[int, list[str]] = {i: [] for i in idx}  # heard word -> the text words said for it
+        ok = True
+        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, [norm(tw[i]["w"]) for i in idx], [norm(x) for x in text],
+                                                           autojunk=False).get_opcodes():
+            if tag == "equal" or (tag == "replace" and i2 - i1 == j2 - j1):
+                for d in range(i2 - i1):
+                    parts[idx[i1 + d]].append(text[j1 + d])
+            elif tag == "replace":  # more or fewer words for these: only when they all stay in one piece
+                owners = {home[idx[i]]["id"] if idx[i] in home else None for i in range(i1, i2)}
+                if len(owners) != 1 or None in owners:
+                    ok = False
+                    break
+                parts[idx[i1]].extend(text[j1:j2])
+            elif tag == "insert":  # words the text adds: with the heard word before them (after, at the start)
+                parts[idx[i1 - 1] if i1 else idx[0]].extend(text[j1:j2])
+        if not ok:
+            continue
+        for p in pieces:
+            mine = [i for i in idx if home.get(i) is p]
+            said = [x for i in mine for x in parts[i]]
+            if mine and said:
+                out.append({**o, "span": p["id"], "src_t": round(tw[mine[0]]["t_start"] + 0.01, 3),
+                            "text": " ".join(said), "until": round(tw[mine[-1]]["t_end"], 3)})
+    new["caption_overrides"] = out
+
+
+def fit_trimmed_overrides(edl: dict, new: dict, fixes: list[Fix], words: Words) -> None:
+    """fit_overrides for the clips a trim shortened: a retext keeps the words the clip still plays."""
+    old = {s["id"]: s for s in edl["spans"]}
+    for s in new["spans"]:
+        if s["id"] in old and any(f.op == "trim_span" and f.target == s["id"] for f in fixes):
+            fit_overrides(new, words, old[s["id"]], [s])
+
+
 def split_pieces(new: dict, words: Words, sid: str, runs: list[tuple[int, int]], next_id: int,
                  split_edges: set[tuple[str, str]]) -> tuple[list[dict], int]:
     """Replace span `sid` of `new` with one span per word run (turn word indices), in place: the first piece keeps the
@@ -1206,6 +1313,7 @@ def split_pieces(new: dict, words: Words, sid: str, runs: list[tuple[int, int]],
         refresh_span(p, words)
         pieces.append(p)
     new["spans"][k:k + 1] = pieces
+    fit_overrides(new, words, s, pieces)  # a retext the split or delete parts goes to its pieces, word by word
     ovs = new.get("caption_overrides") or []  # an override goes with the piece that keeps its word, or goes
     tw = words.turn(pieces[0]["turn_id"])
     # and so does a person's line break (caption_breaks): it named the old span and stopped applying (audit, 31/10)
@@ -1329,6 +1437,7 @@ def cut_edit(edl: dict, words: Words, audio: Audio | None, ranges: list[tuple[st
     if refused:  # as drop(): a version that keeps the words the selection deletes would only look like the edit
         raise SystemExit(f"{refused[0]['target']} cannot go: {refused[0]['note'].removeprefix('not applied: ')}")
     hold_trimmed_edges(edl, new, fixes, plog, words, audio, keep_out=deleted)
+    fit_trimmed_overrides(edl, new, fixes, words)
     meet: set[tuple[str, str]] = set()
     dropped = {f.target for f in fixes if f.op == "drop_span"}
     alive = [k for k, sid in enumerate(ids) if sid not in dropped]
