@@ -45,6 +45,8 @@ HOOK_RULE = (
     "wherever it is said, usually NOT the start of the recording. Read the whole transcript for it before you plan the "
     "rest. Never open on scene-setting, background or chronology (\"when I was growing up\", \"we're part of the ...\", "
     "\"the ride took a full minute\"), on a greeting unless the brief asks for it, or on a filler (\"um\", \"so\", \"yeah\"). "
+    "Start the hook on the first word of the claim itself and leave a lead-in out (\"I thought oh my gosh\", \"so I "
+    "think\", \"what was weird though is that\") when the line still makes sense without it. "
     "When that line sits inside a passage you keep, quote it as its own span first and keep the rest of the passage "
     "as a later span. Every word plays once: the hook is never repeated later as a teaser, and it is never the line "
     "the video ends on (keep that one for the payoff, whole, and find the hook elsewhere). A brief that names the "
