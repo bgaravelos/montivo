@@ -1035,6 +1035,25 @@ and script v5 (`docs/notes/demo-script-v5_2026-11-01.md`: new VO for shots 3, 7 
 pick), 2:52, -14.0 LUFS; assembled by `footage/demo/v5/asm/assemble_v5.py`, upload file `footage/demo/montivo_demo_final.mp4`.
 On YouTube: https://www.youtube.com/watch?v=JRa-nPJJVEc (Billy's channel, custom thumbnail); README opens with it
 (`assets/brand/png/montivo-demo-thumbnail.png`, made by `footage/demo/thumb/make_thumb.py`).
+Credits into quality (1/11, Billy: use the unspent credits, ~$10.9 Meta + $1.15 Baseten): a live judge run on the hosted demo
+(upload `footage/stress4_walk_0111.mp4`, 34.5 s, "Talking head" preset, `runs/live-walk-0853` pulled from the Volume): 68 / 68 /
+68, no pass ($0.23); draft delete + Make Version, Monti, a chat proposal + Apply all worked live. Side session first-cut-hard
+($8.72, notes `docs/notes/first-cut-hard_2026-11-01.md`, `tools/first_cut_bench.py`, `runs/fcb-*`): Spark 1.3 plans get a hook
+rule (strongest standalone line, start on the claim, never the ending), " / " pause marks in the transcript
+(`edges.pause_marks`), plan problems for false starts / filler hooks / edges the preflight cannot clear (`review.stuck_edges`),
+up to two repairs from the best edit, long pauses in v1 shortened (`run.shorten_long_pauses`), callouts on their words; edge
+threshold within 20 dB of the median speech + knocks dropped (any planner); a brief length the recording cannot give is
+`unreachable` (`source_speech_s`), a span on Voice's echo starts on the phrase (`edl.earlier_copy`), a loop with no gain
+escalates (`review.stalled`). Hard set first review 73.2 -> 80.1, first-review passes 0/8 -> 2/8, loop passes 0/8 -> 3/8;
+regression set 90.3 -> 94.3, loop passes 4/6 -> 6/6; live-walk 68 -> 82/85, loop 86P / 92P; 015 v5 and 017 v13 render
+bit-identical. Side session spark-open-stages ($1.15 Baseten, $1.71 Meta, `tools/open_stages_bench.py`, notes
+`docs/notes/spark-open-stages_2026-11-01.md`): `engine/stagemodel.py` puts Monti (24/24 like 1.3, $0.0033 cached vs $0.013) and
+the look from words (48/48) on Muse Spark Open when BASETEN_API_KEY is set, 1.3 on a failure or `MONTIVO_OPEN_STAGES=0`; the
+router, titles, post text and cover stay on 1.3 (measured worse); README "Open weight" has the table. Hosted cap $15 -> $40
+(`ea92fc8`, judge share $3). Merged as dc803fd (805 tests), pushed and deployed 1/11 12:20 on Billy's go from a clean worktree
+(no job since 10:59; the old container stopped); /api/health 200 (cap 40, spent 3.70), /api/runs 401, /s/nope 404; smoke drop on
+015: 34.2 s, -14.0 LUFS / -1.7 dBTP, render 8.5 s; live Monti answered on `meta-models/muse-spark-open-1026`. Left: the New
+project preset brief could follow the clip length (UI); 013's burned-in lower third cropped by 9:16.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
