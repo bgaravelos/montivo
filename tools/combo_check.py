@@ -14,7 +14,15 @@ After every version:
   fields     what the op did not touch stays as it was: music, look (line_breaks too), overlays, punch, punch_skip,
              reframe_speaker_ids, caption_overrides, glossary, highlight, title card, the clips' callouts and places
   segcache   the same EDL rendered again with MONTIVO_SEGCACHE=0 gives the same bytes
+  clip look  a clip's own look (span `look`) stays on every clip that stays, unless the op set it
+  ducks      a structural edit (or the title card on / off) moves music.duck_edits with their words (music.follow_cut):
+             every window's source seconds lie inside a window of the same kind before the edit, and the rest of the
+             bed stays as it was
+  op checks  Correct all puts its written words on a caption line; a line break starts a caption line on its word;
+             style --clip gives the clip a look of its own
 At a chain's end (music and overlays on): `python -m montivo.export` at 9:16, 4:5 and 1:1 renders, at the frame size.
+Chains G and H (2/11) cover the 30/10 ops: speaker names / merge (`human op --op speakers`), a clip look (style
+--clip), music duck edits then structural edits, Correct all (glossary) and a hand line break (linebreak).
 
 $0: MODEL_API_KEY is unset for every command; an overlay gets a placeholder picture instead of Muse Image (the only
 shim: broll.generate is replaced, everything else is the CLI as the server calls it).
@@ -41,7 +49,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PY = str(ROOT / ".venv" / "bin" / "python")
 FPS_TOL = 1 / 30 + 0.002
 WATCHED = ("music", "look", "overlays", "punch", "punch_skip", "reframe_speaker_ids", "caption_overrides", "glossary",
-           "highlight", "title_card", "title_card_text", "target")
+           "highlight", "title_card", "title_card_text", "target", "speaker_names", "speaker_merge", "caption_breaks")
 STRUCTURAL = {"drop", "trim_in", "trim_out", "cut", "split", "insert", "pauses", "reorder", "edges"}
 MAY_CHANGE = {  # watched fields each op may change (structural ops: caption_overrides only for words that left)
     "caption": {"caption_overrides"}, "text": {"title_card", "title_card_text"}, "title_off": {"title_card"},
@@ -49,7 +57,10 @@ MAY_CHANGE = {  # watched fields each op may change (structural ops: caption_ove
     "music_on": {"music"}, "music_faders": {"music"}, "music_off": {"music"}, "punch_on": {"punch"},
     "punch_off": {"punch"}, "punch_skip": {"punch_skip"}, "pin": {"reframe_speaker_ids"},
     "pin_none": {"reframe_speaker_ids"}, "overlay_add": {"overlays"}, "overlay_set": {"overlays"},
-    "overlay_remove": {"overlays"}}
+    "overlay_remove": {"overlays"}, "speakers": {"speaker_names", "speaker_merge"}, "glossary": {"glossary"},
+    "linebreak": {"caption_breaks"}, "duck_edits": {"music"}, "clip_look": set()}
+FOLLOWS = STRUCTURAL | {"title_on", "title_off"}  # ops after which music.duck_edits follow their words (follow_cut)
+GLOSSARY_WORD = "Combo Word"
 
 
 def env(cache: bool = True) -> dict:
@@ -161,6 +172,7 @@ class Step:
     slack: int = 0                       # words past `gone` the op may also take (trim settles on a sentence end)
     restore_of: int | None = None
     shim: bool = False
+    expect: dict = field(default_factory=dict)  # what the op itself must show in the version it made (check_expect)
 
 
 def mid_body(edl: dict) -> dict:
@@ -272,6 +284,33 @@ def make_step(name: str, run: Path, edl: dict, words: list[dict], chain_versions
     if name == "overlay_remove":
         o = (edl.get("overlays") or [None])[-1]
         return Step(name, ["overlay", r, "--remove", o["id"]]) if o else None
+    if name == "speakers":  # SP1 + SP2: a name for the first clip's speaker, a second label merged into it
+        spk = spans[0].get("speaker") or "A"
+        other = next(x for x in "ABCDEFGH" if x != spk)
+        args = {"names": {spk: "Combo Speaker"}, "merge": {other: spk}}
+        return Step(name, ["op", r, "--op", "speakers", "--args", json.dumps(args)])
+    if name == "clip_look":  # S4: the middle clip in a look of its own
+        s = mid_body(edl)
+        return Step(name, ["style", r, "--clip", f"{s['id']}=" + json.dumps({"preset": "box"})], expect={"clip": s["id"]})
+    if name == "duck_edits":  # M5: one window lifted, one held down, in cut seconds (the bed goes on if there is none)
+        dur = expected_duration(run, edl)
+        a, b = round(0.3 * dur, 2), round(0.7 * dur, 2)
+        tr = (edl.get("music") or {}).get("track") or "chill_lofi"
+        ducks = [{"a": a, "b": round(a + 2.0, 2), "duck": False}, {"a": b, "b": round(b + 1.5, 2), "duck": True}]
+        return Step(name, ["music", r, "--track", tr, "--duck-edits", json.dumps(ducks)])
+    if name == "glossary":  # C2: Correct all on a word Voice heard in the middle clip (not one a glossary wrote)
+        taken = {t.lower() for k, v in (edl.get("glossary") or {}).items() for t in f"{k} {v}".split()}
+        ws = [w.strip(".,!?;:'") for w in str(mid_body(edl).get("words") or "").split()]
+        heard = next((w for w in ws if len(w) > 3 and w.isalpha() and w.lower() not in taken), None)
+        return Step(name, ["glossary", r, "--add", f"{heard}={GLOSSARY_WORD}"], expect={"written": GLOSSARY_WORD}) \
+            if heard else None
+    if name == "linebreak":  # C4: a line starts at the second word of a line of three or more
+        c = next((c for c in edl.get("captions") or [] if len(c.get("words") or []) >= 3), None)
+        if c is None:
+            return None
+        at, word = float(c["words"][1]["t_in"]), c["words"][1]["w"]
+        return Step(name, ["linebreak", r, "--at", f"{at:.3f}"],
+                    expect={"word": word, "span": c["spans"][0], "starts": line_starts(edl, c["spans"][0], word)})
     if name.startswith("restore"):  # restore@K: the chain's K-th version (0 = the base, -2 = the one before last)
         k = int(name.split("@")[1])
         v = chain_versions[k]
@@ -287,6 +326,10 @@ CHAINS = {
     "E": ["caption", "cut", "insert", "overlay_add", "overlay_set", "style_fixed", "drop", "music_on", "music_off",
           "overlay_remove"],
     "F": ["insert", "pauses", "split", "cut", "drop", "restore@1", "edges", "title_off"],
+    "G": ["speakers", "clip_look", "duck_edits", "drop", "split", "reorder", "glossary", "linebreak", "title_on",
+          "trim_out"],
+    "H": ["duck_edits", "linebreak", "glossary", "trim_in", "insert", "clip_look", "cut", "pauses", "restore@1",
+          "speakers", "edges"],
 }
 EXPORT_AFTER = {"A", "B"}  # chains that end with music and an overlay on
 
@@ -336,6 +379,70 @@ def callout_map(edl: dict) -> dict:
     return {s["id"]: (s.get("callout") or "", s.get("callout_xy")) for s in edl["spans"]}
 
 
+def clip_looks(edl: dict) -> dict:
+    return {s["id"]: s.get("look") for s in edl["spans"] if s.get("look")}
+
+
+def duck_sources(edl: dict) -> list[tuple[bool, float, float]]:
+    """Each duck edit window as the source seconds it covers (the cut map with the title card follow_cut counts)."""
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from montivo.engine import music
+    from montivo.engine.review import cut_map
+    lead = music._lead(edl)
+    cm = cut_map({**edl, "render": {"title": {"seconds": lead} if lead else None}})
+    out = []
+    for e in (edl.get("music") or {}).get("duck_edits") or []:
+        for c in cm:
+            x, y = max(float(e["a"]), c.cut_in), min(float(e["b"]), c.cut_out)
+            if y > x:
+                s = edl["spans"][c.index]
+                out.append((bool(e["duck"]), s["t_in"] + x - c.cut_in, s["t_in"] + y - c.cut_in))
+    return out
+
+
+def check_ducks(prev: dict, new: dict) -> list[str]:
+    """After a structural edit or the title card on / off: the bed is the same but for its duck edits, and every new
+    window's source seconds lie inside a window of the same kind before the edit (follow_cut moves them with their
+    words, never onto other words)."""
+    bad = []
+    pm, nm = prev.get("music") or {}, new.get("music") or {}
+    if {k: v for k, v in pm.items() if k != "duck_edits"} != {k: v for k, v in nm.items() if k != "duck_edits"}:
+        bad.append(f"music changed: {json.dumps(pm)[:100]} -> {json.dumps(nm)[:100]}")
+    before: list[list] = []  # pieces that meet in the source are one stretch (two clips that played on)
+    for d, x, y in sorted(duck_sources(prev), key=lambda w: (w[0], w[1])):
+        if before and before[-1][0] == d and x <= before[-1][2] + 0.04:
+            before[-1][2] = max(before[-1][2], y)
+        else:
+            before.append([d, x, y])
+    for duck, a, b in duck_sources(new):
+        if b - a >= 0.02 and not any(d == duck and a >= x - 0.04 and b <= y + 0.04 for d, x, y in before):
+            bad.append(f"duck edit ({'held' if duck else 'lifted'}) now over source {a:.2f}-{b:.2f} s, outside every "
+                       "window of that kind before the edit")
+    return bad
+
+
+def line_starts(edl: dict, span: str, word: str) -> int:
+    """How many caption lines of `span` open on `word`."""
+    return sum(1 for c in edl.get("captions") or [] if span in c.get("spans", []) and c.get("words")
+               and c["words"][0]["w"] == word)
+
+
+def check_expect(new: dict, step: Step) -> list[str]:
+    """What the op itself must show in the version it made (the render wrote the caption lines)."""
+    bad = []
+    caps = new.get("captions") or []
+    if "written" in step.expect and not any(step.expect["written"].lower() in c["text"].lower() for c in caps):
+        bad.append(f"no caption line says {step.expect['written']!r} after Correct all")
+    if "starts" in step.expect:  # one more line of that clip opens on the word (a held line can shift its seconds)
+        x = step.expect
+        if line_starts(new, x["span"], x["word"]) <= x["starts"]:
+            bad.append(f"no new caption line starts at {x['word']!r} in {x['span']} after the line break")
+    if "clip" in step.expect and not next((s for s in new["spans"] if s["id"] == step.expect["clip"]), {}).get("look"):
+        bad.append(f"{step.expect['clip']} has no look of its own after style --clip")
+    return bad
+
+
 def check_fields(prev: dict, new: dict, step: Step, restored: dict | None, words: list[dict]) -> list[str]:
     bad = []
     if restored is not None:
@@ -363,6 +470,11 @@ def check_fields(prev: dict, new: dict, step: Step, restored: dict | None, words
             continue
         if f == "punch_skip" and step.name in STRUCTURAL:
             continue  # a jump cut's key can go with its clip
+        if f == "caption_breaks" and step.name in STRUCTURAL:
+            continue  # a break goes with its word, and a split hands it to the piece that plays it
+        if f == "music" and step.name in FOLLOWS:
+            bad += check_ducks(prev, new)
+            continue
         if a != b:
             bad.append(f"{f} changed: {json.dumps(a)[:100]} -> {json.dumps(b)[:100]}")
     lb = lambda e: (e.get("look") or {}).get("line_breaks") or "greedy"  # noqa: E731 (no look = the greedy lines)
@@ -376,6 +488,13 @@ def check_fields(prev: dict, new: dict, step: Step, restored: dict | None, words
     elif step.name not in ("text", "style_pin"):
         if pc != nc:
             bad.append(f"callouts or their places changed: {pc} -> {nc}")
+    if step.name != "clip_look":
+        pl, nl = clip_looks(prev), clip_looks(new)
+        ids = {s["id"] for s in new["spans"]}
+        if changed := [sid for sid, look in pl.items() if sid in ids and nl.get(sid) != look]:
+            bad.append(f"clip looks changed on clips that stayed: {changed}")
+        if step.name not in STRUCTURAL and set(nl) - set(pl):
+            bad.append(f"clip looks appeared: {sorted(set(nl) - set(pl))}")
     return bad
 
 
@@ -403,6 +522,7 @@ def check_version(run: Path, n: int, prev: dict, step: Step, words: list[dict], 
         fail.append(f"loudness {i} LUFS / {tp} dBTP")
     fail += check_words(prev, new, step, words, restored)
     fail += check_fields(prev, new, step, restored, words)
+    fail += check_expect(new, step)
     if segcache:
         tmp = run / f"nocache_v{n}.json"
         shutil.copy2(edl_p, tmp)
