@@ -1147,6 +1147,14 @@ the keyword router decides on/off per feature by the nearest word, "subtitles" i
 worktree at 768db52 (no container was running); /api/health 200, /api/runs 401, /s/nope 404, /api/monti 401, a POST from
 another origin 403; smoke drop on 015: 34.2 s, -14.0 LUFS / -1.7 dBTP, render 8.3 s. Left (Nice): disk reclaim on the
 Volume (Billy: `du` daily), README requirement lines, Dockerfile healthcheck, the test gaps in the note.
+Follow-up 2/11 (PR #7, $0.41, no product change, no deploy needed): 31 offline tests (871 -> 902: review_render,
+glossary / linebreak routes, agent.measured, /heads/at), combo_check chains G and H (20 versions on a 017 v15 clone, 0
+failures), README key / apt / Docker lines, Dockerfile HEALTHCHECK. Live judge pass on the hosted demo (Billy signed in
+and dropped a 90 s trim of raw_ugly_0111): run ui-1102-1902 v1 72 -> v2 72 -> v3 68, no pass, $0.40 (estimate $0.33),
+28.6 s against a 35-45 s brief; the ending blocker comes from the trim (the clip stops mid-sentence at 90 s), the hook
+keeps a doubled "is is". Live pauses -> Make Version (v4, -0.74 s), Ask Montivo in Greek -> Chill Lofi + Bold pop in one
+draft -> v5, export bundle in 2.7 s, Monti answered on Spark Open, Home at 375 px with no overflow: all worked. Cosmetic:
+the tab title's % restarts at every step, a poster request past the cut's end 404s, file HEAD requests 404 (GET fine).
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
