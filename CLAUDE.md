@@ -1155,6 +1155,19 @@ and dropped a 90 s trim of raw_ugly_0111): run ui-1102-1902 v1 72 -> v2 72 -> v3
 keeps a doubled "is is". Live pauses -> Make Version (v4, -0.74 s), Ask Montivo in Greek -> Chill Lofi + Bold pop in one
 draft -> v5, export bundle in 2.7 s, Monti answered on Spark Open, Home at 375 px with no overflow: all worked. Cosmetic:
 the tab title's % restarts at every step, a poster request past the cut's end 404s, file HEAD requests 404 (GET fine).
+First cut + UI polish (2/11, PR #9, ~$4.17 Meta, Billy's go): new EDLs carry `source_usable_s` (kept speech plus usable
+unused speech, fillers and retakes out); a brief minimum above it is `unreachable` (no repair, the reviewer is told), a
+reachable short plan's Spark 1.3 repair gets the unused passages; a real stutter (same word twice with an audible pause)
+is cut in v1 when it adds no cut inside speech; an extend_span with only fillers / Voice echoes left is refused and a
+final clip past its last sentence is trimmed to it, so the loop escalates instead of regressing (the 90 s clip's "yeah").
+Bench (2 rounds): 90 s clip first review 78/68 -> 92/100, passes 0/2 -> 2/2, loop $0.17-0.21 -> $0.04-0.05; regression
+set 93.7 -> 93.8, unchanged passes; hard set 78.5 -> 83.8 (reviewer noise). The hosted run's "is is" was Voice's echo,
+not a stutter. UI: the tab title names the step its % is for; a Live Ask's reply keeps its language, the edit list is a
+chat line `detail`; a frame at or past the cut's end is the last frame; dead upload .part files swept at start. 913
+tests. 017 v15 bit-identical; 015 v5 renders the same on old and new code but not as the stored cut_v5.mp4 (older than
+later render changes; to look into). Deployed 2/11 22:0x on Billy's go from a clean worktree at ceea403 (the idle web
+container stopped); /api/health 200, /api/runs 401, /s/nope 404, /api/monti 401, a POST from another origin 403; smoke
+drop on 015: 34.2 s, -14.0 LUFS / -1.7 dBTP, render 9.4 s.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
