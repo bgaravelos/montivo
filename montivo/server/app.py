@@ -403,6 +403,7 @@ def end_group(pgid: int, grace: float = STOP_GRACE_S) -> None:
         os.killpg(pgid, signal.SIGKILL)
 
 
+UPLOAD_PART_STALE_S = 600  # an upload's .part untouched this long at start-up is a dead one (writes come every few ms)
 EXPORT_MAX_S = 300  # a request-time export or cover / post text command (exports 10-60 s, cover design 30-60 s)
 
 
@@ -477,11 +478,13 @@ def result_message(st: State, job: Job) -> dict:
             from . import draft as draft_mod
             _, done, skipped = draft_mod.push(d, Path(job.draft_dir), rec["draft"], int(rec.get("from") or latest_cut(d)))
             said = (rec.get("reply") or "").strip()
-            if done:
-                said += f" In the draft: {'; '.join(done)}. Make Version renders it."
+            # the edit list is the app's own words, a line of its own: appended to a Greek reply it read as one
+            # sentence in two languages (live check, 2/11)
+            detail = f"In the draft: {'; '.join(done)}. Make Version renders it." if done else ""
             if skipped or rec.get("skipped"):
-                said += " Not done: " + "; ".join([*rec.get("skipped", []), *skipped]) + "."
-            return {"role": "agent", "kind": "draft", "text": said.strip(), "after": rec.get("from"),
+                detail += " Not done: " + "; ".join([*rec.get("skipped", []), *skipped]) + "."
+            return {"role": "agent", "kind": "draft", "text": said or detail.strip(), "detail": detail.strip() if said else None,
+                    "after": rec.get("from"),
                     "message": rec.get("message"), "router": rec.get("router"), "ui": rec.get("ui"),
                     "draft_edits": len(done)}
         if isinstance(rec.get("pending"), dict):  # a structural or costly ask waits for the editor's Apply (--preview)
@@ -666,6 +669,10 @@ def create_app(root: Path) -> FastAPI:
         if isinstance(e, json.JSONDecodeError) or (here and reading):
             return JSONResponse({"detail": f"bad request: {str(e)[:200]}"}, status_code=400)
         raise e
+    for p in st.footage.glob(".upload-*.part"):  # an upload a stop cut off (its finally never ran): up to 1 GB each
+        with contextlib.suppress(OSError):
+            if time.time() - p.stat().st_mtime > UPLOAD_PART_STALE_S:
+                p.unlink()
     for job in interrupted_jobs(st):
         print(f"montivo-ui: {job.run}: {job.label} ended with the server, kept as stopped", file=sys.stderr)
     if budget is not None:
@@ -891,9 +898,14 @@ def create_app(root: Path) -> FastAPI:
         if not out.is_file() or out.stat().st_mtime < src.stat().st_mtime:
             out.parent.mkdir(parents=True, exist_ok=True)
             part = out.with_suffix(".part.jpg")  # a killed ffmpeg left a half frame cached for good
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{max(t, 0):.2f}", "-i", str(src),
-                                "-frames:v", "1", "-vf", "scale=360:-2", "-q:v", "4", str(part)], capture_output=True, timeout=30)
+            # a time at or past the cut's end (a poster on the last tenth of a second) finds no frame: the last one then
+            # (it answered 404, live check 2/11)
+            for seek in (["-ss", f"{max(t, 0):.2f}"], ["-sseof", "-0.1"]):
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *seek, "-i", str(src),
+                                    "-frames:v", "1", "-vf", "scale=360:-2", "-q:v", "4", str(part)], capture_output=True, timeout=30)
+                if part.is_file():
+                    break
             if part.is_file():
                 part.replace(out)
         if not out.is_file():

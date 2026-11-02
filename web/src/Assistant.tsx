@@ -226,6 +226,7 @@ function story(state: RunState, versions: Version[], lines: LogLine[], job: Job 
       }
       out.push({ kind: "you", text: c.retry_of ? "Try something else" : typed(c.message), chips: c.retry_of ? [] : [...scopeChips(c.scope), `v${v.n}`] });
       if (c.text) out.push({ kind: "text", who: "montivo", text: c.text, seek: seeks(c.ui) });
+      if (c.detail) out.push({ kind: "text", who: "montivo", text: c.detail, tone: "checks" }); // a Live Ask's edit list
       const card = c.kind === "preview" && typeof c.pending === "object" ? c.pending : null;
       if (card) out.push({ kind: "preview", card, status: proposalStatus(card.id, chat, versions, job, v.n) });
     }

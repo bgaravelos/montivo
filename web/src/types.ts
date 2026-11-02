@@ -60,7 +60,7 @@ export type ChatLine = { t: number; role: "user" | "agent"; kind?: string; text?
   after?: number | null; message?: string | null; router?: string | null;
   pending?: PendingCard | string | null; scope?: AskScope | null; retry_of?: string | null; // a preview line's card; a user line's proposal id
   job?: string; charged_usd?: number | null; // an error line: the job that failed and what it spent
-  ui?: AgentUi[] | null }; // an ask line: what the chat shows in the editor (the playhead, a selection, a panel)
+  ui?: AgentUi[] | null; detail?: string | null }; // an ask line: what the chat shows in the editor (the playhead, a selection, a panel)
 
 /** The planner A/B of a fresh re-plan against v1 (plan_compare_v1_vN.json): one side per planner. */
 export type PlanSide = { planner: string; spans: number; runtime_s: number; verbatim_rate: number; unplaced: number; hook: string;

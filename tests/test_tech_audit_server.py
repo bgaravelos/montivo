@@ -107,3 +107,35 @@ def test_the_review_copy_leaves_no_clock_frames(tmp_path):
     _clip(cut, seconds=1.0)
     out = review_copy(cut, tmp_path / "review")
     assert out.is_file() and not (tmp_path / "review" / "clock").exists()
+
+
+def test_a_frame_past_the_cuts_end_is_its_last_frame(tmp_path):
+    from tests.test_preview import _clip
+    d = _root(tmp_path)
+    _clip(d / "cut_v1.mp4", seconds=1.0)
+    c = TestClient(A.create_app(tmp_path))
+    assert c.get("/api/runs/r1/frame?v=1&t=1.0&clean=1").status_code == 200
+    assert c.get("/api/runs/r1/frame?v=1&t=0.5&clean=1").status_code == 200
+
+
+def test_a_dead_upload_part_is_swept_at_start(tmp_path):
+    _root(tmp_path)
+    (tmp_path / "footage").mkdir()
+    old, new = tmp_path / "footage" / ".upload-aa.part", tmp_path / "footage" / ".upload-bb.part"
+    old.write_bytes(b"x")
+    new.write_bytes(b"x")
+    os.utime(old, (time.time() - 3600, time.time() - 3600))
+    A.create_app(tmp_path)
+    assert not old.exists() and new.exists()  # a fresh one may be another server's upload in progress
+
+
+def test_a_live_asks_edit_list_is_its_own_line(tmp_path, monkeypatch):
+    """The reply stays in the person's language; the app's edit list is a line of its own (detail)."""
+    from montivo.server import draft
+    d = _root(tmp_path)
+    monkeypatch.setattr(draft, "push", lambda *a, **k: (None, ["music: Chill Lofi"], []))
+    st = A.State(tmp_path)
+    job = A.Job(id="j", run="r1", kind="ask", label="Ask Montivo", cmd=["x"], rc=0, ended=time.time(), draft_dir=str(d))
+    monkeypatch.setattr(A, "job_json", lambda j: {"reply": "Βάζω χαλαρή μουσική.", "draft": [{"op": "music"}], "from": 1})
+    line = A.result_message(st, job)
+    assert line["text"] == "Βάζω χαλαρή μουσική." and line["detail"].startswith("In the draft: music: Chill Lofi")

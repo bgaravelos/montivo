@@ -54,7 +54,9 @@ export function useJobSignals(name: string, job: Job | null, progress: Progress 
     return () => document.removeEventListener("visibilitychange", seen);
   }, []);
   const m = job?.running && progress?.active ? measure(progress) : null;
-  const title = job?.running ? `${m?.frac != null ? `${Math.round(m.frac * 100)}% · ` : ""}${job.label} · Montivo`
+  // the % is the running step's (a job's step count is not known ahead: a loop adds passes), so the step names it: a
+  // bare "67% -> 26%" read as going backwards (live check, 2/11)
+  const title = job?.running ? `${m?.frac != null ? `${Math.round(m.frac * 100)}% ` : ""}${progress?.title || job.label} · Montivo`
     : done ? `${done} ${name} · Montivo` : "Montivo";
   useEffect(() => { document.title = title; }, [title]);
   useEffect(() => () => { document.title = "Montivo"; }, []);

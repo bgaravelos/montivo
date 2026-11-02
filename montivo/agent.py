@@ -339,7 +339,9 @@ def history(run_dir: Path, message: str | None = None, n: int = HISTORY_TURNS) -
         return []
     if lines and message and lines[-1].get("role") == "user" and (lines[-1].get("text") or "").strip() == message.strip():
         lines = lines[:-1]
-    return [{"role": x.get("role"), "text": str(x.get("text") or "")[:240], "version": x.get("version")}
+    # a Live Ask's edit list is its own line (`detail`): the router still reads it with the reply
+    return [{"role": x.get("role"), "text": " ".join(str(x.get(k) or "") for k in ("text", "detail")).strip()[:240],
+             "version": x.get("version")}
             for x in lines[-n:] if x.get("role") in ("user", "agent") and x.get("text")]
 
 
