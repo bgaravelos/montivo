@@ -29,6 +29,7 @@ import math
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Callable
 
 from .edl import norm, title_header_on
 from .frame import FRAME_916, Frame, frame_for
@@ -667,12 +668,14 @@ def _inside(w: CWord, span: str, src_t: float, until: float) -> bool:
     return w.span == span and w.t_in < until - 0.01 and (w.t_out > src_t or w.t_in > src_t - 0.01 - 1e-6)
 
 
-def isolate(lines: list[list[CWord]], span: str, src_t: float, until: float) -> list[list[CWord]]:
+def isolate(lines: list[list[CWord]], span: str, src_t: float, until: float,
+            joins: Callable[[list[CWord], list[CWord]], bool] | None = None) -> list[list[CWord]]:
     """The words of `span` from src_t (a line's first word + 0.01 s) to `until` (its last word's end) as one line of
     their own, where the first of them stood; the words around them keep their lines. A retexted line (C6) is the
     words it was written for: a look with fewer words per line used to break them over several lines and show the
     rest twice next to the new text (015 "we edit short form | added | short | form"), one with more put other words
-    on its line and the retext replaced them too."""
+    on its line and the retext replaced them too. `joins(lone, line)` says whether one word left behind may open the
+    next line (lone_joins); without it, it always does."""
     # a first word the edge pass clipped to no length (t_in == t_out == the line's start) is inside too: src_t is its
     # start + 0.01 s, so `t_out > src_t` alone left it on a line of its own beside the retext (audit 31/10)
     inside = lambda w: _inside(w, span, src_t, until)  # noqa: E731
@@ -686,7 +689,7 @@ def isolate(lines: list[list[CWord]], span: str, src_t: float, until: float) -> 
         hit = [w for w in ln if inside(w)]
         after = [w for w in ln if not inside(w) and w.t_in >= src_t]
         if not hit:
-            out.append(lone + ln)
+            out += [lone + ln] if not lone or joins is None or joins(lone, ln) else [lone, ln]
             lone = []
             continue
         if lone:
@@ -709,6 +712,20 @@ def isolate(lines: list[list[CWord]], span: str, src_t: float, until: float) -> 
 
 
 BREAK_MATCH_S = 0.06  # a hand line break finds its word by source time within this (frame alignment, a clipped edge)
+
+
+def lone_joins(own: set[str], breaks: list[dict], ovs: list[dict | None]) -> Callable[[list[CWord], list[CWord]], bool]:
+    """isolate's `joins`: the word a retext leaves behind opens the next line only when that line is in its look (a
+    clip's own look, span_looks: the line takes the look of its first word), starts at no person's line break
+    (caption_breaks) and has no text override of its own (an old one without `until` retexts the whole line it lands on
+    and would drop the word: "six" said, never captioned). Else it keeps a line of its own (bug audit, 2/11)."""
+    key = lambda w: w.span if w.span in own else None  # noqa: E731
+    def joins(lone: list[CWord], ln: list[CWord]) -> bool:
+        w = ln[0]
+        return key(lone[0]) == key(w) and not any(
+            not b.get("join") and b.get("span") == w.span and abs(w.t_in - float(b["src_t"])) <= BREAK_MATCH_S
+            for b in breaks) and not any(o.get("text") for _, o in _hits(ln, ovs))
+    return joins
 
 
 def apply_breaks(lines: list[list[CWord]], breaks: list[dict]) -> list[list[CWord]]:
@@ -749,8 +766,8 @@ def said(words: list[CWord]) -> set[tuple[str, ...]]:
 
 
 def apply_overrides(lines: list[list[CWord]], overrides: list[dict], pins: dict[int, dict] | None = None,
-                    glossary: dict[str, str] | None = None,
-                    record: dict[int, list[CWord]] | None = None) -> tuple[list[list[CWord]], dict[int, dict]]:
+                    glossary: dict[str, str] | None = None, record: dict[int, list[CWord]] | None = None,
+                    own: set[str] | None = None, breaks: list[dict] | None = None) -> tuple[list[list[CWord]], dict[int, dict]]:
     """The caption overrides on a segment's lines: a `text` retexts its line (taking over the next line's words it
     covers, so nothing shows twice; a next line left empty goes) and a `top` forces its position. Returns the lines and
     {line index: override} of the forced ones.
@@ -759,23 +776,26 @@ def apply_overrides(lines: list[list[CWord]], overrides: list[dict], pins: dict[
     an edit breaks now (015 v5 in Bold pop: "scores it against" retexted "score it" and left "it's | against the", 1/11);
     a reviewer's whose words are no longer those (`said`) is left out (a person's stays while its line holds its time).
     `glossary` (the run's) goes over a reviewer's text, written before the run had it (018 v5: "and NewSpark").
-    `record` gets {index: the words its line had before the retext}, for override_pins."""
+    `record` gets {index: the words its line had before the retext}, for override_pins. `own` (the spans with a look of
+    their own) and `breaks` (the EDL's caption_breaks) keep a word a retext leaves behind out of a line it does not
+    belong on (lone_joins); without them it opens the next line whatever that is."""
     out: list[list[CWord]] = []
     forced: dict[int, dict] = {}
     todo = [list(ln) for ln in lines]
     ovs: list[dict | None] = list(overrides)
+    joins = lone_joins(own or set(), breaks or [], ovs) if own is not None or breaks is not None else None
     for k, ov in enumerate(ovs):  # a person's retext keeps the words it was written for as one line, whatever the style breaks
         if not ov or not ov.get("text") or ov.get("voice") is not None:
             continue
         if ov.get("until") is not None:
-            todo = isolate(todo, ov["span"], float(ov["src_t"]), float(ov["until"]))
+            todo = isolate(todo, ov["span"], float(ov["src_t"]), float(ov["until"]), joins)
         elif pins and k in pins:
             pin = pins[k]
             mine = [w for ln in todo for w in ln if _inside(w, ov["span"], pin["src_t"], pin["until"])]
             if not mine or (ov.get("why") == "review" and not said(mine) & pin["said"]):
                 ovs[k] = None
                 continue
-            todo = isolate(todo, ov["span"], pin["src_t"], pin["until"])
+            todo = isolate(todo, ov["span"], pin["src_t"], pin["until"], joins)
             ovs[k] = {**ov, "until": pin["until"]}
         if glossary and ov.get("why") == "review":
             ovs[k] = {**ovs[k], "text": " ".join(w.w for w in apply_glossary(
@@ -864,7 +884,8 @@ def _pin(run_dir: Path, ref_v: int, ref: dict, o: dict, words: list[dict]) -> di
                                               for sid in seg.span_ids}, run_glossary(ref))
     rec: dict[int, list[CWord]] = {}
     for ws in seg_words.values():
-        apply_overrides(segment_lines(ref, ws, looks), ovs, record=rec)
+        apply_overrides(segment_lines(ref, ws, looks), ovs, record=rec, own=set(looks) - {None},
+                        breaks=ref.get("caption_breaks") or [])
         if k in rec:
             line = rec[k]
             # a last word an out edge clipped to no length stays inside (isolate takes words starting before until - 0.01)
@@ -1041,7 +1062,8 @@ def build_overlays(edl: dict, words: list[dict], segments: list, paths: list, he
     if captions:
         for i, ws in sorted(seg_words.items()):
             seg = segments[i]
-            grouped, forced = apply_overrides(segment_lines(edl, ws, looks), overrides, pins=pins, glossary=glossary)
+            grouped, forced = apply_overrides(segment_lines(edl, ws, looks), overrides, pins=pins, glossary=glossary,
+                                              own=set(own), breaks=edl.get("caption_breaks") or [])
             lines = [Line(words=lw, segment=i) for lw in grouped]
             for ln in lines:
                 ln.word_times = [(cut_t(i, w.t_in), cut_t(i, w.t_out)) for w in ln.words]
