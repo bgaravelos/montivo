@@ -1113,13 +1113,20 @@ def reorder_edit(edl: dict, words: Words, audio: Audio | None, span: str, before
     for i, e in ((moved - 1, "out"), (moved + 1, "in")):  # the new neighbours
         if 0 <= i < len(order):
             meet.add((order[i], e))
+    by_id = {s["id"]: s for s in new["spans"]}
+    for left, right in zip(edl["spans"], edl["spans"][1:]):  # one take this move parts: marked, so a move back rejoins it
+        if one_take(left, right) and order.index(right["id"]) != order.index(left["id"]) + 1:
+            by_id[left["id"]]["take_out"], by_id[right["id"]]["take_in"] = right["id"], left["id"]
     joined = []
     sp = new["spans"]
     for left, right in zip(sp, sp[1:]):  # a move back next to the clip it continues in the recording: one take again
         if (left["id"], "out") in meet and (right["id"], "in") in meet and left["turn_id"] == right["turn_id"] \
                 and right["word_from"] == left["word_to"] + 1:
-            joined.append(f"{left['id']}|{right['id']} at {join_at_dip(left, right, words, audio):.3f}")
             meet -= {(left["id"], "out"), (right["id"], "in")}
+            if left.get("take_out") != right["id"] or right.get("take_in") != left["id"]:
+                continue  # never one take when parted (a pause `pauses` shortened, 012): the edges stay as they were
+            del left["take_out"], right["take_in"]
+            joined.append(f"{left['id']}|{right['id']} at {join_at_dip(left, right, words, audio):.3f}")
     if joined:  # (015 s4 to the end and back: s3 | s4 | s5 stayed three tightened segments, 1.03 s of pause lost)
         plog[0]["note"] += f"; joined to the clip it continues ({', '.join(joined)})"
     if audio is not None and meet:
@@ -1571,6 +1578,13 @@ def insert_plan(edl: dict, words: Words, turn: int, a: int, b: int, before: str 
     if earlier:
         return span, max(earlier, key=lambda k: edl["spans"][k]["t_in"]) + 1
     return span, min(range(len(ids)), key=lambda k: edl["spans"][k]["t_in"])
+
+
+def one_take(left: dict, right: dict) -> bool:
+    """Two neighbouring clips that play as one take: right's first word follows left's last and they meet on one point
+    (a split, a join). A pause `pauses` shortened leaves the same words with source time skipped between the edges."""
+    return left["turn_id"] == right["turn_id"] and right["word_from"] == left["word_to"] + 1 \
+        and abs(right["t_in"] - left["t_out"]) < 0.002
 
 
 def join_at_dip(left: dict, right: dict, words: Words, audio: Audio | None) -> float:

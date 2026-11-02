@@ -166,8 +166,10 @@ def test_bad_input_is_a_400_not_a_500(tmp_path, hosted_env):
 def test_paid_export_calls_on_a_sample_go_to_the_judges_copy(tmp_path, hosted_env):
     host(tmp_path, hosted_env)
     calls = []
-    hosted_env.setattr(A.subprocess, "run", lambda args, **k: calls.append(args) or type(
-        "P", (), {"returncode": 0, "stdout": json.dumps({"platforms": {}}), "stderr": ""})())
+    stub = lambda args, **k: calls.append(args) or type(  # noqa: E731
+        "P", (), {"returncode": 0, "stdout": json.dumps({"platforms": {}}), "stderr": ""})()
+    hosted_env.setattr(A.subprocess, "run", stub)
+    hosted_env.setattr(A, "run_bounded", stub)
     (tmp_path / "runs" / "r1" / "cut_v2.mp4").write_bytes(b"cut")
     c = signed_in(tmp_path)
     jid = c.cookies.get(H.JUDGE).partition(".")[0]

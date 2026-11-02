@@ -915,6 +915,8 @@ def review_copy(cut: Path, out_dir: Path, clock: bool = True) -> Path:
     proc = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", *args, "-c:v", "libx264", "-preset", "veryfast",
                            "-crf", "24", "-c:a", "aac", "-b:a", "128k", "-t", f"{dur:.3f}", "-movflags", "+faststart", str(out)],
                           capture_output=True, text=True)
+    if clock:  # ten PNGs a second, about 430 a review, kept for nothing on the hosted Volume (tech audit, 2/11)
+        shutil.rmtree(out_dir / "clock", ignore_errors=True)
     if proc.returncode != 0:
         raise RuntimeError(f"review copy failed: {proc.stderr[-1500:]}")
     return out
