@@ -63,11 +63,12 @@ from ..ledger import Entry, Ledger, Timer
 from .api import dump_json, upload_file
 from .captions import CAPTION_TOP, DEDUPE_GAP_S, HEAD_MARGIN, SAFE_BOTTOM, overlaps
 from .edges import Audio, Words, level_db, tighten_edges  # noqa: F401 (level_db re-exported for callers)
-from .edl import _FILLER as CONTENT_SKIP, check_brief, norm, norm_tokens
+from .edl import _FILLER as CONTENT_SKIP, OPENING_FILLERS, check_brief, norm, norm_tokens
 from .graphics import font
 from .ingest import make_wav
 from .music import follow_cut
 from .render import frame_align, merge_segments
+from .voice import artefact_doubles
 
 APPLY_SEVERITY = ("blocker", "major")
 SEVERITY_RANK = {"blocker": 0, "major": 1, "minor": 2}
@@ -1336,6 +1337,14 @@ def resolve(issue: dict, k: int, edl: dict, words: Words, cmap: list[CutSpan],
     if op == "extend_span":
         edge = p.get("edge") if p.get("edge") in ("in", "out") else "out"
         sec = max(WORD_SHIFT_MIN_S, abs(float(p.get("seconds") or 0.0)))
+        # the live 90 s upload (2/11): "ending" asked extend_span on the last clip, but the recording ends on "would
+        # yeah" (cut off at 90 s): v2 added "yeah", the reviewer called the filler ending a blocker, 72 -> 72 -> 68.
+        # The cut cannot end later; a final clip that runs on past its last complete sentence ends on it instead. A
+        # clipped word keeps the old fix: with no word to add, its settle can still move the edge off the word
+        if issue["criterion"] != "no_cut_mid_word" and (why := nothing_to_extend(edl, span, words, edge)):
+            if edge == "out" and span is spans[-1] and (fix := end_on_sentence(edl, span, words, cmap, mk)):
+                return fix, ""
+            return None, why
         return mk("extend_span", cs.span, edge=edge, seconds=sec if edge == "out" else -sec), ""
 
     if op == "caption_fix":
@@ -1407,6 +1416,49 @@ def resolve(issue: dict, k: int, edl: dict, words: Words, cmap: list[CutSpan],
         return mk("reframe_bias", cs.span, dir=d, **({"px": int(p["px"])} if p.get("px") else {})), ""
 
     return None, f"unknown fix_op {op}"
+
+
+NO_EXTEND = "nothing to extend"  # the reason prefix of an extend_span the recording cannot give (escalation_notes)
+TAIL_FILLERS = OPENING_FILLERS | {"right", "sorry", "mm", "hmm", "yep", "yes"}  # what a recording trails off on
+FRAGMENT_MAX_WORDS = 8  # a final clip's words past its last sentence end that end_on_sentence trims off, at most
+
+
+def nothing_to_extend(edl: dict, span: dict, words: Words, edge: str) -> str:
+    """Why an extend_span at this edge can add no line, "" when it can: a clip quotes words of one turn, so it grows
+    only into that turn's words no other clip keeps; when those are none (the turn, or the recording, ends there) or
+    only fillers and Voice's echo copies ("would | yeah" at the end of a recording cut off at 90 s), the fix is a no-op
+    or adds a filler ending, and a new render and review are paid for nothing."""
+    tw = words.turn(span["turn_id"])
+    blocked = kept_elsewhere(edl, span)
+    echo = artefact_doubles(tw)
+    step = 1 if edge == "out" else -1
+    i, past = (span["word_to"] if edge == "out" else span["word_from"]) + step, []
+    while 0 <= i < len(tw) and i not in blocked:
+        if i not in echo:
+            past.append(tw[i]["w"])
+        i += step
+    if any(norm(w) and norm(w) not in TAIL_FILLERS for w in past):
+        return ""
+    where = "after" if edge == "out" else "before"
+    edge_word = tw[span["word_to"] if edge == "out" else span["word_from"]]["w"]
+    left = f" but {' '.join(past)!r}" if past else ""
+    return (f"{NO_EXTEND}: the recording has nothing {where} {edge_word!r} in {span['id']}'s passage{left}; the cut "
+            f"cannot {'end later' if edge == 'out' else 'start earlier'} there")
+
+
+def end_on_sentence(edl: dict, span: dict, words: Words, cmap: list[CutSpan], mk) -> "Fix | None":
+    """The final clip ends on its last complete sentence: a trim_span to the last sentence end inside it, when the
+    words after it are a fragment (no sentence end, at most FRAGMENT_MAX_WORDS) and two words stay. None when the clip
+    already ends on a sentence end or has none inside it."""
+    tw = words.turn(span["turn_id"])
+    a, b = span["word_from"], span["word_to"]
+    if _SENTENCE_END.search(tw[b]["w"]):
+        return None
+    ends = [j for j in range(a + 1, b) if _SENTENCE_END.search(tw[j]["w"])]
+    if not ends or b - ends[-1] > FRAGMENT_MAX_WORDS:
+        return None
+    j = ends[-1]
+    return mk("trim_span", span["id"], edge="out", src_t=round(tw[j + 1]["t_start"] + TRIM_SLACK_S, 3))
 
 
 EDGE_OPS = ("move_cut", "extend_span", "trim_span")
@@ -1887,6 +1939,10 @@ def escalation_notes(rv: dict) -> list[str]:
              for i in sorted(rv["review"]["issues"], key=lambda i: (SEVERITY_RANK.get(i["severity"], 3), i["t_s"]))
              if i["severity"] in APPLY_SEVERITY and i["criterion"] not in PASS_IGNORES]
     notes += [f"measured: {r}" for r in (rv.get("pass_gate") or {}).get("checks") or []]
+    # what the recording cannot give (nothing_to_extend), so the re-plan ends on a line that is there instead of
+    # asking for more of the one that is not
+    notes += list(dict.fromkeys(s["reason"].removeprefix(NO_EXTEND + ": ")
+                                for s in rv.get("skipped") or [] if str(s.get("reason", "")).startswith(NO_EXTEND)))
     return notes[:ESCALATE_NOTES]
 
 
