@@ -15,7 +15,8 @@ from .config import REFRAME_CONCEPT, REFRAME_TRACK_FPS, SPARK_MODEL, api_key, op
 from .engine import track as track_mod
 from .engine.api import dump_json
 from .engine.edges import Audio, Words, pause_marks, tighten_edges
-from .engine.edl import build_edl, carry_run_words, edl_summary, filler_hook, plan_check, restarts, title_card_on
+from .engine.edl import (build_edl, carry_run_words, edl_summary, filler_hook, length_short, plan_check, restarts,
+                         stutters, title_card_on, unused_passages)
 from .engine.image import generate_title_card
 from .engine.ingest import Ingested, Probe, detect_shots, ingest
 from .engine.render import render as render_edl
@@ -108,6 +109,55 @@ def plan_reuse(opts: RunOptions, made: dict, have_plan: bool, inputs_resumed: bo
 # keep what was right of. Spark 1.3 repairs now get that edit and what to keep
 REPAIR_KEEP = ("\n- Keep the hook (the opening line) of the first edit unless a problem above names it, and keep every "
                "span no problem names as it was.")
+
+
+def short_passages(edl: dict, words: Words) -> list[str]:
+    """A Spark 1.3 plan that runs short of the brief's minimum length gets, as a plan problem, the seconds missing and
+    the passages it leaves out (edl.unused_passages), so the repair has lines to add; empty when it is long enough."""
+    gap = length_short(edl)
+    if not gap:
+        return []
+    have = unused_passages(edl, words)
+    if not have:
+        return []
+    return [f"length: {gap:.1f} s short of the brief's minimum after the cuts are tightened to the speech. The paper "
+            "edit leaves these passages out (turn, source seconds with their pauses, words): add whole sentences from "
+            "them that the brief allows (never a repeated take, a false start or a filler) until the cut is long "
+            "enough:\n" + "\n".join(f"  - {p}" for p in have)]
+
+
+def cut_stutters(run_dir: Path, edl: dict, words: Words, audio: Audio | None, log=print) -> dict:
+    """Each stutter the plan keeps (edl.stutters: a word said twice with a pause between) cut out of v1 with the
+    editor's word cut (human.cut_edit: a trim when the first copy opens the span, else a split around it); the first
+    copy goes, else the second when the first would leave a one-word clip. Kept only when the trial preflight finds no
+    more edges in speech than before (review.stuck_edges). Recorded as EDL `v1_stutters`; the EDL stays version 1."""
+    from .engine.review import stuck_edges
+    from .human import cut_edit
+    if audio is None or not edl.get("spans"):
+        return edl
+    found = stutters(edl, words, pause_marks([w for tw in words.by_turn.values() for w in tw], audio))
+    done = []
+    for sid, first, second in found:
+        if sid not in {s["id"] for s in edl["spans"]}:
+            continue
+        before = len(stuck_edges(run_dir, edl, words, audio))
+        for k in (first, second):
+            try:
+                new, rec = cut_edit(edl, words, audio, [(sid, k, k)])
+            except SystemExit:
+                continue
+            if len(stuck_edges(run_dir, new, words, audio)) > before:
+                continue
+            span = next(s for s in edl["spans"] if s["id"] == sid)
+            new["version"] = edl.get("version", 1)
+            done.append({"span": sid, "turn_id": span["turn_id"], "word": k,
+                         "w": words.turn(span["turn_id"])[k]["w"], "note": rec.fixes[-1]["note"]})
+            log(f"stutter: {rec.fixes[-1]['note']}")
+            edl = new
+            break
+    if done:
+        edl["v1_stutters"] = done
+    return edl
 
 
 PLAN_REPAIRS = 2  # repair calls at most for a Spark 1.3 plan the check fails (about $0.013 each)
@@ -400,6 +450,7 @@ def run(opts: RunOptions) -> dict:
                               + stuck_edges(out, e, Words([asdict(w) for w in voice.words]), Audio.load(out)))
                 except Exception:
                     log(f"ERROR in the plan check's edge test (left out):\n{traceback.format_exc()}")
+                found += short_passages(e, Words([asdict(w) for w in voice.words]))
             return found
 
         problems = check(edl)
@@ -460,6 +511,11 @@ def run(opts: RunOptions) -> dict:
             log(f"edges: {ep['moved']} cut edges tightened to the speech, {ep['removed_s']} s of pause removed "
                 f"(floor {ep['floor_db']} dB, speech over {ep['threshold_db']} dB)")
         if not opts.planner_model:  # the Open planner's v1 stays as it was benchmarked
+            try:
+                edl = cut_stutters(out, edl, Words([asdict(w) for w in voice.words]), Audio.load(out), log=log)
+            except Exception:
+                errors.append(("stutters", traceback.format_exc()))
+                log(f"ERROR cutting stutters (v1 keeps them):\n{errors[-1][1]}")
             edl = shorten_long_pauses(edl, Words([asdict(w) for w in voice.words]), Audio.load(out), log=log)
     if opts.punch:
         edl["punch"] = True

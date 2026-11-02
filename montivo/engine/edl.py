@@ -336,6 +336,11 @@ def build_edl(plan: dict, voice: VoiceResult, watch: dict, source: dict, brief: 
                 ep.update(moved=len(ep["moves"]), widened=sum(m["widened"] for m in ep["moves"]),
                           removed_s=round(sum(abs(m["to"] - m["from"]) for m in ep["moves"]), 2))
     anchor_callouts(edl, words)
+    if audio is not None:
+        # the most a cut of this plan's lines can run: what it keeps plus the unused speech that is not a filler or a
+        # retake of a kept line (check_brief: the live 90 s upload of 2/11 had 24 s planned and 9.6 s of such speech
+        # left for a 35 to 45 s brief; two repair calls came back short or with a retake)
+        edl["source_usable_s"] = round(edl["runtime_s"] + usable_unused_s(edl, words, audio), 2)
     return edl
 
 
@@ -420,6 +425,11 @@ def check_brief(edl: dict, duration_s: float | None = None) -> list[dict]:
                 # live-walk-0853 (hosted demo, 1/11): the "Talking head" preset asks 35 to 45 s of a 34.5 s clip with
                 # 30.6 s of speech; the reviewer called the length a brief_covered blocker on every version
                 status, found = "unreachable", f"{runtime:.1f} s; the whole recording holds {float(have):.1f} s of speech"
+            usable = edl.get("source_usable_s")
+            if not ok and status != "unreachable" and usable is not None and lo > float(usable) + LENGTH_SLACK_S:
+                status, found = "unreachable", (f"{runtime:.1f} s; past the lines the cut keeps, the recording holds "
+                                                "only fillers, retakes and false starts (about "
+                                                f"{float(usable):.1f} s of usable speech in all)")
         elif kind in ("opening", "ending") and quote and kept:
             part = kept[:len(quote) + 1] if kind == "opening" else kept[-(len(quote) + 1):]
             r = _best_window(quote, part)
@@ -504,6 +514,30 @@ def restarts(edl: dict, window: int = RESTART_WINDOW) -> list[str]:
     return out
 
 
+SAID_TWICE = {"very", "really", "no", "so", "ha", "bye", "that", "had", "yeah", "okay", "ok", "well", "now", "go"}  # a
+# word a speaker doubles on purpose ("very very", "that that", "had had", "no no"): never a stutter
+
+
+def stutters(edl: dict, words: Words, marks: dict[int, set[int]]) -> list[tuple[str, int, int]]:
+    """A word the speaker says twice in a row inside a kept span, with a pause between the two (marks = edges.
+    pause_marks: the indices k of the words a pause comes before): the speaker stumbles and says it again ("Montivo is
+    ... is a video editor", "aquifers and ... and understand", 013). (span id, first copy, second copy) per span, the
+    first such double. Two copies that abut are left alone: that is Voice's doubling as often as speech (015's
+    "meta meta" is "Four Meta", 012's "afterwards afterwards" one word), and Voice's short echo copies
+    (voice.artefact_doubles) never count; the captions drop those doubles either way."""
+    out = []
+    for s in edl.get("spans") or []:
+        tw = words.turn(s["turn_id"])
+        echo = artefact_doubles(tw)
+        for k in range(s["word_from"] + 1, s["word_to"] + 1):
+            a, b = norm(tw[k - 1]["w"]), norm(tw[k]["w"])
+            if (a and a == b and a not in SAID_TWICE and k not in echo and k - 1 not in echo
+                    and k in marks.get(s["turn_id"], set())):
+                out.append((s["id"], k - 1, k))
+                break
+    return out
+
+
 OPENING_FILLERS = {"um", "uh", "uhm", "erm", "so", "yeah", "okay", "ok", "well", "and", "like", "anyway"}
 
 
@@ -524,6 +558,87 @@ def filler_hook(edl: dict) -> list[str]:
     lead = " ".join((spans[0]["words"]).split()[:5])
     return [f"{spans[0]['id']} (the hook) opens on a filler: \"{lead} ...\". The first words a viewer hears must be the "
             "line itself: start the hook span after the filler, on a word that begins the claim, or open on another line"]
+
+
+def length_short(edl: dict) -> float:
+    """Seconds the cut runs under the brief's minimum length (its length brief_check, missed short), 0.0 otherwise;
+    a length the recording cannot give (`unreachable`) is not short."""
+    for c in check_brief(edl):
+        if c["kind"] == "length" and c["status"] == "missed" and (c.get("min_s") or -1) > 0:
+            gap = float(c["min_s"]) - float(edl.get("runtime_s") or 0.0)
+            if gap > 0:
+                return round(gap, 2)
+    return 0.0
+
+
+UNUSED_MIN_WORDS = 3  # an unused run of fewer words is a filler or a fragment, not a passage worth naming
+UNUSED_MAX = 12  # passages named at most (the longest first)
+WORD_S = 0.35  # seconds a word takes when there is no audio to measure a passage's speech on
+
+
+def unused_pieces(edl: dict, words: Words) -> list[tuple[int, list[dict]]]:
+    """The words no span keeps that a cut could still add: per turn, runs of unused words (Voice's echo copies left
+    out), split at every word of a retake (a word pair the cut already says: the live 90 s upload's "Then it renders
+    its own cut" beside the kept "then it renders the cut", "Montivo is an Montivo is an" beside "Montivo is a video
+    editor"), kept when UNUSED_MIN_WORDS or more of their words are not fillers. (turn id, words) in order."""
+    kept: dict[int, set[int]] = {}
+    toks: list[str] = []
+    for s in edl.get("spans") or []:
+        kept.setdefault(s["turn_id"], set()).update(range(s["word_from"], s["word_to"] + 1))
+        toks += norm_tokens(s.get("words") or "")
+    said = {(x, y) for x, y in zip(toks, toks[1:]) if not (x in _FILLER and y in _FILLER)}
+    runs: list[tuple[int, list[dict]]] = []
+    for tid in sorted(words.by_turn):
+        tw = words.turn(tid)
+        echo = artefact_doubles(tw)
+        cur: list[dict] = []
+        for i, w in enumerate(tw + [None]):
+            if w is not None and i not in kept.get(tid, set()):
+                if i not in echo:
+                    cur.append(w)
+                continue
+            if cur:
+                runs.append((tid, cur))
+            cur = []
+    out: list[tuple[int, list[dict]]] = []
+    for tid, run in runs:
+        pair = [(norm(a["w"]), norm(b["w"])) in said for a, b in zip(run, run[1:])]
+        retake = {k for k, hit in enumerate(pair) if hit} | {k + 1 for k, hit in enumerate(pair) if hit}
+        cur = []
+        for k, w in enumerate(run + [None]):
+            if w is not None and k not in retake:
+                cur.append(w)
+                continue
+            if len([x for x in cur if norm(x["w"]) and norm(x["w"]) not in OPENING_FILLERS]) >= UNUSED_MIN_WORDS:
+                out.append((tid, cur))
+            cur = []
+    return out
+
+
+def usable_unused_s(edl: dict, words: Words, audio: Audio | None) -> float:
+    """Seconds of speech in the words of unused_pieces that are not fillers: the audio's speech runs inside each such
+    word (Voice stretches a word over the pause after it: the live 90 s upload's "okay." ran 2.62-6.78 s), else
+    WORD_S a word."""
+    total = 0.0
+    for _, piece in unused_pieces(edl, words):
+        for w in piece:
+            if not norm(w["w"]) or norm(w["w"]) in OPENING_FILLERS:
+                continue
+            if audio is None:
+                total += WORD_S
+            else:
+                total += sum(b - a for a, b in audio.speech_runs(w["t_start"], w["t_end"]))
+    return round(total, 2)
+
+
+def unused_passages(edl: dict, words: Words) -> list[str]:
+    """unused_pieces as lines for a plan repair, the longest first: what a cut that runs short can add. The live 90 s
+    upload of 2/11 came out 28.6 s for a 35 to 45 s brief and both repairs answered with another short edit: "the cut
+    runs 28.5 s" gave the planner no lines to add."""
+    runs = [(p[-1]["t_end"] - p[0]["t_start"],
+             f"turn {tid}, {p[0]['t_start']:.1f}-{p[-1]['t_end']:.1f} s: \"{' '.join(x['w'] for x in p)}\"")
+            for tid, p in unused_pieces(edl, words)]
+    return [r for _, r in sorted(runs, key=lambda r: -r[0])[:UNUSED_MAX]]
 
 
 def plan_check(edl: dict, target_s: float) -> list[str]:
