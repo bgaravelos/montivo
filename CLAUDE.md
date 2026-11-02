@@ -1134,6 +1134,19 @@ eval/ + Docker (1/11 night, $0, Billy's go, first PRs of the repo: #1 `eval/READ
 volume, a `sample` command) and `compose.yaml` (port 8765, `.env` optional), README Setup shows them; checked with colima
 on the Mac (`colima stop` stops it): the 015 sample in 13 s, serve, a drop render of 015 34.2 s, -14.0 LUFS / -1.7 dBTP).
 Reason: an unofficial leaderboard (watt-mind) scores repos on such signals (7.8, #35 on 1/11); new work goes through PRs.
+Tech audit 2/11 ($0, `docs/notes/tech-audit_2026-11-02.md`, PR #5 on Billy's go): four read-only agents (clean clone,
+regressions since 5bd9b28, hosted operations, static analysis), then the Must and Should fixed with tests (861 -> 871): a
+job the server never saw end (container stop) comes back as stopped from `ui/job.json`, so a first run killed before its
+cut keeps its Home tile and Try again, Modal scaledown_window 1500 s; request-time export / cover / post text commands in
+their own process group with a 300 s limit (`app.run_bounded`, 504), the frame grab 30 s via `.part`; exports on a hosted
+sample per judge (`ui/cache/exports/judges/<judge>/`); the review copy deletes its clock PNGs, sample copies skip them;
+Live finds the footage when `serve --root` runs elsewhere; compose binds 127.0.0.1; reorder rejoins only a take a move
+parted (`take_out` / `take_in`; a `pauses` cut moved away and back keeps its short pause); the lone word a retext leaves
+joins the next line only in the same look, not across a person's break or another override (492 stored EDLs unchanged);
+the keyword router decides on/off per feature by the nearest word, "subtitles" is not "title". Deployed 2/11 from a clean
+worktree at 768db52 (no container was running); /api/health 200, /api/runs 401, /s/nope 404, /api/monti 401, a POST from
+another origin 403; smoke drop on 015: 34.2 s, -14.0 LUFS / -1.7 dBTP, render 8.3 s. Left (Nice): disk reclaim on the
+Volume (Billy: `du` daily), README requirement lines, Dockerfile healthcheck, the test gaps in the note.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
