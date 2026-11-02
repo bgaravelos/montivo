@@ -272,7 +272,8 @@ def fetch(sample: str = DEFAULT, src: str | None = None, root: Path = Path("."),
         if sid not in SAMPLES:
             raise SampleError(f"no sample {sid!r}: {', '.join(SAMPLES)} or all")
         out.append(unpack(get_zip(SAMPLES[sid], src, root, verify), sid, root, force))
-    print("next: make ui (or .venv/bin/montivo serve), then open http://127.0.0.1:8765")
+    print("next: docker compose up, then open http://localhost:8765" if os.environ.get("MONTIVO_DOCKER")  # the image sets it
+          else "next: make ui (or .venv/bin/montivo serve), then open http://127.0.0.1:8765")
     return out
 
 

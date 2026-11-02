@@ -18,6 +18,9 @@ RUN pip install --no-cache-dir . -c constraints.txt \
     && chmod +x /usr/local/bin/sample
 
 WORKDIR /data
+ENV MONTIVO_DOCKER=1
 VOLUME /data
 EXPOSE 8765
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/api/health', timeout=4)" || exit 1
 CMD ["montivo", "serve", "--root", "/data", "--host", "0.0.0.0", "--port", "8765"]
