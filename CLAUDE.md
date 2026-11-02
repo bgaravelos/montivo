@@ -1164,8 +1164,9 @@ Bench (2 rounds): 90 s clip first review 78/68 -> 92/100, passes 0/2 -> 2/2, loo
 set 93.7 -> 93.8, unchanged passes; hard set 78.5 -> 83.8 (reviewer noise). The hosted run's "is is" was Voice's echo,
 not a stutter. UI: the tab title names the step its % is for; a Live Ask's reply keeps its language, the edit list is a
 chat line `detail`; a frame at or past the cut's end is the last frame; dead upload .part files swept at start. 913
-tests. 017 v15 bit-identical; 015 v5 renders the same on old and new code but not as the stored cut_v5.mp4 (older than
-later render changes; to look into). Deployed 2/11 22:0x on Billy's go from a clean worktree at ceea403 (the idle web
+tests. 017 v15 bit-identical; 015 v5 renders the same on old and new code but not as the stored cut_v5.mp4 (27/10 23:40,
+before the 28/10 hygiene: full range, x264 medium; checked 2/11: same frames and -14.0 LUFS, only E8's smoother pans,
+the centred caption pill and TV-range colour differ, all on purpose). Deployed 2/11 22:0x on Billy's go from a clean worktree at ceea403 (the idle web
 container stopped); /api/health 200, /api/runs 401, /s/nope 404, /api/monti 401, a POST from another origin 403; smoke
 drop on 015: 34.2 s, -14.0 LUFS / -1.7 dBTP, render 9.4 s.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
