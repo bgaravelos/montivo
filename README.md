@@ -91,7 +91,8 @@ plan, cut, review and re-cut it; your edits go to your own copy, so every judge 
 budget caps the Meta model calls; past it, the finished projects and the $0 edits still work.
 
 **2. From this repo, no API key.** You need Python 3.12+ and ffmpeg with libx264 (macOS: `brew install python@3.12
-ffmpeg`; Debian / Ubuntu: `sudo apt install python3.12-venv ffmpeg`); `make dev` checks both and says what is missing.
+ffmpeg`; Ubuntu 24.04: `sudo apt install python3.12-venv ffmpeg`; older Debian / Ubuntu have no 3.12 package: use the Docker
+image below); `make dev` checks both and says what is missing.
 
 ```bash
 git clone https://github.com/bgaravelos/montivo && cd montivo
@@ -426,7 +427,8 @@ Monti's drawings were made with ChatGPT's image model at design time; Montivo ca
 
 ## Setup
 
-Requirements: Python 3.12, ffmpeg and ffprobe on the PATH, a Meta developer API key.
+Requirements: Python 3.12+, ffmpeg and ffprobe on the PATH. The samples open and edit without a key; a new run (and
+the review, Ask Montivo, title cards, covers) needs a Meta developer API key in `MODEL_API_KEY`.
 
 ```bash
 make dev                      # python3.12 venv in .venv, installs montivo and pytest
@@ -438,6 +440,7 @@ Or in Docker (ffmpeg, Python 3.12 and the pinned packages in the image; runs and
 
 ```bash
 docker compose run --rm montivo sample      # the 015 sample run, no key needed to open it
+docker compose run --rm montivo sample --sample all   # adds run 017 (423 MB)
 docker compose up --build                   # the editor on http://localhost:8765, keys from .env if present
 docker compose run --rm montivo montivo run footage/clip.mp4 --brief "..." --out runs/001
 ```

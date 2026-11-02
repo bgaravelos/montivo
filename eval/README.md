@@ -25,7 +25,7 @@ refined on the same clips, so they say how the agent does on these cases, not a 
 
 | Harness | What it checks | Latest result |
 |---|---|---|
-| [`tests/`](../tests) (`make test`) | the engine, the human edits, the server and the hosted limits, on recorded Voice and SAM streams; no key, no network; runs in CI on every push | 862 tests pass |
+| [`tests/`](../tests) (`make test`) | the engine, the human edits, the server and the hosted limits, on recorded Voice and SAM streams; no key, no network; runs in CI on every push | 871 pass, 1 skipped (2/11) |
 | [`combo_check.py`](../tools/combo_check.py) | chains of human edits through the CLI on a clone of a run, with invariants after every version: duration, -14 LUFS and the true peak, every kept word once and none deleted coming back, untouched fields, the segment cache byte-identical to a cold render, exports at 9:16, 4:5 and 1:1 | 49 versions on run 017, 0 failures |
 | [`live_check.mjs`](../tools/live_check.mjs) | the Live preview in headless Chrome: picture against the audio clock at every cut, freezes, seek-to-play latency | no freeze; picture vs audio p95 0.5 to 0.98 frame; seek to play 21 to 48 ms |
 
