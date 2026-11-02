@@ -403,6 +403,25 @@ def end_group(pgid: int, grace: float = STOP_GRACE_S) -> None:
         os.killpg(pgid, signal.SIGKILL)
 
 
+EXPORT_MAX_S = 300  # a request-time export or cover / post text command (exports 10-60 s, cover design 30-60 s)
+
+
+def run_bounded(args: list[str], cwd: Path, timeout: float = EXPORT_MAX_S) -> subprocess.CompletedProcess:
+    """subprocess.run in its own process group with a wall-clock limit: these run inside a request while it holds the
+    export lock or the paid slot, so a hung ffmpeg used to block every export (or, on the host, every job) until a
+    restart (tech audit, 2/11). Past the limit the group goes and the request answers 504."""
+    proc = subprocess.Popen(args, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        raise HTTPException(504, f"took longer than {timeout:.0f} s and was stopped: try again")
+    return subprocess.CompletedProcess(args, proc.returncode, out, err)
+
+
 def set_aside_unrendered(run_dir: Path, after: int, job_id: str) -> list[int]:
     """A job stopped or failed in its render leaves edl_vN without cut_vN: every such version past `after` (the newest
     when the job started) moves to stopped/, so no version without a cut is listed, becomes the base of the next edit
@@ -499,6 +518,37 @@ def result_message(st: State, job: Job) -> dict:
     return {"role": "agent", "text": text, "version": n, "kind": "result"}
 
 
+JOB_FILE = "ui/job.json"  # the run's latest job as the server started it, with its end once it has one
+
+
+def save_job(d: Path, job: Job) -> None:
+    write_json(d / JOB_FILE, {"id": job.id, "kind": job.kind, "label": job.label, "args": job.cmd[1:], "out": job.out,
+                              "started": job.started, "v0": job.v0, "ended": job.ended, "rc": job.rc})
+
+
+def interrupted_jobs(st: State) -> list[Job]:
+    """Jobs a server that went away never saw end (a container stop, a redeploy, a crash): each comes back as stopped
+    (rc -1), so the run keeps its Stopped tile on Home and its Try again in the chat. Jobs live in memory only, and a
+    new project killed before its first cut had no cut, no job and so no place on Home while its spend still counted
+    (tech audit, 2/11)."""
+    out = []
+    for p in sorted(st.runs.glob(f"*/{JOB_FILE}")):
+        rec = read_json(p) or {}
+        d = p.parent.parent
+        if rec.get("ended") is not None or d.name in st.jobs or not rec.get("args"):
+            continue
+        logp = d / "run.log"
+        job = Job(id=str(rec.get("id") or "restart"), run=d.name, kind=str(rec.get("kind") or "run"),
+                  label=str(rec.get("label") or "The last job"), cmd=[sys.executable, *map(str, rec["args"])],
+                  started=float(rec.get("started") or 0), out=str(rec.get("out") or ""), v0=int(rec.get("v0") or 0),
+                  rc=-1, ended=logp.stat().st_mtime if logp.is_file() else time.time())
+        with contextlib.suppress(OSError):
+            save_job(d, job)
+        st.jobs[d.name] = job
+        out.append(job)
+    return out
+
+
 def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], chat: dict | None = None) -> Job:
     d = st.runs / run_id
     with st.lock:
@@ -524,6 +574,7 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
         job.proc = subprocess.Popen(cmd, cwd=st.root, stdout=fh, stderr=subprocess.STDOUT, env=os.environ.copy(),
                                     start_new_session=True)
         st.jobs[run_id] = job
+        save_job(d, job)
     if chat:
         chat_append(d, chat)
 
@@ -555,6 +606,8 @@ def start_job(st: State, run_id: str, kind: str, label: str, args: list[str], ch
             # set last and always (audit, 31/10: an exception here used to keep the job running forever, and with one
             # job at a time every judge's edits answered 409 until a restart)
             job.rc, job.ended = (rc if rc is not None else -1), time.time()
+            with contextlib.suppress(OSError):
+                save_job(d, job)
         try:
             chat_append(d, result_message(st, job))
         except Exception as e:  # noqa: BLE001 - the run folder may have been archived meanwhile
@@ -613,6 +666,8 @@ def create_app(root: Path) -> FastAPI:
         if isinstance(e, json.JSONDecodeError) or (here and reading):
             return JSONResponse({"detail": f"bad request: {str(e)[:200]}"}, status_code=400)
         raise e
+    for job in interrupted_jobs(st):
+        print(f"montivo-ui: {job.run}: {job.label} ended with the server, kept as stopped", file=sys.stderr)
     if budget is not None:
         st.on_stopped = lambda job: budget.hold(stop_hold(st.root, job), job.run)
         # a container that stopped mid-job (scale to zero, a redeploy) never ran the job's clean-up: its unrendered
@@ -651,7 +706,7 @@ def create_app(root: Path) -> FastAPI:
                 tmp = st.root / ".copying" / mine  # outside runs/: the budget and the list never see a half copy
                 shutil.rmtree(tmp, ignore_errors=True)
                 tmp.parent.mkdir(exist_ok=True)
-                shutil.copytree(d, tmp, ignore=shutil.ignore_patterns("job-*.out", "cache", "frames", "heard"))
+                shutil.copytree(d, tmp, ignore=shutil.ignore_patterns("job-*.out", "cache", "frames", "heard", "clock"))
                 # the other judges' drafts and version names on the sample are theirs, not this copy's
                 shutil.rmtree(tmp / "ui" / "draft", ignore_errors=True)
                 for lab in (tmp / "ui" / "labels").glob("*.json"):
@@ -835,8 +890,12 @@ def create_app(root: Path) -> FastAPI:
         out = d / "ui" / "frames" / f"v{v}_{round(max(t, 0) * 10):05d}{'_clean' if clean else ''}.jpg"
         if not out.is_file() or out.stat().st_mtime < src.stat().st_mtime:
             out.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{max(t, 0):.2f}", "-i", str(src),
-                            "-frames:v", "1", "-vf", "scale=360:-2", "-q:v", "4", str(out)], capture_output=True)
+            part = out.with_suffix(".part.jpg")  # a killed ffmpeg left a half frame cached for good
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{max(t, 0):.2f}", "-i", str(src),
+                                "-frames:v", "1", "-vf", "scale=360:-2", "-q:v", "4", str(part)], capture_output=True, timeout=30)
+            if part.is_file():
+                part.replace(out)
         if not out.is_file():
             raise HTTPException(404, "frame extraction failed")
         return FileResponse(out, headers={"Cache-Control": "max-age=3600"})
@@ -1171,7 +1230,7 @@ def create_app(root: Path) -> FastAPI:
     def export_cmd(d: Path, v: int, *extra: str) -> dict:
         args = [sys.executable, "-m", "montivo.export", str(d.relative_to(st.root)) if d.is_relative_to(st.root) else str(d),
                 "--version", str(v), *extra]
-        proc = subprocess.run(args, cwd=st.root, capture_output=True, text=True)
+        proc = run_bounded(args, cwd=st.root)
         if proc.returncode != 0:
             raise HTTPException(500, f"{'post text' if '--post-text' in extra else 'cover'} failed: "
                                      f"{(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")
@@ -1271,7 +1330,7 @@ def create_app(root: Path) -> FastAPI:
         return {"image": base + out.name, "tile": base + f"{key}-tile.jpg", **read_json(meta)}
 
     @app.post("/api/runs/{run_id}/export/bundle")
-    def export_bundle(run_id: str, b: dict):
+    def export_bundle(run_id: str, request: Request, b: dict):
         """{"v": N, "include": ["video", "clean", "srt", ...], "preset": "full" | "720", "name": stem, "cover_t": s,
         "aspect": "9:16" | "4:5" | "1:1"}: the files (python -m montivo.export, $0) under ui/cache/exports/<key>/, made
         once per choice; returns their download URLs and the zip's when there is more than one. "clean", and "video" in
@@ -1301,7 +1360,10 @@ def create_app(root: Path) -> FastAPI:
             if renders:
                 st.exporting[run_id] = st.exporting.get(run_id, 0) + 1
         try:
-            return make_bundle(run_id, d, v, inc, preset, name, cover, aspect, design)
+            # on a hosted sample each judge has their own folder: the sample's kept the last three bundles of every
+            # judge together, so a fourth judge's export deleted the first one's zip before the click (tech audit, 2/11)
+            sub = Path("judges") / judge_of(request) if is_sample(d) else Path()
+            return make_bundle(run_id, d, v, inc, preset, name, cover, aspect, design, sub)
         finally:
             if renders:
                 with st.lock:
@@ -1309,13 +1371,14 @@ def create_app(root: Path) -> FastAPI:
                     if not st.exporting[run_id]:
                         del st.exporting[run_id]
 
-    def make_bundle(run_id: str, d: Path, v: int, inc: list, preset: str, name: str, cover, aspect: str, design) -> dict:
+    def make_bundle(run_id: str, d: Path, v: int, inc: list, preset: str, name: str, cover, aspect: str, design,
+                    sub: Path = Path()) -> dict:
         edl = d / f"edl_v{v}.json"
         key_in = [v, inc, preset, name, cover, edl.stat().st_mtime_ns] + ([aspect] if aspect != "9:16" else []) \
             + ([design] if design else []) \
             + ([(d / f"post_v{v}.json").stat().st_mtime_ns] if "post" in inc and (d / f"post_v{v}.json").is_file() else [])
         key = hashlib.sha1(json.dumps(key_in).encode()).hexdigest()[:12]
-        out = d / "ui" / "cache" / "exports" / key
+        out = d / "ui" / "cache" / "exports" / sub / key
         rec_p = out / "export.json"
         # one export at a time: a render ("clean", a feed aspect) uses the run's render/ scratch folder. A second one
         # is a 409 now, not a wait: each waiting request held a worker thread, and 40 of them took a GET from 13 ms to
@@ -1335,7 +1398,7 @@ def create_app(root: Path) -> FastAPI:
                             *(["--cover-t", f"{float(cover):.2f}"] if cover is not None else []),
                             *(["--aspect", aspect] if aspect != "9:16" else []),
                             *(["--cover-design", json.dumps(design)] if design else [])]
-                    proc = subprocess.run(args, cwd=st.root, capture_output=True, text=True)
+                    proc = run_bounded(args, cwd=st.root)
                     if proc.returncode != 0:
                         raise HTTPException(500, f"export failed: {(proc.stderr or proc.stdout).strip().splitlines()[-1:]}")
                     write_atomic(rec_p, proc.stdout)  # read without the lock above: never half written
@@ -1343,7 +1406,7 @@ def create_app(root: Path) -> FastAPI:
                 exporting_run[0] = None
                 export_lock.release()
         rec = json.loads(rec_p.read_text())
-        url = lambda f: f"/api/runs/{run_id}/file/ui/cache/exports/{key}/{f}"  # noqa: E731
+        url = lambda f: f"/api/runs/{run_id}/file/{(Path('ui/cache/exports') / sub / key / f).as_posix()}"  # noqa: E731
         return {"files": [{**f, "url": url(f["name"])} for f in rec["files"]],
                 "zip": {**rec["zip"], "url": url(rec["zip"]["name"])} if rec.get("zip") else None}
 

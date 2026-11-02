@@ -382,6 +382,7 @@ def test_two_paid_calls_in_requests_never_run_at_once(tmp_path, hosted_env):
         release.wait(5)
         return Done()
     hosted_env.setattr(A.subprocess, "run", slow)
+    hosted_env.setattr(A, "run_bounded", slow)
     c = TestClient(A.create_app(tmp_path))
     first = {}
     t = threading.Thread(target=lambda: first.update(r=c.post("/api/runs/r1/export/post", json={"v": 2})))

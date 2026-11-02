@@ -40,6 +40,9 @@ def edit_media(run_dir: Path, edl: dict, log=None) -> dict:
     """The edit proxy and edit audio of the EDL's source, made once (about 4 s for 69 s of 1080p on the Mac) and
     kept in ui/cache/edit/ until the source changes (path, size, mtime)."""
     src = Path(edl["source"]["path"])
+    if not src.is_file() and not src.is_absolute():  # a server started from another working directory (--root)
+        alt = run_dir.resolve().parent.parent / src  # (tech audit, 2/11: Live answered 404, look.source_of had it)
+        src = alt if alt.is_file() else src
     if not src.is_file():
         raise FileNotFoundError(f"source footage {src} not found")
     st = src.stat()

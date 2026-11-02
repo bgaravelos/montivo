@@ -293,6 +293,7 @@ def test_a_second_export_and_an_archive_answer_409_while_an_export_is_made(tmp_p
         os.makedirs(out, exist_ok=True)
         return type("P", (), {"returncode": 0, "stdout": json.dumps({"files": [], "zip": None}), "stderr": ""})()
     monkeypatch.setattr(A.subprocess, "run", run)
+    monkeypatch.setattr(A, "run_bounded", run)
     app = A.create_app(tmp_path)
     first = []
     t = threading.Thread(target=lambda: first.append(TestClient(app).post(

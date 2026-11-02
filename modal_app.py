@@ -42,7 +42,7 @@ image = (
 
 
 @app.function(image=image, volumes={DATA: volume}, secrets=[modal.Secret.from_name("montivo-keys")],
-              cpu=4.0, memory=8192, max_containers=1, scaledown_window=900, timeout=3600)
+              cpu=4.0, memory=8192, max_containers=1, scaledown_window=1500, timeout=3600)
 @modal.concurrent(max_inputs=200)
 @modal.asgi_app()
 def web():

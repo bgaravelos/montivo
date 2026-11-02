@@ -3,7 +3,7 @@ services:
     build: .
     image: montivo
     ports:
-      - "8765:8765"
+      - "127.0.0.1:8765:8765"   # this machine only: a server with your key and no password
     volumes:
       - ./data:/data          # runs/ and footage/ (put your clips in ./data/footage)
     env_file:
