@@ -14,7 +14,8 @@
 
 # Montivo
 
-An agent-first video editor built on Meta's models. Give it spoken footage and a one-line brief: it picks the lines,
+An agent-first video editor built on Meta's models, for creators and small teams who turn spoken footage (a talking
+head, an interview, a walk-and-talk) into Reels, Shorts and TikToks every week. Give it that footage and a one-line brief: it picks the lines,
 cuts on word boundaries, keeps the speaker in a 9:16 frame and captions it, then **watches its own render, turns
 what is wrong into timed edits and renders again**, until the cut passes or a guard (budget, passes, a regression, a
 repeated fix) stops the loop. Every version stays visible, and every edit, the agent's or yours, can be undone.
@@ -406,6 +407,20 @@ question, counted by the hosted budget: Muse Spark Open when `BASETEN_API_KEY` i
 $0.0035), else Muse Spark 1.3 (about $0.013); or the guide's keywords for $0 without a key;
 `tools/monti_bench.py` scores it on 24 questions in English and Greek: 20 of 20 run on Spark 1.3 (30/10), 21 of 24 on
 the keywords.
+
+## What's next
+
+Montivo stays open source (MIT) after the event. The next pieces, each one a limit measured above:
+
+- **A held-out benchmark.** The reviewer's checks were tuned on the same cuts the benchmark plants faults in. Next is a
+  set of footage it has never seen, scored the same way, so the catch rate is a real error rate.
+- **Overlapping speakers.** The NASA clip never passes because four people talk over each other at turn changes; cuts
+  and the crop need to treat an overlap as one unit instead of two turns.
+- **J and L cuts.** Audio that starts before or runs past its picture, per clip, in the render and in Live.
+- **More stages on Muse Spark Open** where it measures as well as Spark 1.3: today Monti and the look from words; the
+  router, hook titles and post text stay on 1.3 until their benchmarks say otherwise.
+- **Dissolves and burned-in text.** Camera cuts are detected, dissolves are not, and a lower third already in the
+  source can be cropped by the 9:16 frame.
 
 ## Built during the hackathon
 
