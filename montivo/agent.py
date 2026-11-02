@@ -430,7 +430,7 @@ MOVE = re.compile(r"\bmove\s+(s\d+)\s+(?:before|in front of)\s+(s\d+)|\bmove\s+(
 # "add music, no punch-ins": each feature reads the on/off words of its own clause (one OFF for the whole message
 # turned the music off there); a clause with neither keeps the clause before it ("turn off the music and punch-ins")
 CLAUSE = re.compile(r"[,;.!?]|\b(?:and|but|then|also)\b|\bκαι\b|\bαλλά\b|\bμετά\b", re.I)
-ON = re.compile(r"\b(add|put|turn on|use|with|want|keep|back|bring)\b|βάλ|πρόσθεσ|θέλω|κράτα|φέρ", re.I)
+ON = re.compile(r"\b(add|put|turn on|on|use|with|want|keep|back|bring)\b|βάλ|πρόσθεσ|θέλω|κράτα|φέρ", re.I)
 HIDE = re.compile(r"\b(delete|drop|hide)\b|κρύψ|διάγραψ", re.I)
 # "cut s3 shorter", "remove the pause in s3": a part of the clip, which the keywords cannot place; never a whole drop
 PART = re.compile(r"\b(shorter|short|trim|tighten|pause|pauses|silence|bit|part|word|words|first|last|start|end|"
@@ -438,16 +438,21 @@ PART = re.compile(r"\b(shorter|short|trim|tighten|pause|pauses|silence|bit|part|
 
 
 def switched_off(m: str, feature: str, hide: bool = False) -> bool:
-    """Whether the clauses that name a feature ask for it off ("no", "without", and for the title "delete", "hide")."""
+    """Whether the clauses that name a feature ask for it off ("no", "without", and for the title "delete", "hide"): in
+    each, the on/off word nearest the feature decides (the one before it on a tie: "add music without punch-ins" is
+    music on, punch-ins off; "turn the music off and the title on" used to turn both off); a clause with neither takes
+    the last one said before it."""
     off, seen, last = False, False, False
     for part in CLAUSE.split(m):
         part = part or ""
-        said = bool(OFF.search(part) or (hide and HIDE.search(part)))
-        now = said or (last and not ON.search(part))
-        if re.search(feature, part):
-            seen, off = True, now
-        if said or ON.search(part):
-            last = said
+        sw = sorted([(x.start(), x.end(), True) for x in OFF.finditer(part)]
+                    + ([(x.start(), x.end(), True) for x in HIDE.finditer(part)] if hide else [])
+                    + [(x.start(), x.end(), False) for x in ON.finditer(part)])
+        if f := re.search(feature, part):
+            near = min(sw, key=lambda x: (max(x[0] - f.end(), f.start() - x[1], 0), x[0] > f.start()), default=None)
+            seen, off = True, near[2] if near else last
+        if sw:
+            last = sw[-1][2]
     return off if seen else bool(OFF.search(m))
 
 
@@ -464,7 +469,7 @@ def keywords(edl: dict, message: str, scope: dict | None = None) -> dict:
         span, before = (mv.group(1), mv.group(2)) if mv.group(1) else (mv.group(3), "")
         ops.append(blank | {"op": "reorder", "span": span, "before": before})
         said.append(f"{span} moved " + (f"before {before}" if before else "to the end"))
-    elif DELETE.search(m) and not re.search(r"music|μουσικ|title|τίτλ|punch|zoom", m):
+    elif DELETE.search(m) and not re.search(r"music|μουσικ|\btitle|\bτίτλ|punch|zoom", m):
         if scope.get("words") and (THIS.search(m) or not named):
             for w in scope["words"]:
                 ops.append(blank | {"op": "cut", "span": w["span"], "word_from": w["from"], "word_to": w["to"]})
@@ -496,8 +501,8 @@ def keywords(edl: dict, message: str, scope: dict | None = None) -> dict:
     if preset:
         ops.append(blank | {"op": "style", "preset": preset})
         said.append(f"captions: {PRESET_NAMES[preset]}")
-    if re.search(r"title|τίτλ", m):
-        off = switched_off(m, r"title|τίτλ", hide=True)
+    if re.search(r"\btitle|\bτίτλ", m):
+        off = switched_off(m, r"\btitle|\bτίτλ", hide=True)
         ops.append(blank | {"op": "title_off" if off else "title_on"})
         said.append(f"title card {'off' if off else 'on'}")
     if not ops:
