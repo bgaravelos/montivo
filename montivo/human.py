@@ -718,7 +718,7 @@ def text_fixes(edl: dict, callouts: dict[str, str], title: str | None, title_car
         if not title:
             raise SystemExit("the title is empty: use --title-off to drop the card")
         if title != (edl.get("title_card_text") or ""):
-            card = (style or title_style(edl)) == "card"
+            card = (style or title_style(edl)) == "card" and title_card is not False
             out.append({"op": "title_text", "target": "title", "issue": -1, "severity": "human",
                         "args": {"text": title, "was": edl.get("title_card_text")},
                         "note": f"title {edl.get('title_card_text')!r} -> {title!r}"
@@ -757,7 +757,8 @@ def text_edit(edl: dict, words: Words, audio: Audio | None, callouts: dict[str, 
             by_id[f["target"]]["callout_shift_s"] = f["args"]["shift_s"]
         elif f["op"] == "title_text":
             new["title_card_text"] = f["args"]["text"]
-            new["title_card"] = True
+            if title_card is not False:  # new words with the card asked off stay hidden (code audit 3/11)
+                new["title_card"] = True
         elif f["op"] == "title_style":
             new["title_style"] = f["args"]["style"]
         else:

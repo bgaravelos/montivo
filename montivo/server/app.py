@@ -667,7 +667,7 @@ def create_app(root: Path) -> FastAPI:
         here = tb is not None and Path(tb.tb_frame.f_code.co_filename).parent == Path(__file__).parent
         reading = not isinstance(e, AttributeError) or any(f"has no attribute '{a}'" in str(e) for a in ("get", "strip", "split"))
         if isinstance(e, json.JSONDecodeError) or (here and reading):
-            return JSONResponse({"detail": f"bad request: {str(e)[:200]}"}, status_code=400)
+            return JSONResponse({"error": f"bad request: {str(e)[:200]}"}, status_code=400)  # the client reads error
         raise e
     for p in st.footage.glob(".upload-*.part"):  # an upload a stop cut off (its finally never ran): up to 1 GB each
         with contextlib.suppress(OSError):
@@ -873,7 +873,7 @@ def create_app(root: Path) -> FastAPI:
         return s
 
     @app.get("/api/runs/{run_id}/file/{path:path}")
-    def file(run_id: str, path: str):
+    def file(run_id: str, path: str, request: Request):
         d = st.run_dir(run_id).resolve()
         try:
             p = (d / path).resolve()
@@ -881,6 +881,14 @@ def create_app(root: Path) -> FastAPI:
             raise HTTPException(404, "no such file")
         if d not in p.parents or not p.is_file():
             raise HTTPException(404, "no such file")
+        # ui/ holds each judge's own state on a shared sample (drafts, labels, chat): on the host this route serves only
+        # its media cache, and a judges/<id>/ folder in it (covers, exports) only to that judge (code audit 3/11:
+        # another judge's ui/draft/<id>/state.json answered 200 here)
+        parts = p.relative_to(d).parts
+        if budget is not None and parts[0] == "ui":
+            mine = all(parts[i + 1] == judge_of(request) for i in range(len(parts) - 1) if parts[i] == "judges")
+            if parts[1:2] != ("cache",) or not mine:
+                raise HTTPException(404, "no such file")
         return FileResponse(p)  # answers Range requests, so the player can seek
 
     @app.get("/api/runs/{run_id}/frame")
