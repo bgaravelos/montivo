@@ -1033,8 +1033,13 @@ re-extracted) and put back after; adopted, host spend $3.43 of $15; no container
 Offline demo (1/11, $0, merged into main as 270fdfa and pushed on Billy's go; GitHub releases `sample-015` and `sample-017` published on his yes, a fresh GitHub clone's `make sample SAMPLE=all` downloads and checks both in 55 s): `montivo/server/sample.py` knows samples 015 (default) and 017 with size + sha256, `fetch --sample 015|017|all --from ZIP|DIR|file://|URL --force --no-verify` checks before it unpacks, writes only runs/<id>/ and footage/<clip> (runs/.fetch-<id> then a rename), keeps an existing runs/<id> (--force archives it); `pack` adds the model calls' JSON, cover / loop / hook records, the tracked video and proxy (Speakers thumbnails, Media), writes .sha256 and refuses a file holding a key from the shell. `make check` (Python 3.12+, ffmpeg + libx264, brew / apt lines), `make sample [SAMPLE=all] [FROM=...]`, `make ui [PORT=]` reads `.env`; `.env.example`. Zips (packed read-only from runs/015 and runs/017) in `dist/release-2026-11-01/`: 015 222796455 bytes, 017 423129038 bytes. Clean clone checked: make dev, make test (786), make sample SAMPLE=all FROM=dir, keyless make ui: Home lists both, 015 opens on v5 87, 017 on v13 92, Live drop + Make Version 15.9 s, Export 9:16 zip, Loop, Compare, Versions, music / style / caption / drop / Ask keywords render, every paid route 409 with the reason, Monti from the guide, no console errors. A re-pack changes the size and sha256 pinned in SAMPLES and needs a new release asset.
 Demo video (1/11, $0.06 Meta + 1,384 Magnific credits): demo_v5 = the 28/10 skeleton with every UI shot retaken on the final UI
 and script v5 (`docs/notes/demo-script-v5_2026-11-01.md`: new VO for shots 3, 7 and a new 8b on run 018), the Chill Lofi bed (Billy's
-pick), 2:52, -14.0 LUFS; assembled by `footage/demo/v5/asm/assemble_v5.py`, upload file `footage/demo/montivo_demo_final.mp4`.
-On YouTube: https://www.youtube.com/watch?v=JRa-nPJJVEc (Billy's channel, custom thumbnail); README opens with it
+pick), 2:52, -14.0 LUFS; assembled by `footage/demo/v5/asm/assemble_v5.py`.
+Demo v6 (3/11, $0.03 Meta + 1,416 Magnific credits, Billy: final): v5's picture with slow drifts on every still stretch (only
+the end card stays still) and tighter zooms on what the voice names, shot 9 cropped to the Spark Open cost line, a new shot 9
+line "Planning, the help chat and style from words also run on Muse Spark Open, for a fraction of the cost." (`final_ref/
+shot09_v6.mp3`, locked); 2:53.7, -14.0 LUFS / -1.4 dBTP; `footage/demo/v6/asm/assemble_v6.py --music chill_lofi`, upload file
+`footage/demo/montivo_demo_final.mp4`.
+On YouTube: https://www.youtube.com/watch?v=AAPlyyle_x4 (Billy's channel, custom thumbnail; v5 was JRa-nPJJVEc); README opens with it
 (`assets/brand/png/montivo-demo-thumbnail.png`, made by `footage/demo/thumb/make_thumb.py`).
 Credits into quality (1/11, Billy: use the unspent credits, ~$10.9 Meta + $1.15 Baseten): a live judge run on the hosted demo
 (upload `footage/stress4_walk_0111.mp4`, 34.5 s, "Talking head" preset, `runs/live-walk-0853` pulled from the Volume): 68 / 68 /
