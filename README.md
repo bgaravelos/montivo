@@ -7,8 +7,8 @@
 <p align="center"><b>The video editor that watches its own cut.</b><br><code>plan → render → review → re-cut</code></p>
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=JRa-nPJJVEc"><img alt="Watch the Montivo demo on YouTube (2:52)" src="assets/brand/png/montivo-demo-thumbnail.png" width="640"></a><br>
-  <a href="https://www.youtube.com/watch?v=JRa-nPJJVEc"><b>▶ Watch the demo (2:52)</b></a><br>
+  <a href="https://www.youtube.com/watch?v=AAPlyyle_x4"><img alt="Watch the Montivo demo on YouTube (2:54)" src="assets/brand/png/montivo-demo-thumbnail.png" width="640"></a><br>
+  <a href="https://www.youtube.com/watch?v=AAPlyyle_x4"><b>▶ Watch the demo (2:54)</b></a><br>
   <a href="https://bgaravelos--montivo-web.us-east.modal.run/s/CAlQGWBgIBbo">See a finished cut on the hosted demo</a> (read-only, no sign-in: the cut, every version's blind score)
 </p>
 
@@ -438,7 +438,7 @@ the brand (`assets/brand/`: the symbol, wordmark, colours, cards and sting, all 
 Used as they are: ffmpeg, Pillow, httpx, FastAPI, React and Vite, and the Inter Tight, JetBrains Mono, Montserrat, Anton, Poppins and DM Serif Display fonts (SIL OFL 1.1). The concept
 and the name come from an earlier personal project of Vasileios (Billy) Gkaravelos; none of its code is used here.
 
-The [demo video](https://www.youtube.com/watch?v=JRa-nPJJVEc) is narrated off camera by an AI voice cloned from Billy's own recording (an ElevenLabs instant clone,
+The [demo video](https://www.youtube.com/watch?v=AAPlyyle_x4) is narrated off camera by an AI voice cloned from Billy's own recording (an ElevenLabs instant clone,
 made through Magnific). The clone is used only for the video; Montivo itself calls Meta models only.
 
 Monti's drawings were made with ChatGPT's image model at design time; Montivo calls Meta models only.
