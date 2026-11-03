@@ -1169,6 +1169,14 @@ before the 28/10 hygiene: full range, x264 medium; checked 2/11: same frames and
 the centred caption pill and TV-range colour differ, all on purpose). Deployed 2/11 22:0x on Billy's go from a clean worktree at ceea403 (the idle web
 container stopped); /api/health 200, /api/runs 401, /s/nope 404, /api/monti 401, a POST from another origin 403; smoke
 drop on 015: 34.2 s, -14.0 LUFS / -1.7 dBTP, render 9.4 s.
+Code audit 3/11 ($0, PR #13, commit 03be214, report `docs/code-audit-2026-11-03.md`, untracked):
+on the host the generic file route serves only `ui/cache/` under `ui/`, and a `judges/<id>/` folder only to that
+judge (another judge's `ui/draft/<id>/state.json` answered 200); new title words with `title_card=False` keep the
+card off; a bad request answers `{error}` (the client also reads FastAPI's `detail`); `tc(59.96)` reads 1:00.0; the
+share poster goes through a part file. C01 (`edl.locate` reusing taken words as a fallback) left: it would change
+plans. 924 tests. Deployed 3/11 19:45 on Billy's go from a clean worktree at 3e7853c (no job since 2/11 21:11; the
+idle 19:15 container stopped); /api/health 200, /api/runs 401, /s/nope 404, /api/monti 401, a POST from another
+origin 403; smoke drop on 015: 34.2 s, -14.0 LUFS / -1.7 dBTP, render 10.9 s.
 Demo footage: Billy's own English talking-head clip, 60 to 90 s, expected in `~/Downloads` by 28/10; the NASA clip
 (`footage/nasa_150s.mp4`, public domain) is regression only. Files under iCloud Drive cannot be read from Claude Code.
 
