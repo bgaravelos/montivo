@@ -67,8 +67,9 @@ ledger of tokens, dollars and seconds per stage.
 ## Evidence and limits
 
 - **A development benchmark** (27/10, round 3, the reviewer with the measured checks and the pass gate): four fault
-  types planted in three finished cuts, 28 blind reviews. 91 % of the planted faults were flagged as blocker or major; 2 of 22 faulty cuts still passed; 3 of 4 reviews of clean cuts
-  passed. The checks and the planted faults were refined on these same cuts, so this is not a held-out error rate.
+  types planted in three finished cuts, 28 blind reviews (22 of faulty cuts, 6 of clean ones). 91 % of the planted
+  faults were flagged as blocker or major; 2 of 22 faulty cuts still passed; 3 of 4 reviews of the clean 012 and 015
+  cuts passed (014's clean cut has four loud cut edges of its own, so its two reviews are not counted as clean). The checks and the planted faults were refined on these same cuts, so this is not a held-out error rate.
 - **Unseen footage does not always pass.** Re-run on 28/10 with that day's code, a 4-astronaut NASA clip (66 at best:
   they talk over each other at every turn change), a USGS interview (68) and a multi-camera TEDx talk (70) improved or
   held but never passed. Montivo shows a bounded correction loop you can inspect; it does not promise a publishable
@@ -102,7 +103,9 @@ make sample    # run 015, the one the demo video shows (223 MB): checked against
 make ui        # http://127.0.0.1:8765 (make ui PORT=8800 if that port is taken)
 ```
 
-`make sample SAMPLE=all` adds run 017 (a 132 s clip, 13 versions, 92 and a pass; 423 MB). A zip downloaded by hand
+`make sample SAMPLE=all` adds run 017 (a 132 s clip, 13 versions, 92 and a pass; 423 MB). The hosted demo and the
+share link above have two later versions of it: v14 drops a glossary entry and v15 fixes a caption line ("raw
+footage in"); its blind review scored 86 and passed. A zip downloaded by hand
 from the [releases page](https://github.com/bgaravelos/montivo/releases) unpacks with `make sample FROM=~/Downloads`.
 A sample is the run folder as the agent left it: every version, every blind review with its notes and measured
 checks, and every model call's request, response and cost (`ledger.json`). Without a key you get everything that runs
@@ -196,7 +199,7 @@ flowchart LR
 | The same clip with a deliberately broken v1: a cut inside a word, a caption over the face, a weak hook | the blind reviewer caught all three faults with a timestamp in 3 runs out of 3; the loop took it from 65 to 85 and passed | $0.08 for the test, $0.06 for the loop |
 | A public-domain USGS interview, 166 s, a noisy atrium, a second speaker, passers-by (run 013) | 62 to 68 to 72, no pass; it exposed three bugs the first clip never hit, all fixed (captions avoided every passer-by's head, a flagged title card stayed, a fast speaker's clipped words) | $0.78 |
 | Reviewer benchmark, round 1 (27/10 night, the reviewer alone, before the measured checks): eight fault types planted in three finished cuts, 50 blind reviews per reviewer | Spark 1.3 caught 82 % of the planted faults (75 % as major), passed every clean cut, but 30 % of the faulty cuts still passed; Muse Spark Open caught as many (82 %) but scored clean cuts 15 to 20 points lower and never passed one | part of $5.02 for the night |
-| Reviewer benchmark, round 3 (27/10 night, the reviewer as of that night, with the measured checks and the pass gate): four fault types (a weak hook, a cut inside a word, a wrong caption, the head out of frame) planted in three finished cuts, 28 blind reviews | 91 % of the planted faults caught as blocker or major; 2 of 22 faulty cuts still passed (9 %); 3 of 4 reviews of clean cuts passed (75 %); the same cut reviewed twice differs by 4.3 points (SD) | $0.80 |
+| Reviewer benchmark, round 3 (27/10 night, the reviewer as of that night, with the measured checks and the pass gate): four fault types (a weak hook, a cut inside a word, a wrong caption, the head out of frame) planted in three finished cuts, 28 blind reviews: 22 of faulty cuts, 6 of clean ones | 91 % of the planted faults caught as blocker or major; 2 of 22 faulty cuts still passed (9 %); 3 of 4 reviews of the clean 012 and 015 cuts passed (75 %; 014's clean cut has four loud cut edges of its own, so its two reviews are left out); the same cut reviewed twice differs by 4.3 points (SD) | $0.80 |
 | Three unseen clips re-run with that day's code (28/10): NASA, 4 astronauts, one mic; the USGS interview; the TEDx talk below | no pass on any: NASA 58 to 66 (the astronauts talk over each other at turn changes), USGS 68, TEDx 62 to 70; the bugs they exposed are fixed | part of $1.67 for the day |
 | A faster first cut (30/10): the title over the opening speech, plan and watch at effort low, the brief checklist and the $0 preflight; the same seven clips re-planned from their stored transcripts | first review mean 65.9 to 78.7; passed at the first review 0 of 7 to 2 of 7 (the demo clip: 100); a fresh run of the demo clip passed its first review in 107 s instead of 200 s | $0.56 for the seven, $0.22 for the fresh run |
 | A TEDx clip uploaded through the hosted demo, 84 s, multi-camera, the speaker small in the wide shots | upload, run and loop in the container in 209 s: 72 to 76, no pass ($0.32); after a caption fix, a re-review (74) let the loop try the reviewer's swap_hook: that version scored 48 and the regression guard kept v2 ($0.07) | $0.39 |
@@ -337,7 +340,7 @@ than one file comes as a zip, `python -m montivo.export`, $0); and a pre-flight 
 the gated blind review, -14 LUFS and the peak, the format, the length against Reels, TikTok and Shorts, and how many
 caption lines and callouts reach into each app's own UI (the viewer's safe-area guides; on run 015 v5, 25 of 28
 lines sit low enough to meet TikTok's caption, which the Style panel's fixed position fixes). Feed 4:5 and Square 1:1
-render the version again from a copy of its EDL (EDL `target.aspect`, `engine/frame.py`, `python -m montivo.export ...
+render the version again from a copy of its EDL (EDL `target.aspect`, `montivo/engine/frame.py`, `python -m montivo.export ...
 --aspect 4:5`, $0, about 12-30 s): the crop is still the full source height, only narrower (864 px of a 1080 p source
 for 4:5), and still follows the head; every height the EDL holds (the caption top, a fixed position, a pinned callout)
 is a 1920-frame y scaled by the frame's height, so it keeps its place against the face, and a feed frame keeps only a
@@ -405,8 +408,8 @@ key, op, price and model per stage), with steps and a Show me that runs along th
 it between an in and an out bracket. It never edits: an edit request goes into Ask Montivo's box, unsent. One call per
 question, counted by the hosted budget: Muse Spark Open when `BASETEN_API_KEY` is set, as on the hosted demo (about
 $0.0035), else Muse Spark 1.3 (about $0.013); or the guide's keywords for $0 without a key;
-`tools/monti_bench.py` scores it on 24 questions in English and Greek: 20 of 20 run on Spark 1.3 (30/10), 21 of 24 on
-the keywords.
+`tools/monti_bench.py` scores it on 24 questions in English and Greek: 24 of 24 on Spark 1.3 and 24 of 24 on Muse
+Spark Open (1/11), 21 of 24 on the keywords.
 
 ## What's next
 
@@ -474,7 +477,12 @@ and the run folder layout are in [docs/pipeline.md](docs/pipeline.md).
 | 29/10 | 20 fixes from a cloud code review (a moved clip keeps its audio on ffmpeg 7, ingest refuses broken files, hosted budget and SSE fixes, keyboard and contrast in the UI); Live preview editing: an edit proxy per source, the render's layout played in the browser, a draft for structural edits with its own undo, Make Version N to render it |
 | 30/10 | the editor opens in Live; a linked Voice lane per clip, the music in the draft, the music default to -18 / -6 (about 9 dB of speech over the bed, by ear); a timeline flicker fix; the Montivo loader; the Home redesign (the best cut and its loop, 9:16 tiles, the New project sheet); the rail panels (every panel's edit into the same draft, Captions with find and replace and line breaks, Style tabs and brand kits and a look per clip, Text with hook suggestions, Music with levels, start, fade and lift windows, Speakers and framing, Versions with stars and names, Media with the whole recording and the brief); the smarter chat (the router reads the recording, the versions and the chat, 38 of 38 on its bench, edits into the Live draft, free checks after a version); a faster and smarter first cut (the title over the opening speech, plan and watch at effort low, Voice and the plan started earlier, the review prep in parallel, the brief as a checklist with a plan check, a $0 preflight of the measured checks before every render), the pairwise judge for the hook A/B and the regression guard, "Did you say ...?" glossary suggestions, one escalation re-plan when the loop is stuck; close-up captions placed against SAM's face track; Monti, the help gecko |
 | 31/10 | Monti steps out of the way (the rail's foot by default, drag with snap, tuck into an edge); a read-only audit of the repo and the hosted demo, and its fixes (this README among them) |
-| 1/11 to 4/11 | the samples for the hosted demo, the demo video, the submission. The freeze tag marks the 28/10 state, not the end of the work: everything in the rows for 29/10 to 31/10 came after it, each piece with its tests. The plan from 1/11: only fixes for what breaks the demo |
+| 1/11 | the samples 015 and 017 as GitHub releases (`make sample`) and on the hosted demo; the demo video; a harder first-cut benchmark and its fixes (`tools/first_cut_bench.py`: the hook rule, pause marks in the transcript, up to two plan repairs; hard set first review 73.2 to 80.1, loop passes 0 of 8 to 3 of 8); Monti and the look from words moved to Muse Spark Open after measuring every Spark call on both models; an improvement audit, four area audits and a bug audit, every Must and Should fixed with a test that fails on the old code; `eval/` and the Docker image |
+| 2/11 | a tech audit (a clean clone, the hosted operations, static analysis) and its fixes; 31 more offline tests; a live judge pass on the hosted demo; the first cut knows when a brief's length is longer than the usable speech and cuts a real stutter (a 90 s clip: first review 78 and 68 to 92 and 100) |
+| 3/11 | a code audit and its fixes (hosted file access per judge, title card and error answers); a final check of this README and the repository |
+| 4/11 | the submission |
+
+The freeze tag (`freeze-2026-10-31`) marks the 28/10 state, not the end of the work: everything from 29/10 on came after it, each piece with its tests. From 1/11 the work was benchmarks, audits and their fixes, the samples and the demo video.
 
 ## Before the kickoff
 
