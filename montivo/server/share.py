@@ -12,6 +12,7 @@ import secrets
 import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from fastapi import HTTPException, Request
@@ -70,6 +71,18 @@ class Shares:
             raise HTTPException(404, "This link does not exist or was removed.")
         return s
 
+
+
+def poster_file(src: Path, t: float, out: Path) -> None:
+    """The 720 px poster of `src` at second t into `out`, through a private part file renamed when whole: two requests
+    at once never serve or overwrite a half poster, a failed ffmpeg leaves none (code audit 3/11)."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    part = out.with_name(f"{out.stem}.{uuid.uuid4().hex[:8]}.part.jpg")
+    r = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{t:.2f}", "-i", str(src),
+                        "-frames:v", "1", "-vf", "scale=720:-2", "-q:v", "3", str(part)], capture_output=True)
+    if r.returncode == 0 and part.is_file() and part.stat().st_size:
+        part.replace(out)
+    part.unlink(missing_ok=True)
 
 def _clock(s: float) -> str:
     return f"{int(s // 60)}:{s % 60:04.1f}"
@@ -224,9 +237,7 @@ def install(app, st, protected=lambda d: False) -> None:
         src, t = d / v["cut"], poster_time(v)
         out = d / "ui" / "cache" / "share" / f"v{v['n']}_{round(t * 10):05d}.jpg"
         if not out.is_file() or out.stat().st_mtime < src.stat().st_mtime:
-            out.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", f"{t:.2f}", "-i", str(src),
-                            "-frames:v", "1", "-vf", "scale=720:-2", "-q:v", "3", str(out)], capture_output=True)
+            poster_file(src, t, out)
         if not out.is_file():
             raise HTTPException(404, "poster extraction failed")
         return FileResponse(out, headers={"Cache-Control": "max-age=3600"})

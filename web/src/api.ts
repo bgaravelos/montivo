@@ -8,8 +8,21 @@ export async function api<T = unknown>(path: string, body?: unknown, method?: st
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error((data as { error?: string }).error ?? `${res.status} ${res.statusText}`), { status: res.status });
+  if (!res.ok) throw Object.assign(new Error(errorText(data) ?? `${res.status} ${res.statusText}`), { status: res.status });
   return data as T;
+}
+
+/** The reason a failed request gives: our routes answer {error}; FastAPI's own validation answers {detail} as text or
+ *  as a list of {msg} (code audit 3/11: those showed only "400 Bad Request"). */
+function errorText(data: unknown): string | undefined {
+  const d = data as { error?: unknown; detail?: unknown };
+  if (typeof d.error === "string") return d.error;
+  if (typeof d.detail === "string") return d.detail;
+  if (Array.isArray(d.detail)) {
+    const msgs = d.detail.map((x) => (x as { msg?: unknown })?.msg).filter((m): m is string => typeof m === "string");
+    if (msgs.length) return msgs.join("; ");
+  }
+  return undefined;
 }
 
 export const fileUrl = (run: string, path: string) => `/api/runs/${run}/file/${path}`;
@@ -87,8 +100,10 @@ function fresh(): Seen {
 
 export function tc(s: number | null | undefined, digits = 1): string {
   if (s == null || !isFinite(s)) return "–";
-  const m = Math.floor(s / 60);
-  const r = s - m * 60;
+  // round to what is shown first, then split: 59.96 s read "0:60.0" (code audit 3/11)
+  const q = Math.round(s * 10 ** digits) / 10 ** digits;
+  const m = Math.floor(q / 60);
+  const r = q - m * 60;
   return `${m}:${r.toFixed(digits).padStart(digits ? 3 + digits : 2, "0")}`;
 }
 
