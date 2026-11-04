@@ -316,8 +316,8 @@ More (top bar) > Cost and time shows this project's ledger: every model call wit
 More (top bar) > Replay the agent run plays a finished run back at 1x or 4x, with the steps and the dollars counting up.
 
 ## Hosted demo rules
-<!-- monti: target=home.budget words=hosted,demo,judge,judges,budget left,limit,password,copy,sample,κριτ,όριο,προϋπολογισμός,demo -->
-On the hosted demo everyone shares a model budget; the meter on the project list and the composer show what is left.
+<!-- monti: target=home.budget words=hosted,demo,judge,judges,guest,budget left,limit,password,copy,sample,κριτ,όριο,προϋπολογισμός,demo -->
+On the hosted demo you come in with Enter as guest (no account or password); your browser keeps its guest id. Everyone shares a model budget; the meter on the project list and the composer show what is left.
 1. Editing a sample makes your own copy; other judges never see it.
 2. A clip can be up to 95 s and 1000 MB, three uploads per judge; one job runs at a time on the server.
 3. Past the budget, the finished projects and every $0 edit still work; paid calls (a new run, reviews, Monti's model) stop; Ask Montivo then reads only simple keywords (music, punch-ins, a caption preset by name, the title on or off, delete or move a named clip), and Monti answers from this guide.
