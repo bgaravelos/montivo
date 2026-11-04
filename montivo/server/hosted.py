@@ -3,6 +3,8 @@
 Both switch on from the environment only, so `montivo serve` on a laptop is unchanged:
 
     MONTIVO_PASSWORD=...        every page and API call needs the sign-in cookie (/api/health and /login stay open)
+    MONTIVO_GUEST=1             /login also offers "Enter as guest": a signed judge id without the password (the
+                                submission form has no private field), the same per-judge budget and quotas
     MONTIVO_BUDGET_USD=15       paid actions stop once the runs' ledgers have spent this much since the host started
     MONTIVO_JUDGE_BUDGET_USD=3  and for one judge once their own projects and copies have spent this much (0 = no cap)
     MONTIVO_ONE_JOB=1           one engine job at a time across all runs (one container, one CPU budget)
@@ -48,13 +50,15 @@ from ..engine.api import write_atomic
 
 COOKIE = "montivo_auth"
 JUDGE = "montivo_judge"  # one id per browser: the judge's own copies of the samples and their own runs
-OPEN_PATHS = ("/login", "/api/login", "/api/health", "/favicon", "/apple-touch-icon", "/s/")  # /s/: share links (share.py)
+OPEN_PATHS = ("/login", "/api/login", "/api/guest", "/api/health", "/favicon", "/apple-touch-icon", "/s/")  # /s/: share links (share.py)
 MIN_PAID_USD = 0.01  # the cheapest paid action (a Muse Image title card)
 MONTI = "_monti"  # the budget key of Monti's ledger (no run has a name starting with _)
 ARCHIVED = "_archive"  # runs/_archive/<id> (app.ARCHIVE)
 UNSAFE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
 LOGIN_FAILS_PER_MIN = 10  # wrong passwords one address may send in a minute; past it a wrong one is a 429
 LOGIN_FAILS_ALL_PER_MIN = 100  # and all addresses together; a right password is never refused (login)
+GUESTS_PER_HOUR = 5  # guest ids one address may take in an hour (MONTIVO_GUEST): past it, a 429
+GUESTS_ALL_PER_HOUR = 200  # and all addresses together; the $ caps and upload quotas hold whatever the count
 JUDGE_CAP_USD = 3.0  # what one judge may spend of the hosted budget (MONTIVO_JUDGE_BUDGET_USD)
 CURRENT_JUDGE: ContextVar[str | None] = ContextVar("montivo_judge", default=None)  # the request's judge (app sets it)
 
@@ -304,6 +308,30 @@ class LoginLimit:
         self.fails.append((time.time(), who))
 
 
+class GuestLimit:
+    """Guest ids handed out per address and in all per hour. A guest id is a judge id without the password (the
+    submission form has no private field, so the judges get no password: Cerebral Valley, 1/11), and each one has a
+    judge's own share of the budget: a script taking a new id each time is held back here, and in any case by the
+    hosted cap and the upload quota of all judges together."""
+
+    def __init__(self):
+        self.given: deque[tuple[float, str]] = deque()
+
+    def take(self, who: str) -> bool:
+        now = time.time()
+        while self.given and now - self.given[0][0] > 3600:
+            self.given.popleft()
+        mine = sum(w == who for _, w in self.given)
+        if mine >= GUESTS_PER_HOUR or len(self.given) >= GUESTS_ALL_PER_HOUR:
+            return False
+        self.given.append((now, who))
+        return True
+
+
+def guest_on() -> bool:
+    return os.environ.get("MONTIVO_GUEST", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def client(request: Request) -> str:
     """The address a sign-in comes from: the LAST X-Forwarded-For hop, the one the host's proxy appended. The first
     is whatever the client wrote there: a guesser who sent a new one with each wrong password was never held back
@@ -320,7 +348,8 @@ LOGIN_HTML = """<!doctype html>
 * { box-sizing: border-box; }
 body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--ink); color: var(--paper);
        font: 16px/1.5 "Inter Tight", system-ui, -apple-system, sans-serif; padding: 16px; }
-form { width: 100%; max-width: 360px; display: grid; gap: 14px; }
+main { width: 100%; max-width: 380px; display: grid; gap: 22px; }
+form { display: grid; gap: 14px; }
 h1 { margin: 0 0 4px; font-size: 28px; letter-spacing: -0.02em; }
 h1 span { color: var(--marker); }
 p { margin: 0; color: var(--slate); font-size: 14px; }
@@ -329,23 +358,46 @@ input { width: 100%; padding: 12px 14px; border-radius: 8px; border: 1px solid #
 input:focus { outline: 2px solid var(--marker); outline-offset: 1px; }
 button { padding: 12px 14px; border: 0; border-radius: 8px; background: var(--marker); color: var(--ink);
          font: inherit; font-weight: 700; cursor: pointer; }
+button.alt { background: transparent; color: var(--paper); border: 1px solid #3a3a3a; font-weight: 600; }
 .err { color: var(--cut); }
 </style></head>
-<body><form method="post" action="/api/login">
+<body><main>
 <h1>montivo <span>[v]</span></h1>
-<p>The hosted demo for the Meta hackathon judges. The password is in the submission form.</p>
+__GUEST__
+<form method="post" action="/api/login">
+<p>__PASSWORD_NOTE__</p>
 __ERROR__
-<input type="password" name="password" placeholder="Password" autocomplete="current-password" autofocus required>
-<button type="submit">Sign in</button>
-</form></body></html>"""
+<input type="password" name="password" placeholder="Password" autocomplete="current-password" __AUTOFOCUS__ required>
+<button type="submit" class="__PW_CLASS__">Sign in</button>
+</form></main></body></html>"""
+
+GUEST_HTML = """<form method="post" action="/api/guest" class="guest">
+<p>The hosted demo for the Meta hackathon judges. No account needed: you get your own copy of the finished sample
+projects, can upload a clip of up to 95 s and let the agent plan, cut, review and re-cut it. Model calls come out of a
+small budget per visitor; the $0 edits always work.</p>
+__GUEST_ERROR__
+<button type="submit" autofocus>Enter as guest</button>
+</form>"""
+
+
+def login_html(error: str = "", guest_error: str = "") -> str:
+    if guest_on():
+        guest = GUEST_HTML.replace("__GUEST_ERROR__", guest_error)
+        return (LOGIN_HTML.replace("__GUEST__", guest).replace("__PASSWORD_NOTE__", "Or sign in with a password.")
+                .replace("__AUTOFOCUS__", "").replace("__PW_CLASS__", "alt").replace("__ERROR__", error))
+    return (LOGIN_HTML.replace("__GUEST__", "").replace("__PASSWORD_NOTE__", "The hosted demo for the Meta hackathon judges.")
+            .replace("__AUTOFOCUS__", "autofocus").replace("__PW_CLASS__", "").replace("__ERROR__", error))
 
 
 def install(app, password: str | None, root: Path) -> None:
-    """Put the sign-in in front of every route of the app when a password is set."""
-    if not password:
+    """Put the sign-in in front of every route of the app when a password is set or guests may come in
+    (MONTIVO_GUEST): a guest is a judge id the server signed, with a judge's own copies and share of the budget."""
+    guests = guest_on()
+    if not password and not guests:
         return
     key = judge_key(root)
     limit = LoginLimit()
+    guest_limit = GuestLimit()
     hops_seen = set()  # the X-Forwarded-For lengths logged once each: what the host's proxy sends (never the addresses)
 
     @app.middleware("http")
@@ -357,9 +409,9 @@ def install(app, password: str | None, root: Path) -> None:
             return JSONResponse({"error": "this request did not come from the Montivo page"}, status_code=403)
         if path.startswith(OPEN_PATHS):
             return await call_next(request)
-        if signed_in(request, password):
-            # the judge id comes with the sign-in only: minting one for every request without the cookie let one
-            # client be a new judge each time and step past every per-judge limit (cloud security check, 31/10)
+        if guests or (password and signed_in(request, password)):
+            # the judge id comes with the sign-in (or the guest entry) only: minting one for every request without the
+            # cookie let one client be a new judge each time and step past every per-judge limit (cloud check, 31/10)
             if jid := judge_id(request, key):
                 request.scope[JUDGE_SCOPE] = jid
                 return await call_next(request)
@@ -369,8 +421,23 @@ def install(app, password: str | None, root: Path) -> None:
 
     @app.get("/login")
     def login_page(error: int = 0):
-        msg = '<p class="err">That password is not right.</p>' if error else ""
-        return HTMLResponse(LOGIN_HTML.replace("__ERROR__", msg))
+        msg = '<p class="err">That password is not right.</p>' if error == 1 else ""
+        busy = '<p class="err">Too many guests from here in the last hour: try again later.</p>' if error == 2 else ""
+        return HTMLResponse(login_html(msg, busy))
+
+    @app.post("/api/guest")
+    async def guest(request: Request):
+        """A new judge id without the password (MONTIVO_GUEST); a browser that has one keeps it."""
+        if not guests:
+            return JSONResponse({"error": "guest entry is off"}, status_code=404)
+        resp = RedirectResponse("/", status_code=303)
+        if jid := judge_id(request, key):
+            set_judge(resp, key, jid, https(request))
+            return resp
+        if not guest_limit.take(client(request)):
+            return RedirectResponse("/login?error=2", status_code=303)
+        set_judge(resp, key, secrets.token_hex(4), https(request))
+        return resp
 
     @app.post("/api/login")
     async def login(request: Request):
@@ -390,7 +457,7 @@ def install(app, password: str | None, root: Path) -> None:
                 given = ""
         else:
             given = (parse_qs(body).get("password") or [""])[0]
-        if not hmac.compare_digest(token(given), token(password)):
+        if not password or not hmac.compare_digest(token(given), token(password)):
             blocked = limit.blocked(who)
             if not blocked:  # past the limit nothing more is kept: a flood of wrong ones stays a 100-entry deque
                 limit.failed(who)

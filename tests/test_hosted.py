@@ -18,7 +18,7 @@ def ledger(d, usd):
 def hosted_env(monkeypatch):
     for k in ("MONTIVO_PASSWORD", "MONTIVO_BUDGET_USD", "MONTIVO_ONE_JOB", "MONTIVO_MAX_FOOTAGE_S",
               "MONTIVO_MAX_UPLOAD_MB", "MONTIVO_MAX_UPLOADS", "MONTIVO_JUDGE_SECRET", "MONTIVO_JUDGE_BUDGET_USD",
-              "MONTIVO_MAX_UPLOADS_ALL", "MONTIVO_JOB_MAX_S"):
+              "MONTIVO_MAX_UPLOADS_ALL", "MONTIVO_JOB_MAX_S", "MONTIVO_GUEST"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("MODEL_API_KEY", "test")
     return monkeypatch

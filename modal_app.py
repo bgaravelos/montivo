@@ -1,4 +1,4 @@
-"""The hosted demo for the judges on Modal: `montivo serve` behind a password, the keys only in a Modal secret, the
+"""The hosted demo for the judges on Modal: `montivo serve` behind a sign-in page (guest entry or a password), the keys only in a Modal secret, the
 run folders on a Volume, the Meta model spend capped (montivo/server/hosted.py).
 
     .venv/bin/modal secret create montivo-keys MODEL_API_KEY=... BASETEN_API_KEY=... MONTIVO_PASSWORD=...
@@ -23,8 +23,9 @@ from pathlib import Path
 import modal
 
 DATA = "/data"
-# the judges' limits (hosted.py): $40 in all and $3 a judge, 3 uploads a judge and 60 in all, 15 minutes a job
-HOSTED = {"MONTIVO_BUDGET_USD": "40", "MONTIVO_JUDGE_BUDGET_USD": "3", "MONTIVO_ONE_JOB": "1",
+# the judges' limits (hosted.py): $40 in all and $3 a judge, 3 uploads a judge and 60 in all, 15 minutes a job; judges
+# come in as guests (the submission form has no private field for the password, Cerebral Valley 1/11)
+HOSTED = {"MONTIVO_GUEST": "1", "MONTIVO_BUDGET_USD": "40", "MONTIVO_JUDGE_BUDGET_USD": "3", "MONTIVO_ONE_JOB": "1",
           "MONTIVO_MAX_FOOTAGE_S": "95", "MONTIVO_MAX_UPLOAD_MB": "1000", "MONTIVO_MAX_UPLOADS": "3",
           "MONTIVO_MAX_UPLOADS_ALL": "60", "MONTIVO_JOB_MAX_S": "900", "PYTHONPATH": "/root/app"}
 

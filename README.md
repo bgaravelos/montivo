@@ -43,8 +43,8 @@ The Loop view shows exactly that: each version's frame and score, and between tw
 the reviewer's fix or a human edit, labelled (on run 015: v2 the agent's fixes, v3, v4 and v5 human edits). When a fix makes things worse the agent keeps the earlier cut: on a
 hosted test upload the reviewer's own hook swap scored 48 against 74, and the regression guard kept the 74.
 
-**Judges:** the hosted link and password are in the submission, and the finished samples also run from this repo
-with no key ([Try it](#try-it)). Open a finished sample, press **Loop**, compare the
+**Judges:** [open the hosted demo](https://bgaravelos--montivo-web.us-east.modal.run) and press **Enter as guest**
+(no account or password), or run the finished samples from this repo with no key ([Try it](#try-it)). Open a finished sample, press **Loop**, compare the
 issue, the fix and the result, then make an edit of your own. The editor opens in **Live**: your edits play at once
 from the footage and become a new version (one render, $0) only when you press **Make Version N**, so until then the
 Loop shows nothing new; switch to **Rendered** (V) for one version per edit. Details under [Try it](#try-it) and
@@ -87,10 +87,13 @@ Three ways in, quickest first.
 To only look at a result: [this share link](https://bgaravelos--montivo-web.us-east.modal.run/s/CAlQGWBgIBbo) plays run 017's cut from the hosted demo with its review history,
 no sign-in needed.
 
-**1. Hosted (judges).** Montivo runs hosted for you, with my Meta key on the server. The link and the password are in
-the submission. The finished sample projects open there, and you can upload your own clip (up to 95 s) and let the agent
-plan, cut, review and re-cut it; your edits go to your own copy, so every judge starts from the same samples. A shared
-budget caps the Meta model calls; past it, the finished projects and the $0 edits still work.
+**1. Hosted (judges).** Montivo runs hosted for you at
+[bgaravelos--montivo-web.us-east.modal.run](https://bgaravelos--montivo-web.us-east.modal.run), with my Meta key on the
+server. Press **Enter as guest** on the sign-in page: no account or password, your browser gets its own guest id. The
+finished sample projects open there, and you can upload your own clip (up to 95 s) and let the agent
+plan, cut, review and re-cut it; your edits go to your own copy, so every judge starts from the same samples. Each guest may spend
+about $3 of model calls and upload three clips, and a shared budget caps everyone together; past either, the finished
+projects and the $0 edits still work.
 
 **2. From this repo, no API key.** You need Python 3.12+ and ffmpeg with libx264 (macOS: `brew install python@3.12
 ffmpeg`; Ubuntu 24.04: `sudo apt install python3.12-venv ffmpeg`; older Debian / Ubuntu have no 3.12 package: use the Docker
